@@ -8,3 +8,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+miette = { version = "7.6.0", features = ["fancy"] }
+thiserror = "2.0.18"
+zeen-driver = {path = "../zeen-driver"}
+zeen-lexer= {path = "../zeen-lexer"}
