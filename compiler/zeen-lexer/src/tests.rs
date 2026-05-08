@@ -25,3 +25,31 @@ fn ident() {
 
     assert_eq!(tokens.next(), None);
 }
+
+#[test]
+fn ident_after_block_comment() {
+    const SOURCE: &str = "/* */ abc";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(6.into(), 3)))
+    );
+
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn ident_after_line_comment() {
+    const SOURCE: &str = "// \n abc";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(5.into(), 3)))
+    );
+
+    assert_eq!(tokens.next(), None);
+}
