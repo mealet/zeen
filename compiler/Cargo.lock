@@ -280,6 +280,13 @@ name = "zeen"
 version = "0.0.0"
 
 [[package]]
+name = "zeen-driver"
+version = "0.0.0"
+dependencies = [
+ "miette",
+]
+
+[[package]]
 name = "zeen-lexer"
 version = "0.0.0"
 dependencies = [
