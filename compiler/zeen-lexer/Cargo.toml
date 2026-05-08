@@ -9,3 +9,4 @@ license.workspace = true
 
 [dependencies]
 miette = { version = "7.6.0", features = ["fancy"] }
+zeen-driver = { path = "../zeen-driver" }

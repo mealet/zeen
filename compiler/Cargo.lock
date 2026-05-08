@@ -291,4 +291,5 @@ name = "zeen-lexer"
 version = "0.0.0"
 dependencies = [
  "miette",
+ "zeen-driver",
 ]
