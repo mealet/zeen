@@ -140,8 +140,6 @@ impl<'inp> Tokenizer<'inp> {
             return Token::new(TokenKind::Eof, (0, 0).into());
         };
 
-        println!("{}", first_char);
-
         let token_kind = match first_char {
             // byte char literal
             'b' => todo!(),
