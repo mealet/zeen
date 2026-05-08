@@ -1,0 +1,23 @@
+[workspace]
+members = [
+  "zeen",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+authors = ["mealet <workjason34@gmail.com>"]
+description = "Compiler of Zeen Programming Language"
+repository = "https://codeberg.org/mealet/zeen"
+license = "BSD-3-Clause"
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"
+codegen-units = 1
+panic = "abort"
