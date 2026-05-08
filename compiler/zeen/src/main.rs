@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use zeen_driver::MietteDriver;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
@@ -13,14 +15,11 @@ struct TestError {
 }
 
 fn main() {
-    const SRC: &str = "123 hello 123";
+    const SRC: &str = "/* */ 123 hello 123";
 
-    let err = TestError {
-        src: NamedSource::new("test.zn", SRC.into()),
-        span: SourceSpan::new(4.into(), 5),
-    };
+    let tokens = zeen_lexer::tokenize(SRC);
 
-    let driver = MietteDriver::new();
-
-    println!("{}", driver.report(&err).unwrap());
+    for tok in tokens {
+        println!("{:?}", tok);
+    }
 }
