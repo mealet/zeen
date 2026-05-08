@@ -65,11 +65,11 @@ impl<'inp> Tokenizer<'inp> {
         self.length - self.remaining
     }
 
-    fn pos_len(&self) -> u32 {
-        (self.remaining - self.chars.as_str().len()) as u32
+    fn pos_len(&self) -> usize {
+        self.remaining - self.chars.as_str().len()
     }
 
-    fn reset_pos_len(&mut self) {
+    fn reset_pos(&mut self) {
         self.remaining = self.chars.as_str().len();
     }
 
@@ -83,6 +83,12 @@ impl<'inp> Tokenizer<'inp> {
 
     fn bump_n(&mut self, n: usize) {
         self.chars = self.as_str()[n..].chars();
+    }
+
+    fn eat_while(&mut self, mut predicate: impl FnMut(char) -> bool) {
+        while predicate(self.first()) && !self.is_eof() {
+            let _ = self.bump();
+        }
     }
 
     fn skip_whitespace(&mut self) {
@@ -121,6 +127,8 @@ impl<'inp> Tokenizer<'inp> {
                 break;
             }
         }
+
+        self.reset_pos();
     }
 
     // Tokenizers
@@ -132,6 +140,37 @@ impl<'inp> Tokenizer<'inp> {
             return Token::new(TokenKind::Eof, (0, 0).into());
         };
 
-        todo!();
+        println!("{}", first_char);
+
+        let token_kind = match first_char {
+            // byte char literal
+            'b' => todo!(),
+
+            chr if is_ident_start(chr) => self.ident(),
+
+            _ => TokenKind::Unknown,
+        };
+
+        let token = Token::new(
+            token_kind,
+            miette::SourceSpan::new(self.pos_start().into(), self.pos_len()),
+        );
+        self.reset_pos();
+        token
     }
+
+    // ---------------
+
+    fn ident(&mut self) -> TokenKind {
+        self.eat_while(is_ident_continue);
+        TokenKind::Ident
+    }
+}
+
+fn is_ident_start(chr: char) -> bool {
+    chr == '_' || chr.is_alphabetic()
+}
+
+fn is_ident_continue(chr: char) -> bool {
+    chr == '_' || chr.is_alphanumeric()
 }

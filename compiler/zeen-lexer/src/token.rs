@@ -61,6 +61,7 @@ pub enum TokenKind {
     OpenBracket,  // [
     CloseBracket, // ]
 
+    Unknown,
     Eof,
 }
 
