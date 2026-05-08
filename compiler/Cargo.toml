@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "zeen",
+  "zeen", "zeen-lexer",
 ]
 resolver = "2"
 
