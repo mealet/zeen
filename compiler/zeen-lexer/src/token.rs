@@ -1,16 +1,17 @@
-use zeen_driver::LocationSpan;
+use miette::SourceSpan;
 
 pub struct Token {
     pub kind: TokenKind,
-    pub span: LocationSpan,
+    pub span: SourceSpan,
 }
 
 impl Token {
-    pub fn new(kind: TokenKind, span: LocationSpan) -> Self {
+    pub fn new(kind: TokenKind, span: SourceSpan) -> Self {
         Self { kind, span }
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum TokenKind {
     Ident,   // abcd
     Keyword, // `if`, `defer` and etc...
@@ -62,6 +63,7 @@ pub enum TokenKind {
     Eof,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum LiteralKind {
     Int { base: IntBase },
     Float,
@@ -70,6 +72,7 @@ pub enum LiteralKind {
     Str,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum IntBase {
     Binary = 2,
     Octal = 8,
