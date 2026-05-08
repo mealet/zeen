@@ -7,6 +7,12 @@ pub struct MietteDriver {
     reporter: miette::GraphicalReportHandler,
 }
 
+impl Default for MietteDriver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MietteDriver {
     pub fn new() -> Self {
         let reporter = miette::GraphicalReportHandler::new()
@@ -22,6 +28,6 @@ impl MietteDriver {
 
         self.reporter.render_report(&mut buffer, diagnostic)?;
 
-        return Ok(buffer);
+        Ok(buffer)
     }
 }

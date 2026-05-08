@@ -10,11 +10,26 @@ pub struct LineOffsets(Vec<usize>);
 
 impl LocationSpan {
     pub fn single(line: usize, column: usize) -> Self {
-        Self { start_line: line, start_column: column, end_line: line, end_column: column }
+        Self {
+            start_line: line,
+            start_column: column,
+            end_line: line,
+            end_column: column,
+        }
     }
 
-    pub fn range(start_line: usize, start_column: usize, end_line: usize, end_column: usize) -> Self {
-        Self { start_line, start_column, end_line, end_column }
+    pub fn range(
+        start_line: usize,
+        start_column: usize,
+        end_line: usize,
+        end_column: usize,
+    ) -> Self {
+        Self {
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+        }
     }
 
     pub fn merge(self, other: Self) -> Self {
@@ -25,10 +40,26 @@ impl LocationSpan {
             || (self.end_line == other.end_line && self.end_column >= other.end_column);
 
         Self {
-            start_line: if start_before { self.start_line } else { other.start_line },
-            start_column: if start_before { self.start_column } else { other.start_column },
-            end_line: if end_after { self.end_line } else { other.end_line },
-            end_column: if end_after { self.end_column } else { other.end_column },
+            start_line: if start_before {
+                self.start_line
+            } else {
+                other.start_line
+            },
+            start_column: if start_before {
+                self.start_column
+            } else {
+                other.start_column
+            },
+            end_line: if end_after {
+                self.end_line
+            } else {
+                other.end_line
+            },
+            end_column: if end_after {
+                self.end_column
+            } else {
+                other.end_column
+            },
         }
     }
 
