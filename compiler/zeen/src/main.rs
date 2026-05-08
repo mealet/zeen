@@ -6,8 +6,9 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
-#[error("test error")]
-struct TestError {
+#[error("debug")]
+#[diagnostic(severity(Advice))]
+struct SrcDebugger {
     #[source_code]
     src: NamedSource<String>,
     #[label("here")]
@@ -15,11 +16,20 @@ struct TestError {
 }
 
 fn main() {
-    const SRC: &str = "/* */ 123 hello 123";
+    const SRC: &str = "/* */ hello";
 
     let tokens = zeen_lexer::tokenize(SRC);
 
+    let driver = MietteDriver::new();
+
     for tok in tokens {
-        println!("{:?}", tok);
+        let diagnostic = driver
+            .report(&SrcDebugger {
+                src: NamedSource::new("debug", SRC.into()),
+                span: tok.span,
+            })
+            .unwrap();
+
+        println!("{}", diagnostic);
     }
 }
