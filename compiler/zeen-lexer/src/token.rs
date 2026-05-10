@@ -14,10 +14,12 @@ impl Token {
 
 #[derive(Debug, PartialEq)]
 pub enum TokenKind {
-    Ident,   // abcd
-    Keyword, // `if`, `defer` and etc...
-    Ref,     // &expr
+    Ident,      // abcd
+    MacroIdent, // print!
+    Keyword,    // `if`, `defer` and etc...
+    Ref,        // &expr
 
+    Type(),
     Literal { kind: LiteralKind },
 
     Underscore, // _
@@ -82,3 +84,5 @@ pub enum IntBase {
     Decimal = 10,
     Hexadecimal = 16,
 }
+
+pub enum CompilerType {}

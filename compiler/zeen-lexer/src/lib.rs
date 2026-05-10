@@ -146,6 +146,11 @@ impl<'inp> Tokenizer<'inp> {
 
             chr if is_ident_start(chr) => self.ident(),
 
+            chr @ '0'..='9' => {
+                let literal_kind = self.number(chr);
+                TokenKind::Literal { kind: literal_kind }
+            }
+
             _ => TokenKind::Unknown,
         };
 
@@ -162,6 +167,90 @@ impl<'inp> Tokenizer<'inp> {
     fn ident(&mut self) -> TokenKind {
         self.eat_while(is_ident_continue);
         TokenKind::Ident
+    }
+
+    fn number(&mut self, first_digit: char) -> token::LiteralKind {
+        let mut base = token::IntBase::Decimal;
+
+        if first_digit == '0' {
+            match self.first() {
+                'b' => {
+                    base = token::IntBase::Binary;
+
+                    let _ = self.bump();
+                    let _ = self.eat_decimal_digits();
+
+                    return token::LiteralKind::Int { base };
+                }
+
+                'o' => {
+                    base = token::IntBase::Octal;
+
+                    let _ = self.bump();
+                    let _ = self.eat_decimal_digits();
+
+                    return token::LiteralKind::Int { base };
+                }
+
+                'x' => {
+                    base = token::IntBase::Hexadecimal;
+
+                    let _ = self.bump();
+                    let _ = self.eat_hexadecimal_digits();
+
+                    return token::LiteralKind::Int { base };
+                }
+
+                '0'..='9' | '_' => {
+                    self.eat_decimal_digits();
+                }
+
+                '.' => {}
+
+                _ => return token::LiteralKind::Int { base },
+            }
+        } else {
+            self.eat_decimal_digits();
+        }
+
+        match self.first() {
+            '.' if self.second() != '.' && !is_ident_start(self.second()) => {
+                let _ = self.bump();
+
+                if self.first().is_ascii_digit() {
+                    self.eat_decimal_digits();
+                }
+
+                token::LiteralKind::Float
+            }
+
+            _ => token::LiteralKind::Int { base },
+        }
+    }
+
+    fn eat_decimal_digits(&mut self) {
+        loop {
+            if matches!(self.first(), '_' | '0'..='9') {
+                let _ = self.bump();
+                continue;
+            }
+
+            break;
+        }
+    }
+
+    fn eat_hexadecimal_digits(&mut self) {
+        loop {
+            if matches!(
+                self.first(),
+                '_' | '0'..='9' | 'a'..='f' | 'A'..='F'
+            ) {
+                let _ = self.bump();
+                continue;
+            }
+
+            break;
+        }
     }
 }
 

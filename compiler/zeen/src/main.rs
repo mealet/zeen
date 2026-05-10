@@ -6,9 +6,11 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
-#[error("debug")]
+#[error("{dbg}")]
 #[diagnostic(severity(Advice))]
 struct SrcDebugger {
+    dbg: String,
+
     #[source_code]
     src: NamedSource<String>,
     #[label("here")]
@@ -16,7 +18,7 @@ struct SrcDebugger {
 }
 
 fn main() {
-    const SRC: &str = "/* */ hello";
+    const SRC: &str = "";
 
     let tokens = zeen_lexer::tokenize(SRC);
 
@@ -25,6 +27,7 @@ fn main() {
     for tok in tokens {
         let diagnostic = driver
             .report(&SrcDebugger {
+                dbg: format!("{:?}", tok.kind),
                 src: NamedSource::new("debug", SRC.into()),
                 span: tok.span,
             })
