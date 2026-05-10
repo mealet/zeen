@@ -70,8 +70,9 @@ pub enum LiteralKind {
     Int { base: IntBase },
     Float,
     Char,
-    Byte,
+    ByteChar,
     Str,
+    RawStr,
 }
 
 #[derive(Debug, PartialEq)]
