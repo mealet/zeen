@@ -160,6 +160,10 @@ impl<'inp> Tokenizer<'inp> {
                     kind = TokenKind::Type(compiler_type);
                 }
 
+                if slice == "_" {
+                    kind = TokenKind::Underscore;
+                }
+
                 kind
             }
 
@@ -167,8 +171,6 @@ impl<'inp> Tokenizer<'inp> {
                 let literal_kind = self.number(chr);
                 TokenKind::Literal { kind: literal_kind }
             }
-
-            '_' => TokenKind::Underscore,
 
             ';' => TokenKind::Semicolon,
             ':' => TokenKind::Colon,
