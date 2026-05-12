@@ -18,6 +18,7 @@ pub enum TokenKind {
     MacroIdent, // print!
     Ref,        // &expr
 
+    Keyword(CompilerKeyword),
     Type(CompilerType),
     Literal { kind: LiteralKind },
 
@@ -146,6 +147,7 @@ impl std::fmt::Display for CompilerType {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum CompilerKeyword {
     If,
     Else,

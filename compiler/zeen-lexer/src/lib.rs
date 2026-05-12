@@ -160,6 +160,10 @@ impl<'inp> Tokenizer<'inp> {
                     kind = TokenKind::Type(compiler_type);
                 }
 
+                if let Some(compiler_keyword) = token::CompilerKeyword::from_str(slice) {
+                    kind = TokenKind::Keyword(compiler_keyword);
+                }
+
                 if slice == "_" {
                     kind = TokenKind::Underscore;
                 }
