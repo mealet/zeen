@@ -18,7 +18,7 @@ struct SrcDebugger {
 }
 
 fn main() {
-    const SRC: &str = "";
+    const SRC: &str = "suka nahui blyat";
 
     let tokens = zeen_lexer::tokenize(SRC);
 

@@ -142,7 +142,7 @@ impl<'inp> Tokenizer<'inp> {
 
         let token_kind = match first_char {
             // byte char literal
-            'b' => todo!(),
+            'b' => self.byte_literal(),
 
             chr if is_ident_start(chr) => self.ident(),
 
@@ -250,6 +250,14 @@ impl<'inp> Tokenizer<'inp> {
             }
 
             break;
+        }
+    }
+
+    fn byte_literal(&mut self) -> TokenKind {
+        match self.first() {
+            '\'' => todo!(),
+            chr if is_ident_continue(chr) => self.ident(),
+            _ => TokenKind::Unknown,
         }
     }
 }
