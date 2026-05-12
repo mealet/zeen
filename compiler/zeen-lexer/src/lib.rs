@@ -23,6 +23,8 @@ pub fn tokenize(input: &str) -> impl Iterator<Item = Token> {
 const EOF_CHAR: char = '\0';
 
 pub struct Tokenizer<'inp> {
+    src: &'inp str,
+
     chars: Chars<'inp>,
     prev: char,
 
@@ -33,6 +35,8 @@ pub struct Tokenizer<'inp> {
 impl<'inp> Tokenizer<'inp> {
     pub fn new(input: &'inp str) -> Self {
         Self {
+            src: input,
+
             chars: input.chars(),
             prev: EOF_CHAR,
 
@@ -144,7 +148,20 @@ impl<'inp> Tokenizer<'inp> {
             // byte char literal
             'b' => self.byte_literal(),
 
-            chr if is_ident_start(chr) => self.ident(),
+            chr if is_ident_start(chr) => {
+                let mut kind = self.ident();
+
+                let pos_start = self.pos_start();
+                let pos_len = self.pos_len();
+
+                let slice = &self.src[pos_start..pos_start + pos_len];
+
+                if let Some(compiler_type) = token::CompilerType::from_str(slice) {
+                    kind = TokenKind::Type(compiler_type);
+                }
+
+                kind
+            }
 
             chr @ '0'..='9' => {
                 let literal_kind = self.number(chr);
