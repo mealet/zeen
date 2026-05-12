@@ -1,0 +1,200 @@
+// Zeen Programming Language.
+// -> this file is development syntax description, which is used to keep
+// -> in mind right syntax and core ideas due compiler and libraries construction.
+
+// Comments are separated to: line-comment (`//`) and block-comment (`/* */`)
+
+/* ====@ Literals @==== */
+/*
+  Supported literals in Zeen:
+  * Integer (decimal, binary, hexadecimal, octal)
+  * Float
+  * Char (single byte character)
+  * ByteChar (single byte character with `u8` type)
+  * Str (basic string, type is like in C - `*char`)
+  * RawStr (raw string with `r#"` and `"#` as terminators)
+*/
+
+/* ====@ Types @==== */
+/*
+  Builtin compiler types:
+  > Signed Integers
+    * i8
+    * i16
+    * i32
+    * i64
+    * isize (platform specific)
+  
+  > Unsigned Integers
+    * u8
+    * u16
+    * u32
+    * u64
+    * usize (platform specific)
+
+  > Floats
+    * f32
+    * f64
+
+  > Non-categorized
+    * bool (1 byte, true/false)
+    * char (1 byte, unsigned)
+    * void
+
+  Advanced Types:
+    * `self` - self struct reference, used in methods.
+    * `Self` - alias for current structure.
+
+    * Named types (like structures, enums)
+    * Generic Types (can be used with interfaces: `T: Add, Display`)
+
+    * `const T` - constant types
+    * `*T` - pointer type (can be combined: `const *T` / `*const T`)
+    
+    * `[N]T` - array type (N - comptime size, T - element type)
+    * `[]T` - slice type (T - element type)
+
+    * `fn ABCD( T, T, .. ) T` - fn type (can be used in vtables, or closures)
+*/
+
+/* ====@ Imports @==== */
+
+/*
+  Imports are the core moduling tool for Zeen, main concept is to use
+  them as namespace-imports (like in Rust). Main keyword: `import`.
+*/
+
+// To simply import module `lib` and define its namespace use:
+
+import lib;
+
+// From now all its public elements will be avaible as: lib.function, lib.structure and etc.
+// You can import it with special alias:
+
+import lib : hello;
+
+// Now this will work like: hello.function, hello.structure, ...
+// You can import its children and give them special aliases. Example:
+
+import std.string : std_string; /* will be avaible as `std_string` */
+
+/*
+  You can import modules from different directories, by default from project directory (where main file).
+  Here's extra keywords for modules dirs managing:
+  * `super` - go to the parent directory (".." analogue). Example: import super.module (`../module.zn`).
+  * `root` - go to project root directory. Example: import root.module (`PROJECT_ROOT_DIR/module.zn`).
+  * `std` / `core` - aliases for specialized Zeen libraries on your computer.
+*/
+
+/* ====@ Externs @==== */
+
+/*
+  Zeen allows you to work with extern C content: functions, headers, linkages.
+  To externally declare function use syntax: `extern fn FUNCTION_NAME( ARG_TYPE, ARG_TYPE, ... ) RETURN_TYPE`
+*/
+
+extern fn malloc(usize) *void;
+extern fn free(*void);
+extern fn printf(const *char, ...); // `...` is VA_ARGS marker
+
+/*
+  Extern functions can have statements block and named parameters, that means function can be exported:
+*/
+
+extern fn add(a: i32, b: i32) i32 {
+  return a + b;
+}
+
+/*
+  If you just want to include C header to your project, use:
+*/
+
+extern include "lib.h"; // that will automatically declare functions and structures from header
+
+/*
+  Also supported extern variables:
+*/
+
+extern let stdout: **char;
+
+/* ====@ Functions @==== */
+/*
+  Functions can take params, return (or not return) values and use generic types with appliable interfaces.
+  Visibility is changeable (with `public` keyword).
+*/
+
+fn foo(a: i32, b: i32) i32 {
+  return a + b;
+}
+
+public fn add_print<T: Add + Display>(a: T, b: T) {
+  println!("result: {}", a + b);
+}
+
+/* ====@ Structures @==== */
+/*
+  Structures can have fields, generic types and methods.
+  To implement extra interface - use `implement` keyword with special separated syntax.
+  Visibility is changeable (with `public` keyword).
+*/
+
+struct Foo {
+  value: i32,
+
+  public fn new(value: i32) Self {
+    return Self {
+      .value = value
+    };
+  }
+}
+
+implement Foo : Display {
+  fn display(self) *char {
+    return format!("{}", self.value);
+  }
+}
+
+/* ====@ Enums @==== */
+/*
+  Enums are C-like without any extra features, can be casted to any integer.
+  Visibility is changeable (with `public` keyword).
+*/
+
+/* ====@ Macros @==== */
+/*
+  Macros is Zeen are comptime features to level up user experience.
+  Avaible macros:
+  * `as!(T, expr) T` - casts expression to specified type.
+  * `sizeof!(T) usize` - returns size of provided type.
+  * `alignof!(T) usize` - returns align of provided type.
+
+  * `print!("format string", ...) void` - formats string with values and prints it.
+  * `println!("format string", ...) void` - formats string with values and prints it with new line.
+  * `format!("format string", ...) *char` - formats string with values and puts it on stack.
+
+  * `panic!("format string", ...) never` - panics (emergency program stop with stack trace) with formatted string.
+  * `unreachable!() never` - tells compiler that this code is unreachable. If runtime reaches that piece - code panics.
+  * `dbg!(expr) expr` - prints debug info about expression and returns it.
+*/
+
+/* ====@ Variables @==== */
+// To define mutable variable with implicit type:
+// -> let a = 123;
+//
+// To define non-mutable variable with implicit type:
+// -> const a = 123;
+//
+// To define mutable variable with explicit type:
+// -> let a: i32 = 123;
+//
+// To define non-mutable variable with explicit type:
+// -> const a: i32 = 123;
+//
+// To define unintialized variable (requires explicit type):
+// -> let a: i32;
+//
+// Constant definition without initialization is not allowed.
+
+
+
+// TODO: Finish core features description
