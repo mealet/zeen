@@ -168,6 +168,32 @@ impl<'inp> Tokenizer<'inp> {
                 TokenKind::Literal { kind: literal_kind }
             }
 
+            '_' => TokenKind::Underscore,
+
+            ';' => TokenKind::Semicolon,
+            ':' => TokenKind::Colon,
+            ',' => TokenKind::Comma,
+            '.' => TokenKind::Dot,
+            '~' => TokenKind::Tilde,
+            '?' => TokenKind::Question,
+            '=' => TokenKind::Eq,
+            '!' => TokenKind::Bang,
+
+            '<' => TokenKind::Lt,
+            '>' => TokenKind::Gt,
+
+            '+' => TokenKind::Plus,
+            '-' => TokenKind::Minus,
+            '*' => TokenKind::Star,
+            '%' => TokenKind::Percent,
+
+            '(' => TokenKind::OpenParen,
+            ')' => TokenKind::CloseParen,
+            '[' => TokenKind::OpenBracket,
+            ']' => TokenKind::CloseBracket,
+            '{' => TokenKind::OpenBrace,
+            '}' => TokenKind::CloseBrace,
+
             _ => TokenKind::Unknown,
         };
 
