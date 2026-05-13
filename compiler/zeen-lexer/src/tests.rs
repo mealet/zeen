@@ -249,7 +249,7 @@ fn raw_str_literal() {
 
 #[test]
 fn basic_symbols() {
-    const SOURCE: &str = "_ ; : , . ~ ? = !";
+    const SOURCE: &str = "_ ; : , . ~ ? = ! > < & | ^ + - * / %";
 
     let mut tokens = tokenize(SOURCE);
 
@@ -305,6 +305,123 @@ fn basic_symbols() {
     assert_eq!(
         tokens.next(),
         Some(Token::new(TokenKind::Bang, SourceSpan::new(16.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Gt, SourceSpan::new(18.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Lt, SourceSpan::new(20.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::Ampersand,
+            SourceSpan::new(22.into(), 1)
+        ))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Pipe, SourceSpan::new(24.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Caret, SourceSpan::new(26.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Plus, SourceSpan::new(28.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Minus, SourceSpan::new(30.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Star, SourceSpan::new(32.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Slash, SourceSpan::new(34.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::Percent,
+            SourceSpan::new(36.into(), 1)
+        ))
+    );
+
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn complex_symbols() {
+    const SOURCE: &str = "<= >= == && || => << >>";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Leq, SourceSpan::new(0.into(), 2)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Geq, SourceSpan::new(3.into(), 2)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::BooleanEq,
+            SourceSpan::new(6.into(), 2)
+        ))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::BooleanAnd,
+            SourceSpan::new(9.into(), 2)
+        ))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::BooleanOr,
+            SourceSpan::new(12.into(), 2)
+        ))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::FatArrow,
+            SourceSpan::new(15.into(), 2)
+        ))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::LShift, SourceSpan::new(18.into(), 2)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::RShift, SourceSpan::new(21.into(), 2)))
     );
 
     assert_eq!(tokens.next(), None);
