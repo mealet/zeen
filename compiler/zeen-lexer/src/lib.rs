@@ -176,6 +176,14 @@ impl<'inp> Tokenizer<'inp> {
                 TokenKind::Literal { kind: literal_kind }
             }
 
+            '&' => {
+                if matches!(self.first(), ' ' | '\0') {
+                    TokenKind::Ampersand
+                } else {
+                    TokenKind::Ref
+                }
+            }
+
             ';' => TokenKind::Semicolon,
             ':' => TokenKind::Colon,
             ',' => TokenKind::Comma,
