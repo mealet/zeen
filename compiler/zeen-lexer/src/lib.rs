@@ -212,6 +212,7 @@ impl<'inp> Tokenizer<'inp> {
             '-' => TokenKind::Minus,
             '*' => TokenKind::Star,
             '%' => TokenKind::Percent,
+            '^' => TokenKind::Caret,
 
             '(' => TokenKind::OpenParen,
             ')' => TokenKind::CloseParen,
