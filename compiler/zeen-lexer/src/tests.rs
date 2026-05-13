@@ -221,7 +221,7 @@ fn bytechar_literal() {
         tokens.next(),
         Some(Token::new(
             TokenKind::Literal {
-                kind: token::LiteralKind::Char {
+                kind: token::LiteralKind::ByteChar {
                     terminated: true,
                     empty: false,
                 }
