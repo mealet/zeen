@@ -196,18 +196,47 @@ impl<'inp> Tokenizer<'inp> {
                 }
             }
 
+            '<' => {
+                if self.first() == '=' {
+                    let _ = self.bump();
+                    TokenKind::Leq
+                } else if self.first() == '<' {
+                    let _ = self.bump();
+                    TokenKind::LShift
+                } else {
+                    TokenKind::Lt
+                }
+            }
+
+            '>' => {
+                if self.first() == '=' {
+                    let _ = self.bump();
+                    TokenKind::Geq
+                } else if self.first() == '>' {
+                    let _ = self.bump();
+                    TokenKind::RShift
+                } else {
+                    TokenKind::Gt
+                }
+            }
+
+            '=' => {
+                if self.first() == '=' {
+                    let _ = self.bump();
+                    TokenKind::BooleanEq
+                } else {
+                    TokenKind::Eq
+                }
+            }
+
             ';' => TokenKind::Semicolon,
             ':' => TokenKind::Colon,
             ',' => TokenKind::Comma,
             '.' => TokenKind::Dot,
             '~' => TokenKind::Tilde,
             '?' => TokenKind::Question,
-            '=' => TokenKind::Eq,
             '!' => TokenKind::Bang,
             '/' => TokenKind::Slash,
-
-            '<' => TokenKind::Lt,
-            '>' => TokenKind::Gt,
 
             '+' => TokenKind::Plus,
             '-' => TokenKind::Minus,
