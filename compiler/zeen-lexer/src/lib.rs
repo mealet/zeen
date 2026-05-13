@@ -179,6 +179,10 @@ impl<'inp> Tokenizer<'inp> {
             '&' => {
                 if matches!(self.first(), ' ' | '\0') {
                     TokenKind::Ampersand
+                } else if self.first() == '&' {
+                    let _ = self.bump();
+
+                    TokenKind::BooleanAnd
                 } else {
                     TokenKind::Ref
                 }
