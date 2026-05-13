@@ -245,7 +245,7 @@ fn str_literal() {
             TokenKind::Literal {
                 kind: token::LiteralKind::Str { terminated: true }
             },
-            SourceSpan::new(0.into(), 6)
+            SourceSpan::new(0.into(), 7)
         ))
     );
 
