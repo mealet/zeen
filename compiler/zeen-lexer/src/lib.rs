@@ -181,10 +181,18 @@ impl<'inp> Tokenizer<'inp> {
                     TokenKind::Ampersand
                 } else if self.first() == '&' {
                     let _ = self.bump();
-
                     TokenKind::BooleanAnd
                 } else {
                     TokenKind::Ref
+                }
+            }
+
+            '|' => {
+                if self.first() == '|' {
+                    let _ = self.bump();
+                    TokenKind::BooleanOr
+                } else {
+                    TokenKind::Pipe
                 }
             }
 
