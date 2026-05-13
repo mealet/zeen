@@ -77,6 +77,7 @@ pub enum LiteralKind {
     ByteChar { terminated: bool, empty: bool },
     Str { terminated: bool },
     RawStr { terminated: bool },
+    InvalidRawStr,
 }
 
 #[derive(Debug, PartialEq)]

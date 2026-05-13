@@ -148,6 +148,9 @@ impl<'inp> Tokenizer<'inp> {
             // byte char literal
             'b' => self.byte_literal(),
 
+            // raw str literal
+            'r' => self.raw_str_literal(),
+
             chr if is_ident_start(chr) => {
                 let mut kind = self.ident();
 
@@ -177,6 +180,8 @@ impl<'inp> Tokenizer<'inp> {
             }
 
             '\'' => self.char_literal(),
+
+            '"' => self.str_literal(),
 
             '&' => {
                 if matches!(self.first(), ' ' | '\0') {
@@ -417,6 +422,32 @@ impl<'inp> Tokenizer<'inp> {
             chr if is_ident_continue(chr) => self.ident(),
             _ => TokenKind::Unknown,
         }
+    }
+
+    fn str_literal(&mut self) -> TokenKind {
+        let mut terminated = false;
+
+        while (self.first() != '\0') {
+            if self.first() == '"' {
+                terminated = true;
+                let _ = self.bump();
+                break;
+            }
+
+            if self.first() == '\\' {
+                let _ = self.bump();
+            }
+
+            let _ = self.bump();
+        }
+
+        TokenKind::Literal {
+            kind: token::LiteralKind::Str { terminated },
+        }
+    }
+
+    fn raw_str_literal(&mut self) -> TokenKind {
+        todo!()
     }
 }
 
