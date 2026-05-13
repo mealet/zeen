@@ -79,7 +79,12 @@ fn reference() {
 
     assert_eq!(
         tokens.next(),
-        Some(Token::new(TokenKind::Ref, SourceSpan::new(0.into(), 4)))
+        Some(Token::new(TokenKind::Ref, SourceSpan::new(0.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(1.into(), 3)))
     );
 
     assert_eq!(tokens.next(), None);
