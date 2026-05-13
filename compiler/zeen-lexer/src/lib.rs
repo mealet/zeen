@@ -224,6 +224,9 @@ impl<'inp> Tokenizer<'inp> {
                 if self.first() == '=' {
                     let _ = self.bump();
                     TokenKind::BooleanEq
+                } else if self.first() == '>' {
+                    let _ = self.bump();
+                    TokenKind::FatArrow
                 } else {
                     TokenKind::Eq
                 }
