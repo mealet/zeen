@@ -204,6 +204,7 @@ impl<'inp> Tokenizer<'inp> {
             '?' => TokenKind::Question,
             '=' => TokenKind::Eq,
             '!' => TokenKind::Bang,
+            '/' => TokenKind::Slash,
 
             '<' => TokenKind::Lt,
             '>' => TokenKind::Gt,
