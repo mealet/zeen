@@ -178,7 +178,7 @@ fn floats() {
 
 #[test]
 fn char_literal() {
-    const SOURCE: &str = "'a'";
+    const SOURCE: &str = "'a' '\\0'";
 
     let mut tokens = tokenize(SOURCE);
 
@@ -192,6 +192,19 @@ fn char_literal() {
                 }
             },
             SourceSpan::new(0.into(), 3)
+        ))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::Literal {
+                kind: token::LiteralKind::Char {
+                    terminated: true,
+                    empty: false
+                }
+            },
+            SourceSpan::new(4.into(), 4)
         ))
     );
 
