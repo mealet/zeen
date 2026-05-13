@@ -45,6 +45,14 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+
+            let elapsed = start.elapsed().as_secs_f64();
+
+            println!("Tokenized in {} seconds", elapsed);
+            println!(
+                "Speed is {} MB/s",
+                (content.len() as f64 / 1024.0 / 1024.0) / elapsed
+            );
         }
         Err(err) => {
             eprintln!("Unable to open file: {}", err);
