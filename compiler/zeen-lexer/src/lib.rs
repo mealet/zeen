@@ -271,7 +271,13 @@ impl<'inp> Tokenizer<'inp> {
 
     fn ident(&mut self) -> TokenKind {
         self.eat_while(is_ident_continue);
-        TokenKind::Ident
+
+        if self.first() == '!' {
+            let _ = self.bump();
+            TokenKind::MacroIdent
+        } else {
+            TokenKind::Ident
+        }
     }
 
     fn char_literal(&mut self) -> TokenKind {
