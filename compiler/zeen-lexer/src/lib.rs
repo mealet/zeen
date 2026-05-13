@@ -419,8 +419,7 @@ impl<'inp> Tokenizer<'inp> {
                     kind
                 }
             }
-            chr if is_ident_continue(chr) => self.ident(),
-            _ => TokenKind::Unknown,
+            _ => self.ident(),
         }
     }
 
@@ -447,7 +446,40 @@ impl<'inp> Tokenizer<'inp> {
     }
 
     fn raw_str_literal(&mut self) -> TokenKind {
-        todo!()
+        match self.first() {
+            '#' => {
+                let _ = self.bump();
+
+                if self.first() != '"' {
+                    self.eat_while(|chr| chr != '#' && chr != ';' && chr != '\0');
+
+                    return TokenKind::Literal {
+                        kind: token::LiteralKind::InvalidRawStr,
+                    };
+                }
+
+                let _ = self.bump();
+
+                let mut terminated = false;
+
+                while (self.first() != '\0') {
+                    if self.first() == '"' && self.second() == '#' {
+                        let _ = self.bump();
+                        let _ = self.bump();
+
+                        terminated = true;
+                        break;
+                    }
+
+                    let _ = self.bump();
+                }
+
+                TokenKind::Literal {
+                    kind: token::LiteralKind::RawStr { terminated },
+                }
+            }
+            _ => self.ident(),
+        }
     }
 }
 
