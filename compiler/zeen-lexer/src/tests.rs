@@ -186,7 +186,10 @@ fn char_literal() {
         tokens.next(),
         Some(Token::new(
             TokenKind::Literal {
-                kind: token::LiteralKind::Char
+                kind: token::LiteralKind::Char {
+                    terminated: true,
+                    empty: false
+                }
             },
             SourceSpan::new(0.into(), 3)
         ))
@@ -205,7 +208,10 @@ fn bytechar_literal() {
         tokens.next(),
         Some(Token::new(
             TokenKind::Literal {
-                kind: token::LiteralKind::Char
+                kind: token::LiteralKind::Char {
+                    terminated: true,
+                    empty: false,
+                }
             },
             SourceSpan::new(0.into(), 4)
         ))
@@ -224,7 +230,7 @@ fn str_literal() {
         tokens.next(),
         Some(Token::new(
             TokenKind::Literal {
-                kind: token::LiteralKind::Str
+                kind: token::LiteralKind::Str { terminated: true }
             },
             SourceSpan::new(0.into(), 6)
         ))
@@ -243,7 +249,7 @@ fn raw_str_literal() {
         tokens.next(),
         Some(Token::new(
             TokenKind::Literal {
-                kind: token::LiteralKind::RawStr
+                kind: token::LiteralKind::RawStr { terminated: true }
             },
             SourceSpan::new(0.into(), 10)
         ))

@@ -176,6 +176,8 @@ impl<'inp> Tokenizer<'inp> {
                 TokenKind::Literal { kind: literal_kind }
             }
 
+            '\'' => self.char_literal(),
+
             '&' => {
                 if matches!(self.first(), ' ' | '\0') {
                     TokenKind::Ampersand
@@ -270,6 +272,39 @@ impl<'inp> Tokenizer<'inp> {
     fn ident(&mut self) -> TokenKind {
         self.eat_while(is_ident_continue);
         TokenKind::Ident
+    }
+
+    fn char_literal(&mut self) -> TokenKind {
+        if self.first() == '\'' {
+            return TokenKind::Literal {
+                kind: token::LiteralKind::Char {
+                    terminated: true,
+                    empty: true,
+                },
+            };
+        }
+
+        match self.first() {
+            '\\' => {
+                let _ = self.bump();
+            }
+            _ => {}
+        };
+
+        let _ = self.bump();
+
+        let terminated = self.first() == '\'';
+
+        if terminated {
+            let _ = self.bump();
+        }
+
+        TokenKind::Literal {
+            kind: token::LiteralKind::Char {
+                terminated,
+                empty: false,
+            },
+        }
     }
 
     fn number(&mut self, first_digit: char) -> token::LiteralKind {

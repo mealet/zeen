@@ -73,10 +73,10 @@ pub enum TokenKind {
 pub enum LiteralKind {
     Int { base: IntBase },
     Float,
-    Char,
-    ByteChar,
-    Str,
-    RawStr,
+    Char { terminated: bool, empty: bool },
+    ByteChar { terminated: bool, empty: bool },
+    Str { terminated: bool },
+    RawStr { terminated: bool },
 }
 
 #[derive(Debug, PartialEq)]
