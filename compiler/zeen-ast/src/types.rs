@@ -1,7 +1,14 @@
 use lasso::Spur;
+use miette::SourceSpan;
 
 #[derive(Debug)]
-pub enum TypeExpr<'arena> {
+pub struct TypeExpr<'arena> {
+    kind: TypeKind<'arena>,
+    span: SourceSpan,
+}
+
+#[derive(Debug)]
+pub enum TypeKind<'arena> {
     Builtin(BuiltinType),
 
     SelfType,

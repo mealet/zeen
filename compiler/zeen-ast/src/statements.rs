@@ -1,4 +1,5 @@
 use lasso::Spur;
+use miette::SourceSpan;
 
 use crate::{
     expressions::{self, Expression},
@@ -6,7 +7,13 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub enum Statement<'arena> {
+pub struct Statement<'arena> {
+    kind: StatementKind<'arena>,
+    span: SourceSpan,
+}
+
+#[derive(Debug)]
+pub enum StatementKind<'arena> {
     Let {
         name: Spur,
         explicit_type: Option<&'arena TypeExpr<'arena>>,
