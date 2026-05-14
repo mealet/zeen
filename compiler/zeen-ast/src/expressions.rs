@@ -1,8 +1,6 @@
 use lasso::Spur;
 use miette::SourceSpan;
 
-// NOTE: Spur is a key for `lasso` string interner.
-
 pub struct Expression<'arena> {
     kind: ExpressionKind<'arena>,
     span: SourceSpan,

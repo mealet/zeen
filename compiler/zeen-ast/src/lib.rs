@@ -8,3 +8,4 @@ pub mod statements;
 // Box/Rc/Arc/...). So expressions/statements/declarations must keep lifetimed references to other
 // members instead of "boxing" them on heap.
 
+// NOTE: `Spur` is a key for `lasso` string interner.
