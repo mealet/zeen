@@ -8,3 +8,9 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+bumpalo = "3.20.2"
+lasso = "0.7.3"
+miette = "7.6.0"
+zeen-lexer = {path = "../zeen-lexer"}
+zeen-ast = {path = "../zeen-ast"}
+thiserror = "2.0.18"

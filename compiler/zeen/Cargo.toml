@@ -13,4 +13,4 @@ lasso = "0.7.3"
 miette = { version = "7.6.0", features = ["fancy"] }
 thiserror = "2.0.18"
 zeen-driver = {path = "../zeen-driver"}
-zeen-lexer= {path = "../zeen-lexer"}
+zeen-lexer = {path = "../zeen-lexer"}

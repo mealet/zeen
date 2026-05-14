@@ -389,6 +389,14 @@ dependencies = [
 [[package]]
 name = "zeen-parser"
 version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "miette",
+ "thiserror",
+ "zeen-ast",
+ "zeen-lexer",
+]
 
 [[package]]
 name = "zerocopy"
