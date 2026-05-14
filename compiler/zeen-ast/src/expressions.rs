@@ -12,15 +12,16 @@ pub enum ExpressionKind<'arena> {
     Macro(Spur),
 
     Binary {
-        lhs: &'arena ExpressionKind<'arena>,
-        rhs: &'arena ExpressionKind<'arena>,
+        lhs: &'arena Expression<'arena>,
+        rhs: &'arena Expression<'arena>,
         op: BinaryOp,
     },
 
     Unary {
-        expr: &'arena ExpressionKind<'arena>,
+        expr: &'arena Expression<'arena>,
         op: UnaryOp,
     },
+
 }
 
 // Literal
