@@ -1,11 +1,13 @@
 use lasso::Spur;
 use miette::SourceSpan;
 
+#[derive(Debug)]
 pub struct Expression<'arena> {
     kind: ExpressionKind<'arena>,
     span: SourceSpan,
 }
 
+#[derive(Debug)]
 pub enum ExpressionKind<'arena> {
     Literal(ExpressionLiteral),
     Ident(Spur),
@@ -63,6 +65,7 @@ pub enum ExpressionKind<'arena> {
 
 // Literal
 
+#[derive(Debug)]
 pub enum ExpressionLiteral {
     Int(i64),
     Float(f64),
@@ -73,6 +76,7 @@ pub enum ExpressionLiteral {
 
 // Binary
 
+#[derive(Debug)]
 pub enum BinaryOp {
     // Arithmetic
     Add, // +
@@ -103,6 +107,7 @@ pub enum BinaryOp {
 
 // Unary
 
+#[derive(Debug)]
 pub enum UnaryOp {
     Neg,    // -a
     Not,    // !a (boolean)
@@ -113,6 +118,7 @@ pub enum UnaryOp {
 
 // Struct Init
 
+#[derive(Debug)]
 pub struct FieldInit<'arena> {
     name: Spur,
     value: &'arena Expression<'arena>,
@@ -120,12 +126,14 @@ pub struct FieldInit<'arena> {
 
 // Switch
 
+#[derive(Debug)]
 pub struct Arm<'arena> {
     pattern: Pattern<'arena>,
     body: &'arena Expression<'arena>,
     guard: Option<&'arena Expression<'arena>>,
 }
 
+#[derive(Debug)]
 pub enum Pattern<'arena> {
     Literal(ExpressionLiteral),
     Named(Spur),
