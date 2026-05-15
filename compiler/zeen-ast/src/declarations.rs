@@ -3,13 +3,13 @@ use miette::SourceSpan;
 
 use crate::{expressions::Expression, statements::Statement, types::TypeExpr};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Declaration<'arena> {
     kind: DeclarationKind<'arena>,
     span: SourceSpan,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DeclarationKind<'arena> {
     FnDecl {
         name: Spur,

@@ -1,0 +1,39 @@
+use smol_str::SmolStr;
+use std::sync::Arc;
+
+use miette::{Diagnostic, NamedSource, SourceSpan};
+use thiserror::Error;
+
+#[derive(Debug, Error, Diagnostic)]
+pub enum ParserError {
+    #[error("unknown token found")]
+    #[diagnostic(severity(Error), code(zeen::parser::unknown_token))]
+    UnknownToken {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("right here")]
+        span: SourceSpan,
+    },
+
+    #[error("expected `{expected}` token")]
+    #[diagnostic(severity(Error), code(zeen::parser::expected_token))]
+    ExpectedToken {
+        expected: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("but found this")]
+        span: SourceSpan,
+    },
+
+    #[error("expected `{expected}`, but reached end of file")]
+    #[diagnostic(severity(Error), code(zeen::parser::unexpected_eof))]
+    UnexpectedEof {
+        expected: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("ended up here")]
+        span: SourceSpan,
+    },
+}

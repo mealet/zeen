@@ -14,3 +14,4 @@ miette = "7.6.0"
 zeen-lexer = {path = "../zeen-lexer"}
 zeen-ast = {path = "../zeen-ast"}
 thiserror = "2.0.18"
+smol_str = "0.3.6"
