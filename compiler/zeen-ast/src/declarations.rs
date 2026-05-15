@@ -13,8 +13,11 @@ pub struct Declaration<'arena> {
 pub enum DeclarationKind<'arena> {
     FnDecl {
         name: Spur,
+
+        generics: &'arena [GenericType<'arena>],
         params: &'arena [FnParam<'arena>],
         return_type: Option<&'arena TypeExpr<'arena>>,
+
         body: Option<&'arena Statement<'arena>>,
 
         is_pub: bool,
@@ -23,8 +26,11 @@ pub enum DeclarationKind<'arena> {
 
     StructDecl {
         name: Spur,
+
+        generics: &'arena [GenericType<'arena>],
         fields: &'arena [StructField<'arena>],
         methods: &'arena [Declaration<'arena>], // FnDecl
+
         is_pub: bool,
     },
 
@@ -60,6 +66,12 @@ pub struct FnParam<'arena> {
     name: Option<Spur>,
     ty: &'arena TypeExpr<'arena>,
     span: SourceSpan,
+}
+
+#[derive(Debug)]
+pub struct GenericType<'arena> {
+    name: Spur,
+    interfaces: Option<&'arena [Spur]>,
 }
 
 // Struct
