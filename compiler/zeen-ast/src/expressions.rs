@@ -141,7 +141,7 @@ pub struct Arm<'arena> {
 
 #[derive(Debug)]
 pub enum Pattern<'arena> {
-    Literal(ExpressionLiteral),
+    Literal(Literal),
     Named(Spur),
     Or(&'arena [Pattern<'arena>]),
     Wildcard,
