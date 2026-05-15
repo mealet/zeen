@@ -116,8 +116,8 @@ impl<'inp> Tokenizer<'inp> {
 
                     // block comment
                     '*' => {
-                        while !self.is_eof() && !(self.first() == '*' && self.second() == '/') {
-                            if self.bump() == None {
+                        while !(self.is_eof() || self.first() == '*' && self.second() == '/') {
+                            if self.bump().is_none() {
                                 break;
                             }
                         }
@@ -159,11 +159,11 @@ impl<'inp> Tokenizer<'inp> {
 
                 let slice = &self.src[pos_start..pos_start + pos_len];
 
-                if let Some(compiler_type) = token::CompilerType::from_str(slice) {
+                if let Some(compiler_type) = token::CompilerType::try_str(slice) {
                     kind = TokenKind::Type(compiler_type);
                 }
 
-                if let Some(compiler_keyword) = token::CompilerKeyword::from_str(slice) {
+                if let Some(compiler_keyword) = token::CompilerKeyword::try_str(slice) {
                     kind = TokenKind::Keyword(compiler_keyword);
                 }
 
@@ -295,11 +295,8 @@ impl<'inp> Tokenizer<'inp> {
             };
         }
 
-        match self.first() {
-            '\\' => {
-                let _ = self.bump();
-            }
-            _ => {}
+        if self.first() == '\\' {
+            let _ = self.bump();
         };
 
         let _ = self.bump();
@@ -327,7 +324,7 @@ impl<'inp> Tokenizer<'inp> {
                     base = token::IntBase::Binary;
 
                     let _ = self.bump();
-                    let _ = self.eat_decimal_digits();
+                    self.eat_decimal_digits();
 
                     return token::LiteralKind::Int { base };
                 }
@@ -336,7 +333,7 @@ impl<'inp> Tokenizer<'inp> {
                     base = token::IntBase::Octal;
 
                     let _ = self.bump();
-                    let _ = self.eat_decimal_digits();
+                    self.eat_decimal_digits();
 
                     return token::LiteralKind::Int { base };
                 }
@@ -345,7 +342,7 @@ impl<'inp> Tokenizer<'inp> {
                     base = token::IntBase::Hexadecimal;
 
                     let _ = self.bump();
-                    let _ = self.eat_hexadecimal_digits();
+                    self.eat_hexadecimal_digits();
 
                     return token::LiteralKind::Int { base };
                 }

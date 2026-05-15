@@ -35,7 +35,7 @@ fn main() {
                 if token.kind == zeen_lexer::TokenKind::Unknown {
                     let rep = driver
                         .report(&SrcDebugger {
-                            dbg: format!("Unknown token"),
+                            dbg: "Unknown token".to_string(),
                             src: NamedSource::new(&path, content.clone()),
                             span: token.span,
                         })

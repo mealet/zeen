@@ -116,7 +116,7 @@ pub enum CompilerType {
 }
 
 impl CompilerType {
-    pub fn from_str(str: impl AsRef<str>) -> Option<Self> {
+    pub fn try_str(str: impl AsRef<str>) -> Option<Self> {
         match str.as_ref() {
             "i8" => Some(CompilerType::i8),
             "i16" => Some(CompilerType::i16),
@@ -184,7 +184,7 @@ pub enum CompilerKeyword {
 }
 
 impl CompilerKeyword {
-    pub fn from_str(str: impl AsRef<str>) -> Option<Self> {
+    pub fn try_str(str: impl AsRef<str>) -> Option<Self> {
         match str.as_ref() {
             "if" => Some(CompilerKeyword::If),
             "else" => Some(CompilerKeyword::Else),
