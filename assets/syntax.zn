@@ -127,7 +127,7 @@ fn foo(a: i32, b: i32) i32 {
   return a + b;
 }
 
-public fn add_print<T: Add + Display>(a: T, b: T) {
+public fn add_print[T: Add + Display](a: T, b: T) {
   println!("result: {}", a + b);
 }
 
@@ -152,6 +152,11 @@ implement Foo : Display {
   fn display(self) *char {
     return format!("{}", self.value);
   }
+}
+
+struct Value[T: Add, R: Add] {
+  a: T,
+  b: R
 }
 
 /* ====@ Enums @==== */
@@ -195,6 +200,23 @@ implement Foo : Display {
 //
 // Constant definition without initialization is not allowed.
 
+/* ====@ Generics Usage @==== */
+/*
+  Structs and functions can have generic types, there's 2 ways to use them:
+*/
 
+// 1. Implicit usage by argument.
 
-// TODO: Finish core features description
+fn foo<T: Display>(a: T) { /* ... */ }
+
+{
+  let a: i32 = 10;
+  foo(a); // will represent foo[i32]()
+}
+
+// 2. Explicit
+
+{
+  let a = 123;
+  foo[i64](a);
+}
