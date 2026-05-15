@@ -38,6 +38,7 @@ pub enum TokenKind {
     Leq,        // <=
     Geq,        // >=
     BooleanEq,  // ==
+    BooleanNe,  // !=
     BooleanAnd, // &&
     BooleanOr,  // ||
 

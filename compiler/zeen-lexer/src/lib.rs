@@ -239,13 +239,21 @@ impl<'inp> Tokenizer<'inp> {
                 }
             }
 
+            '!' => {
+                if self.first() == '=' {
+                    let _ = self.bump();
+                    TokenKind::BooleanNe
+                } else {
+                    TokenKind::Bang
+                }
+            }
+
             ';' => TokenKind::Semicolon,
             ':' => TokenKind::Colon,
             ',' => TokenKind::Comma,
             '.' => TokenKind::Dot,
             '~' => TokenKind::Tilde,
             '?' => TokenKind::Question,
-            '!' => TokenKind::Bang,
             '/' => TokenKind::Slash,
 
             '+' => TokenKind::Plus,
