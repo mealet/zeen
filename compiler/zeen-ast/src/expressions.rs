@@ -100,7 +100,7 @@ pub enum BinaryOp {
     Ge, // >= / =>
 
     // Boolean
-    Logicaland, // &&
+    LogicalAnd, // &&
     LogicalOr,  // ||
 
     // Bitwise
