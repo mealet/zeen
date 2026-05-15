@@ -15,5 +15,3 @@ pub use types::{TypeExpr, TypeKind};
 // members instead of "boxing" them on heap.
 
 // NOTE: `Spur` is a key for `lasso` string interner.
-
-// TODO: Add generic types support

@@ -9,8 +9,13 @@ pub struct Expression<'arena> {
 
 #[derive(Debug)]
 pub enum ExpressionKind<'arena> {
-    Literal(ExpressionLiteral),
-    Ident(Spur),
+    Literal(Literal),
+
+    Ident {
+        name: Spur,
+        generic_args: Option<&'arena [crate::types::TypeExpr<'arena>]>,
+    },
+
     Macro(Spur),
 
     Binary {
@@ -27,6 +32,7 @@ pub enum ExpressionKind<'arena> {
     Call {
         callee: &'arena Expression<'arena>,
         args: &'arena [Expression<'arena>],
+        generic_args: Option<&'arena [crate::types::TypeExpr<'arena>]>,
     },
 
     If {
@@ -66,7 +72,7 @@ pub enum ExpressionKind<'arena> {
 // Literal
 
 #[derive(Debug)]
-pub enum ExpressionLiteral {
+pub enum Literal {
     Int(i64),
     Float(f64),
     Bool(bool),
