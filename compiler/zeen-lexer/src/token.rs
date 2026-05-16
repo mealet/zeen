@@ -77,7 +77,7 @@ pub enum TokenKind {
     Eof,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum LiteralKind {
     Int { base: IntBase },
     Float,
@@ -88,7 +88,7 @@ pub enum LiteralKind {
     InvalidRawStr,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum IntBase {
     Binary = 2,
     Octal = 8,
