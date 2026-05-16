@@ -1,6 +1,6 @@
 use miette::SourceSpan;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: SourceSpan,
@@ -10,9 +10,16 @@ impl Token {
     pub fn new(kind: TokenKind, span: SourceSpan) -> Self {
         Self { kind, span }
     }
+
+    pub fn merge_span(&self, other: SourceSpan) -> SourceSpan {
+        let start = self.span.offset().min(other.offset());
+        let end = (self.span.offset() + self.span.len()).max(other.offset() + other.len());
+
+        SourceSpan::new(start.into(), end - start)
+    }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum TokenKind {
     Ident,      // abcd
     MacroIdent, // print!
@@ -70,7 +77,7 @@ pub enum TokenKind {
     Eof,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum LiteralKind {
     Int { base: IntBase },
     Float,
@@ -81,7 +88,7 @@ pub enum LiteralKind {
     InvalidRawStr,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum IntBase {
     Binary = 2,
     Octal = 8,
@@ -90,7 +97,7 @@ pub enum IntBase {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum CompilerType {
     // signed integers
     i8,
@@ -149,7 +156,7 @@ impl std::fmt::Display for CompilerType {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum CompilerKeyword {
     If,
     Else,
