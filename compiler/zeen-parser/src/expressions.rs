@@ -139,7 +139,7 @@ impl BinaryInfo {
     }
 }
 
-// ==@ Expressions Parser @==
+/// ==@ Expressions Parser @==
 
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
@@ -218,6 +218,29 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_primary(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+}
+
+/// Literals Implementations
+impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
+    pub fn parse_literal_int(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    pub fn parse_literal_float(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    pub fn parse_literal_bool(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    pub fn parse_literal_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    pub fn parse_literal_null(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 }
