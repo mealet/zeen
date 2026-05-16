@@ -291,10 +291,18 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let token = self.p.current()?;
         let span = token.span;
 
-        let str_value = &self.p.src[token.span.offset()..token.span.offset() + token.span.len()];
-        let base = base as u32;
+        let mut str_value =
+            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+        let radix = base as u32;
 
-        let value = i64::from_str_radix(str_value, base).unwrap_or_else(|err| {
+        match base {
+            IntBase::Binary => str_value = str_value.replace("0b", ""),
+            IntBase::Hexadecimal => str_value = str_value.replace("0x", ""),
+            IntBase::Octal => str_value = str_value.replace("0o", ""),
+            IntBase::Decimal => {}
+        };
+
+        let value = i64::from_str_radix(&str_value, radix).unwrap_or_else(|err| {
             self.p.report(ParserError::InvalidLiteral {
                 message: "invalid integer literal found".into(),
                 label: format!("number parser returned: `{}`", err).into(),
@@ -387,5 +395,73 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_switch(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn literal_int() {
+        const SRC: &str = "123 0x1ef 0b1011 0o123";
+
+        let src = std::sync::Arc::new(SRC.to_string());
+
+        let mut rodeo = lasso::Rodeo::default();
+        let bump = bumpalo::Bump::new();
+
+        let mut tokens = zeen_lexer::tokenize(SRC);
+        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+
+        let mut expr_parser = ExprParser::new(&mut parser);
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::Int(123)),
+                    span: (0, 3).into()
+                }
+            );
+        }
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::Int(0x1ef)),
+                    span: (4, 5).into()
+                }
+            );
+        }
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::Int(0b1011)),
+                    span: (10, 6).into()
+                }
+            );
+        }
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::Int(0o123)),
+                    span: (17, 5).into()
+                }
+            );
+        }
     }
 }

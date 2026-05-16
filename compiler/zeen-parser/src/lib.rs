@@ -9,7 +9,7 @@ use error::ParserError;
 use zeen_lexer::{Token, TokenKind};
 
 pub mod error;
-mod expressions;
+pub mod expressions;
 
 pub struct Parser<'ctx> {
     src: Arc<String>,
