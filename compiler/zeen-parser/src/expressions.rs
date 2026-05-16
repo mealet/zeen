@@ -169,7 +169,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                 break;
             }
 
-            self.p.advance()?;
+            let _ = self.p.advance()?;
 
             let rhs = self.parse_precedence(op.prec.next())?;
 
@@ -187,7 +187,30 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_unary(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        use expressions::UnaryOp;
+
+        let token = self.p.current_clone()?;
+
+        let op = match token.kind {
+            TokenKind::Minus => UnaryOp::Neg,
+            TokenKind::Bang => UnaryOp::Not,
+            TokenKind::Tilde => UnaryOp::BitNot,
+            TokenKind::Star => UnaryOp::Deref,
+            TokenKind::Ampersand => UnaryOp::AddrOf,
+
+            _ => return self.parse_postfix(),
+        };
+
+        let _ = self.p.advance()?;
+
+        let expr = self.parse_unary()?;
+
+        let result = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Unary { expr, op },
+            span: token.merge_span(expr.span),
+        });
+
+        return Some(result);
     }
 
     fn parse_postfix(&mut self) -> Option<&'ctx Expression<'ctx>> {
