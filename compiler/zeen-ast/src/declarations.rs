@@ -9,6 +9,15 @@ pub struct Declaration<'arena> {
     pub span: SourceSpan,
 }
 
+impl Declaration<'_> {
+    pub fn merge_span(&self, other: SourceSpan) -> SourceSpan {
+        let start = self.span.offset().min(other.offset());
+        let end = (self.span.offset() + self.span.len()).max(other.offset() + other.len());
+
+        SourceSpan::new(start.into(), end - start)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum DeclarationKind<'arena> {
     FnDecl {
