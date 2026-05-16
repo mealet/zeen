@@ -206,7 +206,7 @@ impl CompilerKeyword {
             "switch" => Some(CompilerKeyword::Switch),
             "return" => Some(CompilerKeyword::Return),
 
-            "pub" => Some(CompilerKeyword::Pub),
+            "public" => Some(CompilerKeyword::Pub),
             "fn" => Some(CompilerKeyword::Fn),
             "extern" => Some(CompilerKeyword::Extern),
             "include" => Some(CompilerKeyword::Include),
