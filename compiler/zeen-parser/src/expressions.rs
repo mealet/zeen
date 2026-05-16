@@ -214,7 +214,19 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_postfix(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let mut expr = self.parse_primary()?;
+
+        loop {
+            expr = match self.p.current()?.kind {
+                TokenKind::OpenParen => self.parse_call(expr)?,
+                TokenKind::OpenBracket => self.parse_slice_access(expr)?,
+                TokenKind::Dot => self.parse_field_access(expr)?,
+
+                _ => break,
+            }
+        }
+
+        Some(expr)
     }
 
     fn parse_primary(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -258,7 +270,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         todo!()
     }
 
-    fn parse_call(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_call(&mut self, callee: &Expression) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 
@@ -266,11 +278,11 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         todo!()
     }
 
-    fn parse_field_access(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_field_access(&mut self, object: &Expression) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 
-    fn parse_slice_access(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_slice_access(&mut self, object: &Expression) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 
