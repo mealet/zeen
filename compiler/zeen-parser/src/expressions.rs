@@ -230,17 +230,98 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_primary(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let token = self.p.current()?;
+
+        return match token.kind {
+            TokenKind::Literal { kind } => self.parse_literal(kind),
+
+            _ => {
+                self.p.report(ParserError::UnknownExpression {
+                    token_kind: format!("{:?}", token.kind).into(),
+                    src: self.p.named_src(),
+                    span: token.span,
+                });
+
+                None
+            }
+        };
     }
 }
 
 /// Literals Implementations
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
-    fn parse_literal_int(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+    fn parse_literal(
+        &mut self,
+        literal: zeen_lexer::token::LiteralKind,
+    ) -> Option<&'ctx Expression<'ctx>> {
+        use zeen_lexer::token::LiteralKind;
+
+        let token = self.p.current()?;
+
+        let output = match literal {
+            LiteralKind::Int { base } => self.parse_literal_int(base),
+            LiteralKind::Float => self.parse_literal_float(),
+            LiteralKind::Char { terminated, empty } => self.parse_literal_char(),
+            LiteralKind::ByteChar { terminated, empty } => self.parse_literal_bytechar(),
+            LiteralKind::Str { terminated } => self.parse_literal_string(),
+            LiteralKind::RawStr { terminated } => self.parse_literal_raw_string(),
+            LiteralKind::InvalidRawStr => {
+                self.p.report(ParserError::InvalidLiteral {
+                    message: "invalid raw string literal found".into(),
+                    label: "verify this literal".into(),
+                    src: self.p.named_src(),
+                    span: token.span,
+                });
+
+                None
+            }
+        };
+
+        let _ = self.p.advance();
+
+        output
+    }
+
+    fn parse_literal_int(
+        &mut self,
+        base: zeen_lexer::token::IntBase,
+    ) -> Option<&'ctx Expression<'ctx>> {
+        use zeen_lexer::token::IntBase;
+
+        let token = self.p.current()?;
+        let span = token.span;
+
+        let str_value = &self.p.src[token.span.offset()..token.span.offset() + token.span.len()];
+        let base = base as u32;
+
+        let value = i64::from_str_radix(str_value, base).unwrap_or_else(|err| {
+            self.p.report(ParserError::InvalidLiteral {
+                message: "invalid integer literal found".into(),
+                label: format!("number parser returned: `{}`", err).into(),
+                src: self.p.named_src(),
+                span: span,
+            });
+
+            return 0;
+        });
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Literal(expressions::Literal::Int(value)),
+            span,
+        });
+
+        Some(expr)
     }
 
     fn parse_literal_float(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_literal_char(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_literal_bytechar(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 
@@ -249,6 +330,10 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_literal_raw_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 

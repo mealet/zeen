@@ -15,6 +15,17 @@ pub enum ParserError {
         span: SourceSpan,
     },
 
+    #[error("unknown expression found")]
+    #[diagnostic(severity(Error), code(zeen::parser::unknown_expression))]
+    UnknownExpression {
+        token_kind: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("[`{token_kind}`]")]
+        span: SourceSpan,
+    },
+
     #[error("expected `{expected}` token")]
     #[diagnostic(severity(Error), code(zeen::parser::expected_token))]
     ExpectedToken {
@@ -34,6 +45,18 @@ pub enum ParserError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("ended up here")]
+        span: SourceSpan,
+    },
+
+    #[error("{message}")]
+    #[diagnostic(severity(Error), code(zeen::parser::unexpected_eof))]
+    InvalidLiteral {
+        message: SmolStr,
+        label: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("{label}")]
         span: SourceSpan,
     },
 }
