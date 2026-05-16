@@ -1,7 +1,7 @@
 use lasso::Spur;
 use miette::SourceSpan;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct TypeExpr<'arena> {
     pub kind: TypeKind<'arena>,
     pub span: SourceSpan,
@@ -16,7 +16,7 @@ impl TypeExpr<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum TypeKind<'arena> {
     Builtin(BuiltinType),
 
@@ -40,7 +40,7 @@ pub enum TypeKind<'arena> {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum BuiltinType {
     i8,
     i16,
