@@ -17,7 +17,7 @@ pub struct Parser<'ctx> {
 
     tokens: &'ctx mut dyn Iterator<Item = Token>,
 
-    arena: &'ctx mut Bump,
+    arena: &'ctx Bump,
     interner: &'ctx mut Rodeo,
 
     current: Option<Token>,
@@ -32,7 +32,7 @@ impl<'ctx> Parser<'ctx> {
         filename: &'ctx str,
         src: Arc<String>,
         tokens: &'ctx mut dyn Iterator<Item = Token>,
-        arena: &'ctx mut Bump,
+        arena: &'ctx Bump,
         interner: &'ctx mut Rodeo,
     ) -> Self {
         let current = tokens.next();
@@ -86,6 +86,10 @@ impl<'ctx> Parser<'ctx> {
 
     pub fn current(&self) -> Option<&Token> {
         self.current.as_ref()
+    }
+
+    pub fn current_clone(&self) -> Option<Token> {
+        self.current.clone()
     }
 
     pub fn at(&self, kind: TokenKind) -> bool {

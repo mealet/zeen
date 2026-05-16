@@ -3,12 +3,12 @@ use strum::FromRepr;
 use zeen_ast::expressions::{self, Expression, ExpressionKind};
 use zeen_lexer::{Token, TokenKind};
 
-pub struct ExprParser<'ctx> {
-    p: &'ctx Parser<'ctx>,
+pub struct ExprParser<'ctx, 'pr> {
+    p: &'pr mut Parser<'ctx>,
 }
 
 #[repr(u8)]
-#[derive(PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, FromRepr, Copy, Clone)]
 enum Precedence {
     Lowest,
     LogicalOr,
@@ -141,20 +141,60 @@ impl BinaryInfo {
 
 // ==@ Expressions Parser @==
 
-impl<'ctx> ExprParser<'ctx> {
-    pub fn new(parser: &'ctx Parser<'ctx>) -> Self {
+impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
+    pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
         Self { p: parser }
     }
 
-    pub fn parse(&mut self) -> Option<Expression<'_>> {
+    pub fn parse(&mut self) -> Option<&'ctx Expression<'ctx>> {
         self.parse_precedence(Precedence::Lowest)
     }
 
-    pub fn parse_non_binary(&mut self) -> Option<Expression<'_>> {
+    pub fn parse_non_binary(&mut self) -> Option<&'ctx Expression<'ctx>> {
         self.parse_precedence(Precedence::NonBinary)
     }
 
-    fn parse_precedence(&mut self, min_prec: Precedence) -> Option<Expression<'_>> {
+    fn parse_precedence(&mut self, min_prec: Precedence) -> Option<&'ctx Expression<'ctx>> {
+        let mut lhs = self.parse_unary()?;
+
+        loop {
+            let Some(current) = self.p.current() else {
+                break;
+            };
+            let Some(op) = BinaryInfo::new(current) else {
+                break;
+            };
+
+            if (op.prec as u8) < (min_prec as u8) {
+                break;
+            }
+
+            self.p.advance()?;
+
+            let rhs = self.parse_precedence(op.prec.next())?;
+
+            lhs = self.p.arena.alloc(Expression {
+                kind: ExpressionKind::Binary {
+                    lhs,
+                    rhs,
+                    op: op.tag,
+                },
+                span: lhs.merge_span(rhs.span),
+            });
+        }
+
+        Some(lhs)
+    }
+
+    fn parse_unary(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_postfix(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_primary(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 }
