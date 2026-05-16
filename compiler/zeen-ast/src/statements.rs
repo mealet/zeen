@@ -8,8 +8,8 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Statement<'arena> {
-    kind: StatementKind<'arena>,
-    span: SourceSpan,
+    pub kind: StatementKind<'arena>,
+    pub span: SourceSpan,
 }
 
 #[derive(Debug)]

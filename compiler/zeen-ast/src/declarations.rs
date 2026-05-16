@@ -5,8 +5,8 @@ use crate::{expressions::Expression, statements::Statement, types::TypeExpr};
 
 #[derive(Debug, Clone)]
 pub struct Declaration<'arena> {
-    kind: DeclarationKind<'arena>,
-    span: SourceSpan,
+    pub kind: DeclarationKind<'arena>,
+    pub span: SourceSpan,
 }
 
 #[derive(Debug, Clone)]

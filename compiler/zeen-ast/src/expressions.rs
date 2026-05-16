@@ -3,8 +3,8 @@ use miette::SourceSpan;
 
 #[derive(Debug)]
 pub struct Expression<'arena> {
-    kind: ExpressionKind<'arena>,
-    span: SourceSpan,
+    pub kind: ExpressionKind<'arena>,
+    pub span: SourceSpan,
 }
 
 #[derive(Debug)]
