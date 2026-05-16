@@ -224,23 +224,71 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
 /// Literals Implementations
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
-    pub fn parse_literal_int(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_literal_int(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 
-    pub fn parse_literal_float(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_literal_float(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 
-    pub fn parse_literal_bool(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_literal_bool(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 
-    pub fn parse_literal_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_literal_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 
-    pub fn parse_literal_null(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_literal_null(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+}
+
+impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
+    fn parse_ident_or_struct_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_struct_init_fields(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_grouped(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_call(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_macro_call(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_field_access(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_slice_access(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_if_expr(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_array_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+
+    fn parse_block(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        todo!()
+    }
+}
+
+impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
+    fn parse_switch(&mut self) -> Option<&'ctx Expression<'ctx>> {
         todo!()
     }
 }
