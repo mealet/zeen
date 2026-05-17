@@ -952,4 +952,27 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn ident_simple() {
+        const SRC: &str = "foo";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+            let spur = rodeo.lock().unwrap().try_get_or_intern("foo").unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Ident {
+                        name: spur,
+                        generic_args: None,
+                    },
+                    span: (0, "null".len()).into()
+                }
+            );
+        }
+    }
 }
