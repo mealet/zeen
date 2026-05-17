@@ -100,7 +100,7 @@ impl<'ctx> Parser<'ctx> {
     }
 
     pub fn at(&self, kind: TokenKind) -> bool {
-        self.current().map_or(false, |token| token.kind == kind)
+        self.current().is_some_and(|token| token.kind == kind)
     }
 
     pub fn is_eof(&self) -> bool {
@@ -111,13 +111,13 @@ impl<'ctx> Parser<'ctx> {
         let next = self.peeked.take().or_else(|| self.tokens.next());
         let prev = std::mem::replace(&mut self.current, next);
 
-        if let Some(token) = &self.current {
-            if token.kind == TokenKind::Unknown {
-                self.report(ParserError::UnknownToken {
-                    src: self.named_src(),
-                    span: token.span,
-                });
-            }
+        if let Some(token) = &self.current
+            && token.kind == TokenKind::Unknown
+        {
+            self.report(ParserError::UnknownToken {
+                src: self.named_src(),
+                span: token.span,
+            });
         }
 
         prev
@@ -139,11 +139,11 @@ impl<'ctx> Parser<'ctx> {
         }
     }
 
-    pub fn expect(&mut self, kind: TokenKind, display: &str) -> Result<Token, ()> {
+    pub fn expect(&mut self, kind: TokenKind, display: &str) -> Option<Token> {
         if self.at(kind) {
-            Ok(self.advance().unwrap())
+            Some(self.advance().unwrap())
         } else {
-            if let Some(cur) = self.current().clone() {
+            if let Some(cur) = self.current() {
                 self.report(ParserError::ExpectedToken {
                     expected: SmolStr::from(display),
 
@@ -159,7 +159,7 @@ impl<'ctx> Parser<'ctx> {
                 });
             }
 
-            Err(())
+            None
         }
     }
 

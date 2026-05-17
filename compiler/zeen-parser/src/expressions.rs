@@ -153,7 +153,6 @@ fn character_escape(escape: char) -> Option<char> {
 }
 
 /// ==@ Expressions Parser @==
-
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
         Self { p: parser }
@@ -174,10 +173,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_precedence(&mut self, min_prec: Precedence) -> Option<&'ctx Expression<'ctx>> {
         let mut lhs = self.parse_unary()?;
 
-        loop {
-            let Some(current) = self.p.current() else {
-                break;
-            };
+        while let Some(current) = self.p.current() {
             let Some(op) = BinaryInfo::new(current) else {
                 break;
             };
@@ -227,7 +223,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             span: token.merge_span(expr.span),
         });
 
-        return Some(result);
+        Some(result)
     }
 
     fn parse_postfix(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -251,7 +247,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
         let token = self.p.current()?;
 
-        return match &token.kind {
+        match &token.kind {
             TokenKind::Literal { kind } => self.parse_literal(*kind),
             TokenKind::Keyword(kw) => match kw {
                 CompilerKeyword::Null => {
@@ -303,7 +299,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
                 None
             }
-        };
+        }
     }
 }
 
@@ -355,7 +351,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let span = token.span;
 
         let mut str_value =
-            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+            self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_owned();
         let radix = base as u32;
 
         match base {
@@ -370,10 +366,10 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                 message: "invalid integer literal found".into(),
                 label: format!("number parser returned: `{}`", err).into(),
                 src: self.p.named_src(),
-                span: span,
+                span,
             });
 
-            return 0;
+            0
         });
 
         let expr = self.p.arena.alloc(Expression {
@@ -389,17 +385,17 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let span = token.span;
 
         let mut str_value =
-            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+            self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_owned();
 
         let value = str_value.parse::<f64>().unwrap_or_else(|err| {
             self.p.report(ParserError::InvalidLiteral {
                 message: "invalid float literal found".into(),
                 label: format!("float parser returned: `{}`", err).into(),
                 src: self.p.named_src(),
-                span: span,
+                span,
             });
 
-            return 0.0;
+            0.0
         });
 
         let expr = self.p.arena.alloc(Expression {
@@ -460,7 +456,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                     character_escape(escape).unwrap_or_else(|| {
                         self.p.report(ParserError::InvalidCharacterEscape {
                             src: self.p.named_src(),
-                            span: span,
+                            span,
                         });
 
                         ' '
@@ -470,7 +466,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                         message: "invalid char literal".into(),
                         label: "`char` literal must be a signle character".into(),
                         src: self.p.named_src(),
-                        span: span,
+                        span,
                     });
 
                     ' '
@@ -482,7 +478,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                     message: "invalid char literal".into(),
                     label: "`char` literal must be a signle character".into(),
                     src: self.p.named_src(),
-                    span: span,
+                    span,
                 });
 
                 ' '
@@ -519,7 +515,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let span = token.span;
 
         let token_slice =
-            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+            self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_owned();
 
         debug_assert_eq!(token_slice.chars().nth(0), Some('"'));
         debug_assert_eq!(token_slice.chars().last(), Some('"'));
@@ -567,7 +563,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
         let expr = self.p.arena.alloc(Expression {
             kind: ExpressionKind::Literal(expressions::Literal::String(interned_id)),
-            span: span,
+            span,
         });
 
         Some(expr)
@@ -578,7 +574,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let span = token.span;
 
         let token_slice =
-            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+            self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_owned();
 
         debug_assert_eq!(token_slice.chars().nth(0), Some('r'));
         debug_assert_eq!(token_slice.chars().last(), Some('#'));
@@ -589,7 +585,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
         let expr = self.p.arena.alloc(Expression {
             kind: ExpressionKind::Literal(expressions::Literal::String(interned_id)),
-            span: span,
+            span,
         });
 
         Some(expr)
@@ -603,7 +599,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             span: current.span,
         });
 
-        return Some(expr);
+        Some(expr)
     }
 }
 
