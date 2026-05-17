@@ -139,11 +139,26 @@ impl BinaryInfo {
     }
 }
 
+fn character_escape(escape: char) -> Option<char> {
+    match escape {
+        '0' => Some('\0'),
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        't' => Some('\t'),
+        '\\' => Some('\\'),
+        _ => None,
+    }
+}
+
 /// ==@ Expressions Parser @==
 
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
         Self { p: parser }
+    }
+
+    pub fn errors(&self) -> &[ParserError] {
+        &self.p.errors
     }
 
     pub fn parse(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -362,7 +377,63 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_char(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let token = self.p.current_clone()?;
+        let span = token.span;
+
+        let mut str_value =
+            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+
+        debug_assert_eq!(str_value.chars().nth(0), Some('\''));
+        debug_assert_eq!(str_value.chars().last(), Some('\''));
+
+        let inner_str = &str_value[1..str_value.len() - 1];
+
+        let inner_value = match inner_str.len() {
+            1 => inner_str.chars().nth(0).unwrap(),
+            2 => {
+                if let Some('\\') = inner_str.chars().nth(0) {
+                    let escape = inner_str.chars().nth(1).unwrap();
+
+                    character_escape(escape).unwrap_or_else(|| {
+                        self.p.report(ParserError::InvalidLiteral {
+                            message: "invalid char literal".into(),
+                            label: "this character escape is invalid".into(),
+                            src: self.p.named_src(),
+                            span: span,
+                        });
+
+                        ' '
+                    })
+                } else {
+                    self.p.report(ParserError::InvalidLiteral {
+                        message: "invalid char literal".into(),
+                        label: "`char` literal must be a signle character".into(),
+                        src: self.p.named_src(),
+                        span: span,
+                    });
+
+                    ' '
+                }
+            }
+
+            _ => {
+                self.p.report(ParserError::InvalidLiteral {
+                    message: "invalid char literal".into(),
+                    label: "`char` literal must be a signle character".into(),
+                    src: self.p.named_src(),
+                    span: span,
+                });
+
+                ' '
+            }
+        };
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Literal(expressions::Literal::Char(inner_value)),
+            span: token.span,
+        });
+
+        Some(expr)
     }
 
     fn parse_literal_bytechar(&mut self) -> Option<&'ctx Expression<'ctx>> {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
-#[derive(Debug, Error, Diagnostic)]
+#[derive(Debug, Error, Diagnostic, Clone)]
 pub enum ParserError {
     #[error("unknown token found")]
     #[diagnostic(severity(Error), code(zeen::parser::unknown_token))]
