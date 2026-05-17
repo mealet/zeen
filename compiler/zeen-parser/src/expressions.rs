@@ -336,7 +336,29 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_float(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let token = self.p.current()?;
+        let span = token.span;
+
+        let mut str_value =
+            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+
+        let value = str_value.parse::<f64>().unwrap_or_else(|err| {
+            self.p.report(ParserError::InvalidLiteral {
+                message: "invalid float literal found".into(),
+                label: format!("float parser returned: `{}`", err).into(),
+                src: self.p.named_src(),
+                span: span,
+            });
+
+            return 0.0;
+        });
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Literal(expressions::Literal::Float(value)),
+            span,
+        });
+
+        Some(expr)
     }
 
     fn parse_literal_char(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -533,7 +555,7 @@ mod tests {
                     kind: ExpressionKind::Literal(expressions::Literal::Float(
                         3.1415926535897932384626
                     )),
-                    span: (4, 25).into()
+                    span: (4, 24).into()
                 }
             );
         }
