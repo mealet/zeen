@@ -3,7 +3,7 @@
 use bumpalo::Bump;
 use lasso::Rodeo;
 use smol_str::SmolStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use error::ParserError;
 use zeen_lexer::{Token, TokenKind};
@@ -18,7 +18,7 @@ pub struct Parser<'ctx> {
     tokens: &'ctx mut dyn Iterator<Item = Token>,
 
     arena: &'ctx Bump,
-    interner: &'ctx mut Rodeo,
+    interner: Arc<Mutex<Rodeo>>,
 
     current: Option<Token>,
     peeked: Option<Token>,
@@ -33,7 +33,7 @@ impl<'ctx> Parser<'ctx> {
         src: Arc<String>,
         tokens: &'ctx mut dyn Iterator<Item = Token>,
         arena: &'ctx Bump,
-        interner: &'ctx mut Rodeo,
+        interner: Arc<Mutex<Rodeo>>,
     ) -> Self {
         let current = tokens.next();
 
