@@ -412,8 +412,10 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
         let span = token.span;
 
-        let mut str_value =
-            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+        let byte_literal_offset = if is_byte { 1 } else { 0 };
+        let mut str_value = (&self.p.src
+            [token.span.offset() + byte_literal_offset..token.span.offset() + token.span.len()])
+            .to_owned();
 
         debug_assert_eq!(str_value.chars().nth(0), Some('\''));
         debug_assert_eq!(str_value.chars().last(), Some('\''));
@@ -461,7 +463,11 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         };
 
         let expr = self.p.arena.alloc(Expression {
-            kind: ExpressionKind::Literal(expressions::Literal::Char(inner_value)),
+            kind: ExpressionKind::Literal(if is_byte {
+                expressions::Literal::ByteChar(inner_value)
+            } else {
+                expressions::Literal::Char(inner_value)
+            }),
             span: token.span,
         });
 
@@ -768,7 +774,7 @@ mod tests {
                 expr,
                 &Expression {
                     kind: ExpressionKind::Literal(expressions::Literal::ByteChar('\\')),
-                    span: (10, 5).into()
+                    span: (11, 5).into()
                 }
             );
         }
