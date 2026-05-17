@@ -408,11 +408,17 @@ mod tests {
 
         let src = std::sync::Arc::new(SRC.to_string());
 
-        let mut rodeo = lasso::Rodeo::default();
+        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
         let bump = bumpalo::Bump::new();
 
         let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+        let mut parser = Parser::new(
+            "tests.zn",
+            src,
+            &mut tokens,
+            &bump,
+            std::sync::Arc::clone(&rodeo),
+        );
 
         let mut expr_parser = ExprParser::new(&mut parser);
 
@@ -471,11 +477,17 @@ mod tests {
 
         let src = std::sync::Arc::new(SRC.to_string());
 
-        let mut rodeo = lasso::Rodeo::default();
+        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
         let bump = bumpalo::Bump::new();
 
         let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+        let mut parser = Parser::new(
+            "tests.zn",
+            src,
+            &mut tokens,
+            &bump,
+            std::sync::Arc::clone(&rodeo),
+        );
 
         let mut expr_parser = ExprParser::new(&mut parser);
 
@@ -512,11 +524,17 @@ mod tests {
 
         let src = std::sync::Arc::new(SRC.to_string());
 
-        let mut rodeo = lasso::Rodeo::default();
+        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
         let bump = bumpalo::Bump::new();
 
         let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+        let mut parser = Parser::new(
+            "tests.zn",
+            src,
+            &mut tokens,
+            &bump,
+            std::sync::Arc::clone(&rodeo),
+        );
 
         let mut expr_parser = ExprParser::new(&mut parser);
 
@@ -563,11 +581,17 @@ mod tests {
 
         let src = std::sync::Arc::new(SRC.to_string());
 
-        let mut rodeo = lasso::Rodeo::default();
+        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
         let bump = bumpalo::Bump::new();
 
         let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+        let mut parser = Parser::new(
+            "tests.zn",
+            src,
+            &mut tokens,
+            &bump,
+            std::sync::Arc::clone(&rodeo),
+        );
 
         let mut expr_parser = ExprParser::new(&mut parser);
 
@@ -614,11 +638,17 @@ mod tests {
 
         let src = std::sync::Arc::new(SRC.to_string());
 
-        let mut rodeo = lasso::Rodeo::default();
+        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
         let bump = bumpalo::Bump::new();
 
         let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+        let mut parser = Parser::new(
+            "tests.zn",
+            src,
+            &mut tokens,
+            &bump,
+            std::sync::Arc::clone(&rodeo),
+        );
 
         let mut expr_parser = ExprParser::new(&mut parser);
 
@@ -649,26 +679,46 @@ mod tests {
 
     #[test]
     fn literal_string() {
-        const SRC: &str = "\"hello, world\"";
+        const SRC: &str = "\"hello, world\" \"new line \\n\"";
 
         let src = std::sync::Arc::new(SRC.to_string());
 
-        let mut rodeo = lasso::Rodeo::default();
+        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
         let bump = bumpalo::Bump::new();
 
         let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+        let mut parser = Parser::new(
+            "tests.zn",
+            src,
+            &mut tokens,
+            &bump,
+            std::sync::Arc::clone(&rodeo),
+        );
 
         let mut expr_parser = ExprParser::new(&mut parser);
 
         {
             let expr = expr_parser.parse_primary().unwrap();
+            let id = rodeo.lock().unwrap().get("hello, world").unwrap();
 
             assert_eq!(
                 expr,
                 &Expression {
-                    kind: ExpressionKind::Literal(expressions::Literal::Bool(true)),
+                    kind: ExpressionKind::Literal(expressions::Literal::String(id)),
                     span: (0, "hello, world".len() + 2).into()
+                }
+            );
+        }
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+            let id = rodeo.lock().unwrap().get("new line \n").unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::String(id)),
+                    span: (0, 13).into()
                 }
             );
         }
@@ -680,11 +730,17 @@ mod tests {
 
         let src = std::sync::Arc::new(SRC.to_string());
 
-        let mut rodeo = lasso::Rodeo::default();
+        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
         let bump = bumpalo::Bump::new();
 
         let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+        let mut parser = Parser::new(
+            "tests.zn",
+            src,
+            &mut tokens,
+            &bump,
+            std::sync::Arc::clone(&rodeo),
+        );
 
         let mut expr_parser = ExprParser::new(&mut parser);
 
