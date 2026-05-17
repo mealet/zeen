@@ -79,6 +79,13 @@ impl<'ctx> Parser<'ctx> {
         miette::NamedSource::new(self.filename, src_ref)
     }
 
+    pub fn get_or_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
+        // compiler is not async/threaded (at least for now), so we're unwrapping lock
+        let mut interner = self.interner.lock().unwrap();
+
+        interner.get_or_intern(value)
+    }
+
     pub fn report(&mut self, err: ParserError) {
         self.errors.push(err);
         self.panic_mode = true;
