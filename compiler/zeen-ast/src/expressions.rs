@@ -22,7 +22,7 @@ pub enum ExpressionKind<'arena> {
 
     Ident {
         name: Spur,
-        generic_args: Option<&'arena [crate::types::TypeExpr<'arena>]>,
+        generic_args: Option<&'arena [&'arena crate::types::TypeExpr<'arena>]>,
     },
 
     Macro(Spur),

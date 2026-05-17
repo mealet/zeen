@@ -1,5 +1,8 @@
 use crate::{Parser, error::ParserError};
+
 use strum::FromRepr;
+use smallvec::SmallVec;
+
 use zeen_ast::expressions::{self, Expression, ExpressionKind};
 use zeen_lexer::{Token, TokenKind};
 
@@ -605,7 +608,45 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_ident_or_struct_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let token = self.p.current_clone()?;
+        let token_slice =
+            self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_string();
+
+        let id = self.p.get_or_intern(token_slice);
+
+        let mut generic_args: Option<&'_ [&'_ zeen_ast::TypeExpr<'_>]> = None;
+        let mut span = token.span;
+
+        if self.p.eat(TokenKind::OpenBracket) {
+            let mut args_buffer: SmallVec<[&zeen_ast::TypeExpr<'_>; 16]> = SmallVec::new();
+
+            while let Some(current) = self.p.current_clone() {
+                if self.p.eat(TokenKind::CloseBracket) {
+                    span = token.merge_span(current.span);
+                    break;
+                }
+
+                let generic_arg_type = todo!();
+                args_buffer.push(generic_arg_type);
+
+                let _ = self.p.eat(TokenKind::Comma);
+            }
+            
+            let args_slice = self.p.arena.alloc_slice_clone(&args_buffer);
+            drop(args_buffer);
+
+            generic_args = Some(args_slice);
+        }
+
+        let base = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Ident {
+                name: id,
+                generic_args,
+            },
+            span
+        });
+
+        Some(base)
     }
 
     fn parse_struct_init_fields(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -728,6 +769,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant, clippy::excessive_precision)]
     fn literal_float() {
         const SRC: &str = "1.0 3.1415926535897932384626";
 
@@ -966,7 +1008,7 @@ mod tests {
                         name: spur,
                         generic_args: None,
                     },
-                    span: (0, "null".len()).into()
+                    span: (0, 3).into()
                 }
             );
         }
