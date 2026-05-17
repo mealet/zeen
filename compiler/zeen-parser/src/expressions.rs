@@ -554,7 +554,25 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_raw_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let token = self.p.current()?;
+        let span = token.span;
+
+        let token_slice =
+            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+
+        debug_assert_eq!(token_slice.chars().nth(0), Some('r'));
+        debug_assert_eq!(token_slice.chars().last(), Some('#'));
+
+        let raw_str = &token_slice["r#\"".len()..token_slice.len() - "\"#".len()];
+
+        let interned_id = self.p.get_or_intern(raw_str);
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Literal(expressions::Literal::String(interned_id)),
+            span: span,
+        });
+
+        Some(expr)
     }
 
     fn parse_literal_null(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -938,6 +956,40 @@ mod tests {
                 &Expression {
                     kind: ExpressionKind::Literal(expressions::Literal::String(id)),
                     span: (15, 13).into()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn literal_raw_string() {
+        const SRC: &str = "r#\"hello \\n \\0\"#";
+
+        let src = std::sync::Arc::new(SRC.to_string());
+
+        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
+        let bump = bumpalo::Bump::new();
+
+        let mut tokens = zeen_lexer::tokenize(SRC);
+        let mut parser = Parser::new(
+            "tests.zn",
+            src,
+            &mut tokens,
+            &bump,
+            std::sync::Arc::clone(&rodeo),
+        );
+
+        let mut expr_parser = ExprParser::new(&mut parser);
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+            let id = rodeo.lock().unwrap().get("hello \\n \\0").unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::String(id)),
+                    span: (0, 16).into()
                 }
             );
         }
