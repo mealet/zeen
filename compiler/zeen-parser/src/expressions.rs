@@ -466,6 +466,47 @@ mod tests {
     }
 
     #[test]
+    fn literal_float() {
+        const SRC: &str = "1.0 3.1415926535897932384626";
+
+        let src = std::sync::Arc::new(SRC.to_string());
+
+        let mut rodeo = lasso::Rodeo::default();
+        let bump = bumpalo::Bump::new();
+
+        let mut tokens = zeen_lexer::tokenize(SRC);
+        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+
+        let mut expr_parser = ExprParser::new(&mut parser);
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::Float(1.0)),
+                    span: (0, 3).into()
+                }
+            );
+        }
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::Float(
+                        3.1415926535897932384626
+                    )),
+                    span: (4, 25).into()
+                }
+            );
+        }
+    }
+
+    #[test]
     fn literal_char() {
         const SRC: &str = "'a' '\\0' '\\\\'";
 
