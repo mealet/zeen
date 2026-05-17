@@ -59,4 +59,12 @@ pub enum ParserError {
         #[label("{label}")]
         span: SourceSpan,
     },
+
+    #[error("invalid character escape")]
+    InvalidCharacterEscape {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this escape is invalid")]
+        span: SourceSpan,
+    },
 }

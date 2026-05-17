@@ -146,6 +146,8 @@ fn character_escape(escape: char) -> Option<char> {
         'r' => Some('\r'),
         't' => Some('\t'),
         '\\' => Some('\\'),
+        '\'' => Some('\''),
+        '"' => Some('"'),
         _ => None,
     }
 }
@@ -421,9 +423,8 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let span = token.span;
 
         let byte_literal_offset = if is_byte { 1 } else { 0 };
-        let mut str_value = (&self.p.src
-            [token.span.offset() + byte_literal_offset..token.span.offset() + token.span.len()])
-            .to_owned();
+        let str_value = (&self.p.src
+            [token.span.offset() + byte_literal_offset..token.span.offset() + token.span.len()]);
 
         debug_assert_eq!(str_value.chars().nth(0), Some('\''));
         debug_assert_eq!(str_value.chars().last(), Some('\''));
@@ -437,9 +438,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                     let escape = inner_str.chars().nth(1).unwrap();
 
                     character_escape(escape).unwrap_or_else(|| {
-                        self.p.report(ParserError::InvalidLiteral {
-                            message: "invalid char literal".into(),
-                            label: "this character escape is invalid".into(),
+                        self.p.report(ParserError::InvalidCharacterEscape {
                             src: self.p.named_src(),
                             span: span,
                         });
@@ -496,7 +495,62 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let token = self.p.current()?;
+        let span = token.span;
+
+        let token_slice =
+            (&self.p.src[token.span.offset()..token.span.offset() + token.span.len()]).to_owned();
+
+        debug_assert_eq!(token_slice.chars().nth(0), Some('"'));
+        debug_assert_eq!(token_slice.chars().last(), Some('"'));
+
+        let raw_str = &token_slice[1..token_slice.len() - 1];
+
+        let mut chars = raw_str.char_indices().peekable();
+        let mut buffer = String::new();
+
+        while let Some((pos, chr)) = chars.next() {
+            if chr == '\\' {
+                match chars.next() {
+                    Some((_, next_chr)) => {
+                        let escaped = character_escape(next_chr).unwrap_or_else(|| {
+                            // TOKEN_OFFSET + 1 (for dquote) + inner offset
+                            let error_offset = span.offset() + 1 + pos;
+
+                            self.p.report(ParserError::InvalidCharacterEscape {
+                                src: self.p.named_src(),
+                                span: (error_offset, 2).into(),
+                            });
+
+                            ' '
+                        });
+
+                        buffer.push(escaped);
+                    }
+
+                    None => {
+                        // TOKEN_OFFSET + 1 (for dquote) + inner offset
+                        let error_offset = span.offset() + 1 + pos;
+
+                        self.p.report(ParserError::InvalidCharacterEscape {
+                            src: self.p.named_src(),
+                            span: (error_offset, 2).into(),
+                        });
+                    }
+                }
+            } else {
+                buffer.push(chr);
+            }
+        }
+
+        let interned_id = self.p.get_or_intern(buffer);
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Literal(expressions::Literal::String(interned_id)),
+            span: span,
+        });
+
+        Some(expr)
     }
 
     fn parse_literal_raw_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -883,7 +937,7 @@ mod tests {
                 expr,
                 &Expression {
                     kind: ExpressionKind::Literal(expressions::Literal::String(id)),
-                    span: (0, 13).into()
+                    span: (15, 13).into()
                 }
             );
         }
