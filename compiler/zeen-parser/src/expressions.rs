@@ -230,10 +230,24 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_primary(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        use zeen_lexer::token::CompilerKeyword;
+
         let token = self.p.current()?;
 
-        return match token.kind {
-            TokenKind::Literal { kind } => self.parse_literal(kind),
+        return match &token.kind {
+            TokenKind::Literal { kind } => self.parse_literal(*kind),
+            TokenKind::Keyword(kw) => match kw {
+                CompilerKeyword::Null => {
+                    // `null` literal is not included in `parse_literal` functions, but it is
+                    // written with the same rule: don't move cursor.
+
+                    let output = self.parse_literal_null();
+                    let _ = self.p.advance();
+
+                    output
+                }
+                _ => todo!(),
+            },
 
             _ => {
                 self.p.report(ParserError::UnknownExpression {
@@ -346,7 +360,14 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_null(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let current = self.p.current()?;
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Literal(expressions::Literal::Null),
+            span: current.span,
+        });
+
+        return Some(expr);
     }
 }
 
