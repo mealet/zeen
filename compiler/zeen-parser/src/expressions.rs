@@ -290,8 +290,12 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let output = match literal {
             LiteralKind::Int { base } => self.parse_literal_int(base),
             LiteralKind::Float => self.parse_literal_float(),
-            LiteralKind::Char { terminated, empty } => self.parse_literal_char(),
-            LiteralKind::ByteChar { terminated, empty } => self.parse_literal_bytechar(),
+            LiteralKind::Char { terminated, empty } => {
+                self.parse_literal_char(false, terminated, empty)
+            }
+            LiteralKind::ByteChar { terminated, empty } => {
+                self.parse_literal_char(true, terminated, empty)
+            }
             LiteralKind::Str { terminated } => self.parse_literal_string(),
             LiteralKind::RawStr { terminated } => self.parse_literal_raw_string(),
             LiteralKind::InvalidRawStr => {
@@ -376,8 +380,36 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         Some(expr)
     }
 
-    fn parse_literal_char(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_literal_char(
+        &mut self,
+        is_byte: bool,
+        terminated: bool,
+        empty: bool,
+    ) -> Option<&'ctx Expression<'ctx>> {
         let token = self.p.current_clone()?;
+
+        if empty {
+            self.p.report(ParserError::InvalidLiteral {
+                message: "invalid char literal".into(),
+                label: "char literal shouldn't be empty".into(),
+                src: self.p.named_src(),
+                span: token.span,
+            });
+
+            return None;
+        }
+
+        if !terminated {
+            self.p.report(ParserError::InvalidLiteral {
+                message: "invalid char literal".into(),
+                label: "char literal is not closed".into(),
+                src: self.p.named_src(),
+                span: token.span,
+            });
+
+            return None;
+        }
+
         let span = token.span;
 
         let mut str_value =
@@ -434,10 +466,6 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         });
 
         Some(expr)
-    }
-
-    fn parse_literal_bytechar(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
     }
 
     fn parse_literal_bool(&mut self) -> Option<&'ctx Expression<'ctx>> {
