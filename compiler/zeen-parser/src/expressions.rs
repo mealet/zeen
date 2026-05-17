@@ -646,6 +646,21 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             span
         });
 
+        if self.p.at(TokenKind::OpenBrace) {
+            if token.kind == TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::SelfLower) {
+                self.p.report(ParserError::SyntaxError {
+                    label: "unknown `self` struct init".into(),
+                    help: Some("perhaps you wanted to use `Self` alias?".into()),
+                    src: self.p.named_src(),
+                    span: token.span,
+                });
+
+                return None;
+            }
+
+            return self.parse_struct_init_fields();
+        }
+
         Some(base)
     }
 

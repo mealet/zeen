@@ -49,7 +49,7 @@ pub enum ParserError {
     },
 
     #[error("{message}")]
-    #[diagnostic(severity(Error), code(zeen::parser::unexpected_eof))]
+    #[diagnostic(severity(Error), code(zeen::parser::invalid_literal))]
     InvalidLiteral {
         message: SmolStr,
         label: SmolStr,
@@ -61,10 +61,25 @@ pub enum ParserError {
     },
 
     #[error("invalid character escape")]
+    #[diagnostic(severity(Error), code(zeen::parser::invalid_character_escape))]
     InvalidCharacterEscape {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("this escape is invalid")]
+        span: SourceSpan,
+    },
+
+    #[error("syntax error")]
+    #[diagnostic(severity(Error), code(zeen::parser::syntax_error))]
+    SyntaxError {
+        label: SmolStr,
+
+        #[help]
+        help: Option<SmolStr>,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("{label}")]
         span: SourceSpan,
     },
 }
