@@ -556,4 +556,55 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn literal_bytechar() {
+        const SRC: &str = "b'a' b'\\0' b'\\\\'";
+
+        let src = std::sync::Arc::new(SRC.to_string());
+
+        let mut rodeo = lasso::Rodeo::default();
+        let bump = bumpalo::Bump::new();
+
+        let mut tokens = zeen_lexer::tokenize(SRC);
+        let mut parser = Parser::new("tests.zn", src, &mut tokens, &bump, &mut rodeo);
+
+        let mut expr_parser = ExprParser::new(&mut parser);
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::ByteChar('a')),
+                    span: (0, 4).into()
+                }
+            );
+        }
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::ByteChar('\0')),
+                    span: (5, 5).into()
+                }
+            );
+        }
+
+        {
+            let expr = expr_parser.parse_primary().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::ByteChar('\\')),
+                    span: (10, 5).into()
+                }
+            );
+        }
+    }
 }
