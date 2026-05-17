@@ -271,8 +271,28 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                     output
                 }
 
-                _ => todo!(),
+                CompilerKeyword::If => self.parse_if_expr(),
+                CompilerKeyword::SelfUpper | CompilerKeyword::SelfLower => {
+                    self.parse_ident_or_struct_init()
+                }
+
+                _ => {
+                    self.p.report(ParserError::UnknownExpression {
+                        token_kind: format!("{:?}", token.kind).into(),
+                        src: self.p.named_src(),
+                        span: token.span,
+                    });
+
+                    None
+                }
             },
+
+            TokenKind::Ident => self.parse_ident_or_struct_init(),
+            TokenKind::MacroIdent => self.parse_macro_call(),
+
+            TokenKind::OpenParen => self.parse_grouped(),
+            TokenKind::OpenBracket => self.parse_array_init(),
+            TokenKind::OpenBrace => self.parse_block(),
 
             _ => {
                 self.p.report(ParserError::UnknownExpression {
