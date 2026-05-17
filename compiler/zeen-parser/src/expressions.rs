@@ -659,25 +659,28 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 mod tests {
     use super::*;
 
+    macro_rules! make_expr_parser {
+        ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident, $ep: ident) => {
+            let src_arc = std::sync::Arc::new($src.to_string());
+            let $rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
+            let $bump = bumpalo::Bump::new();
+            let mut $tokens = zeen_lexer::tokenize($src);
+            let mut $parser = Parser::new(
+                "tests.zn",
+                src_arc,
+                &mut $tokens,
+                &$bump,
+                std::sync::Arc::clone(&$rodeo),
+            );
+            let mut $ep = ExprParser::new(&mut $parser);
+        };
+    }
+
     #[test]
     fn literal_int() {
         const SRC: &str = "123 0x1ef 0b1011 0o123";
 
-        let src = std::sync::Arc::new(SRC.to_string());
-
-        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
-        let bump = bumpalo::Bump::new();
-
-        let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new(
-            "tests.zn",
-            src,
-            &mut tokens,
-            &bump,
-            std::sync::Arc::clone(&rodeo),
-        );
-
-        let mut expr_parser = ExprParser::new(&mut parser);
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
             let expr = expr_parser.parse_primary().unwrap();
@@ -732,21 +735,7 @@ mod tests {
     fn literal_float() {
         const SRC: &str = "1.0 3.1415926535897932384626";
 
-        let src = std::sync::Arc::new(SRC.to_string());
-
-        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
-        let bump = bumpalo::Bump::new();
-
-        let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new(
-            "tests.zn",
-            src,
-            &mut tokens,
-            &bump,
-            std::sync::Arc::clone(&rodeo),
-        );
-
-        let mut expr_parser = ExprParser::new(&mut parser);
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
             let expr = expr_parser.parse_primary().unwrap();
@@ -779,21 +768,7 @@ mod tests {
     fn literal_char() {
         const SRC: &str = "'a' '\\0' '\\\\'";
 
-        let src = std::sync::Arc::new(SRC.to_string());
-
-        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
-        let bump = bumpalo::Bump::new();
-
-        let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new(
-            "tests.zn",
-            src,
-            &mut tokens,
-            &bump,
-            std::sync::Arc::clone(&rodeo),
-        );
-
-        let mut expr_parser = ExprParser::new(&mut parser);
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
             let expr = expr_parser.parse_primary().unwrap();
@@ -836,21 +811,7 @@ mod tests {
     fn literal_bytechar() {
         const SRC: &str = "b'a' b'\\0' b'\\\\'";
 
-        let src = std::sync::Arc::new(SRC.to_string());
-
-        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
-        let bump = bumpalo::Bump::new();
-
-        let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new(
-            "tests.zn",
-            src,
-            &mut tokens,
-            &bump,
-            std::sync::Arc::clone(&rodeo),
-        );
-
-        let mut expr_parser = ExprParser::new(&mut parser);
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
             let expr = expr_parser.parse_primary().unwrap();
@@ -893,21 +854,7 @@ mod tests {
     fn literal_bool() {
         const SRC: &str = "true false";
 
-        let src = std::sync::Arc::new(SRC.to_string());
-
-        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
-        let bump = bumpalo::Bump::new();
-
-        let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new(
-            "tests.zn",
-            src,
-            &mut tokens,
-            &bump,
-            std::sync::Arc::clone(&rodeo),
-        );
-
-        let mut expr_parser = ExprParser::new(&mut parser);
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
             let expr = expr_parser.parse_primary().unwrap();
@@ -938,21 +885,7 @@ mod tests {
     fn literal_string() {
         const SRC: &str = "\"hello, world\" \"new line \\n\"";
 
-        let src = std::sync::Arc::new(SRC.to_string());
-
-        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
-        let bump = bumpalo::Bump::new();
-
-        let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new(
-            "tests.zn",
-            src,
-            &mut tokens,
-            &bump,
-            std::sync::Arc::clone(&rodeo),
-        );
-
-        let mut expr_parser = ExprParser::new(&mut parser);
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
             let expr = expr_parser.parse_primary().unwrap();
@@ -985,21 +918,7 @@ mod tests {
     fn literal_raw_string() {
         const SRC: &str = "r#\"hello \\n \\0\"#";
 
-        let src = std::sync::Arc::new(SRC.to_string());
-
-        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
-        let bump = bumpalo::Bump::new();
-
-        let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new(
-            "tests.zn",
-            src,
-            &mut tokens,
-            &bump,
-            std::sync::Arc::clone(&rodeo),
-        );
-
-        let mut expr_parser = ExprParser::new(&mut parser);
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
             let expr = expr_parser.parse_primary().unwrap();
@@ -1019,21 +938,7 @@ mod tests {
     fn literal_null() {
         const SRC: &str = "null";
 
-        let src = std::sync::Arc::new(SRC.to_string());
-
-        let rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
-        let bump = bumpalo::Bump::new();
-
-        let mut tokens = zeen_lexer::tokenize(SRC);
-        let mut parser = Parser::new(
-            "tests.zn",
-            src,
-            &mut tokens,
-            &bump,
-            std::sync::Arc::clone(&rodeo),
-        );
-
-        let mut expr_parser = ExprParser::new(&mut parser);
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
             let expr = expr_parser.parse_primary().unwrap();
