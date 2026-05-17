@@ -261,6 +261,14 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
                     output
                 }
+
+                CompilerKeyword::True | CompilerKeyword::False => {
+                    let output = self.parse_literal_bool();
+                    let _ = self.p.advance();
+
+                    output
+                }
+
                 _ => todo!(),
             },
 
@@ -475,7 +483,16 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_bool(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let token = self.p.current_clone()?;
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Literal(expressions::Literal::Bool(
+                token.kind == TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::True),
+            )),
+            span: token.span,
+        });
+
+        Some(expr)
     }
 
     fn parse_literal_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
