@@ -84,6 +84,8 @@ pub enum ExpressionKind<'arena> {
 pub enum Literal {
     Int(i64),
     Float(f64),
+    Char(char),
+    ByteChar(char),
     Bool(bool),
     String(Spur),
     Null,
