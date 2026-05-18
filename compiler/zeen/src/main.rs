@@ -5,6 +5,8 @@ use zeen_driver::MietteDriver;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
+use std::sync::{Arc, Mutex};
+
 #[derive(Debug, Error, Diagnostic)]
 #[error("{dbg}")]
 #[diagnostic(severity(Advice))]
@@ -26,33 +28,40 @@ fn main() {
 
     match std::fs::read_to_string(&path) {
         Ok(content) => {
+            let content = Arc::new(content);
+            let rodeo = Arc::new(Mutex::new(lasso::Rodeo::default()));
+            let bump = bumpalo::Bump::default();
+
             let driver = MietteDriver::new();
-            let tokens = zeen_lexer::tokenize(&content);
+            let mut tokens = zeen_lexer::tokenize(&content);
 
-            let start = std::time::Instant::now();
+            let mut parser = zeen_parser::Parser::new(
+                &path,
+                std::sync::Arc::clone(&content),
+                &mut tokens,
+                &bump,
+                std::sync::Arc::clone(&rodeo),
+            );
 
-            for token in tokens {
-                if token.kind == zeen_lexer::TokenKind::Unknown {
-                    let rep = driver
-                        .report(&SrcDebugger {
-                            dbg: "Unknown token".to_string(),
-                            src: NamedSource::new(&path, content.clone()),
-                            span: token.span,
-                        })
-                        .unwrap();
+            let mut expr_parser = zeen_parser::expressions::ExprParser::new(&mut parser);
 
-                    eprintln!("{}", rep);
-                    std::process::exit(1);
+            let expr = expr_parser.parse().unwrap_or_else(|| {
+                for err in &parser.errors {
+                    let report_string = driver.report(err).unwrap();
+                    eprintln!("{}", report_string);
                 }
+
+                println!("Error");
+
+                std::process::exit(1);
+            });
+
+            for err in parser.errors {
+                let report_string = driver.report(&err).unwrap();
+                eprintln!("{}", report_string);
             }
 
-            let elapsed = start.elapsed().as_secs_f64();
-
-            println!("Tokenized in {} seconds", elapsed);
-            println!(
-                "Speed is {} MB/s",
-                (content.len() as f64 / 1024.0 / 1024.0) / elapsed
-            );
+            println!("{:#?}", expr);
         }
         Err(err) => {
             eprintln!("Unable to open file: {}", err);

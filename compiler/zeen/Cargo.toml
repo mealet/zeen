@@ -14,3 +14,4 @@ miette = { version = "7.6.0", features = ["fancy"] }
 thiserror = "2.0.18"
 zeen-driver = {path = "../zeen-driver"}
 zeen-lexer = {path = "../zeen-lexer"}
+zeen-parser = {path = "../zeen-parser"}
