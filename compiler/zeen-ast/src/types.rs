@@ -61,3 +61,30 @@ pub enum BuiltinType {
     char,
     void,
 }
+
+impl BuiltinType {
+    pub fn try_str(slice: &str) -> Option<Self> {
+        match slice {
+            "i8" => Some(Self::i8),
+            "i16" => Some(Self::i16),
+            "i32" => Some(Self::i32),
+            "i64" => Some(Self::i64),
+            "isize" => Some(Self::isize),
+
+            "u8" => Some(Self::u8),
+            "u16" => Some(Self::u16),
+            "u32" => Some(Self::u32),
+            "u64" => Some(Self::u64),
+            "usize" => Some(Self::usize),
+
+            "f32" => Some(Self::f32),
+            "f64" => Some(Self::f64),
+
+            "bool" => Some(Self::bool),
+            "char" => Some(Self::bool),
+            "void" => Some(Self::void),
+
+            _ => None,
+        }
+    }
+}
