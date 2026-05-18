@@ -455,6 +455,7 @@ dependencies = [
  "lasso",
  "miette",
  "smallvec",
+ "zeen-lexer",
 ]
 
 [[package]]

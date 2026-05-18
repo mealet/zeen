@@ -63,28 +63,28 @@ pub enum BuiltinType {
 }
 
 impl BuiltinType {
-    pub fn try_str(slice: &str) -> Option<Self> {
-        match slice {
-            "i8" => Some(Self::i8),
-            "i16" => Some(Self::i16),
-            "i32" => Some(Self::i32),
-            "i64" => Some(Self::i64),
-            "isize" => Some(Self::isize),
+    pub fn try_lexer_type(value: zeen_lexer::token::CompilerType) -> Self {
+        use zeen_lexer::token::CompilerType;
 
-            "u8" => Some(Self::u8),
-            "u16" => Some(Self::u16),
-            "u32" => Some(Self::u32),
-            "u64" => Some(Self::u64),
-            "usize" => Some(Self::usize),
+        match value {
+            CompilerType::i8 => Self::i8,
+            CompilerType::i16 => Self::i16,
+            CompilerType::i32 => Self::i32,
+            CompilerType::i64 => Self::i64,
+            CompilerType::isize => Self::isize,
 
-            "f32" => Some(Self::f32),
-            "f64" => Some(Self::f64),
+            CompilerType::u8 => Self::u8,
+            CompilerType::u16 => Self::u16,
+            CompilerType::u32 => Self::u32,
+            CompilerType::u64 => Self::u64,
+            CompilerType::usize => Self::usize,
 
-            "bool" => Some(Self::bool),
-            "char" => Some(Self::bool),
-            "void" => Some(Self::void),
+            CompilerType::f32 => Self::f32,
+            CompilerType::f64 => Self::f64,
 
-            _ => None,
+            CompilerType::bool => Self::bool,
+            CompilerType::char => Self::char,
+            CompilerType::void => Self::void,
         }
     }
 }

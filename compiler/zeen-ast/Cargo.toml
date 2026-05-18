@@ -11,3 +11,4 @@ license.workspace = true
 lasso = "0.7.3"
 miette = { version = "7.6.0", features = ["fancy"] }
 smallvec = "1.15.1"
+zeen-lexer = {path = "../zeen-lexer"}
