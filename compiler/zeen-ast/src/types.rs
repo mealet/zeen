@@ -23,18 +23,22 @@ pub enum TypeKind<'arena> {
     SelfType,
     SelfAlias,
 
-    Named(Spur),
+    Named {
+        name: Spur,
+        generic_args: Option<&'arena [&'arena TypeExpr<'arena>]>,
+    },
 
     Const(&'arena TypeExpr<'arena>),
     Pointer(&'arena TypeExpr<'arena>),
 
     Array {
         element: &'arena TypeExpr<'arena>,
-        len: &'arena crate::expressions::Expression<'arena>,
+        len: Option<&'arena crate::expressions::Expression<'arena>>,
     },
 
     Fn {
-        params: &'arena [TypeExpr<'arena>],
+        params: &'arena [&'arena TypeExpr<'arena>],
+        generic_args: Option<&'arena [&'arena TypeExpr<'arena>]>,
         ret: &'arena TypeExpr<'arena>,
     },
 }

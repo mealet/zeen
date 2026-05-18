@@ -11,9 +11,9 @@ license.workspace = true
 bumpalo = "3.20.2"
 lasso = "0.7.3"
 miette = "7.6.0"
-zeen-lexer = {path = "../zeen-lexer"}
-zeen-ast = {path = "../zeen-ast"}
 thiserror = "2.0.18"
 smol_str = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 smallvec = "1.15.1"
+zeen-lexer = {path = "../zeen-lexer"}
+zeen-ast = {path = "../zeen-ast"}

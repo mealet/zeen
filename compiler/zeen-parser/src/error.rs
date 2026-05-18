@@ -82,4 +82,18 @@ pub enum ParserError {
         #[label("{label}")]
         span: SourceSpan,
     },
+
+    #[error("unknown data type")]
+    #[diagnostic(severity(Error), code(zeen::parser::unknown_type))]
+    UnknownType {
+        label: SmolStr,
+
+        #[help]
+        help: Option<SmolStr>,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("{label}")]
+        span: SourceSpan,
+    },
 }
