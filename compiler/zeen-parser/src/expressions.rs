@@ -613,6 +613,8 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let mut generic_args: Option<&'_ [&'_ zeen_ast::TypeExpr<'_>]> = None;
         let mut span = token.span;
 
+        let _ = self.p.advance();
+
         if self.p.eat(TokenKind::OpenBracket) {
             let mut args_buffer: SmallVec<[&zeen_ast::TypeExpr<'_>; 16]> = SmallVec::new();
 
@@ -624,7 +626,9 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                     break;
                 }
 
-                let generic_arg_type = todo!();
+                let mut type_parser = crate::type_parser::TypeParser::new(self.p);
+                let generic_arg_type = type_parser.parse()?;
+
                 args_buffer.push(generic_arg_type);
 
                 let _ = self.p.eat(TokenKind::Comma);
