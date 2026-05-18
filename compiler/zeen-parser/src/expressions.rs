@@ -254,39 +254,33 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
         match &token.kind {
             TokenKind::Literal { kind } => self.parse_literal(*kind),
-            TokenKind::Keyword(kw) => match kw {
-                CompilerKeyword::Null => {
-                    // `null` literal is not included in `parse_literal` functions, but it is
-                    // written with the same rule: don't move cursor.
 
-                    let output = self.parse_literal_null();
-                    let _ = self.p.advance();
+            // --> keywords
+            
+            TokenKind::Keyword(CompilerKeyword::Null) => {
+                // `null` literal is not included in `parse_literal` functions, but it is
+                // written with the same rule: don't move cursor.
 
-                    output
-                }
+                let output = self.parse_literal_null();
+                let _ = self.p.advance();
 
-                CompilerKeyword::True | CompilerKeyword::False => {
-                    let output = self.parse_literal_bool();
-                    let _ = self.p.advance();
+                output
+            }
 
-                    output
-                }
+            TokenKind::Keyword(CompilerKeyword::True | CompilerKeyword::False) => {
+                let output = self.parse_literal_bool();
+                let _ = self.p.advance();
 
-                CompilerKeyword::If => self.parse_if_expr(),
-                CompilerKeyword::SelfUpper | CompilerKeyword::SelfLower => {
-                    self.parse_ident_or_struct_init()
-                }
+                output
+            }
 
-                _ => {
-                    self.p.report(ParserError::UnknownExpression {
-                        token_kind: format!("{:?}", token.kind).into(),
-                        src: self.p.named_src(),
-                        span: token.span,
-                    });
+            TokenKind::Keyword(CompilerKeyword::If) => self.parse_if_expr(),
 
-                    None
-                }
-            },
+            TokenKind::Keyword(CompilerKeyword::SelfUpper | CompilerKeyword::SelfLower) => {
+                self.parse_ident_or_struct_init()
+            }
+
+            // <-- keywords
 
             TokenKind::Ident => self.parse_ident_or_struct_init(),
             TokenKind::MacroIdent => self.parse_macro_call(),
