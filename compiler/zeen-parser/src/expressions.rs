@@ -176,7 +176,9 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_precedence(&mut self, min_prec: Precedence) -> Option<&'ctx Expression<'ctx>> {
         let mut lhs = self.parse_unary()?;
 
-        while let Some(current) = self.p.current() {
+        while self.p.current().kind != TokenKind::Eof {
+            let current = self.p.current();
+
             let Some(op) = BinaryInfo::new(current) else {
                 break;
             };
@@ -185,7 +187,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                 break;
             }
 
-            let _ = self.p.advance()?;
+            if self.p.advance_not_eof().is_none() { break };
 
             let rhs = self.parse_precedence(op.prec.next())?;
 
@@ -205,7 +207,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_unary(&mut self) -> Option<&'ctx Expression<'ctx>> {
         use expressions::UnaryOp;
 
-        let token = self.p.current_clone()?;
+        let token = self.p.current_clone();
 
         let op = match token.kind {
             TokenKind::Minus => UnaryOp::Neg,
@@ -217,7 +219,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             _ => return self.parse_postfix(),
         };
 
-        let _ = self.p.advance()?;
+        let _ = self.p.advance_not_eof()?;
 
         let expr = self.parse_unary()?;
 
@@ -233,7 +235,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let mut expr = self.parse_primary()?;
 
         loop {
-            expr = match self.p.current()?.kind {
+            expr = match self.p.current().kind {
                 TokenKind::OpenParen => self.parse_call(expr)?,
                 TokenKind::OpenBracket => self.parse_slice_access(expr)?,
                 TokenKind::Dot => self.parse_field_access(expr)?,
@@ -248,7 +250,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_primary(&mut self) -> Option<&'ctx Expression<'ctx>> {
         use zeen_lexer::token::CompilerKeyword;
 
-        let token = self.p.current()?;
+        let token = self.p.current();
 
         match &token.kind {
             TokenKind::Literal { kind } => self.parse_literal(*kind),
@@ -314,7 +316,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     ) -> Option<&'ctx Expression<'ctx>> {
         use zeen_lexer::token::LiteralKind;
 
-        let token = self.p.current()?;
+        let token = self.p.current();
 
         let output = match literal {
             LiteralKind::Int { base } => self.parse_literal_int(base),
@@ -350,7 +352,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     ) -> Option<&'ctx Expression<'ctx>> {
         use zeen_lexer::token::IntBase;
 
-        let token = self.p.current()?;
+        let token = self.p.current();
         let span = token.span;
 
         let mut str_value =
@@ -384,7 +386,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_float(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        let token = self.p.current()?;
+        let token = self.p.current();
         let span = token.span;
 
         let mut str_value =
@@ -415,7 +417,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         terminated: bool,
         empty: bool,
     ) -> Option<&'ctx Expression<'ctx>> {
-        let token = self.p.current_clone()?;
+        let token = self.p.current_clone();
 
         if empty {
             self.p.report(ParserError::InvalidLiteral {
@@ -501,7 +503,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_bool(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        let token = self.p.current_clone()?;
+        let token = self.p.current_clone();
 
         let expr = self.p.arena.alloc(Expression {
             kind: ExpressionKind::Literal(expressions::Literal::Bool(
@@ -514,7 +516,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        let token = self.p.current()?;
+        let token = self.p.current();
         let span = token.span;
 
         let token_slice =
@@ -573,7 +575,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_raw_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        let token = self.p.current()?;
+        let token = self.p.current();
         let span = token.span;
 
         let token_slice =
@@ -595,7 +597,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_literal_null(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        let current = self.p.current()?;
+        let current = self.p.current();
 
         let expr = self.p.arena.alloc(Expression {
             kind: ExpressionKind::Literal(expressions::Literal::Null),
@@ -608,7 +610,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_ident_or_struct_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        let token = self.p.current_clone()?;
+        let token = self.p.current_clone();
         let token_slice =
             self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_string();
 
@@ -620,7 +622,9 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         if self.p.eat(TokenKind::OpenBracket) {
             let mut args_buffer: SmallVec<[&zeen_ast::TypeExpr<'_>; 16]> = SmallVec::new();
 
-            while let Some(current) = self.p.current_clone() {
+            while self.p.current().kind != TokenKind::Eof {
+                let current = self.p.current_clone();
+
                 if self.p.eat(TokenKind::CloseBracket) {
                     span = token.merge_span(current.span);
                     break;

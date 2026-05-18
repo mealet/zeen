@@ -20,7 +20,7 @@ pub struct Parser<'ctx> {
     arena: &'ctx Bump,
     interner: Arc<Mutex<Rodeo>>,
 
-    current: Option<Token>,
+    current: Token,
     peeked: Option<Token>,
 
     pub errors: Vec<ParserError>,
@@ -35,7 +35,9 @@ impl<'ctx> Parser<'ctx> {
         arena: &'ctx Bump,
         interner: Arc<Mutex<Rodeo>>,
     ) -> Self {
-        let current = tokens.next();
+        let current = tokens
+            .next()
+            .unwrap_or(Token::new(TokenKind::Eof, (0, 0).into()));
 
         Self {
             filename,
@@ -91,36 +93,54 @@ impl<'ctx> Parser<'ctx> {
         self.panic_mode = true;
     }
 
-    pub fn current(&self) -> Option<&Token> {
-        self.current.as_ref()
+    pub fn current(&self) -> &Token {
+        &self.current
     }
 
-    pub fn current_clone(&self) -> Option<Token> {
+    pub fn current_clone(&self) -> Token {
         self.current.clone()
     }
 
     pub fn at(&self, kind: TokenKind) -> bool {
-        self.current().is_some_and(|token| token.kind == kind)
+        self.current.kind == kind
     }
 
     pub fn is_eof(&self) -> bool {
-        self.current.is_none()
+        self.current.kind == TokenKind::Eof
+    }
+
+    pub fn eof_token(&self) -> Token {
+        let span = (self.current.span.offset() + 1, 0).into();
+        Token::new(TokenKind::Eof, span)
     }
 
     pub fn advance(&mut self) -> Option<Token> {
-        let next = self.peeked.take().or_else(|| self.tokens.next());
-        let prev = std::mem::replace(&mut self.current, next);
+        let next = self.peeked.take().or_else(|| self.tokens.next())?;
+        let prev = self.current.clone();
 
-        if let Some(token) = &self.current
-            && token.kind == TokenKind::Unknown
-        {
+        self.current = next;
+
+        if self.current.kind == TokenKind::Unknown {
             self.report(ParserError::UnknownToken {
                 src: self.named_src(),
-                span: token.span,
+                span: self.current.span,
             });
         }
 
-        prev
+        Some(prev)
+    }
+
+    pub fn advance_not_eof(&mut self) -> Option<Token> {
+        self.advance().or_else(|| {
+            self.report(ParserError::UnexpectedEof {
+                expected: "expression".into(),
+
+                src: self.named_src(),
+                span: (self.src.len() - 1, 0).into(),
+            });
+
+            None
+        })
     }
 
     pub fn peek(&mut self) -> Option<&Token> {
@@ -143,12 +163,12 @@ impl<'ctx> Parser<'ctx> {
         if self.at(kind) {
             Some(self.advance().unwrap())
         } else {
-            if let Some(cur) = self.current() {
+            if self.current.kind != TokenKind::Eof {
                 self.report(ParserError::ExpectedToken {
                     expected: SmolStr::from(display),
 
                     src: self.named_src(),
-                    span: cur.span,
+                    span: self.current.span,
                 });
             } else {
                 self.report(ParserError::UnexpectedEof {
@@ -167,15 +187,15 @@ impl<'ctx> Parser<'ctx> {
         self.panic_mode = false;
 
         loop {
-            match self.current().map(|token| &token.kind) {
-                None => break,
+            match self.current().kind {
+                TokenKind::Eof => break,
 
-                Some(TokenKind::Semicolon) => {
+                TokenKind::Semicolon => {
                     let _ = self.advance();
                     break;
                 }
 
-                Some(TokenKind::Keyword(kw)) if is_sync_keyword(kw) => break,
+                TokenKind::Keyword(ref kw) if is_sync_keyword(kw) => break,
 
                 _ => {
                     self.advance();
