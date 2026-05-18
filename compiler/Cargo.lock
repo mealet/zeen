@@ -445,6 +445,7 @@ dependencies = [
  "thiserror",
  "zeen-driver",
  "zeen-lexer",
+ "zeen-parser",
 ]
 
 [[package]]
