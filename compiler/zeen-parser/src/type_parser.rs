@@ -688,4 +688,6 @@ mod tests {
             None
         );
     }
+
+    // TODO: Add test for fn type with generic type with interfaces: `fn foo[T: Add + Display]() void`
 }
