@@ -188,10 +188,15 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
             kind: TypeKind::Fn {
                 params: arena_params,
                 ret: ret_type,
-                generic_args,
+                generic_args: None,
             },
             span: kw_fn.merge_span(ret_type.span),
         });
+
+        // FIXME: Review generic types parsing, it should be declaration syntax:
+        // Now its: `fn foo[T]() void` (where T is named and doesn't supported interfaces).
+        // Should be: `fn foo[T: Add + Display]() void` (T is generic declarated type with interfaces)
+        todo!();
 
         Some(expr)
     }
