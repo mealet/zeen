@@ -613,4 +613,79 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn fn_type() {
+        const SRC: &str = "fn(i32, u32) usize";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Fn {
+                    params: &[
+                        &TypeExpr {
+                            kind: TypeKind::Builtin(types::BuiltinType::i32),
+                            span: (3, 3).into()
+                        },
+                        &TypeExpr {
+                            kind: TypeKind::Builtin(types::BuiltinType::u32),
+                            span: (8, 3).into()
+                        },
+                    ],
+                    generic_args: None,
+                    ret: &TypeExpr {
+                        kind: TypeKind::Builtin(types::BuiltinType::usize),
+                        span: (13, 5).into()
+                    }
+                },
+                span: (0, 18).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
+    }
+
+    #[test]
+    fn fn_type_with_generic() {
+        const SRC: &str = "fn[T](u32) usize";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Fn {
+                    params: &[
+                        &TypeExpr {
+                            kind: TypeKind::Builtin(types::BuiltinType::u32),
+                            span: (6, 3).into()
+                        },
+                    ],
+                    generic_args: Some(&[
+                        zeen_ast::declarations::GenericType {
+                            name: rodeo.lock().unwrap().get_or_intern("T"),
+                            interfaces: None,
+                        }
+                    ]),
+                    ret: &TypeExpr {
+                        kind: TypeKind::Builtin(types::BuiltinType::usize),
+                        span: (11, 5).into()
+                    }
+                },
+                span: (0, 16).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
+    }
 }
