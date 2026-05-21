@@ -551,4 +551,36 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn array_type() {
+        const SRC: &str = "[10]i32";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Array {
+                    element: &TypeExpr {
+                        kind: TypeKind::Builtin(types::BuiltinType::i32),
+                        span: (4, 3).into(),
+                    },
+                    len: Some(
+                        &zeen_ast::Expression {
+                            kind: zeen_ast::ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(10)),
+                            span: (1, 2).into(),
+                        }
+                    )
+                },
+                span: (0, 7).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
+    }
 }
