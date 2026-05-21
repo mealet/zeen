@@ -38,7 +38,7 @@ pub enum TypeKind<'arena> {
 
     Fn {
         params: &'arena [&'arena TypeExpr<'arena>],
-        generic_args: Option<&'arena [&'arena TypeExpr<'arena>]>,
+        generic_args: Option<&'arena [crate::declarations::GenericType<'arena>]>,
         ret: &'arena TypeExpr<'arena>,
     },
 }
