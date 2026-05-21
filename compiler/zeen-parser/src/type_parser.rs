@@ -497,4 +497,58 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn ptr_type_basic() {
+        const SRC: &str = "*i32";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Pointer(&TypeExpr {
+                    kind: TypeKind::Builtin(types::BuiltinType::i32),
+                    span: (1, 3).into()
+                }),
+                span: (0, 4).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
+    }
+
+    #[test]
+    fn ptr_type_nested() {
+        const SRC: &str = "***i32";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Pointer(&TypeExpr {
+                    kind: TypeKind::Pointer(&TypeExpr {
+                        kind: TypeKind::Pointer(&TypeExpr {
+                            kind: TypeKind::Builtin(types::BuiltinType::i32),
+                            span: (3, 3).into()
+                        }),
+                        span: (2, 4).into()
+                    }),
+                    span: (1, 5).into()
+                }),
+                span: (0, 6).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
+    }
 }
