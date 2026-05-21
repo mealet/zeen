@@ -319,7 +319,7 @@ mod tests {
         const SRC: &str = "i8 i16 i32 i64 isize";
 
         make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
-        
+
         // i8
         assert_eq!(
             type_parser.parse().unwrap(),
@@ -366,10 +366,7 @@ mod tests {
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
     #[test]
@@ -377,7 +374,7 @@ mod tests {
         const SRC: &str = "u8 u16 u32 u64 usize";
 
         make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
-        
+
         // u8
         assert_eq!(
             type_parser.parse().unwrap(),
@@ -424,10 +421,7 @@ mod tests {
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
     #[test]
@@ -435,7 +429,7 @@ mod tests {
         const SRC: &str = "f32 f64";
 
         make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
-        
+
         // f32
         assert_eq!(
             type_parser.parse().unwrap(),
@@ -455,10 +449,7 @@ mod tests {
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
     #[test]
@@ -495,10 +486,7 @@ mod tests {
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
     #[test]
@@ -519,10 +507,7 @@ mod tests {
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
     #[test]
@@ -549,10 +534,7 @@ mod tests {
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
     #[test]
@@ -569,22 +551,19 @@ mod tests {
                         kind: TypeKind::Builtin(types::BuiltinType::i32),
                         span: (4, 3).into(),
                     },
-                    len: Some(
-                        &zeen_ast::Expression {
-                            kind: zeen_ast::ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(10)),
-                            span: (1, 2).into(),
-                        }
-                    )
+                    len: Some(&zeen_ast::Expression {
+                        kind: zeen_ast::ExpressionKind::Literal(
+                            zeen_ast::expressions::Literal::Int(10)
+                        ),
+                        span: (1, 2).into(),
+                    })
                 },
                 span: (0, 7).into()
             }
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
     #[test]
@@ -608,10 +587,7 @@ mod tests {
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
     #[test]
@@ -645,10 +621,7 @@ mod tests {
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
     #[test]
@@ -661,18 +634,14 @@ mod tests {
             type_parser.parse().unwrap(),
             &TypeExpr {
                 kind: TypeKind::Fn {
-                    params: &[
-                        &TypeExpr {
-                            kind: TypeKind::Builtin(types::BuiltinType::u32),
-                            span: (6, 3).into()
-                        },
-                    ],
-                    generic_args: Some(&[
-                        zeen_ast::declarations::GenericType {
-                            name: rodeo.lock().unwrap().get_or_intern("T"),
-                            interfaces: None,
-                        }
-                    ]),
+                    params: &[&TypeExpr {
+                        kind: TypeKind::Builtin(types::BuiltinType::u32),
+                        span: (6, 3).into()
+                    },],
+                    generic_args: Some(&[zeen_ast::declarations::GenericType {
+                        name: rodeo.lock().unwrap().get_or_intern("T"),
+                        interfaces: None,
+                    }]),
                     ret: &TypeExpr {
                         kind: TypeKind::Builtin(types::BuiltinType::usize),
                         span: (11, 5).into()
@@ -683,11 +652,40 @@ mod tests {
         );
 
         // eof
-        assert_eq!(
-            type_parser.parse(),
-            None
-        );
+        assert_eq!(type_parser.parse(), None);
     }
 
-    // TODO: Add test for fn type with generic type with interfaces: `fn foo[T: Add + Display]() void`
+    #[test]
+    fn fn_type_with_generic_and_interfaces() {
+        const SRC: &str = "fn[T: Add + Display](u32) usize";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Fn {
+                    params: &[&TypeExpr {
+                        kind: TypeKind::Builtin(types::BuiltinType::u32),
+                        span: (6, 3).into()
+                    },],
+                    generic_args: Some(&[zeen_ast::declarations::GenericType {
+                        name: rodeo.lock().unwrap().get_or_intern("T"),
+                        interfaces: Some(&[
+                            rodeo.lock().unwrap().get_or_intern("Add"),
+                            rodeo.lock().unwrap().get_or_intern("Display"),
+                        ]),
+                    }]),
+                    ret: &TypeExpr {
+                        kind: TypeKind::Builtin(types::BuiltinType::usize),
+                        span: (11, 5).into()
+                    }
+                },
+                span: (0, 16).into()
+            }
+        );
+
+        // eof
+        assert_eq!(type_parser.parse(), None);
+    }
 }
