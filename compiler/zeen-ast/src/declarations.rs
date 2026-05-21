@@ -72,30 +72,30 @@ pub enum DeclarationKind<'arena> {
 
 #[derive(Debug)]
 pub struct FnParam<'arena> {
-    name: Option<Spur>,
-    ty: &'arena TypeExpr<'arena>,
-    span: SourceSpan,
+    pub name: Option<Spur>,
+    pub ty: &'arena TypeExpr<'arena>,
+    pub span: SourceSpan,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct GenericType<'arena> {
-    name: Spur,
-    interfaces: Option<&'arena [Spur]>,
+    pub name: Spur,
+    pub interfaces: Option<&'arena [Spur]>,
 }
 
 // Struct
 
 #[derive(Debug)]
 pub struct StructField<'arena> {
-    name: Spur,
-    ty: &'arena TypeExpr<'arena>,
-    is_pub: bool,
+    pub name: Spur,
+    pub ty: &'arena TypeExpr<'arena>,
+    pub is_pub: bool,
 }
 
 // Enum
 
 #[derive(Debug)]
 pub struct EnumVariant {
-    name: Spur,
-    span: SourceSpan,
+    pub name: Spur,
+    pub span: SourceSpan,
 }
