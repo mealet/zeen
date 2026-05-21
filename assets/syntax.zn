@@ -207,7 +207,7 @@ struct Value[T: Add, R: Add] {
 
 // 1. Implicit usage by argument.
 
-fn foo<T: Display>(a: T) { /* ... */ }
+fn foo[T: Display](a: T) { /* ... */ }
 
 {
   let a: i32 = 10;
