@@ -142,8 +142,8 @@ impl CompilerType {
             "f64" => Some(CompilerType::f64),
 
             "bool" => Some(CompilerType::bool),
-            "char" => Some(CompilerType::bool),
-            "void" => Some(CompilerType::bool),
+            "char" => Some(CompilerType::char),
+            "void" => Some(CompilerType::void),
 
             _ => None,
         }
