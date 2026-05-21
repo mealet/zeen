@@ -116,7 +116,15 @@ impl<'ctx> Parser<'ctx> {
     }
 
     pub fn advance(&mut self) -> Option<Token> {
-        let next = self.peeked.take().or_else(|| self.tokens.next())?;
+        let next = self
+            .peeked
+            .take()
+            .or_else(|| self.tokens.next())
+            .or_else(|| {
+                self.current = self.eof_token();
+                None
+            })?;
+
         let prev = self.current.clone();
 
         self.current = next;
