@@ -55,9 +55,7 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
 impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
     fn parse_builtin(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
         let token = self.p.current_clone();
-        dbg!(self.p.current());
         let _ = self.p.advance();
-        dbg!(self.p.current());
 
         let TokenKind::Type(typ) = token.kind else {
             unreachable!()
@@ -574,6 +572,33 @@ mod tests {
                     )
                 },
                 span: (0, 7).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
+    }
+
+    #[test]
+    fn slice_type() {
+        const SRC: &str = "[]i32";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Array {
+                    element: &TypeExpr {
+                        kind: TypeKind::Builtin(types::BuiltinType::i32),
+                        span: (2, 3).into(),
+                    },
+                    len: None,
+                },
+                span: (0, 5).into()
             }
         );
 
