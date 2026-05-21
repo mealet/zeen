@@ -55,7 +55,9 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
 impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
     fn parse_builtin(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
         let token = self.p.current_clone();
+        dbg!(self.p.current());
         let _ = self.p.advance();
+        dbg!(self.p.current());
 
         let TokenKind::Type(typ) = token.kind else {
             unreachable!()
@@ -233,7 +235,7 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
             .to_owned();
 
         let name_id = self.p.get_or_intern(ident_slice);
-        let _ = self.p.advance()?;
+        let _ = self.p.advance();
 
         let mut generic_args: Option<&'_ [&'_ zeen_ast::TypeExpr<'_>]> = None;
 
@@ -285,5 +287,214 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
         });
 
         Some(expr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! make_type_parser {
+        ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident, $p_name: ident) => {
+            let src_arc = std::sync::Arc::new($src.to_string());
+            let $rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
+            let $bump = bumpalo::Bump::new();
+            let mut $tokens = zeen_lexer::tokenize($src);
+            let mut $parser = Parser::new(
+                "tests.zn",
+                src_arc,
+                &mut $tokens,
+                &$bump,
+                std::sync::Arc::clone(&$rodeo),
+            );
+            let mut $p_name = TypeParser::new(&mut $parser);
+        };
+    }
+
+    #[test]
+    fn builtin_integer_types() {
+        const SRC: &str = "i8 i16 i32 i64 isize";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+        
+        // i8
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::i8),
+                span: (0, 2).into()
+            }
+        );
+
+        // i16
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::i16),
+                span: (3, 3).into()
+            }
+        );
+
+        // i32
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::i32),
+                span: (7, 3).into()
+            }
+        );
+
+        // i64
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::i64),
+                span: (11, 3).into()
+            }
+        );
+
+        // isize
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::isize),
+                span: (15, 5).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
+    }
+
+    #[test]
+    fn builtin_unsigned_integer_types() {
+        const SRC: &str = "u8 u16 u32 u64 usize";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+        
+        // u8
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::u8),
+                span: (0, 2).into()
+            }
+        );
+
+        // u16
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::u16),
+                span: (3, 3).into()
+            }
+        );
+
+        // u32
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::u32),
+                span: (7, 3).into()
+            }
+        );
+
+        // u64
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::u64),
+                span: (11, 3).into()
+            }
+        );
+
+        // usize
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::usize),
+                span: (15, 5).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
+    }
+
+    #[test]
+    fn builtin_float_types() {
+        const SRC: &str = "f32 f64";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+        
+        // f32
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::f32),
+                span: (0, 3).into()
+            }
+        );
+
+        // f64
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::f64),
+                span: (4, 3).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
+    }
+
+    #[test]
+    fn builtin_other_types() {
+        const SRC: &str = "bool char void";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        // bool
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::bool),
+                span: (0, 4).into()
+            }
+        );
+
+        // char
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::char),
+                span: (5, 4).into()
+            }
+        );
+
+        // void
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Builtin(types::BuiltinType::void),
+                span: (10, 4).into()
+            }
+        );
+
+        // eof
+        assert_eq!(
+            type_parser.parse(),
+            None
+        );
     }
 }
