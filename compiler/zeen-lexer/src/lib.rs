@@ -154,24 +154,7 @@ impl<'inp> Tokenizer<'inp> {
             chr if is_ident_start(chr) => {
                 let mut kind = self.ident();
 
-                let pos_start = self.pos_start();
-                let pos_len = self.pos_len();
-
-                let slice = &self.src[pos_start..pos_start + pos_len];
-
-                if let Some(compiler_type) = token::CompilerType::try_str(slice) {
-                    kind = TokenKind::Type(compiler_type);
-                }
-
-                if let Some(compiler_keyword) = token::CompilerKeyword::try_str(slice) {
-                    kind = TokenKind::Keyword(compiler_keyword);
-                }
-
-                if slice == "_" {
-                    kind = TokenKind::Underscore;
-                }
-
-                kind
+                self.tokenize_ident(kind)
             }
 
             chr @ '0'..='9' => {
@@ -291,6 +274,27 @@ impl<'inp> Tokenizer<'inp> {
         } else {
             TokenKind::Ident
         }
+    }
+
+    fn tokenize_ident(&mut self, mut kind: TokenKind) -> TokenKind {
+        let pos_start = self.pos_start();
+        let pos_len = self.pos_len();
+
+        let slice = &self.src[pos_start..pos_start + pos_len];
+
+        if let Some(compiler_type) = token::CompilerType::try_str(slice) {
+            kind = TokenKind::Type(compiler_type);
+        }
+
+        if let Some(compiler_keyword) = token::CompilerKeyword::try_str(slice) {
+            kind = TokenKind::Keyword(compiler_keyword);
+        }
+
+        if slice == "_" {
+            kind = TokenKind::Underscore;
+        }
+
+        kind
     }
 
     fn char_literal(&mut self) -> TokenKind {
@@ -424,7 +428,10 @@ impl<'inp> Tokenizer<'inp> {
                     kind
                 }
             }
-            _ => self.ident(),
+            _ => {
+                let kind = self.ident();
+                self.tokenize_ident(kind)
+            }
         }
     }
 
