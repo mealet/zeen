@@ -1243,4 +1243,93 @@ mod tests {
 
         assert_eq!(expr_parser.parse().unwrap().span, (1, 5).into());
     }
+
+    #[test]
+    fn call_empty() {
+        const SRC: &str = "foo()";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(
+            expr_parser.parse().unwrap(),
+            &Expression {
+                kind: ExpressionKind::Call {
+                    callee: &Expression {
+                        kind: ExpressionKind::Ident {
+                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            generic_args: None,
+                        },
+                        span: (0, 3).into(),
+                    },
+                    args: &[],
+                },
+                span: (3, 2).into()
+            }
+        );
+    }
+
+    #[test]
+    fn call_with_generic() {
+        use zeen_ast::types::*;
+
+        const SRC: &str = "foo[i32]()";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(
+            expr_parser.parse().unwrap(),
+            &Expression {
+                kind: ExpressionKind::Call {
+                    callee: &Expression {
+                        kind: ExpressionKind::Ident {
+                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            generic_args: Some(&[
+                                &TypeExpr {
+                                    kind: TypeKind::Builtin(BuiltinType::i32),
+                                    span: (4, 3).into()
+                                }
+                            ]),
+                        },
+                        span: (0, 8).into(),
+                    },
+                    args: &[],
+                },
+                span: (8, 2).into()
+            }
+        );
+    }
+
+    #[test]
+    fn call_with_args() {
+        const SRC: &str = "foo(123, 321)";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(
+            expr_parser.parse().unwrap(),
+            &Expression {
+                kind: ExpressionKind::Call {
+                    callee: &Expression {
+                        kind: ExpressionKind::Ident {
+                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            generic_args: None,
+                        },
+                        span: (0, 3).into(),
+                    },
+                    args: &[
+                        &Expression {
+                            kind: ExpressionKind::Literal(expressions::Literal::Int(123)),
+                            span: (4, 3).into(),
+                        },
+
+                        &Expression {
+                            kind: ExpressionKind::Literal(expressions::Literal::Int(321)),
+                            span: (9, 3).into(),
+                        },
+                    ],
+                },
+                span: (3, 10).into()
+            }
+        );
+    }
 }
