@@ -731,8 +731,29 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_call(&mut self, callee: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
+        let macro_id: Option<lasso::Spur> = if let ExpressionKind::Macro(key) = callee.kind { Some(key) } else { None };
+
         let open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
         let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
+
+        if let Some(macro_id) = macro_id {
+            let mut interner_lock = self.p.interner.lock().unwrap();
+            let macro_name = interner_lock.resolve(&macro_id).to_owned();
+            drop(interner_lock);
+
+            if matches!(macro_name.as_ref(), "as!" | "sizeof!" | "alignof!") {
+                let mut type_parser = crate::type_parser::TypeParser::new(self.p);
+
+                let parsed_type = type_parser.parse()?;
+                let type_expr = self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Type(parsed_type),
+                    span: parsed_type.span,
+                });
+
+                args_buffer.push(type_expr);
+                let _ = self.p.eat(TokenKind::Comma);
+            }
+        }
 
         while !matches!(self.p.current().kind, TokenKind::CloseParen | TokenKind::Eof) {
             let arg = self.parse()?;
