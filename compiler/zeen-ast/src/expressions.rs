@@ -139,6 +139,7 @@ pub enum UnaryOp {
 pub struct FieldInit<'arena> {
     pub name: Spur,
     pub value: &'arena Expression<'arena>,
+    pub span: SourceSpan,
 }
 
 // Switch
