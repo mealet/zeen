@@ -783,4 +783,25 @@ mod tests {
         // eof
         assert_eq!(type_parser.parse(), None);
     }
+
+    #[test]
+    fn const_type() {
+        const SRC: &str = "const i32";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Const(&TypeExpr {
+                    kind: TypeKind::Builtin(types::BuiltinType::i32),
+                    span: (6, 3).into(),
+                }),
+                span: (0, 9).into()
+            }
+        );
+
+        // eof
+        assert_eq!(type_parser.parse(), None);
+    }
 }
