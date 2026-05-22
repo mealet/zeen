@@ -1,7 +1,7 @@
 use crate::{Parser, error::ParserError};
 
-use strum::FromRepr;
 use smallvec::SmallVec;
+use strum::FromRepr;
 
 use zeen_ast::expressions::{self, Expression, ExpressionKind};
 use zeen_lexer::{Token, TokenKind};
@@ -187,7 +187,9 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                 break;
             }
 
-            if self.p.advance_not_eof().is_none() { break };
+            if self.p.advance_not_eof().is_none() {
+                break;
+            };
 
             let rhs = self.parse_precedence(op.prec.next())?;
 
@@ -256,7 +258,6 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             TokenKind::Literal { kind } => self.parse_literal(*kind),
 
             // --> keywords
-            
             TokenKind::Keyword(CompilerKeyword::Null) => {
                 // `null` literal is not included in `parse_literal` functions, but it is
                 // written with the same rule: don't move cursor.
@@ -281,7 +282,6 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             }
 
             // <-- keywords
-
             TokenKind::Ident => self.parse_ident_or_struct_init(),
             TokenKind::MacroIdent => self.parse_macro_call(),
 
@@ -633,7 +633,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
                 let _ = self.p.eat(TokenKind::Comma);
             }
-            
+
             let args_slice = self.p.arena.alloc_slice_clone(&args_buffer);
             drop(args_buffer);
 
@@ -645,7 +645,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                 name: id,
                 generic_args,
             },
-            span
+            span,
         });
 
         if self.p.at(TokenKind::OpenBrace) {
@@ -737,7 +737,7 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -749,7 +749,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -761,7 +761,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -773,7 +773,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -793,7 +793,7 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -805,7 +805,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -826,7 +826,7 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -838,7 +838,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -850,7 +850,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -869,7 +869,7 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -881,7 +881,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -893,7 +893,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -912,7 +912,7 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -924,7 +924,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -943,7 +943,7 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
             let id = rodeo.lock().unwrap().get("hello, world").unwrap();
 
             assert_eq!(
@@ -956,7 +956,7 @@ mod tests {
         }
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
             let id = rodeo.lock().unwrap().get("new line \n").unwrap();
 
             assert_eq!(
@@ -976,7 +976,7 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
             let id = rodeo.lock().unwrap().get("hello \\n \\0").unwrap();
 
             assert_eq!(
@@ -996,7 +996,7 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
 
             assert_eq!(
                 expr,
@@ -1015,7 +1015,7 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         {
-            let expr = expr_parser.parse_primary().unwrap();
+            let expr = expr_parser.parse().unwrap();
             let spur = rodeo.lock().unwrap().try_get_or_intern("foo").unwrap();
 
             assert_eq!(
