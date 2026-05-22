@@ -170,7 +170,10 @@ impl<'ctx> Parser<'ctx> {
 
     pub fn expect(&mut self, kind: TokenKind, display: &str) -> Option<Token> {
         if self.at(kind) {
-            Some(self.advance().unwrap())
+            let cur = self.current.clone();
+            let _ = self.advance();
+
+            Some(cur)
         } else {
             if self.current.kind != TokenKind::Eof {
                 self.report(ParserError::ExpectedToken {
