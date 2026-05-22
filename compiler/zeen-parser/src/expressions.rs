@@ -1212,8 +1212,6 @@ mod tests {
 
     #[test]
     fn grouped_expr() {
-        use zeen_ast::expressions::FieldInit;
-
         const SRC: &str = "(1 + 1)";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
