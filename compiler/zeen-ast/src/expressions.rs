@@ -137,17 +137,17 @@ pub enum UnaryOp {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct FieldInit<'arena> {
-    name: Spur,
-    value: &'arena Expression<'arena>,
+    pub name: Spur,
+    pub value: &'arena Expression<'arena>,
 }
 
 // Switch
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Arm<'arena> {
-    pattern: Pattern<'arena>,
-    body: &'arena Expression<'arena>,
-    guard: Option<&'arena Expression<'arena>>,
+    pub pattern: Pattern<'arena>,
+    pub body: &'arena Expression<'arena>,
+    pub guard: Option<&'arena Expression<'arena>>,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
