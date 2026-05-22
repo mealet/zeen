@@ -1364,4 +1364,30 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn basic_macro_call() {
+        // NOTE: In this case we're just assuming that it parses
+
+        const SRC: &str = "foo!(123, 321)";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_some());
+    }
+
+    #[test]
+    fn type_required_macro_call() {
+        // NOTE: In this case we're just assuming that it parses
+
+        const SRC: &str = "as!(*const i32, 123) sizeof!([]void) alignof!(some_struct)";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_some());
+        assert!(expr_parser.parse().is_some());
+        assert!(expr_parser.parse().is_some());
+        
+        assert!(expr_parser.parse().is_none());
+    }
 }
