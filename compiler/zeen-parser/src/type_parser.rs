@@ -804,4 +804,55 @@ mod tests {
         // eof
         assert_eq!(type_parser.parse(), None);
     }
+
+    #[test]
+    fn named_type() {
+        const SRC: &str = "some_struct";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Named {
+                    name: { rodeo.lock().unwrap().get_or_intern("some_struct") },
+                    generic_args: None,
+                },
+                span: (0, 11).into()
+            }
+        );
+
+        // eof
+        assert_eq!(type_parser.parse(), None);
+    }
+
+    #[test]
+    fn named_with_generic_args() {
+        const SRC: &str = "some_struct[i32, u32]";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Named {
+                    name: { rodeo.lock().unwrap().get_or_intern("some_struct") },
+                    generic_args: Some(&[
+                        &TypeExpr {
+                            kind: TypeKind::Builtin(types::BuiltinType::i32),
+                            span: (12, 3).into(),
+                        },
+                        &TypeExpr {
+                            kind: TypeKind::Builtin(types::BuiltinType::u32),
+                            span: (17, 3).into(),
+                        },
+                    ]),
+                },
+                span: (0, 21).into()
+            }
+        );
+
+        // eof
+        assert_eq!(type_parser.parse(), None);
+    }
 }
