@@ -760,7 +760,18 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_macro_call(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let macro_ident = self.p.expect(TokenKind::MacroIdent, "macro identifier")?;
+        
+        let ident_span = macro_ident.span;
+        let ident_slice = self.p.src[ident_span.offset() .. ident_span.offset() + ident_span.len()].to_owned();
+        let ident_id = self.p.get_or_intern(ident_slice);
+
+        let callee = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Macro(ident_id),
+            span: macro_ident.span,
+        });
+
+        self.parse_call(callee)
     }
 
     fn parse_field_access(&mut self, object: &Expression) -> Option<&'ctx Expression<'ctx>> {
