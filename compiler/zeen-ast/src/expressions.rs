@@ -40,7 +40,7 @@ pub enum ExpressionKind<'arena> {
 
     Call {
         callee: &'arena Expression<'arena>,
-        args: &'arena [Expression<'arena>],
+        args: &'arena [&'arena Expression<'arena>],
     },
 
     If {
