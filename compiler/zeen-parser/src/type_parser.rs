@@ -251,7 +251,7 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
         let kw_self = self.p.current();
         let kw_span = kw_self.span;
 
-        let _ = self.p.advance()?;
+        let _ = self.p.advance();
 
         let expr = self.p.arena.alloc(TypeExpr {
             kind: TypeKind::SelfType,
@@ -265,7 +265,7 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
         let kw_self_upper = self.p.current();
         let kw_span = kw_self_upper.span;
 
-        let _ = self.p.advance()?;
+        let _ = self.p.advance();
 
         let expr = self.p.arena.alloc(TypeExpr {
             kind: TypeKind::SelfAlias,
@@ -741,6 +741,42 @@ mod tests {
                     },
                 },
                 span: (0, 31).into()
+            }
+        );
+
+        // eof
+        assert_eq!(type_parser.parse(), None);
+    }
+
+    #[test]
+    fn self_ref_type() {
+        const SRC: &str = "self";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::SelfType,
+                span: (0, 4).into()
+            }
+        );
+
+        // eof
+        assert_eq!(type_parser.parse(), None);
+    }
+
+    #[test]
+    fn self_alias_type() {
+        const SRC: &str = "Self";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::SelfAlias,
+                span: (0, 4).into()
             }
         );
 
