@@ -1030,4 +1030,33 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn ident_with_generics() {
+        use zeen_ast::types::*;
+
+        const SRC: &str = "foo[i32, u32]";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(
+            expr_parser.parse().unwrap(),
+            &Expression {
+                kind: ExpressionKind::Ident {
+                    name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                    generic_args: Some(&[
+                        &TypeExpr {
+                            kind: TypeKind::Builtin(BuiltinType::i32),
+                            span: (4, 3).into(),
+                        },
+                        &TypeExpr {
+                            kind: TypeKind::Builtin(BuiltinType::u32),
+                            span: (9, 3).into(),
+                        },
+                    ]),
+                },
+                span: (0, 13).into()
+            }
+        );
+    }
 }
