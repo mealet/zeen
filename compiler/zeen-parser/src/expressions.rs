@@ -795,8 +795,25 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         self.parse_call(callee)
     }
 
-    fn parse_field_access(&mut self, object: &Expression) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+    fn parse_field_access(&mut self, object: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
+        let _ = self.p.advance_not_eof()?; // skip `.`
+
+
+        let field_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let field_span = field_token.span;
+        let field_slice = self.p.src[field_span.offset() .. field_span.offset() + field_span.len()].to_owned();
+
+        let field = self.p.get_or_intern(field_slice);
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::FieldAccess {
+                object,
+                field,
+            },
+            span: object.merge_span(field_token.span),
+        });
+
+        Some(expr)
     }
 
     fn parse_slice_access(&mut self, object: &Expression) -> Option<&'ctx Expression<'ctx>> {
