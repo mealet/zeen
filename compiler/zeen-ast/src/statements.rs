@@ -6,7 +6,7 @@ use crate::{
     types::TypeExpr,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Statement<'arena> {
     pub kind: StatementKind<'arena>,
     pub span: SourceSpan,
@@ -21,7 +21,7 @@ impl Statement<'_> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum StatementKind<'arena> {
     Let {
         name: Spur,

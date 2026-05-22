@@ -1,7 +1,7 @@
 use lasso::Spur;
 use miette::SourceSpan;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Expression<'arena> {
     pub kind: ExpressionKind<'arena>,
     pub span: SourceSpan,
@@ -16,7 +16,7 @@ impl Expression<'_> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ExpressionKind<'arena> {
     Literal(Literal),
 
@@ -80,7 +80,7 @@ pub enum ExpressionKind<'arena> {
 
 // Literal
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Literal {
     Int(i64),
     Float(f64),
@@ -93,7 +93,7 @@ pub enum Literal {
 
 // Binary
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum BinaryOp {
     // Arithmetic
     Add, // +
@@ -124,7 +124,7 @@ pub enum BinaryOp {
 
 // Unary
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum UnaryOp {
     Neg,    // -a
     Not,    // !a (boolean)
@@ -135,7 +135,7 @@ pub enum UnaryOp {
 
 // Struct Init
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct FieldInit<'arena> {
     name: Spur,
     value: &'arena Expression<'arena>,
@@ -143,14 +143,14 @@ pub struct FieldInit<'arena> {
 
 // Switch
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Arm<'arena> {
     pattern: Pattern<'arena>,
     body: &'arena Expression<'arena>,
     guard: Option<&'arena Expression<'arena>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Pattern<'arena> {
     Literal(Literal),
     Named(Spur),

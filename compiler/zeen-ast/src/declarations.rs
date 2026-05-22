@@ -3,7 +3,7 @@ use miette::SourceSpan;
 
 use crate::{expressions::Expression, statements::Statement, types::TypeExpr};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Declaration<'arena> {
     pub kind: DeclarationKind<'arena>,
     pub span: SourceSpan,
@@ -18,7 +18,7 @@ impl Declaration<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum DeclarationKind<'arena> {
     FnDecl {
         name: Spur,
@@ -70,14 +70,14 @@ pub enum DeclarationKind<'arena> {
 
 // Fn
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct FnParam<'arena> {
     pub name: Option<Spur>,
     pub ty: &'arena TypeExpr<'arena>,
     pub span: SourceSpan,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub struct GenericType<'arena> {
     pub name: Spur,
     pub interfaces: Option<&'arena [Spur]>,
@@ -85,7 +85,7 @@ pub struct GenericType<'arena> {
 
 // Struct
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct StructField<'arena> {
     pub name: Spur,
     pub ty: &'arena TypeExpr<'arena>,
@@ -94,7 +94,7 @@ pub struct StructField<'arena> {
 
 // Enum
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct EnumVariant {
     pub name: Spur,
     pub span: SourceSpan,
