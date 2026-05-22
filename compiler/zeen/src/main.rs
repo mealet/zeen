@@ -43,9 +43,7 @@ fn main() {
                 std::sync::Arc::clone(&rodeo),
             );
 
-            let mut expr_parser = zeen_parser::type_parser::TypeParser::new(&mut parser);
-
-            let _ = expr_parser.parse();
+            let mut expr_parser = zeen_parser::expressions::ExprParser::new(&mut parser);
 
             let expr = expr_parser.parse().unwrap_or_else(|| {
                 for err in &parser.errors {
