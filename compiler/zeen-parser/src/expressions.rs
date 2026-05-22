@@ -1059,4 +1059,98 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn struct_init_empty() {
+        use zeen_ast::types::*;
+
+        const SRC: &str = "foo {}";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(
+            expr_parser.parse().unwrap(),
+            &Expression {
+                kind: ExpressionKind::StructInit {
+                    ty: &Expression {
+                        kind: ExpressionKind::Ident {
+                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            generic_args: None,
+                        },
+                        span: (0, 3).into()
+                    },
+                    fields: None,
+                },
+                span: (0, 6).into()
+            }
+        );
+    }
+
+    #[test]
+    fn struct_init_with_generic() {
+        use zeen_ast::types::*;
+
+        const SRC: &str = "foo[i32] {}";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(
+            expr_parser.parse().unwrap(),
+            &Expression {
+                kind: ExpressionKind::StructInit {
+                    ty: &Expression {
+                        kind: ExpressionKind::Ident {
+                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            generic_args: Some(&[
+                                // fmt comment
+                                &TypeExpr {
+                                    kind: TypeKind::Builtin(BuiltinType::i32),
+                                    span: (4, 3).into()
+                                }
+                            ]),
+                        },
+                        span: (0, 3).into()
+                    },
+                    fields: None,
+                },
+                span: (0, 11).into()
+            }
+        );
+    }
+
+    #[test]
+    fn struct_init_with_field() {
+        use zeen_ast::expressions::FieldInit;
+
+        const SRC: &str = "foo { .a = 123 }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(
+            expr_parser.parse().unwrap(),
+            &Expression {
+                kind: ExpressionKind::StructInit {
+                    ty: &Expression {
+                        kind: ExpressionKind::Ident {
+                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            generic_args: None,
+                        },
+                        span: (0, 3).into()
+                    },
+                    fields: Some(&[
+                        // fmt comment
+                        FieldInit {
+                            name: { rodeo.lock().unwrap().get_or_intern("a") },
+                            value: &Expression {
+                                kind: ExpressionKind::Literal(expressions::Literal::Int(123)),
+                                span: (11, 3).into(),
+                            },
+                            span: (6, 8).into(),
+                        }
+                    ]),
+                },
+                span: (0, 16).into()
+            }
+        );
+    }
 }
