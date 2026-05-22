@@ -443,6 +443,7 @@ dependencies = [
  "lasso",
  "miette",
  "thiserror",
+ "zeen-ast",
  "zeen-driver",
  "zeen-lexer",
  "zeen-parser",
