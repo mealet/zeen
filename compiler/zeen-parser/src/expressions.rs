@@ -660,14 +660,64 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
                 return None;
             }
 
-            return self.parse_struct_init_fields();
+            return self.parse_struct_init_fields(base);
         }
 
         Some(base)
     }
 
-    fn parse_struct_init_fields(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+    fn parse_struct_init_fields(
+        &mut self,
+        ty: &'ctx Expression<'ctx>,
+    ) -> Option<&'ctx Expression<'ctx>> {
+        use zeen_ast::expressions::FieldInit;
+        assert!(self.p.eat(TokenKind::OpenBrace));
+
+        let mut fields: Option<&'ctx [FieldInit<'ctx>]> = None;
+        let mut last_span = self.p.current().span;
+
+        if !self.p.eat(TokenKind::CloseBrace) {
+            let mut fields_buffer: SmallVec<[FieldInit; 8]> = SmallVec::new();
+
+            while !matches!(
+                self.p.current().kind,
+                TokenKind::CloseBrace | TokenKind::Eof
+            ) {
+                let dot_token = self.p.expect(TokenKind::Dot, ".")?;
+
+                let identifier_token = self.p.expect(TokenKind::Ident, "identifier")?;
+                let identifier_slice = self.p.src[identifier_token.span.offset()
+                    ..identifier_token.span.offset() + identifier_token.span.len()]
+                    .to_owned();
+                let identifier_id = self.p.get_or_intern(identifier_slice);
+
+                let _ = self.p.expect(TokenKind::Eq, "=")?;
+
+                let value_expr = self.parse()?;
+                let _ = self.p.eat(TokenKind::Comma);
+
+                fields_buffer.push(FieldInit {
+                    name: identifier_id,
+                    value: value_expr,
+                    span: value_expr.merge_span(dot_token.span),
+                });
+            }
+
+            let close_brace = self.p.expect(TokenKind::CloseBrace, "}")?;
+
+            let fields_arena = self.p.arena.alloc_slice_copy(&fields_buffer);
+            drop(fields_buffer);
+
+            fields = Some(fields_arena);
+            last_span = close_brace.span;
+        }
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::StructInit { ty, fields },
+            span: ty.merge_span(last_span),
+        });
+
+        Some(expr)
     }
 
     fn parse_grouped(&mut self) -> Option<&'ctx Expression<'ctx>> {
