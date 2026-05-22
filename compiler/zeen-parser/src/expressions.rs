@@ -730,8 +730,33 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         expr
     }
 
-    fn parse_call(&mut self, callee: &Expression) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+    fn parse_call(&mut self, callee: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
+        let open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
+        let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
+
+        while !matches!(self.p.current().kind, TokenKind::CloseParen | TokenKind::Eof) {
+            let arg = self.parse()?;
+            args_buffer.push(arg);
+
+            if !self.p.at(TokenKind::CloseParen) {
+                self.p.expect(TokenKind::Comma, ",");
+            }
+        }
+
+        let close_paren = self.p.expect(TokenKind::CloseParen, ")")?;
+
+        let args = self.p.arena.alloc_slice_copy(&args_buffer);
+        drop(args_buffer);
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Call {
+                callee,
+                args
+            },
+            span: open_paren.merge_span(close_paren.span),
+        });
+
+        Some(expr)
     }
 
     fn parse_macro_call(&mut self) -> Option<&'ctx Expression<'ctx>> {
