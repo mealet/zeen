@@ -1109,7 +1109,7 @@ mod tests {
                                 }
                             ]),
                         },
-                        span: (0, 3).into()
+                        span: (0, 8).into()
                     },
                     fields: None,
                 },
