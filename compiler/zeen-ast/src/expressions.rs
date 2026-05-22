@@ -41,7 +41,6 @@ pub enum ExpressionKind<'arena> {
     Call {
         callee: &'arena Expression<'arena>,
         args: &'arena [Expression<'arena>],
-        generic_args: Option<&'arena [crate::types::TypeExpr<'arena>]>,
     },
 
     If {
