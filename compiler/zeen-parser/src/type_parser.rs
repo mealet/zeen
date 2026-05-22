@@ -1,6 +1,9 @@
 use crate::{Parser, error::ParserError};
 
-use zeen_ast::types::{self, TypeExpr, TypeKind};
+use zeen_ast::{
+    declarations::GenericType,
+    types::{self, TypeExpr, TypeKind},
+};
 use zeen_lexer::{Token, TokenKind, token};
 
 use smallvec::SmallVec;
@@ -37,6 +40,16 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
             // named
             TokenKind::Ident => self.parse_named(),
 
+            TokenKind::Eof => {
+                self.p.report(ParserError::UnexpectedEof {
+                    expected: "type".into(),
+                    src: self.p.named_src(),
+                    span: self.p.current().span,
+                });
+
+                None
+            }
+
             _ => {
                 self.p.report(ParserError::UnknownType {
                     label: "unknown type here".into(),
@@ -49,6 +62,64 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
                 None
             }
         }
+    }
+}
+
+impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
+    pub fn parse_generics_declarations(&mut self) -> Option<&'ctx [GenericType<'ctx>]> {
+        if self.p.eat(TokenKind::OpenBracket) {
+            let mut generics: SmallVec<[GenericType<'ctx>; 8]> = SmallVec::new();
+
+            loop {
+                if self.p.at(TokenKind::CloseBracket) || self.p.at(TokenKind::Eof) {
+                    break;
+                };
+
+                let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+                let name_slice = self.p.src
+                    [name_token.span.offset()..name_token.span.offset() + name_token.span.len()]
+                    .to_owned();
+
+                let name = self.p.get_or_intern(name_slice);
+
+                let interfaces: Option<&'ctx [lasso::Spur]> = if self.p.eat(TokenKind::Colon) {
+                    let mut interfaces_buffer: SmallVec<[lasso::Spur; 8]> = SmallVec::new();
+
+                    while !matches!(
+                        self.p.current().kind,
+                        TokenKind::CloseBracket | TokenKind::Eof | TokenKind::Comma
+                    ) {
+                        let interface_token = self.p.expect(TokenKind::Ident, "identifier")?;
+                        let interface_slice = self.p.src[interface_token.span.offset()
+                            ..interface_token.span.offset() + interface_token.span.len()]
+                            .to_owned();
+
+                        let interface_id = self.p.get_or_intern(interface_slice);
+                        interfaces_buffer.push(interface_id);
+
+                        let _ = self.p.eat(TokenKind::Plus);
+                    }
+
+                    let interfaces_arena = self.p.arena.alloc_slice_copy(&interfaces_buffer);
+                    drop(interfaces_buffer);
+
+                    Some(interfaces_arena)
+                } else {
+                    None
+                };
+
+                generics.push(GenericType { name, interfaces });
+            }
+
+            self.p.eat(TokenKind::CloseBracket);
+
+            let generics_slice = self.p.arena.alloc_slice_copy(&generics);
+            drop(generics);
+
+            return Some(generics_slice);
+        }
+
+        None
     }
 }
 
@@ -126,27 +197,7 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
         let kw_fn = self.p.current_clone();
         let _ = self.p.advance_not_eof()?;
 
-        let mut generic_args: Option<&'_ [&'_ zeen_ast::TypeExpr<'_>]> = None;
-
-        if self.p.eat(TokenKind::OpenBracket) {
-            let mut args_buffer: SmallVec<[&zeen_ast::TypeExpr<'_>; 16]> = SmallVec::new();
-
-            while self.p.current().kind != TokenKind::Eof {
-                if self.p.eat(TokenKind::CloseBracket) {
-                    break;
-                }
-
-                let generic_arg_type = self.parse()?;
-                args_buffer.push(generic_arg_type);
-
-                let _ = self.p.eat(TokenKind::Comma);
-            }
-
-            let args_slice = self.p.arena.alloc_slice_clone(&args_buffer);
-            drop(args_buffer);
-
-            generic_args = Some(args_slice);
-        }
+        let mut generic_args = self.parse_generics_declarations();
 
         if !self.p.eat(TokenKind::OpenParen) {
             self.p.report(ParserError::UnknownType {
@@ -188,15 +239,10 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
             kind: TypeKind::Fn {
                 params: arena_params,
                 ret: ret_type,
-                generic_args: None,
+                generic_args,
             },
             span: kw_fn.merge_span(ret_type.span),
         });
-
-        // FIXME: Review generic types parsing, it should be declaration syntax:
-        // Now its: `fn foo[T]() void` (where T is named and doesn't supported interfaces).
-        // Should be: `fn foo[T: Add + Display]() void` (T is generic declarated type with interfaces)
-        todo!();
 
         Some(expr)
     }
@@ -667,21 +713,34 @@ mod tests {
                 kind: TypeKind::Fn {
                     params: &[&TypeExpr {
                         kind: TypeKind::Builtin(types::BuiltinType::u32),
-                        span: (6, 3).into()
-                    },],
-                    generic_args: Some(&[zeen_ast::declarations::GenericType {
-                        name: rodeo.lock().unwrap().get_or_intern("T"),
+                        span: (21, 3).into(),
+                    }],
+                    generic_args: Some(&[GenericType {
+                        name: { rodeo.lock().unwrap().get_or_intern("T") },
                         interfaces: Some(&[
-                            rodeo.lock().unwrap().get_or_intern("Add"),
-                            rodeo.lock().unwrap().get_or_intern("Display"),
+                            /*
+                             * Kinda interesting bug:
+                             *
+                             * Mutex.lock() was locking interner inside until test scope end, but right after that
+                             * we're trying to lock it again, and next "lockers" will wait previous user to go out scope.
+                             *
+                             * That means they never free the Mutex lock and get stuck in infinity loop.
+                             *
+                             * To fix this I've wrapped all calls in braces to create new local scopes and free the lock
+                             * for other Mutex users.
+                             *
+                             * I've lost 2 hours of debugging for this...
+                             */
+                            { rodeo.lock().unwrap().get_or_intern("Add") },
+                            { rodeo.lock().unwrap().get_or_intern("Display") },
                         ]),
                     }]),
                     ret: &TypeExpr {
                         kind: TypeKind::Builtin(types::BuiltinType::usize),
-                        span: (11, 5).into()
-                    }
+                        span: (26, 5).into(),
+                    },
                 },
-                span: (0, 16).into()
+                span: (0, 31).into()
             }
         );
 
