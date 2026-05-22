@@ -721,7 +721,13 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_grouped(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        debug_assert!(self.p.at(TokenKind::OpenParen));
+
+        let _ = self.p.advance_not_eof()?;
+        let expr = self.parse();
+        let _ = self.p.expect(TokenKind::CloseParen, ")")?;
+
+        expr
     }
 
     fn parse_call(&mut self, callee: &Expression) -> Option<&'ctx Expression<'ctx>> {
@@ -1202,5 +1208,16 @@ mod tests {
                 span: (0, 16).into()
             }
         );
+    }
+
+    #[test]
+    fn grouped_expr() {
+        use zeen_ast::expressions::FieldInit;
+
+        const SRC: &str = "(1 + 1)";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(expr_parser.parse().unwrap().span, (1, 5).into());
     }
 }
