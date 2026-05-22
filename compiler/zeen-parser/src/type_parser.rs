@@ -331,7 +331,7 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
         let mut child = self.parse()?;
 
         let expr = arena.alloc(TypeExpr {
-            kind: TypeKind::Pointer(child),
+            kind: TypeKind::Const(child),
             span: kw_const.merge_span(child.span),
         });
 
