@@ -111,7 +111,7 @@ impl<'ctx> Parser<'ctx> {
     }
 
     pub fn eof_token(&self) -> Token {
-        let span = (self.current.span.offset() + 1, 0).into();
+        let span = (self.current.span.offset() + self.current.span.len(), 0).into();
         Token::new(TokenKind::Eof, span)
     }
 
