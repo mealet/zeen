@@ -56,7 +56,7 @@ pub enum ExpressionKind<'arena> {
 
     FieldAccess {
         object: &'arena Expression<'arena>,
-        field: Spur,
+        field: &'arena Expression<'arena>, // ident expr
     },
 
     SliceAccess {
