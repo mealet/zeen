@@ -200,6 +200,7 @@ struct Value[T: Add, R: Add] {
 //
 // Constant definition without initialization is not allowed.
 
+
 /* ====@ Generics Usage @==== */
 /*
   Structs and functions can have generic types, there's 2 ways to use them:
@@ -218,5 +219,5 @@ fn foo[T: Display](a: T) { /* ... */ }
 
 {
   let a = 123;
-  foo[i64](a);
+  foo #[i64] (a);
 }
