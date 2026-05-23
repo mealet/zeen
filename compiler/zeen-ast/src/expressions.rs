@@ -70,7 +70,7 @@ pub enum ExpressionKind<'arena> {
     },
 
     ArrayInit {
-        elements: &'arena [Expression<'arena>],
+        elements: &'arena [&'arena Expression<'arena>],
     },
 
     Block(&'arena [crate::statements::Statement<'arena>]),
