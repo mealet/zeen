@@ -240,6 +240,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             expr = match self.p.current().kind {
                 TokenKind::OpenParen => self.parse_call(expr)?,
                 TokenKind::OpenBracket => self.parse_slice_access(expr)?,
+                TokenKind::OpenBrace => self.parse_struct_init_fields(expr)?,
                 TokenKind::Dot => self.parse_field_access(expr)?,
 
                 _ => break,
@@ -810,10 +811,51 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let field_slice =
             self.p.src[field_span.offset()..field_span.offset() + field_span.len()].to_owned();
 
-        let field = self.p.get_or_intern(field_slice);
+        let field_id = self.p.get_or_intern(field_slice);
+
+        let mut generic_args: Option<&'_ [&'_ zeen_ast::TypeExpr<'_>]> = None;
+        let mut span = field_token.span;
+
+        if self.p.eat(TokenKind::Hashtag) {
+            let _ = self.p.expect(TokenKind::OpenBracket, "[")?;
+
+            let mut args_buffer: SmallVec<[&zeen_ast::TypeExpr<'_>; 16]> = SmallVec::new();
+
+            while self.p.current().kind != TokenKind::Eof {
+                let current = self.p.current_clone();
+
+                if self.p.eat(TokenKind::CloseBracket) {
+                    span = field_token.merge_span(current.span);
+                    break;
+                }
+
+                let mut type_parser = crate::type_parser::TypeParser::new(self.p);
+                let generic_arg_type = type_parser.parse()?;
+
+                args_buffer.push(generic_arg_type);
+
+                let _ = self.p.eat(TokenKind::Comma);
+            }
+
+            let args_slice = self.p.arena.alloc_slice_clone(&args_buffer);
+            drop(args_buffer);
+
+            generic_args = Some(args_slice);
+        }
+
+        let ident_expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Ident {
+                name: field_id,
+                generic_args,
+            },
+            span: field_token.span,
+        });
 
         let expr = self.p.arena.alloc(Expression {
-            kind: ExpressionKind::FieldAccess { object, field },
+            kind: ExpressionKind::FieldAccess {
+                object,
+                field: ident_expr,
+            },
             span: object.merge_span(field_token.span),
         });
 
@@ -826,10 +868,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let close_bracket = self.p.expect(TokenKind::CloseBracket, "]")?;
 
         let expr = self.p.arena.alloc(Expression {
-            kind: ExpressionKind::SliceAccess {
-                object,
-                index,
-            },
+            kind: ExpressionKind::SliceAccess { object, index },
             span: object.merge_span(close_bracket.span),
         });
 
