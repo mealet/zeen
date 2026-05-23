@@ -731,7 +731,11 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_call(&mut self, callee: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
-        let macro_id: Option<lasso::Spur> = if let ExpressionKind::Macro(key) = callee.kind { Some(key) } else { None };
+        let macro_id: Option<lasso::Spur> = if let ExpressionKind::Macro(key) = callee.kind {
+            Some(key)
+        } else {
+            None
+        };
 
         let open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
         let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
@@ -755,7 +759,10 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             }
         }
 
-        while !matches!(self.p.current().kind, TokenKind::CloseParen | TokenKind::Eof) {
+        while !matches!(
+            self.p.current().kind,
+            TokenKind::CloseParen | TokenKind::Eof
+        ) {
             let arg = self.parse()?;
             args_buffer.push(arg);
 
@@ -770,10 +777,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         drop(args_buffer);
 
         let expr = self.p.arena.alloc(Expression {
-            kind: ExpressionKind::Call {
-                callee,
-                args
-            },
+            kind: ExpressionKind::Call { callee, args },
             span: open_paren.merge_span(close_paren.span),
         });
 
@@ -782,9 +786,10 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
     fn parse_macro_call(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let macro_ident = self.p.expect(TokenKind::MacroIdent, "macro identifier")?;
-        
+
         let ident_span = macro_ident.span;
-        let ident_slice = self.p.src[ident_span.offset() .. ident_span.offset() + ident_span.len()].to_owned();
+        let ident_slice =
+            self.p.src[ident_span.offset()..ident_span.offset() + ident_span.len()].to_owned();
         let ident_id = self.p.get_or_intern(ident_slice);
 
         let callee = self.p.arena.alloc(Expression {
@@ -798,18 +803,15 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_field_access(&mut self, object: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
         let _ = self.p.advance_not_eof()?; // skip `.`
 
-
         let field_token = self.p.expect(TokenKind::Ident, "identifier")?;
         let field_span = field_token.span;
-        let field_slice = self.p.src[field_span.offset() .. field_span.offset() + field_span.len()].to_owned();
+        let field_slice =
+            self.p.src[field_span.offset()..field_span.offset() + field_span.len()].to_owned();
 
         let field = self.p.get_or_intern(field_slice);
 
         let expr = self.p.arena.alloc(Expression {
-            kind: ExpressionKind::FieldAccess {
-                object,
-                field,
-            },
+            kind: ExpressionKind::FieldAccess { object, field },
             span: object.merge_span(field_token.span),
         });
 
@@ -1332,12 +1334,10 @@ mod tests {
                     callee: &Expression {
                         kind: ExpressionKind::Ident {
                             name: { rodeo.lock().unwrap().get_or_intern("foo") },
-                            generic_args: Some(&[
-                                &TypeExpr {
-                                    kind: TypeKind::Builtin(BuiltinType::i32),
-                                    span: (4, 3).into()
-                                }
-                            ]),
+                            generic_args: Some(&[&TypeExpr {
+                                kind: TypeKind::Builtin(BuiltinType::i32),
+                                span: (4, 3).into()
+                            }]),
                         },
                         span: (0, 8).into(),
                     },
@@ -1370,7 +1370,6 @@ mod tests {
                             kind: ExpressionKind::Literal(expressions::Literal::Int(123)),
                             span: (4, 3).into(),
                         },
-
                         &Expression {
                             kind: ExpressionKind::Literal(expressions::Literal::Int(321)),
                             span: (9, 3).into(),
@@ -1404,7 +1403,7 @@ mod tests {
         assert!(expr_parser.parse().is_some());
         assert!(expr_parser.parse().is_some());
         assert!(expr_parser.parse().is_some());
-        
+
         assert!(expr_parser.parse().is_none());
     }
 }
