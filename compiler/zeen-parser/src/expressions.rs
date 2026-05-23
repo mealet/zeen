@@ -1514,4 +1514,72 @@ mod tests {
 
         assert!(expr_parser.parse().is_none());
     }
+
+    #[test]
+    fn if_expr() {
+        // NOTE: In this case we're just assuming that it parses
+
+        const SRC: &str = "if (1 == 1) 123";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_some());
+
+        assert!(expr_parser.parse().is_none());
+    }
+
+    #[test]
+    fn if_else_expr() {
+        // NOTE: In this case we're just assuming that it parses
+
+        const SRC: &str = "if (1 == 1) 123 else 321";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_some());
+
+        assert!(expr_parser.parse().is_none());
+    }
+
+    #[test]
+    #[should_panic]
+    fn if_without_parentheses() {
+        // NOTE: In this case we're just assuming that it parses
+
+        const SRC: &str = "if 1 == 1 123";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_some());
+
+        assert!(expr_parser.parse().is_none());
+    }
+
+    #[test]
+    #[should_panic]
+    fn if_without_then() {
+        // NOTE: In this case we're just assuming that it parses
+
+        const SRC: &str = "if (1 == 1) ";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_some());
+
+        assert!(expr_parser.parse().is_none());
+    }
+
+    #[test]
+    #[should_panic]
+    fn if_else_without_expr() {
+        // NOTE: In this case we're just assuming that it parses
+
+        const SRC: &str = "if (1 == 1) 123 else";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_some());
+
+        assert!(expr_parser.parse().is_none());
+    }
 }
