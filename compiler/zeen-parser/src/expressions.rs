@@ -1406,4 +1406,34 @@ mod tests {
 
         assert!(expr_parser.parse().is_none());
     }
+
+    #[test]
+    fn field_access() {
+        const SRC: &str = "field.sub_field.sub_sub_field";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(
+            expr_parser.parse().unwrap(),
+            &Expression {
+                kind: ExpressionKind::FieldAccess {
+                    object: &Expression {
+                        kind: ExpressionKind::FieldAccess {
+                            object: &Expression {
+                                kind: ExpressionKind::Ident {
+                                    name: { rodeo.lock().unwrap().get_or_intern("field") },
+                                    generic_args: None,
+                                },
+                                span: (0, 5).into(),
+                            },
+                            field: { rodeo.lock().unwrap().get_or_intern("sub_field") }
+                        },
+                        span: (0, 15).into(),
+                    },
+                    field: { rodeo.lock().unwrap().get_or_intern("sub_sub_field") },
+                },
+                span: (0, 29).into()
+            }
+        );
+    }
 }
