@@ -35,12 +35,26 @@ pub enum DeclarationKind<'arena> {
 
     StructDecl {
         name: Spur,
+        is_pub: bool,
 
         generics: &'arena [GenericType<'arena>],
         fields: &'arena [StructField<'arena>],
         methods: &'arena [Declaration<'arena>], // FnDecl
+    },
 
+    InterfaceDecl {
+        name: Spur,
         is_pub: bool,
+
+        generics: &'arena [GenericType<'arena>],
+        methods: &'arena [Declaration<'arena>], // FnDecl
+    },
+
+    ImplementDecl {
+        interface: &'arena Expression<'arena>, // must be ident / field access that ends with ident.
+        object: &'arena Expression<'arena>,    // here too
+
+        methods: &'arena [Declaration<'arena>], // FnDecl
     },
 
     EnumDecl {
