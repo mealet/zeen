@@ -273,7 +273,7 @@ fn raw_str_literal() {
 
 #[test]
 fn basic_symbols() {
-    const SOURCE: &str = "_ ; : , . ~ ? = ! > < & | ^ + - * / %";
+    const SOURCE: &str = "_ ; : , . ~ ? = ! > < & | ^ + - * / % #";
 
     let mut tokens = tokenize(SOURCE);
 
@@ -384,6 +384,14 @@ fn basic_symbols() {
         Some(Token::new(
             TokenKind::Percent,
             SourceSpan::new(36.into(), 1)
+        ))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::Hashtag,
+            SourceSpan::new(38.into(), 1)
         ))
     );
 
