@@ -922,7 +922,31 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_array_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let open = self.p.expect(TokenKind::OpenBracket, "[")?;
+
+        let mut elements_buffer: SmallVec<[&'ctx Expression; 8]> = SmallVec::new();
+
+        while !matches!(
+            self.p.current.kind,
+            TokenKind::CloseBracket | TokenKind::Eof
+        ) {
+            let expr = self.parse()?;
+            elements_buffer.push(expr);
+
+            if !self.p.at(TokenKind::CloseBracket) {
+                self.p.expect(TokenKind::Comma, ",");
+            }
+        }
+
+        let close = self.p.expect(TokenKind::CloseBracket, "]")?;
+        let elements = self.p.arena.alloc_slice_copy(&elements_buffer);
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::ArrayInit { elements },
+            span: open.merge_span(close.span),
+        });
+
+        Some(expr)
     }
 
     fn parse_block(&mut self) -> Option<&'ctx Expression<'ctx>> {
