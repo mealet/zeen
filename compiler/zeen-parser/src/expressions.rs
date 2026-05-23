@@ -818,8 +818,20 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         Some(expr)
     }
 
-    fn parse_slice_access(&mut self, object: &Expression) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+    fn parse_slice_access(&mut self, object: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
+        let _ = self.p.advance_not_eof()?;
+        let index = self.parse()?;
+        let close_bracket = self.p.expect(TokenKind::CloseBracket, "]")?;
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::SliceAccess {
+                object,
+                index,
+            },
+            span: object.merge_span(close_bracket.span),
+        });
+
+        Some(expr)
     }
 
     fn parse_if_expr(&mut self) -> Option<&'ctx Expression<'ctx>> {
