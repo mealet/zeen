@@ -290,6 +290,16 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             TokenKind::OpenBracket => self.parse_array_init(),
             TokenKind::OpenBrace => self.parse_block(),
 
+            TokenKind::Eof => {
+                self.p.report(ParserError::UnexpectedEof {
+                    expected: "expression".into(),
+                    src: self.p.named_src(),
+                    span: token.span,
+                });
+
+                None
+            }
+
             _ => {
                 self.p.report(ParserError::UnknownExpression {
                     token_kind: format!("{:?}", token.kind).into(),
