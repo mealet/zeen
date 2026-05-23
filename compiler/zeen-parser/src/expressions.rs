@@ -615,7 +615,9 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
         let _ = self.p.advance();
 
-        if self.p.eat(TokenKind::OpenBracket) {
+        if self.p.eat(TokenKind::Hashtag) {
+            let _ = self.p.expect(TokenKind::OpenBracket, "[")?;
+
             let mut args_buffer: SmallVec<[&zeen_ast::TypeExpr<'_>; 16]> = SmallVec::new();
 
             while self.p.current().kind != TokenKind::Eof {
