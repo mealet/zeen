@@ -244,6 +244,7 @@ impl<'inp> Tokenizer<'inp> {
             '*' => TokenKind::Star,
             '%' => TokenKind::Percent,
             '^' => TokenKind::Caret,
+            '#' => TokenKind::Hashtag,
 
             '(' => TokenKind::OpenParen,
             ')' => TokenKind::CloseParen,

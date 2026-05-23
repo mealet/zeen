@@ -57,6 +57,7 @@ pub enum TokenKind {
     Pipe,      // |
     Ampersand, // &
     Caret,     // ^
+    Hashtag,   // #
 
     Plus,    // +
     Minus,   // -
