@@ -886,7 +886,39 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_if_expr(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let if_kw = self.p.expect(
+            TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::If),
+            "if",
+        )?;
+
+        let condition = self.parse_grouped()?;
+        let then_block = self.parse()?;
+
+        let mut else_block: Option<&'ctx Expression<'ctx>> = None;
+
+        if self
+            .p
+            .eat(TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::Else))
+        {
+            else_block = Some(self.parse()?);
+        }
+
+        let span = if let Some(expr) = else_block {
+            if_kw.merge_span(expr.span)
+        } else {
+            if_kw.merge_span(then_block.span)
+        };
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::If {
+                condition,
+                then_block,
+                else_block,
+            },
+            span,
+        });
+
+        Some(expr)
     }
 
     fn parse_array_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
