@@ -1181,7 +1181,7 @@ mod tests {
     fn ident_with_generics() {
         use zeen_ast::types::*;
 
-        const SRC: &str = "foo[i32, u32]";
+        const SRC: &str = "foo#[i32, u32]";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
@@ -1193,15 +1193,15 @@ mod tests {
                     generic_args: Some(&[
                         &TypeExpr {
                             kind: TypeKind::Builtin(BuiltinType::i32),
-                            span: (4, 3).into(),
+                            span: (5, 3).into(),
                         },
                         &TypeExpr {
                             kind: TypeKind::Builtin(BuiltinType::u32),
-                            span: (9, 3).into(),
+                            span: (10, 3).into(),
                         },
                     ]),
                 },
-                span: (0, 13).into()
+                span: (0, 14).into()
             }
         );
     }
@@ -1236,7 +1236,7 @@ mod tests {
     fn struct_init_with_generic() {
         use zeen_ast::types::*;
 
-        const SRC: &str = "foo[i32] {}";
+        const SRC: &str = "foo#[i32] {}";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
@@ -1251,15 +1251,15 @@ mod tests {
                                 // fmt comment
                                 &TypeExpr {
                                     kind: TypeKind::Builtin(BuiltinType::i32),
-                                    span: (4, 3).into()
+                                    span: (5, 3).into()
                                 }
                             ]),
                         },
-                        span: (0, 8).into()
+                        span: (0, 9).into()
                     },
                     fields: None,
                 },
-                span: (0, 11).into()
+                span: (0, 12).into()
             }
         );
     }
@@ -1337,7 +1337,7 @@ mod tests {
     fn call_with_generic() {
         use zeen_ast::types::*;
 
-        const SRC: &str = "foo[i32]()";
+        const SRC: &str = "foo#[i32]()";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
@@ -1350,14 +1350,14 @@ mod tests {
                             name: { rodeo.lock().unwrap().get_or_intern("foo") },
                             generic_args: Some(&[&TypeExpr {
                                 kind: TypeKind::Builtin(BuiltinType::i32),
-                                span: (4, 3).into()
+                                span: (5, 3).into()
                             }]),
                         },
-                        span: (0, 8).into(),
+                        span: (0, 9).into(),
                     },
                     args: &[],
                 },
-                span: (8, 2).into()
+                span: (9, 2).into()
             }
         );
     }
