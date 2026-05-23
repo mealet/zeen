@@ -1606,4 +1606,17 @@ mod tests {
 
         assert!(expr_parser.parse().is_none());
     }
+
+    #[test]
+    fn array_init() {
+        // NOTE: In this case we're just assuming that it parses
+
+        const SRC: &str = "[1, 1.0, \"hello\", foo(), field.sub_field.some_struct#[i32] {.a = 123, .b = 321} .call()]";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_some());
+
+        assert!(expr_parser.parse().is_none());
+    }
 }
