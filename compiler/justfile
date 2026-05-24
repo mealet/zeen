@@ -1,0 +1,35 @@
+# Justfile is an analogue for Makefile.
+# Utility: https://github.com/casey/just
+
+# Zeen Compiler Justfile
+# https://github.com/mealet/zeen
+
+# Usage: just <recipe>
+# (used in development purposes)
+
+default:
+    @just --list
+
+# Run the compiler on `test.zn` file
+run:
+  touch test.zn
+  cargo run -- test.zn
+
+# Run the compiler on `test.zn` (release mode)
+run-release:
+  touch test.zn
+  cargo run --release -- test.zn
+
+# Run tests (nextest if available, otherwise cargo test)
+test:
+  #!/usr/bin/env sh
+  if cargo nextest --version > /dev/null 2>&1; then
+      cargo nextest run
+  else
+      echo "nextest not found, falling back to cargo test"
+      cargo test
+  fi
+
+# Build a release binary
+build:
+    cargo build --release
