@@ -33,3 +33,11 @@ test:
 # Build a release binary
 build:
     cargo build --release
+
+# Apply cargo formatter
+fmt:
+  cargo fmt -- --emit=files
+
+# Apply cargo clippy
+clippy:
+  cargo clippy --fix --allow-dirty -- -D warnings
