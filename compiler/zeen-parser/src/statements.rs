@@ -230,4 +230,105 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn assign_field() {
+        const SRC: &str = "a.field = b";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Assign {
+                    object: Expression {
+                        kind: ExpressionKind::FieldAccess {
+                            object: Expression {
+                                kind: ExpressionKind::Ident { .. },
+                                ..
+                            },
+                            field: Expression {
+                                kind: ExpressionKind::Ident { .. },
+                                ..
+                            }
+                        },
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Ident {
+                            name: _,
+                            generic_args: None,
+                        },
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn assign_slice() {
+        const SRC: &str = "a[123] = b";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Assign {
+                    object: Expression {
+                        kind: ExpressionKind::SliceAccess {
+                            object: Expression {
+                                kind: ExpressionKind::Ident { .. },
+                                ..
+                            },
+                            index: Expression {
+                                kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(
+                                    123
+                                )),
+                                ..
+                            }
+                        },
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Ident {
+                            name: _,
+                            generic_args: None,
+                        },
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn assign_wtf() {
+        const SRC: &str = "123 = a";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Assign {
+                    object: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(123)),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Ident {
+                            name: _,
+                            generic_args: None,
+                        },
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
 }
