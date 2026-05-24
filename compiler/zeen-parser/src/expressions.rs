@@ -895,7 +895,8 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         let then_block;
 
         {
-            let mut stmt_parser = crate::statements::StmtParser::new(self.p);
+            let mut stmt_parser =
+                crate::statements::StmtParser::new(self.p).with_optional_semicolon(false);
             then_block = stmt_parser.parse()?;
         }
 
@@ -905,7 +906,8 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             .p
             .eat(TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::Else))
         {
-            let mut stmt_parser = crate::statements::StmtParser::new(self.p);
+            let mut stmt_parser =
+                crate::statements::StmtParser::new(self.p).with_optional_semicolon(false);
             else_block = Some(stmt_parser.parse()?);
         }
 

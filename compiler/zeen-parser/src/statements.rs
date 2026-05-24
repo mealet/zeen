@@ -1,4 +1,4 @@
-use crate::{Parser, error::ParserError};
+use crate::{Parser, error::ParserError, expressions::ExprParser};
 
 use smallvec::SmallVec;
 
@@ -7,12 +7,21 @@ use zeen_lexer::{Token, TokenKind, token::CompilerKeyword};
 
 pub struct StmtParser<'ctx, 'pr> {
     p: &'pr mut Parser<'ctx>,
+    expect_optional_semicolon: bool,
 }
 
 /// ==@ Statements Parser @==
 impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
-        Self { p: parser }
+        Self {
+            p: parser,
+            expect_optional_semicolon: false,
+        }
+    }
+
+    pub fn with_optional_semicolon(mut self, flag: bool) -> Self {
+        self.expect_optional_semicolon = flag;
+        self
     }
 
     pub fn errors(&self) -> &[ParserError] {
@@ -35,6 +44,12 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
             TokenKind::OpenBrace => self.parse_block(),
 
             _ => self.parse_expr_or_assign(),
+        }
+    }
+
+    fn expect_optional_semicolon(&mut self) {
+        if self.expect_optional_semicolon {
+            let _ = self.p.expect(TokenKind::Semicolon, ";");
         }
     }
 }
@@ -73,6 +88,20 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 
     pub fn parse_expr_or_assign(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        todo!()
+        let start = self.p.current().span;
+
+        let mut expr_parser = ExprParser::new(self.p);
+        let lhs = expr_parser.parse_non_binary()?;
+
+        // expr in statement
+
+        self.expect_optional_semicolon();
+
+        let stmt = self.p.arena.alloc(Statement {
+            kind: StatementKind::Expr(lhs),
+            span: lhs.span,
+        });
+
+        Some(stmt)
     }
 }
