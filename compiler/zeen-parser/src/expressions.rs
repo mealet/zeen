@@ -892,15 +892,21 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         )?;
 
         let condition = self.parse_grouped()?;
-        let then_block = self.parse()?;
+        let then_block;
 
-        let mut else_block: Option<&'ctx Expression<'ctx>> = None;
+        {
+            let mut stmt_parser = crate::statements::StmtParser::new(self.p);
+            then_block = stmt_parser.parse()?;
+        }
+
+        let mut else_block: Option<&'ctx zeen_ast::statements::Statement<'ctx>> = None;
 
         if self
             .p
             .eat(TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::Else))
         {
-            else_block = Some(self.parse()?);
+            let mut stmt_parser = crate::statements::StmtParser::new(self.p);
+            else_block = Some(stmt_parser.parse()?);
         }
 
         let span = if let Some(expr) = else_block {

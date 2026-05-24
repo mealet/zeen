@@ -45,8 +45,8 @@ pub enum ExpressionKind<'arena> {
 
     If {
         condition: &'arena Expression<'arena>,
-        then_block: &'arena Expression<'arena>,
-        else_block: Option<&'arena Expression<'arena>>,
+        then_block: &'arena crate::statements::Statement<'arena>,
+        else_block: Option<&'arena crate::statements::Statement<'arena>>,
     },
 
     Switch {
