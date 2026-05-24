@@ -176,3 +176,58 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
         Some(stmt)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_matches::assert_matches;
+
+    use zeen_ast::{Expression, ExpressionKind};
+
+    macro_rules! make_stmt_parser {
+        ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident, $ep: ident) => {
+            let src_arc = std::sync::Arc::new($src.to_string());
+            let $rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
+            let $bump = bumpalo::Bump::new();
+            let mut $tokens = zeen_lexer::tokenize($src);
+            let mut $parser = Parser::new(
+                "tests.zn",
+                src_arc,
+                &mut $tokens,
+                &$bump,
+                std::sync::Arc::clone(&$rodeo),
+            );
+            let mut $ep = StmtParser::new(&mut $parser);
+        };
+    }
+
+    #[test]
+    fn assign_basic() {
+        const SRC: &str = "a = b";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Assign {
+                    object: Expression {
+                        kind: ExpressionKind::Ident {
+                            name: _,
+                            generic_args: None
+                        },
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Ident {
+                            name: _,
+                            generic_args: None,
+                        },
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
+}

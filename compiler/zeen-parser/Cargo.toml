@@ -17,3 +17,6 @@ strum = { version = "0.28.0", features = ["derive"] }
 smallvec = "1.15.1"
 zeen-lexer = {path = "../zeen-lexer"}
 zeen-ast = {path = "../zeen-ast"}
+
+[dev-dependencies]
+assert_matches = "1.5"
