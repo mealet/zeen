@@ -2,11 +2,12 @@ use crate::{
     Parser,
     error::ParserError,
     expressions::{self, ExprParser},
+    type_parser::TypeParser,
 };
 
 use smallvec::SmallVec;
 
-use zeen_ast::statements::{self, Statement, StatementKind};
+use zeen_ast::{Expression, TypeExpr, statements::{self, Statement, StatementKind}};
 use zeen_lexer::{Token, TokenKind, token::CompilerKeyword};
 
 pub struct StmtParser<'ctx, 'pr> {
@@ -64,7 +65,53 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
 
 impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     pub fn parse_let(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        todo!()
+        let start = self.p.current().span;
+        let is_const = self.p.eat(TokenKind::Keyword(CompilerKeyword::Const));
+
+        if !is_const {
+            self.p.expect(TokenKind::Keyword(CompilerKeyword::Let), "let")?;
+        }
+
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
+
+        let name = self.p.get_or_intern(name_slice);
+
+        let mut explicit_type: Option<&'ctx TypeExpr<'ctx>> = None;
+        let mut value: Option<&'ctx Expression<'ctx>> = None;
+
+        if self.p.eat(TokenKind::Colon) {
+            let mut type_parser = TypeParser::new(self.p);
+            let type_expr = type_parser.parse()?;
+
+            explicit_type = Some(type_expr);
+        }
+
+        if self.p.eat(TokenKind::Eq) {
+            let mut expr_parser = ExprParser::new(self.p);
+            let expr = expr_parser.parse()?;
+
+            value = Some(expr);
+        }
+
+        self.expect_semicolon();
+
+        let span = if let Some(value_expr) = value { value_expr.merge_span(start) }
+        else if let Some(type_expr) = explicit_type { type_expr.merge_span(start) }
+        else { name_token.merge_span(start) };
+
+        let expr = self.p.arena.alloc(Statement {
+            kind: StatementKind::Let {
+                name,
+                explicit_type,
+                value,
+                is_const,
+            },
+            span,
+        });
+
+        Some(expr)
     }
 
     pub fn parse_return(&mut self) -> Option<&'ctx Statement<'ctx>> {
