@@ -7,7 +7,10 @@ use crate::{
 
 use smallvec::SmallVec;
 
-use zeen_ast::{Expression, TypeExpr, statements::{self, Statement, StatementKind}};
+use zeen_ast::{
+    Expression, TypeExpr,
+    statements::{self, Statement, StatementKind},
+};
 use zeen_lexer::{Token, TokenKind, token::CompilerKeyword};
 
 pub struct StmtParser<'ctx, 'pr> {
@@ -69,12 +72,14 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
         let is_const = self.p.eat(TokenKind::Keyword(CompilerKeyword::Const));
 
         if !is_const {
-            self.p.expect(TokenKind::Keyword(CompilerKeyword::Let), "let")?;
+            self.p
+                .expect(TokenKind::Keyword(CompilerKeyword::Let), "let")?;
         }
 
         let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
         let name_span = name_token.span;
-        let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
 
         let name = self.p.get_or_intern(name_slice);
 
@@ -97,9 +102,13 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
 
         self.expect_semicolon();
 
-        let span = if let Some(value_expr) = value { value_expr.merge_span(start) }
-        else if let Some(type_expr) = explicit_type { type_expr.merge_span(start) }
-        else { name_token.merge_span(start) };
+        let span = if let Some(value_expr) = value {
+            value_expr.merge_span(start)
+        } else if let Some(type_expr) = explicit_type {
+            type_expr.merge_span(start)
+        } else {
+            name_token.merge_span(start)
+        };
 
         let expr = self.p.arena.alloc(Statement {
             kind: StatementKind::Let {
