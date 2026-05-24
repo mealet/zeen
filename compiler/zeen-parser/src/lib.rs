@@ -10,6 +10,7 @@ use zeen_lexer::{Token, TokenKind};
 
 pub mod error;
 pub mod expressions;
+pub mod statements;
 pub mod type_parser;
 
 pub struct Parser<'ctx> {
