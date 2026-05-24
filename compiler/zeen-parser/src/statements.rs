@@ -1,4 +1,8 @@
-use crate::{Parser, error::ParserError, expressions::ExprParser};
+use crate::{
+    Parser,
+    error::ParserError,
+    expressions::{self, ExprParser},
+};
 
 use smallvec::SmallVec;
 
@@ -47,6 +51,10 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
         }
     }
 
+    fn expect_semicolon(&mut self) {
+        let _ = self.p.expect(TokenKind::Semicolon, ";");
+    }
+
     fn expect_optional_semicolon(&mut self) {
         if self.expect_optional_semicolon {
             let _ = self.p.expect(TokenKind::Semicolon, ";");
@@ -90,8 +98,71 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     pub fn parse_expr_or_assign(&mut self) -> Option<&'ctx Statement<'ctx>> {
         let start = self.p.current().span;
 
-        let mut expr_parser = ExprParser::new(self.p);
-        let lhs = expr_parser.parse_non_binary()?;
+        let lhs;
+
+        {
+            let mut expr_parser = ExprParser::new(self.p);
+            lhs = expr_parser.parse_non_binary()?;
+        }
+
+        // assignment (a = b)
+
+        if self.p.eat(TokenKind::Eq) {
+            let mut expr_parser = ExprParser::new(self.p);
+            let rhs = expr_parser.parse()?;
+
+            self.expect_semicolon();
+
+            let stmt = self.p.arena.alloc(Statement {
+                kind: StatementKind::Assign {
+                    object: lhs,
+                    value: rhs,
+                },
+                span: rhs.merge_span(start),
+            });
+
+            return Some(stmt);
+        }
+
+        if let Some(bin_info) = expressions::BinaryInfo::new(self.p.current()) {
+            const NOT_ALLOWED: &[zeen_ast::expressions::BinaryOp] = &[
+                zeen_ast::expressions::BinaryOp::Eq,
+                zeen_ast::expressions::BinaryOp::Ne,
+                zeen_ast::expressions::BinaryOp::Lt,
+                zeen_ast::expressions::BinaryOp::Gt,
+                zeen_ast::expressions::BinaryOp::Le,
+                zeen_ast::expressions::BinaryOp::Ge,
+            ];
+
+            if NOT_ALLOWED.contains(&bin_info.tag) {
+                self.p.report(ParserError::UnsupportedAction {
+                    label: "provided operator is not supported for compound assign".into(),
+                    src: self.p.named_src(),
+                    span: self.p.current().span,
+                });
+
+                return None;
+            }
+
+            let _ = self.p.advance_not_eof();
+            let _ = self.p.expect(TokenKind::Eq, "=")?;
+
+            let mut expr_parser = ExprParser::new(self.p);
+            let rhs = expr_parser.parse()?;
+
+            self.expect_semicolon();
+
+            let stmt = self.p.arena.alloc(Statement {
+                kind: StatementKind::CompoundAssign {
+                    object: lhs,
+                    value: rhs,
+                    op: bin_info.tag,
+                },
+                span: rhs.merge_span(start),
+            });
+
+            return Some(stmt);
+        }
 
         // expr in statement
 

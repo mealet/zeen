@@ -12,7 +12,7 @@ pub struct ExprParser<'ctx, 'pr> {
 
 #[repr(u8)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, FromRepr, Copy, Clone)]
-enum Precedence {
+pub enum Precedence {
     Lowest,
     LogicalOr,
     LogicalAnd,
@@ -36,9 +36,9 @@ impl Precedence {
     }
 }
 
-struct BinaryInfo {
-    tag: expressions::BinaryOp,
-    prec: Precedence,
+pub struct BinaryInfo {
+    pub tag: expressions::BinaryOp,
+    pub prec: Precedence,
 }
 
 impl BinaryInfo {

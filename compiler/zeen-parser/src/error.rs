@@ -96,4 +96,15 @@ pub enum ParserError {
         #[label("{label}")]
         span: SourceSpan,
     },
+
+    #[error("this action is not supported")]
+    #[diagnostic(severity(Error), code(zeen::parser::unsupported_action))]
+    UnsupportedAction {
+        label: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("{label}")]
+        span: SourceSpan,
+    },
 }
