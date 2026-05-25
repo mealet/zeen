@@ -129,7 +129,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     pub fn parse_return(&mut self) -> Option<&'ctx Statement<'ctx>> {
         let return_kw = self
             .p
-            .expect(TokenKind::Keyword(CompilerKeyword::Return), "")?;
+            .expect(TokenKind::Keyword(CompilerKeyword::Return), "return")?;
 
         let mut value: Option<&'ctx Expression<'ctx>> = None;
 
@@ -159,7 +159,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     pub fn parse_break(&mut self) -> Option<&'ctx Statement<'ctx>> {
         let break_kw = self
             .p
-            .expect(TokenKind::Keyword(CompilerKeyword::Break), "")?;
+            .expect(TokenKind::Keyword(CompilerKeyword::Break), "break")?;
 
         self.expect_optional_semicolon()?;
 
