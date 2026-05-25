@@ -580,4 +580,19 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn break_stmt() {
+        const SRC: &str = "break;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Break,
+                ..
+            }
+        );
+    }
 }
