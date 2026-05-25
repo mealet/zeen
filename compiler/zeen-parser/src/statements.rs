@@ -201,7 +201,17 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 
     pub fn parse_block(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        todo!()
+        let mut expr_parser = ExprParser::new(self.p);
+        let expr = expr_parser.parse()?;
+
+        let _ = self.p.eat(TokenKind::Semicolon);
+
+        let stmt = self.p.arena.alloc(Statement {
+            kind: StatementKind::Expr(expr),
+            span: expr.span,
+        });
+
+        Some(stmt)
     }
 
     pub fn parse_expr_or_assign(&mut self) -> Option<&'ctx Statement<'ctx>> {
