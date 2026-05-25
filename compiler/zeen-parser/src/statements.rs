@@ -60,10 +60,12 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
         Some(())
     }
 
-    fn expect_optional_semicolon(&mut self) {
+    fn expect_optional_semicolon(&mut self) -> Option<()> {
         if self.expect_optional_semicolon {
-            let _ = self.p.expect(TokenKind::Semicolon, ";");
+            let _ = self.p.expect(TokenKind::Semicolon, ";")?;
+            return Some(());
         }
+        Some(())
     }
 }
 
@@ -159,7 +161,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Break), "")?;
 
-        self.expect_semicolon()?;
+        self.expect_optional_semicolon()?;
 
         let expr = self.p.arena.alloc(Statement {
             kind: StatementKind::Break,
@@ -260,7 +262,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
 
         // expr in statement
 
-        self.expect_optional_semicolon();
+        self.expect_optional_semicolon()?;
 
         let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::Expr(lhs),
