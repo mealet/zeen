@@ -532,4 +532,39 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn return_no_value() {
+        const SRC: &str = "return;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Return { value: None },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn return_with_value() {
+        const SRC: &str = "return 123;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Return {
+                    value: Some(Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(123)),
+                        ..
+                    })
+                },
+                ..
+            }
+        );
+    }
 }
