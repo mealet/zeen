@@ -734,9 +734,9 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     pub fn parse_grouped(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        debug_assert!(self.p.at(TokenKind::OpenParen));
+        let _ = self.p.expect(TokenKind::OpenParen, "(")?;
+        // debug_assert!(self.p.at(TokenKind::OpenParen));
 
-        let _ = self.p.advance_not_eof()?;
         let expr = self.parse();
         let _ = self.p.expect(TokenKind::CloseParen, ")")?;
 
