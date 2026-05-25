@@ -55,8 +55,9 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
         }
     }
 
-    fn expect_semicolon(&mut self) {
+    fn expect_semicolon(&mut self) -> Option<()> {
         let _ = self.p.expect(TokenKind::Semicolon, ";");
+        Some(())
     }
 
     fn expect_optional_semicolon(&mut self) {
@@ -100,7 +101,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
             value = Some(expr);
         }
 
-        self.expect_semicolon();
+        self.expect_semicolon()?;
 
         let span = if let Some(value_expr) = value {
             value_expr.merge_span(start)
@@ -124,16 +125,20 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 
     pub fn parse_return(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        let return_kw = self.p.expect(TokenKind::Keyword(CompilerKeyword::Return), "")?;
+        let return_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Return), "")?;
 
         let mut value: Option<&'ctx Expression<'ctx>> = None;
+
+        dbg!(self.p.current());
 
         if !self.p.at(TokenKind::Semicolon) {
             let mut expr_parser = ExprParser::new(self.p);
             value = Some(expr_parser.parse()?);
         }
 
-        self.expect_semicolon();
+        self.expect_semicolon()?;
 
         let span = if let Some(value_expr) = value {
             value_expr.merge_span(return_kw.span)
@@ -142,9 +147,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
         };
 
         let expr = self.p.arena.alloc(Statement {
-            kind: StatementKind::Return {
-                value
-            },
+            kind: StatementKind::Return { value },
             span,
         });
 
@@ -191,7 +194,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
             let mut expr_parser = ExprParser::new(self.p);
             let rhs = expr_parser.parse()?;
 
-            self.expect_semicolon();
+            self.expect_semicolon()?;
 
             let stmt = self.p.arena.alloc(Statement {
                 kind: StatementKind::Assign {
