@@ -958,7 +958,31 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 
     fn parse_block(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        todo!()
+        let open = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut stmts_buffer: SmallVec<[&'ctx zeen_ast::statements::Statement<'ctx>; 8]> = SmallVec::new();
+
+        while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+            let mut stmt_parser = crate::statements::StmtParser::new(self.p);
+            let stmt = stmt_parser.parse().or_else(|| {
+                if self.p.panic_mode { self.p.sync() }
+                None
+            });
+
+            if let Some(stmt) = stmt {
+                stmts_buffer.push(stmt);
+            }
+        }
+
+        let close = self.p.expect(TokenKind::CloseBrace, "}")?;
+        let stmts = self.p.arena.alloc_slice_copy(&stmts_buffer);
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Block(stmts),
+            span: open.merge_span(close.span),
+        });
+
+        Some(expr)
     }
 }
 
@@ -1620,6 +1644,19 @@ mod tests {
         // NOTE: In this case we're just assuming that it parses
 
         const SRC: &str = "[1, 1.0, \"hello\", foo(), field.sub_field.some_struct#[i32] {.a = 123, .b = 321} .call()]";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_some());
+
+        assert!(expr_parser.parse().is_none());
+    }
+
+    #[test]
+    fn block_expr() {
+        // NOTE: In this case we're just assuming that it parses
+
+        const SRC: &str = "{ let a = 123; let b = 321; }";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
