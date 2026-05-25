@@ -733,7 +733,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
         Some(expr)
     }
 
-    fn parse_grouped(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    pub fn parse_grouped(&mut self) -> Option<&'ctx Expression<'ctx>> {
         debug_assert!(self.p.at(TokenKind::OpenParen));
 
         let _ = self.p.advance_not_eof()?;
@@ -960,12 +960,15 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_block(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let open = self.p.expect(TokenKind::OpenBrace, "{")?;
 
-        let mut stmts_buffer: SmallVec<[&'ctx zeen_ast::statements::Statement<'ctx>; 8]> = SmallVec::new();
+        let mut stmts_buffer: SmallVec<[&'ctx zeen_ast::statements::Statement<'ctx>; 8]> =
+            SmallVec::new();
 
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
             let mut stmt_parser = crate::statements::StmtParser::new(self.p);
             let stmt = stmt_parser.parse().or_else(|| {
-                if self.p.panic_mode { self.p.sync() }
+                if self.p.panic_mode {
+                    self.p.sync()
+                }
                 None
             });
 
