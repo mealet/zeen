@@ -49,6 +49,8 @@ pub enum StatementKind<'arena> {
         body: &'arena Statement<'arena>,
     },
 
+    Break,
+
     While {
         condition: &'arena Expression<'arena>,
         block: &'arena Statement<'arena>,

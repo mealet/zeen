@@ -155,7 +155,18 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 
     pub fn parse_break(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        todo!()
+        let break_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Break), "")?;
+
+        self.expect_semicolon()?;
+
+        let expr = self.p.arena.alloc(Statement {
+            kind: StatementKind::Break,
+            span: break_kw.span,
+        });
+
+        Some(expr)
     }
 
     pub fn parse_defer(&mut self) -> Option<&'ctx Statement<'ctx>> {
