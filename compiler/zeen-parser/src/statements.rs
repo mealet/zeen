@@ -48,7 +48,6 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::Defer) => self.parse_defer(),
             TokenKind::Keyword(CompilerKeyword::While) => self.parse_while(),
             TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(),
-            TokenKind::Keyword(CompilerKeyword::Switch) => self.parse_switch(),
             TokenKind::OpenBrace => self.parse_block(),
 
             _ => self.parse_expr_or_assign(),
@@ -209,10 +208,6 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 
     pub fn parse_for(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        todo!()
-    }
-
-    pub fn parse_switch(&mut self) -> Option<&'ctx Statement<'ctx>> {
         todo!()
     }
 
