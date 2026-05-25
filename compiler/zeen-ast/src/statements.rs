@@ -57,7 +57,7 @@ pub enum StatementKind<'arena> {
     },
 
     For {
-        varname: Spur,
+        varname: (Spur, SourceSpan),
         iterator: &'arena Expression<'arena>,
         block: &'arena Statement<'arena>,
     },

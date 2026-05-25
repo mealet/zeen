@@ -208,7 +208,41 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 
     pub fn parse_for(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        todo!()
+        let for_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::For), "for")?;
+
+        let _ = self.p.expect(TokenKind::OpenParen, "(")?;
+
+        let var_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let var_slice = self.p.src
+            [var_token.span.offset()..var_token.span.offset() + var_token.span.len()]
+            .to_owned();
+
+        let varname_id = self.p.get_or_intern(var_slice);
+        let varname_span = var_token.span;
+
+        let _ = self.p.expect(TokenKind::Colon, ":")?;
+
+        let mut expr_parser = ExprParser::new(self.p);
+        let iterator = expr_parser.parse()?;
+
+        let _ = self.p.expect(TokenKind::CloseParen, ")")?;
+
+        let block = self.parse()?;
+
+        let _ = self.p.eat(TokenKind::Semicolon);
+
+        let stmt = self.p.arena.alloc(Statement {
+            kind: StatementKind::For {
+                varname: (varname_id, varname_span),
+                iterator,
+                block,
+            },
+            span: for_kw.merge_span(block.span),
+        });
+
+        Some(stmt)
     }
 
     pub fn parse_block(&mut self) -> Option<&'ctx Statement<'ctx>> {
