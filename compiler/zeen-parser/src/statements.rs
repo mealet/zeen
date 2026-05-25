@@ -677,4 +677,46 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn while_single() {
+        const SRC: &str = "while (1 == 1) let a = 123;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::While {
+                    condition: _,
+                    block: Statement {
+                        kind: StatementKind::Let { .. },
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn while_block() {
+        const SRC: &str = "while (1 == 1) { let a = 123; }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::While {
+                    condition: _,
+                    block: Statement {
+                        kind: StatementKind::Expr(..),
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
 }
