@@ -991,6 +991,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_switch(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        // TODO: Do it already
         todo!()
     }
 }
