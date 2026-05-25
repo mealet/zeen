@@ -113,7 +113,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
             name_token.merge_span(start)
         };
 
-        let expr = self.p.arena.alloc(Statement {
+        let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::Let {
                 name,
                 explicit_type,
@@ -123,7 +123,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
             span,
         });
 
-        Some(expr)
+        Some(stmt)
     }
 
     pub fn parse_return(&mut self) -> Option<&'ctx Statement<'ctx>> {
@@ -148,12 +148,12 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
             return_kw.span
         };
 
-        let expr = self.p.arena.alloc(Statement {
+        let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::Return { value },
             span,
         });
 
-        Some(expr)
+        Some(stmt)
     }
 
     pub fn parse_break(&mut self) -> Option<&'ctx Statement<'ctx>> {
@@ -163,12 +163,12 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
 
         self.expect_optional_semicolon()?;
 
-        let expr = self.p.arena.alloc(Statement {
+        let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::Break,
             span: break_kw.span,
         });
 
-        Some(expr)
+        Some(stmt)
     }
 
     pub fn parse_defer(&mut self) -> Option<&'ctx Statement<'ctx>> {
@@ -178,12 +178,12 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
 
         let body = self.parse()?;
 
-        let expr = self.p.arena.alloc(Statement {
+        let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::Defer { body },
             span: body.merge_span(defer_kw.span),
         });
 
-        Some(expr)
+        Some(stmt)
     }
 
     pub fn parse_while(&mut self) -> Option<&'ctx Statement<'ctx>> {
