@@ -20,6 +20,12 @@ run-release:
   touch test.zn
   cargo run --release -- test.zn
 
+nvim:
+  touch test.zn
+  nvim test.zn
+
+  {{just_executable()}} run
+
 # Run tests (nextest if available, otherwise cargo test)
 test:
   #!/usr/bin/env sh
