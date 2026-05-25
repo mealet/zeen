@@ -195,7 +195,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
 
         let mut expr_parser = ExprParser::new(self.p);
 
-        let condition = expr_parser.parse()?;
+        let condition = expr_parser.parse_grouped()?;
         let block = self.parse()?;
 
         let _ = self.p.eat(TokenKind::Semicolon);
