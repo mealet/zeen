@@ -178,6 +178,8 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
 
         let body = self.parse()?;
 
+        let _ = self.p.eat(TokenKind::Semicolon);
+
         let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::Defer { body },
             span: body.merge_span(defer_kw.span),
