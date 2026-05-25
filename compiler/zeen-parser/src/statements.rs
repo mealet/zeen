@@ -393,6 +393,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -429,6 +431,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -467,6 +471,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -494,6 +500,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -514,6 +522,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -537,6 +547,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -560,6 +572,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -586,6 +600,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -612,6 +628,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -627,6 +645,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -647,6 +667,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -662,6 +684,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -682,6 +706,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -705,6 +731,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -726,6 +754,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -747,6 +777,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -772,6 +804,8 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 
     #[test]
@@ -797,5 +831,7 @@ mod tests {
                 ..
             }
         );
+
+        assert!(stmt_parser.parse().is_none());
     }
 }
