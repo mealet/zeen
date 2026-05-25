@@ -387,4 +387,122 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn let_only_name() {
+        const SRC: &str = "let a;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let {
+                    name: _,
+                    explicit_type: None,
+                    value: None,
+                    is_const: false
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn let_only_value() {
+        const SRC: &str = "let a = 123;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let {
+                    name: _,
+                    explicit_type: None,
+                    value: Some(Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(123)),
+                        ..
+                    }),
+                    is_const: false
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn let_only_type() {
+        const SRC: &str = "let a: i32;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let {
+                    name: _,
+                    explicit_type: Some(TypeExpr {
+                        kind: zeen_ast::TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    }),
+                    value: None,
+                    is_const: false
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn let_value_and_type() {
+        const SRC: &str = "let a: i32 = 123;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let {
+                    name: _,
+                    explicit_type: Some(TypeExpr {
+                        kind: zeen_ast::TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    }),
+                    value: Some(Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(123)),
+                        ..
+                    }),
+                    is_const: false
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn let_const_value_and_type() {
+        const SRC: &str = "const a: i32 = 123;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let {
+                    name: _,
+                    explicit_type: Some(TypeExpr {
+                        kind: zeen_ast::TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    }),
+                    value: Some(Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(123)),
+                        ..
+                    }),
+                    is_const: true
+                },
+                ..
+            }
+        );
+    }
 }
