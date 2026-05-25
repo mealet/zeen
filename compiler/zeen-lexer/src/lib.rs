@@ -491,7 +491,10 @@ impl<'inp> Tokenizer<'inp> {
                     kind: token::LiteralKind::RawStr { terminated },
                 }
             }
-            _ => self.ident(),
+            _ => {
+                let kind = self.ident();
+                self.tokenize_ident(kind)
+            }
         }
     }
 }
