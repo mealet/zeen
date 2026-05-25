@@ -172,7 +172,18 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 
     pub fn parse_defer(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        todo!()
+        let defer_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Defer), "defer")?;
+
+        let body = self.parse()?;
+
+        let expr = self.p.arena.alloc(Statement {
+            kind: StatementKind::Defer { body },
+            span: body.merge_span(defer_kw.span),
+        });
+
+        Some(expr)
     }
 
     pub fn parse_while(&mut self) -> Option<&'ctx Statement<'ctx>> {
