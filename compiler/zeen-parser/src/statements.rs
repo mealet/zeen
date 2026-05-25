@@ -608,4 +608,44 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn defer_basic() {
+        const SRC: &str = "defer let a = 123;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Defer {
+                    body: Statement {
+                        kind: StatementKind::Let { .. },
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn defer_block() {
+        const SRC: &str = "defer { let a = 123; }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Defer {
+                    body: Statement {
+                        kind: StatementKind::Let { .. },
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
 }
