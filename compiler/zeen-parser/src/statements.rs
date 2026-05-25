@@ -748,4 +748,54 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn for_single() {
+        const SRC: &str = "for (i : 123) let a = 123;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::For {
+                    varname: _,
+                    iterator: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(123)),
+                        ..
+                    },
+                    block: Statement {
+                        kind: StatementKind::Let { .. },
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn for_block() {
+        const SRC: &str = "for (i : 123) { let a = 123; }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::For {
+                    varname: _,
+                    iterator: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(123)),
+                        ..
+                    },
+                    block: Statement {
+                        kind: StatementKind::Expr(..),
+                        ..
+                    }
+                },
+                ..
+            }
+        );
+    }
 }
