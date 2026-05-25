@@ -124,7 +124,31 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 
     pub fn parse_return(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        todo!()
+        let return_kw = self.p.expect(TokenKind::Keyword(CompilerKeyword::Return), "")?;
+
+        let mut value: Option<&'ctx Expression<'ctx>> = None;
+
+        if !self.p.at(TokenKind::Semicolon) {
+            let mut expr_parser = ExprParser::new(self.p);
+            value = Some(expr_parser.parse()?);
+        }
+
+        self.expect_semicolon();
+
+        let span = if let Some(value_expr) = value {
+            value_expr.merge_span(return_kw.span)
+        } else {
+            return_kw.span
+        };
+
+        let expr = self.p.arena.alloc(Statement {
+            kind: StatementKind::Return {
+                value
+            },
+            span,
+        });
+
+        Some(expr)
     }
 
     pub fn parse_break(&mut self) -> Option<&'ctx Statement<'ctx>> {
