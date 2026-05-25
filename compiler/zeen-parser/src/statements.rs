@@ -189,7 +189,23 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 
     pub fn parse_while(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        todo!()
+        let while_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::While), "while")?;
+
+        let mut expr_parser = ExprParser::new(self.p);
+
+        let condition = expr_parser.parse()?;
+        let block = self.parse()?;
+
+        let _ = self.p.eat(TokenKind::Semicolon);
+
+        let stmt = self.p.arena.alloc(Statement {
+            kind: StatementKind::While { condition, block },
+            span: while_kw.merge_span(block.span),
+        });
+
+        Some(stmt)
     }
 
     pub fn parse_for(&mut self) -> Option<&'ctx Statement<'ctx>> {
