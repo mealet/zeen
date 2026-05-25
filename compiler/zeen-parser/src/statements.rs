@@ -640,7 +640,10 @@ mod tests {
             Statement {
                 kind: StatementKind::Defer {
                     body: Statement {
-                        kind: StatementKind::Let { .. },
+                        kind: StatementKind::Expr(Expression {
+                            kind: ExpressionKind::Block(..),
+                            ..
+                        }),
                         ..
                     }
                 },
