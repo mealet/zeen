@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use error::ParserError;
 use zeen_lexer::{Token, TokenKind};
 
+pub mod declarations;
 pub mod error;
 pub mod expressions;
 pub mod statements;
@@ -231,7 +232,7 @@ fn is_sync_keyword(kw: &zeen_lexer::token::CompilerKeyword) -> bool {
             | Defer
             | Switch
             | Return
-            | Pub
+            | Public
             | Fn
             | Extern
             | Include
