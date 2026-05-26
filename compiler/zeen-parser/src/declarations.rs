@@ -149,7 +149,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         let mut return_type = None;
         let mut body = None;
 
-        if !(self.p.at(TokenKind::OpenBrace) || self.p.at(TokenKind::Semicolon)) {
+        if !(self.p.at(TokenKind::OpenBrace) || self.p.at(TokenKind::Semicolon) || self.p.at(TokenKind::Eof)) {
             let mut type_parser = TypeParser::new(self.p);
             return_type = Some(type_parser.parse()?);
         }
