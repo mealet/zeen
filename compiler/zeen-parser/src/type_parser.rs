@@ -108,6 +108,8 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
                     None
                 };
 
+                let _ = self.p.eat(TokenKind::Comma);
+
                 generics.push(GenericType { name, interfaces });
             }
 
