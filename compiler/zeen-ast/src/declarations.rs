@@ -37,17 +37,17 @@ pub enum DeclarationKind<'arena> {
         name: (Spur, SourceSpan),
         is_pub: bool,
 
-        generics: &'arena [GenericType<'arena>],
+        generics: Option<&'arena [GenericType<'arena>]>,
         fields: &'arena [StructField<'arena>],
-        methods: &'arena [Declaration<'arena>], // FnDecl
+        methods: &'arena [&'arena Declaration<'arena>], // FnDecl
     },
 
     InterfaceDecl {
         name: (Spur, SourceSpan),
         is_pub: bool,
 
-        generics: &'arena [GenericType<'arena>],
-        methods: &'arena [Declaration<'arena>], // FnDecl
+        generics: Option<&'arena [GenericType<'arena>]>,
+        methods: &'arena [&'arena Declaration<'arena>], // FnDecl
     },
 
     ImplementDecl {

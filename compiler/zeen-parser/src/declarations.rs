@@ -68,7 +68,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::Fn) => {
                 self.parse_fn(start_span, is_pub, IsExtern(false))
             }
-            TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span),
+            TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span),
             TokenKind::Keyword(CompilerKeyword::Import) => self.parse_import(),
 
@@ -186,8 +186,97 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         Some(decl)
     }
 
-    fn parse_struct(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
-        todo!()
+    fn parse_struct(&mut self, start_span: miette::SourceSpan, is_pub: IsPub) -> Option<&'ctx Declaration<'ctx>> {
+        #[derive(PartialEq)]
+        enum Mode { Any, Methods, Reported };
+
+        let struct_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Struct), "struct")?;
+
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+        let name = (self.p.get_or_intern(name_slice), name_span);
+
+        let mut type_parser = TypeParser::new(self.p);
+
+        // will give Option::None if not at bracket token
+        let generics = type_parser.parse_generics_declarations();
+
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut fields_buffer: SmallVec<[declarations::StructField; 8]> = SmallVec::new();
+        let mut methods_buffer: SmallVec<[&'ctx Declaration<'ctx>; 8]> = SmallVec::new();
+
+        let mut mode = Mode::Any;
+
+        while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+            let start_span = self.p.current().span;
+            let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
+
+            if self.p.at(TokenKind::Keyword(CompilerKeyword::Fn)) {
+                if mode == Mode::Any {
+                    mode = Mode::Methods;
+                }
+
+                let decl = self.parse_fn(start_span, is_pub, IsExtern(false))?;
+                methods_buffer.push(decl);
+
+                continue;
+            }
+
+            let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+            let name_span = name_token.span;
+            let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
+
+            let name = self.p.get_or_intern(name_slice);
+            let _ = self.p.expect(TokenKind::Colon, ":")?;
+
+            let mut type_parser = TypeParser::new(self.p);
+            let ty = type_parser.parse()?;
+
+            let struct_field = declarations::StructField {
+                name,
+                ty,
+                is_pub: is_pub.0
+            };
+
+            fields_buffer.push(struct_field);
+
+            if mode == Mode::Methods {
+                mode = Mode::Reported;
+
+                self.p.report(ParserError::SyntaxError {
+                    label: "fields are not allowed after methods".into(),
+                    help: Some("consider defining necessary fields before methods".into()),
+                    src: self.p.named_src(),
+                    span: name_span,
+                });
+            }
+        }
+
+        let close_brace = self.p.expect(TokenKind::CloseBrace, "{")?;
+
+        let fields = self.p.arena.alloc_slice_copy(&fields_buffer);
+        let methods = self.p.arena.alloc_slice_copy(&methods_buffer);
+
+        let span = close_brace.merge_span(start_span);
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::StructDecl {
+                name,
+                is_pub: is_pub.0,
+                generics,
+                fields,
+                methods,
+            },
+            span
+        });
+        
+        Some(decl)
     }
 
     fn parse_enum(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
