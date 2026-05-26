@@ -1072,10 +1072,13 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_single_pattern(&mut self) -> Option<expressions::Pattern<'ctx>> {
         use expressions::Pattern;
 
-        let token = self.p.advance_not_eof()?;
+        let token = self.p.current_clone();
 
         match token.kind {
-            TokenKind::Underscore => Some(Pattern::Wildcard),
+            TokenKind::Underscore => {
+                let _ = self.p.advance_not_eof()?;
+                Some(Pattern::Wildcard)
+            },
 
             TokenKind::Literal { kind } => {
                 let Expression { kind: ExpressionKind::Literal(literal), span: _ } = self.parse_literal(kind)? else { unreachable!() };
@@ -1088,6 +1091,8 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             },
 
             TokenKind::Ident => {
+                let _ = self.p.advance_not_eof()?;
+
                 let token_slice = self.p.src[token.span.offset() .. token.span.offset() + token.span.len()].to_owned();
                 let name_id = self.p.get_or_intern(token_slice);
 
