@@ -965,7 +965,9 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             SmallVec::new();
 
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
-            let mut stmt_parser = crate::statements::StmtParser::new(self.p);
+            let mut stmt_parser =
+                crate::statements::StmtParser::new(self.p).with_optional_semicolon(true);
+
             let stmt = stmt_parser.parse().or_else(|| {
                 if self.p.panic_mode {
                     self.p.sync()
