@@ -1785,4 +1785,6 @@ mod tests {
 
         assert!(expr_parser.parse().is_none());
     }
+
+    // TODO: Add tests for switch expression
 }
