@@ -119,8 +119,8 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             if self.p.at(TokenKind::Ident) {
                 let name_token = self.p.advance_not_eof()?;
                 let name_span = name_token.span;
-                let name_slice = 
-                    self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
+                let name_slice =
+                    self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
 
                 name = Some(self.p.get_or_intern(name_slice));
                 span = name_span;
@@ -135,11 +135,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
 
             let _ = self.p.eat(TokenKind::Comma);
 
-            params_buffer.push(declarations::FnParam {
-                name,
-                ty,
-                span
-            });
+            params_buffer.push(declarations::FnParam { name, ty, span });
         }
 
         let close_params = self.p.expect(TokenKind::CloseParen, ")")?;
@@ -149,7 +145,10 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         let mut return_type = None;
         let mut body = None;
 
-        if !(self.p.at(TokenKind::OpenBrace) || self.p.at(TokenKind::Semicolon) || self.p.at(TokenKind::Eof)) {
+        if !(self.p.at(TokenKind::OpenBrace)
+            || self.p.at(TokenKind::Semicolon)
+            || self.p.at(TokenKind::Eof))
+        {
             let mut type_parser = TypeParser::new(self.p);
             return_type = Some(type_parser.parse()?);
         }
@@ -161,9 +160,13 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
 
         let _ = self.p.eat(TokenKind::Semicolon);
 
-        let latest_span = if let Some(body) = body { body.span }
-            else if let Some(return_type) = return_type { return_type.span }
-            else { close_params.span };
+        let latest_span = if let Some(body) = body {
+            body.span
+        } else if let Some(return_type) = return_type {
+            return_type.span
+        } else {
+            close_params.span
+        };
 
         let span = fn_kw.merge_span(latest_span);
 
@@ -213,7 +216,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
 
-    use zeen_ast::{TypeExpr, TypeKind, Expression, ExpressionKind, Statement, StatementKind};
+    use zeen_ast::{Expression, ExpressionKind, Statement, StatementKind, TypeExpr, TypeKind};
 
     macro_rules! make_parser {
         ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident) => {
@@ -239,21 +242,18 @@ mod tests {
 
         assert_matches!(
             parser.parse_program(),
-            Ok([
-                Declaration {
-                    kind: DeclarationKind::FnDecl {
-                        name: _,
-                        generics: None,
-                        params: [],
-                        return_type: None,
-                        body: None,
-                        is_pub: false,
-                        is_extern: false,
-
-                    },
-                    ..
-                }
-            ])
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    name: _,
+                    generics: None,
+                    params: [],
+                    return_type: None,
+                    body: None,
+                    is_pub: false,
+                    is_extern: false,
+                },
+                ..
+            }])
         );
     }
 
@@ -265,21 +265,18 @@ mod tests {
 
         assert_matches!(
             parser.parse_program(),
-            Ok([
-                Declaration {
-                    kind: DeclarationKind::FnDecl {
-                        name: _,
-                        generics: None,
-                        params: [],
-                        return_type: None,
-                        body: None,
-                        is_pub: true,
-                        is_extern: false,
-
-                    },
-                    ..
-                }
-            ])
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    name: _,
+                    generics: None,
+                    params: [],
+                    return_type: None,
+                    body: None,
+                    is_pub: true,
+                    is_extern: false,
+                },
+                ..
+            }])
         );
     }
 
@@ -291,21 +288,18 @@ mod tests {
 
         assert_matches!(
             parser.parse_program(),
-            Ok([
-                Declaration {
-                    kind: DeclarationKind::FnDecl {
-                        name: _,
-                        generics: None,
-                        params: [],
-                        return_type: None,
-                        body: None,
-                        is_pub: false,
-                        is_extern: true,
-
-                    },
-                    ..
-                }
-            ])
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    name: _,
+                    generics: None,
+                    params: [],
+                    return_type: None,
+                    body: None,
+                    is_pub: false,
+                    is_extern: true,
+                },
+                ..
+            }])
         );
     }
 
@@ -317,21 +311,18 @@ mod tests {
 
         assert_matches!(
             parser.parse_program(),
-            Ok([
-                Declaration {
-                    kind: DeclarationKind::FnDecl {
-                        name: _,
-                        generics: None,
-                        params: [],
-                        return_type: None,
-                        body: None,
-                        is_pub: true,
-                        is_extern: true,
-
-                    },
-                    ..
-                }
-            ])
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    name: _,
+                    generics: None,
+                    params: [],
+                    return_type: None,
+                    body: None,
+                    is_pub: true,
+                    is_extern: true,
+                },
+                ..
+            }])
         );
     }
 
@@ -343,24 +334,21 @@ mod tests {
 
         assert_matches!(
             parser.parse_program(),
-            Ok([
-                Declaration {
-                    kind: DeclarationKind::FnDecl {
-                        name: _,
-                        generics: None,
-                        params: [],
-                        return_type: Some(TypeExpr {
-                            kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
-                            ..
-                        }),
-                        body: None,
-                        is_pub: false,
-                        is_extern: false,
-
-                    },
-                    ..
-                }
-            ])
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    name: _,
+                    generics: None,
+                    params: [],
+                    return_type: Some(TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    }),
+                    body: None,
+                    is_pub: false,
+                    is_extern: false,
+                },
+                ..
+            }])
         );
     }
 
@@ -372,42 +360,38 @@ mod tests {
 
         assert_matches!(
             parser.parse_program(),
-            Ok([
-                Declaration {
-                    kind: DeclarationKind::FnDecl {
-                        name: _,
-                        generics: None,
-                        params: [
-                            declarations::FnParam {
-                                name: None,
-                                ty: TypeExpr {
-                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
-                                    ..
-                                },
-                                span: _
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    name: _,
+                    generics: None,
+                    params: [
+                        declarations::FnParam {
+                            name: None,
+                            ty: TypeExpr {
+                                kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                                ..
                             },
-
-                            declarations::FnParam {
-                                name: None,
-                                ty: TypeExpr {
-                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::u32),
-                                    ..
-                                },
-                                span: _
+                            span: _
+                        },
+                        declarations::FnParam {
+                            name: None,
+                            ty: TypeExpr {
+                                kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::u32),
+                                ..
                             },
-                        ],
-                        return_type: Some(TypeExpr {
-                            kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
-                            ..
-                        }),
-                        body: None,
-                        is_pub: false,
-                        is_extern: false,
-
-                    },
-                    ..
-                }
-            ])
+                            span: _
+                        },
+                    ],
+                    return_type: Some(TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    }),
+                    body: None,
+                    is_pub: false,
+                    is_extern: false,
+                },
+                ..
+            }])
         );
     }
 
@@ -419,42 +403,38 @@ mod tests {
 
         assert_matches!(
             parser.parse_program(),
-            Ok([
-                Declaration {
-                    kind: DeclarationKind::FnDecl {
-                        name: _,
-                        generics: None,
-                        params: [
-                            declarations::FnParam {
-                                name: Some(_),
-                                ty: TypeExpr {
-                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
-                                    ..
-                                },
-                                span: _
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    name: _,
+                    generics: None,
+                    params: [
+                        declarations::FnParam {
+                            name: Some(_),
+                            ty: TypeExpr {
+                                kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                                ..
                             },
-
-                            declarations::FnParam {
-                                name: Some(_),
-                                ty: TypeExpr {
-                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::u32),
-                                    ..
-                                },
-                                span: _
+                            span: _
+                        },
+                        declarations::FnParam {
+                            name: Some(_),
+                            ty: TypeExpr {
+                                kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::u32),
+                                ..
                             },
-                        ],
-                        return_type: Some(TypeExpr {
-                            kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
-                            ..
-                        }),
-                        body: None,
-                        is_pub: false,
-                        is_extern: false,
-
-                    },
-                    ..
-                }
-            ])
+                            span: _
+                        },
+                    ],
+                    return_type: Some(TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    }),
+                    body: None,
+                    is_pub: false,
+                    is_extern: false,
+                },
+                ..
+            }])
         );
     }
 
@@ -466,52 +446,47 @@ mod tests {
 
         assert_matches!(
             parser.parse_program(),
-            Ok([
-                Declaration {
-                    kind: DeclarationKind::FnDecl {
-                        name: _,
-                        generics: Some([
-                            declarations::GenericType {
-                                name: _,
-                                interfaces: Some(_)
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    name: _,
+                    generics: Some([
+                        declarations::GenericType {
+                            name: _,
+                            interfaces: Some(_)
+                        },
+                        declarations::GenericType {
+                            name: _,
+                            interfaces: Some(_)
+                        },
+                    ]),
+                    params: [
+                        declarations::FnParam {
+                            name: Some(_),
+                            ty: TypeExpr {
+                                kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                                ..
                             },
-
-                            declarations::GenericType {
-                                name: _,
-                                interfaces: Some(_)
+                            span: _
+                        },
+                        declarations::FnParam {
+                            name: Some(_),
+                            ty: TypeExpr {
+                                kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::u32),
+                                ..
                             },
-                        ]),
-                        params: [
-                            declarations::FnParam {
-                                name: Some(_),
-                                ty: TypeExpr {
-                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
-                                    ..
-                                },
-                                span: _
-                            },
-
-                            declarations::FnParam {
-                                name: Some(_),
-                                ty: TypeExpr {
-                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::u32),
-                                    ..
-                                },
-                                span: _
-                            },
-                        ],
-                        return_type: Some(TypeExpr {
-                            kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
-                            ..
-                        }),
-                        body: None,
-                        is_pub: false,
-                        is_extern: false,
-
-                    },
-                    ..
-                }
-            ])
+                            span: _
+                        },
+                    ],
+                    return_type: Some(TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    }),
+                    body: None,
+                    is_pub: false,
+                    is_extern: false,
+                },
+                ..
+            }])
         );
     }
 }
