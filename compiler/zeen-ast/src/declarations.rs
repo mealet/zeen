@@ -21,9 +21,9 @@ impl Declaration<'_> {
 #[derive(Debug, Clone, Copy)]
 pub enum DeclarationKind<'arena> {
     FnDecl {
-        name: Spur,
+        name: (Spur, SourceSpan),
 
-        generics: &'arena [GenericType<'arena>],
+        generics: Option<&'arena [GenericType<'arena>]>,
         params: &'arena [FnParam<'arena>],
         return_type: Option<&'arena TypeExpr<'arena>>,
 
@@ -34,7 +34,7 @@ pub enum DeclarationKind<'arena> {
     },
 
     StructDecl {
-        name: Spur,
+        name: (Spur, SourceSpan),
         is_pub: bool,
 
         generics: &'arena [GenericType<'arena>],
@@ -43,7 +43,7 @@ pub enum DeclarationKind<'arena> {
     },
 
     InterfaceDecl {
-        name: Spur,
+        name: (Spur, SourceSpan),
         is_pub: bool,
 
         generics: &'arena [GenericType<'arena>],
@@ -64,7 +64,7 @@ pub enum DeclarationKind<'arena> {
     },
 
     ExternVar {
-        name: Spur,
+        name: (Spur, SourceSpan),
         ty: &'arena TypeExpr<'arena>,
     },
 
@@ -77,8 +77,8 @@ pub enum DeclarationKind<'arena> {
     },
 
     Import {
-        module: Spur,
-        alias: Spur,
+        module: (Spur, SourceSpan),
+        alias: (Spur, SourceSpan),
     },
 }
 
