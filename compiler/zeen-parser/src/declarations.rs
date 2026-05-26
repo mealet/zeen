@@ -333,6 +333,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         }
 
         let close_brace = self.p.expect(TokenKind::CloseBrace, "{")?;
+        let _ = self.p.eat(TokenKind::Semicolon);
 
         let variants = self.p.arena.alloc_slice_copy(&variants_buffer);
 
