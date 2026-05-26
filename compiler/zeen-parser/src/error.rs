@@ -26,6 +26,17 @@ pub enum ParserError {
         span: SourceSpan,
     },
 
+    #[error("unknown top-level declaration found")]
+    #[diagnostic(severity(Error), code(zeen::parser::unknown_expression))]
+    UnknownDeclaration {
+        token_kind: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("[`{token_kind}`]")]
+        span: SourceSpan,
+    },
+
     #[error("expected `{expected}` token")]
     #[diagnostic(severity(Error), code(zeen::parser::expected_token))]
     ExpectedToken {
