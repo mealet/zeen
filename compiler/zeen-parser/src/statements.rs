@@ -132,8 +132,6 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
 
         let mut value: Option<&'ctx Expression<'ctx>> = None;
 
-        dbg!(self.p.current());
-
         if !self.p.at(TokenKind::Semicolon) {
             let mut expr_parser = ExprParser::new(self.p);
             value = Some(expr_parser.parse()?);
