@@ -225,6 +225,8 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
                 let decl = self.parse_fn(start_span, is_pub, IsExtern(false))?;
                 methods_buffer.push(decl);
 
+                let _ = self.p.eat(TokenKind::Comma);
+
                 continue;
             }
 
@@ -245,6 +247,8 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             };
 
             fields_buffer.push(struct_field);
+
+            let _ = self.p.eat(TokenKind::Comma);
 
             if mode == Mode::Methods {
                 mode = Mode::Reported;
