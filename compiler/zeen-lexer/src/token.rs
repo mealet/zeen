@@ -171,7 +171,7 @@ pub enum CompilerKeyword {
     Switch,
     Return,
 
-    Pub,
+    Public,
     Fn,
     Extern,
     Include,
@@ -207,7 +207,7 @@ impl CompilerKeyword {
             "switch" => Some(CompilerKeyword::Switch),
             "return" => Some(CompilerKeyword::Return),
 
-            "public" => Some(CompilerKeyword::Pub),
+            "public" => Some(CompilerKeyword::Public),
             "fn" => Some(CompilerKeyword::Fn),
             "extern" => Some(CompilerKeyword::Extern),
             "include" => Some(CompilerKeyword::Include),
