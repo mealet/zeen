@@ -207,3 +207,311 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         todo!()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_matches::assert_matches;
+
+    use zeen_ast::{TypeExpr, TypeKind, Expression, ExpressionKind, Statement, StatementKind};
+
+    macro_rules! make_parser {
+        ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident) => {
+            let src_arc = std::sync::Arc::new($src.to_string());
+            let $rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
+            let $bump = bumpalo::Bump::new();
+            let mut $tokens = zeen_lexer::tokenize($src);
+            let mut $parser = Parser::new(
+                "tests.zn",
+                src_arc,
+                &mut $tokens,
+                &$bump,
+                std::sync::Arc::clone(&$rodeo),
+            );
+        };
+    }
+
+    #[test]
+    fn fn_decl_basic() {
+        const SRC: &str = "fn foo();";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::FnDecl {
+                        name: _,
+                        generics: None,
+                        params: [],
+                        return_type: None,
+                        body: None,
+                        is_pub: false,
+                        is_extern: false,
+
+                    },
+                    ..
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn fn_decl_public() {
+        const SRC: &str = "public fn foo();";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::FnDecl {
+                        name: _,
+                        generics: None,
+                        params: [],
+                        return_type: None,
+                        body: None,
+                        is_pub: true,
+                        is_extern: false,
+
+                    },
+                    ..
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn fn_decl_extern() {
+        const SRC: &str = "extern fn foo();";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::FnDecl {
+                        name: _,
+                        generics: None,
+                        params: [],
+                        return_type: None,
+                        body: None,
+                        is_pub: false,
+                        is_extern: true,
+
+                    },
+                    ..
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn fn_decl_public_extern() {
+        const SRC: &str = "public extern fn foo();";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::FnDecl {
+                        name: _,
+                        generics: None,
+                        params: [],
+                        return_type: None,
+                        body: None,
+                        is_pub: true,
+                        is_extern: true,
+
+                    },
+                    ..
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn fn_decl_with_return_type() {
+        const SRC: &str = "fn foo() i32;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::FnDecl {
+                        name: _,
+                        generics: None,
+                        params: [],
+                        return_type: Some(TypeExpr {
+                            kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                            ..
+                        }),
+                        body: None,
+                        is_pub: false,
+                        is_extern: false,
+
+                    },
+                    ..
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn fn_decl_with_unnamed_params() {
+        const SRC: &str = "fn foo(i32, u32) i32;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::FnDecl {
+                        name: _,
+                        generics: None,
+                        params: [
+                            declarations::FnParam {
+                                name: None,
+                                ty: TypeExpr {
+                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                                    ..
+                                },
+                                span: _
+                            },
+
+                            declarations::FnParam {
+                                name: None,
+                                ty: TypeExpr {
+                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::u32),
+                                    ..
+                                },
+                                span: _
+                            },
+                        ],
+                        return_type: Some(TypeExpr {
+                            kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                            ..
+                        }),
+                        body: None,
+                        is_pub: false,
+                        is_extern: false,
+
+                    },
+                    ..
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn fn_decl_with_named_params() {
+        const SRC: &str = "fn foo(a: i32, b: u32) i32;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::FnDecl {
+                        name: _,
+                        generics: None,
+                        params: [
+                            declarations::FnParam {
+                                name: Some(_),
+                                ty: TypeExpr {
+                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                                    ..
+                                },
+                                span: _
+                            },
+
+                            declarations::FnParam {
+                                name: Some(_),
+                                ty: TypeExpr {
+                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::u32),
+                                    ..
+                                },
+                                span: _
+                            },
+                        ],
+                        return_type: Some(TypeExpr {
+                            kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                            ..
+                        }),
+                        body: None,
+                        is_pub: false,
+                        is_extern: false,
+
+                    },
+                    ..
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn fn_decl_with_generics() {
+        const SRC: &str = "fn foo[T: Add + Display, R: Debug + Copy](a: i32, b: u32) i32;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::FnDecl {
+                        name: _,
+                        generics: Some([
+                            declarations::GenericType {
+                                name: _,
+                                interfaces: Some(_)
+                            },
+
+                            declarations::GenericType {
+                                name: _,
+                                interfaces: Some(_)
+                            },
+                        ]),
+                        params: [
+                            declarations::FnParam {
+                                name: Some(_),
+                                ty: TypeExpr {
+                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                                    ..
+                                },
+                                span: _
+                            },
+
+                            declarations::FnParam {
+                                name: Some(_),
+                                ty: TypeExpr {
+                                    kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::u32),
+                                    ..
+                                },
+                                span: _
+                            },
+                        ],
+                        return_type: Some(TypeExpr {
+                            kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                            ..
+                        }),
+                        body: None,
+                        is_pub: false,
+                        is_extern: false,
+
+                    },
+                    ..
+                }
+            ])
+        );
+    }
+}
