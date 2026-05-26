@@ -277,6 +277,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             }
 
             TokenKind::Keyword(CompilerKeyword::If) => self.parse_if_expr(),
+            TokenKind::Keyword(CompilerKeyword::Switch) => self.parse_switch(),
 
             TokenKind::Keyword(CompilerKeyword::SelfUpper | CompilerKeyword::SelfLower) => {
                 self.parse_ident_or_struct_init()
@@ -780,7 +781,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             args_buffer.push(arg);
 
             if !self.p.at(TokenKind::CloseParen) {
-                self.p.expect(TokenKind::Comma, ",");
+                self.p.expect(TokenKind::Comma, ",")?;
             }
         }
 
@@ -991,8 +992,119 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     fn parse_switch(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        // TODO: Do it already
-        todo!()
+        let switch_kw = self.p.expect(TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::Switch), "switch")?;
+        let object = self.parse_grouped()?;
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut arms_buffer: SmallVec<[&'_ expressions::Arm<'_>; 8]> = SmallVec::new();
+
+        while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+            let arm = self.parse_switch_arm()?;
+            arms_buffer.push(arm);
+        }
+
+        let end = self.p.expect(TokenKind::CloseBrace, "}")?;
+        let arms = self.p.arena.alloc_slice_copy(&arms_buffer);
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Switch {
+                object,
+                arms,
+            },
+            span: switch_kw.merge_span(end.span),
+        });
+
+        Some(expr)
+    }
+
+    fn parse_switch_arm(&mut self) -> Option<&'ctx expressions::Arm<'ctx>> {
+        let pattern = self.parse_pattern()?;
+        
+        let mut guard: Option<&'ctx Expression<'ctx>> = None;
+
+        if self.p.eat(TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::If)) {
+            let Some(guard_expr) = self.parse_grouped() else {
+                if self.p.panic_mode { self.p.sync() }
+                return None;
+           };
+
+            guard = Some(guard_expr);
+        }
+
+        let _ = self.p.expect(TokenKind::FatArrow, "=>")?;
+
+        let Some(body) = self.parse() else {
+            if self.p.panic_mode { self.p.sync() };
+            return None;
+        };
+
+        let _ = self.p.eat(TokenKind::Comma);
+
+        let arm = self.p.arena.alloc(expressions::Arm {
+            pattern,
+            body,
+            guard,
+        });
+
+        Some(arm)
+    }
+
+    fn parse_pattern(&mut self) -> Option<expressions::Pattern<'ctx>> {
+        let pattern = self.parse_single_pattern()?;
+
+        if self.p.eat(TokenKind::Pipe) {
+            let mut patterns_buffer: SmallVec<[expressions::Pattern; 4]> = SmallVec::new();
+            patterns_buffer.push(pattern);
+
+            while self.p.eat(TokenKind::Pipe) {
+                let Some(next) = self.parse_single_pattern() else { break };
+                patterns_buffer.push(next);
+            }
+
+            let patterns = self.p.arena.alloc_slice_copy(&patterns_buffer);
+
+            return Some(expressions::Pattern::Or(patterns));
+        }
+
+        Some(pattern)
+    }
+
+    fn parse_single_pattern(&mut self) -> Option<expressions::Pattern<'ctx>> {
+        use expressions::Pattern;
+
+        let token = self.p.advance_not_eof()?;
+
+        match token.kind {
+            TokenKind::Underscore => Some(Pattern::Wildcard),
+
+            TokenKind::Literal { kind } => {
+                let Expression { kind: ExpressionKind::Literal(literal), span: _ } = self.parse_literal(kind)? else { unreachable!() };
+
+                if self.p.panic_mode { return None }
+
+                let pat = Pattern::Literal(*literal);
+
+                Some(pat)
+            },
+
+            TokenKind::Ident => {
+                let token_slice = self.p.src[token.span.offset() .. token.span.offset() + token.span.len()].to_owned();
+                let name_id = self.p.get_or_intern(token_slice);
+
+                Some(Pattern::Named(name_id))
+            }
+
+            _ => {
+                self.p.report(ParserError::SyntaxError {
+                    label: "expected switch pattern here".into(),
+                    help: None,
+                    src: self.p.named_src(),
+                    span: token.span,
+                });
+
+                None
+            }
+        }
     }
 }
 

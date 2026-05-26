@@ -51,7 +51,7 @@ pub enum ExpressionKind<'arena> {
 
     Switch {
         object: &'arena Expression<'arena>,
-        arms: &'arena [Arm<'arena>],
+        arms: &'arena [&'arena Arm<'arena>],
     },
 
     FieldAccess {
