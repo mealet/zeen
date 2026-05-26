@@ -1,7 +1,10 @@
 #![allow(unused)]
 
+use declarations::DeclParser;
+
 use bumpalo::Bump;
 use lasso::Rodeo;
+use smallvec::SmallVec;
 use smol_str::SmolStr;
 use std::sync::{Arc, Mutex};
 
@@ -61,14 +64,22 @@ impl<'ctx> Parser<'ctx> {
 
     pub fn parse_program(
         &mut self,
-    ) -> Result<&'ctx [zeen_ast::Declaration<'_>], &'ctx [ParserError]> {
-        let mut decls: Vec<zeen_ast::Declaration> = Vec::new();
+    ) -> Result<&'ctx [&'ctx zeen_ast::Declaration<'_>], &'ctx [ParserError]> {
+        let mut decls: SmallVec<[&'ctx zeen_ast::Declaration; 8]> = SmallVec::new();
 
         while !self.is_eof() {
-            todo!();
+            let mut decl_parser = DeclParser::new(self);
+
+            if let Some(decl) = decl_parser.parse() {
+                decls.push(decl);
+            }
+
+            if self.panic_mode {
+                self.sync();
+            }
         }
 
-        let arena_slice = self.arena.alloc_slice_clone(&decls);
+        let arena_slice = self.arena.alloc_slice_copy(&decls);
         drop(decls);
 
         if self.errors.is_empty() {

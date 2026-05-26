@@ -43,25 +43,16 @@ fn main() {
                 std::sync::Arc::clone(&rodeo),
             );
 
-            let mut expr_parser = zeen_parser::statements::StmtParser::new(&mut parser);
-
-            let expr = expr_parser.parse().unwrap_or_else(|| {
-                for err in &parser.errors {
+            let program = parser.parse_program().unwrap_or_else(|errors| {
+                for err in errors {
                     let report_string = driver.report(err).unwrap();
                     eprintln!("{}", report_string);
                 }
 
-                println!("Error");
-
                 std::process::exit(1);
             });
 
-            for err in parser.errors {
-                let report_string = driver.report(&err).unwrap();
-                eprintln!("{}", report_string);
-            }
-
-            println!("{:#?}", expr);
+            println!("{:#?}", program);
         }
         Err(err) => {
             eprintln!("Unable to open file: {}", err);
