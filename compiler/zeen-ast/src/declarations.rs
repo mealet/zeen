@@ -58,7 +58,7 @@ pub enum DeclarationKind<'arena> {
     },
 
     EnumDecl {
-        name: Spur,
+        name: (Spur, SourceSpan),
         variants: &'arena [EnumVariant],
         is_pub: bool,
     },

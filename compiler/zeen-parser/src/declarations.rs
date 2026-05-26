@@ -69,7 +69,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
                 self.parse_fn(start_span, is_pub, IsExtern(false))
             }
             TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
-            TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span),
+            TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Import) => self.parse_import(),
 
             _ => {
@@ -283,8 +283,54 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         Some(decl)
     }
 
-    fn parse_enum(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
-        todo!()
+    fn parse_enum(&mut self, start_span: miette::SourceSpan, is_pub: IsPub) -> Option<&'ctx Declaration<'ctx>> {
+        let enum_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Enum), "enum")?;
+
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+        let name = (self.p.get_or_intern(name_slice), name_span);
+
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut variants_buffer: SmallVec<[declarations::EnumVariant; 8]> = SmallVec::new();
+        
+        while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+            let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+            let name_span = name_token.span;
+            let name_slice =
+                self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+            let name = self.p.get_or_intern(name_slice);
+
+            if !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+                let _ = self.p.expect(TokenKind::Comma, ",")?;
+            }
+
+            variants_buffer.push(declarations::EnumVariant {
+                name,
+                span: name_span
+            });
+        }
+
+        let close_brace = self.p.expect(TokenKind::CloseBrace, "{")?;
+
+        let variants = self.p.arena.alloc_slice_copy(&variants_buffer);
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::EnumDecl {
+                name,
+                variants,
+                is_pub: is_pub.0,
+            },
+            span: close_brace.merge_span(start_span)
+        });
+
+        Some(decl)
     }
 
     fn parse_import(&mut self) -> Option<&'ctx Declaration<'ctx>> {
