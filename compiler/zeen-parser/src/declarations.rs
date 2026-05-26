@@ -146,6 +146,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         let mut body = None;
 
         if !(self.p.at(TokenKind::OpenBrace)
+            || self.p.at(TokenKind::CloseBrace)
             || self.p.at(TokenKind::Semicolon)
             || self.p.at(TokenKind::Eof))
         {
@@ -230,6 +231,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
                 continue;
             }
 
+
             let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
             let name_span = name_token.span;
             let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
@@ -263,6 +265,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         }
 
         let close_brace = self.p.expect(TokenKind::CloseBrace, "{")?;
+        let _ = self.p.eat(TokenKind::Semicolon);
 
         let fields = self.p.arena.alloc_slice_copy(&fields_buffer);
         let methods = self.p.arena.alloc_slice_copy(&methods_buffer);

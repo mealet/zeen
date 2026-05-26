@@ -75,7 +75,7 @@ impl<'ctx> Parser<'ctx> {
             }
 
             if self.panic_mode {
-                self.sync();
+                self.decl_sync();
             }
         }
 
@@ -215,12 +215,23 @@ impl<'ctx> Parser<'ctx> {
             match self.current().kind {
                 TokenKind::Eof => break,
 
-                TokenKind::Semicolon => {
-                    let _ = self.advance();
-                    break;
-                }
-
                 TokenKind::Keyword(ref kw) if is_sync_keyword(kw) => break,
+
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    fn decl_sync(&mut self) {
+        self.panic_mode = false;
+
+        loop {
+            match self.current().kind {
+                TokenKind::Eof => break,
+
+                TokenKind::Keyword(ref kw) if is_decl_keyword(kw) => break,
 
                 _ => {
                     self.advance();
@@ -254,5 +265,14 @@ fn is_sync_keyword(kw: &zeen_lexer::token::CompilerKeyword) -> bool {
             | Interface
             | Implement
             | Type
+    )
+}
+
+fn is_decl_keyword(kw: &zeen_lexer::token::CompilerKeyword) -> bool {
+    use zeen_lexer::token::CompilerKeyword::*;
+
+    matches!(
+        kw,
+        Public | Fn | Extern | Import | Struct | Enum | Interface | Implement | Type
     )
 }

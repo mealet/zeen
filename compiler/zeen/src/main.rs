@@ -52,7 +52,7 @@ fn main() {
                 std::process::exit(1);
             });
 
-            println!("{:#?}", program);
+            // println!("{:#?}", program);
         }
         Err(err) => {
             eprintln!("Unable to open file: {}", err);
