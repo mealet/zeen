@@ -1,4 +1,4 @@
-name: Unit Tests
+name: CI
 
 on:
   push:
@@ -15,20 +15,38 @@ jobs:
     permissions:
       contents: read
 
+    defaults:
+      run:
+        working-directory: ./compiler
+
     runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v5
-    - uses: dtolnay/rust-toolchain@stable
 
-    # - name: 🖱️ LLVM Install
-    #   uses: ZhongRuoyu/setup-llvm@405ac952f13f3ee4d376adc2b7a96e5f48d1f73f
-    #   with:
-    #     llvm-version: 18
+    # Checkout
+    - name: Checkout
+      uses: actions/checkout@v5
 
-    - name: ⚙️ Install Nextest
+    # Install Rust
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+          toolchain: stable
+          profile: minimal
+          override: true
+          components: rustfmt, clippy
+
+    # Install Nextest
+    - name: Install Nextest
       uses: taiki-e/install-action@nextest
 
-    - name: ⌛ Packages Tests
-      run: |
-        cd compiler
-        cargo nextest run
+    # Run Clippy (linting)
+    - name: Run Clippy
+      run: cargo clippy --all-targets -- -D warnings
+
+    # Check code formatting
+    - name: Check formatting
+      run: cargo fmt --all --check
+
+    - name: Packages Tests
+      run: cargo nextest run
