@@ -187,9 +187,17 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         Some(decl)
     }
 
-    fn parse_struct(&mut self, start_span: miette::SourceSpan, is_pub: IsPub) -> Option<&'ctx Declaration<'ctx>> {
+    fn parse_struct(
+        &mut self,
+        start_span: miette::SourceSpan,
+        is_pub: IsPub,
+    ) -> Option<&'ctx Declaration<'ctx>> {
         #[derive(PartialEq)]
-        enum Mode { Any, Methods, Reported };
+        enum Mode {
+            Any,
+            Methods,
+            Reported,
+        };
 
         let struct_kw = self
             .p
@@ -231,10 +239,10 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
                 continue;
             }
 
-
             let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
             let name_span = name_token.span;
-            let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
+            let name_slice =
+                self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
 
             let name = self.p.get_or_intern(name_slice);
 
@@ -245,7 +253,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
                     src: self.p.named_src(),
                     span: name_span,
                 });
-                
+
                 return None;
             }
 
@@ -257,7 +265,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             let struct_field = declarations::StructField {
                 name,
                 ty,
-                is_pub: is_pub.0
+                is_pub: is_pub.0,
             };
 
             fields_buffer.push(struct_field);
@@ -292,13 +300,17 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
                 fields,
                 methods,
             },
-            span
+            span,
         });
-        
+
         Some(decl)
     }
 
-    fn parse_enum(&mut self, start_span: miette::SourceSpan, is_pub: IsPub) -> Option<&'ctx Declaration<'ctx>> {
+    fn parse_enum(
+        &mut self,
+        start_span: miette::SourceSpan,
+        is_pub: IsPub,
+    ) -> Option<&'ctx Declaration<'ctx>> {
         let enum_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Enum), "enum")?;
@@ -313,7 +325,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
 
         let mut variants_buffer: SmallVec<[declarations::EnumVariant; 8]> = SmallVec::new();
-        
+
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
             let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
             let name_span = name_token.span;
@@ -328,7 +340,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
 
             variants_buffer.push(declarations::EnumVariant {
                 name,
-                span: name_span
+                span: name_span,
             });
         }
 
@@ -343,7 +355,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
                 variants,
                 is_pub: is_pub.0,
             },
-            span: close_brace.merge_span(start_span)
+            span: close_brace.merge_span(start_span),
         });
 
         Some(decl)
