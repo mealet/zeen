@@ -237,6 +237,18 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
 
             let name = self.p.get_or_intern(name_slice);
+
+            if self.p.at(TokenKind::OpenParen) || self.p.at(TokenKind::OpenBracket) {
+                self.p.report(ParserError::SyntaxError {
+                    label: "function definition without `fn` keyword".into(),
+                    help: Some("consider using syntax: [public] fn IDENT(..) ..".into()),
+                    src: self.p.named_src(),
+                    span: name_span,
+                });
+                
+                return None;
+            }
+
             let _ = self.p.expect(TokenKind::Colon, ":")?;
 
             let mut type_parser = TypeParser::new(self.p);
