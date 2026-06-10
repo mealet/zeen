@@ -442,7 +442,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Link), "link")?;
 
-        let string_token = self.p.expect(TokenKind::Literal { kind: zeen_lexer::token::LiteralKind::Str { terminated: true } }, "string literal")?;
+        let string_token = self.p.expect(TokenKind::Literal { kind: zeen_lexer::token::LiteralKind::Str { terminated: true } }, "str")?;
         let token_span = string_token.span;
         let string_slice = self.p.src[token_span.offset() .. token_span.offset() + token_span.len()].to_owned();
 
