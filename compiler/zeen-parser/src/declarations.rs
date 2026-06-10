@@ -794,4 +794,76 @@ mod tests {
             }])
         );
     }
+
+    #[test]
+    fn enum_decl_empty() {
+        const SRC: &str = "enum Foo {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::EnumDecl {
+                    name: _,
+                    variants: [],
+                    is_pub: false,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn enum_decl_pub() {
+        const SRC: &str = "public enum Foo {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::EnumDecl {
+                    name: _,
+                    variants: [],
+                    is_pub: true,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn enum_decl_with_variants() {
+        const SRC: &str = "public enum Foo { A, B, C }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::EnumDecl {
+                    name: _,
+                    variants: [
+                        zeen_ast::declarations::EnumVariant {
+                            name: _,
+                            span: _,
+                        },
+
+                        zeen_ast::declarations::EnumVariant {
+                            name: _,
+                            span: _,
+                        },
+
+                        zeen_ast::declarations::EnumVariant {
+                            name: _,
+                            span: _,
+                        },
+                    ],
+                    is_pub: true,
+                },
+                ..
+            }])
+        );
+    }
 }
