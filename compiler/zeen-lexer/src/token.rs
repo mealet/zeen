@@ -1,6 +1,6 @@
 use miette::SourceSpan;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: SourceSpan,
@@ -19,7 +19,7 @@ impl Token {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum TokenKind {
     Ident,      // abcd
     MacroIdent, // print!
@@ -98,7 +98,7 @@ pub enum IntBase {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CompilerType {
     // signed integers
     i8,
@@ -157,7 +157,7 @@ impl std::fmt::Display for CompilerType {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CompilerKeyword {
     If,
     Else,

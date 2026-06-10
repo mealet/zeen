@@ -364,6 +364,76 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
     }
 
     fn parse_import(&mut self) -> Option<&'ctx Declaration<'ctx>> {
+        let import_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Import), "import")?;
+
+        let mut module_name = String::new();
+
+        let ident_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let ident_span = ident_token.span;
+        let ident_slice = &self.p.src[ident_span.offset() .. ident_span.offset() + ident_span.len()];
+
+        module_name.push_str(ident_slice);
+
+        let mut current = ident_token;
+
+        if self.p.at(TokenKind::Ident) || self.p.at(TokenKind::Dot) {
+            current = self.p.current_clone();
+        }
+
+        while self.p.at(TokenKind::Ident) || self.p.at(TokenKind::Dot) {
+            let current_span = current.span;
+            let current_slice = &self.p.src[current_span.offset() .. current_span.offset() + current_span.len()];
+
+            module_name.push_str(current_slice);
+            let _ = self.p.advance_not_eof()?;
+
+            if self.p.at(TokenKind::Ident) || self.p.at(TokenKind::Dot) {
+                current = self.p.current_clone();
+            }
+        }
+
+        if current.kind == TokenKind::Dot {
+            self.p.report(ParserError::SyntaxError {
+                label: "import sequence ends with dot (`.`)".into(),
+                help: Some("consider removing last dot from module import".into()),
+                src: self.p.named_src(),
+                span: current.span,
+            });
+
+            return None;
+        }
+
+        let module_id = self.p.get_or_intern(module_name);
+        let module = (module_id, ident_token.merge_span(current.span));
+
+        let mut alias: Option<(lasso::Spur, miette::SourceSpan)> = None;
+        let mut end = current.span;
+
+        if self.p.at(TokenKind::Colon) {
+            let _ = self.p.advance_not_eof()?;
+
+            let alias_token = self.p.current_clone();
+            let span = alias_token.span;
+
+            let alias_slice = self.p.src[span.offset() .. span.offset() + span.len()].to_owned();
+            let alias_id = self.p.get_or_intern(alias_slice);
+
+            alias = Some((alias_id, alias_token.span));
+            end = alias_token.span;
+        }
+
+        let _ = self.p.expect(TokenKind::Semicolon, ";")?;
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::Import {
+                module,
+                alias,
+            },
+            span: import_kw.merge_span(end), 
+        });
+
         todo!()
     }
 
