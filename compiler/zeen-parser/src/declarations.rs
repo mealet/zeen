@@ -414,7 +414,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         if self.p.at(TokenKind::Colon) {
             let _ = self.p.advance_not_eof()?;
 
-            let alias_token = self.p.current_clone();
+            let alias_token = self.p.expect(TokenKind::Ident, "identifier")?;
             let span = alias_token.span;
 
             let alias_slice = self.p.src[span.offset() .. span.offset() + span.len()].to_owned();
@@ -434,7 +434,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             span: import_kw.merge_span(end), 
         });
 
-        todo!()
+        Some(decl)
     }
 
     fn parse_link(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
