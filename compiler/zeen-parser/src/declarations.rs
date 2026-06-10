@@ -656,4 +656,142 @@ mod tests {
             }])
         );
     }
+
+    #[test]
+    fn struct_decl_empty() {
+        const SRC: &str = "struct Foo {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::StructDecl {
+                    name: _,
+                    is_pub: false,
+
+                    generics: None,
+                    fields: [],
+                    methods: []
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn struct_decl_pub() {
+        const SRC: &str = "public struct Foo {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::StructDecl {
+                    name: _,
+                    is_pub: true,
+
+                    generics: None,
+                    fields: [],
+                    methods: []
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn struct_decl_with_fields() {
+        const SRC: &str = "struct Foo {
+            a: i32,
+            public b: u32
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::StructDecl {
+                    name: _,
+                    is_pub: false,
+
+                    generics: None,
+                    fields: [
+                        zeen_ast::declarations::StructField {
+                            name: _,
+                            ty: _,
+                            is_pub: false,
+                        },
+
+                        zeen_ast::declarations::StructField {
+                            name: _,
+                            ty: _,
+                            is_pub: true,
+                        },
+                    ],
+                    methods: []
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn struct_decl_with_methods() {
+        const SRC: &str = "struct Foo {
+            a: i32,
+            public b: u32,
+
+            public fn new(a: i32) Self {}
+
+            fn asd(self) u32 {}
+            fn dsa(const self) i32 {}
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::StructDecl {
+                    name: _,
+                    is_pub: false,
+
+                    generics: None,
+                    fields: [
+                        zeen_ast::declarations::StructField {
+                            name: _,
+                            ty: _,
+                            is_pub: false,
+                        },
+
+                        zeen_ast::declarations::StructField {
+                            name: _,
+                            ty: _,
+                            is_pub: true,
+                        },
+                    ],
+                    methods: [
+                        Declaration {
+                            kind: DeclarationKind::FnDecl { .. },
+                            ..
+                        },
+
+                        Declaration {
+                            kind: DeclarationKind::FnDecl { .. },
+                            ..
+                        },
+
+                        Declaration {
+                            kind: DeclarationKind::FnDecl { .. },
+                            ..
+                        },
+                    ]
+                },
+                ..
+            }])
+        );
+    }
 }
