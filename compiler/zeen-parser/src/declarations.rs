@@ -953,4 +953,58 @@ mod tests {
             }])
         );
     }
+
+    #[test]
+    fn import_decl_single() {
+        const SRC: &str = "import std;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Import {
+                    module: _,
+                    alias: None,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn import_decl_nested() {
+        const SRC: &str = "import std.io.Stdout;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Import {
+                    module: _,
+                    alias: None,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn import_decl_with_alias() {
+        const SRC: &str = "import std.io.Stdout : default_output;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Import {
+                    module: _,
+                    alias: Some(_),
+                },
+                ..
+            }])
+        );
+    }
 }
