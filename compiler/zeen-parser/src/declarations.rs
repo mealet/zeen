@@ -438,7 +438,24 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
     }
 
     fn parse_link(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
-        todo!()
+        let import_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Extern), "extern")?;
+
+        let string_token = self.p.expect(TokenKind::Literal { kind: zeen_lexer::token::LiteralKind::Str { terminated: true } }, "string literal")?;
+        let token_span = string_token.span;
+        let string_slice = self.p.src[token_span.offset() .. token_span.offset() + token_span.len()].to_owned();
+
+        let path = self.p.get_or_intern(string_slice);
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::ExternLink {
+                path,
+            },
+            span: import_kw.merge_span(string_token.span),
+        });
+
+        Some(decl)
     }
 
     fn parse_include(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
