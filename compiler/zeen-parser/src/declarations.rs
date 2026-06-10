@@ -71,6 +71,8 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Import) => self.parse_import(),
+            TokenKind::Keyword(CompilerKeyword::Interface) => self.parse_interface(start_span, is_pub),
+            TokenKind::Keyword(CompilerKeyword::Implement) => self.parse_implement(start_span),
 
             _ => {
                 self.p.report(ParserError::UnknownDeclaration {
@@ -370,6 +372,21 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
     }
 
     fn parse_include(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
+        todo!()
+    }
+
+    fn parse_interface(
+        &mut self,
+        start_span: miette::SourceSpan,
+        is_pub: IsPub,
+    ) -> Option<&'ctx Declaration<'ctx>> {
+        todo!()
+    }
+
+    fn parse_implement(
+        &mut self,
+        start_span: miette::SourceSpan,
+    ) -> Option<&'ctx Declaration<'ctx>> {
         todo!()
     }
 
