@@ -499,7 +499,32 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
     }
 
     fn parse_let(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
-        todo!()
+        let let_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Let), "let")?;
+
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
+
+        let name = (self.p.get_or_intern(name_slice), name_span);
+
+        let _ = self.p.expect(TokenKind::Colon, ":")?;
+
+        let mut type_parser = TypeParser::new(self.p);
+        let ty = type_parser.parse()?;
+
+        let _ = self.p.expect(TokenKind::Semicolon, ";")?;
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::ExternVar {
+                name,
+                ty
+            },
+            span: ty.merge_span(start_span),
+        });
+
+        Some(decl)
     }
 }
 
