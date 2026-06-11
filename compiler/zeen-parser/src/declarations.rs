@@ -1174,4 +1174,111 @@ mod tests {
             }])
         );
     }
+
+    #[test]
+    fn interface_decl() {
+        const SRC: &str = "interface Empty {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::InterfaceDecl {
+                    name: _,
+                    is_pub: false,
+
+                    generics: None,
+                    methods: [],
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn interface_decl_public() {
+        const SRC: &str = "public interface Empty {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::InterfaceDecl {
+                    name: _,
+                    is_pub: true,
+
+                    generics: None,
+                    methods: [],
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn interface_decl_with_generics() {
+        const SRC: &str = "interface Empty[T, R] {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::InterfaceDecl {
+                    name: _,
+                    is_pub: false,
+
+                    generics: Some([
+                        zeen_ast::declarations::GenericType {
+                            name: _,
+                            interfaces: _,
+                        },
+
+                        zeen_ast::declarations::GenericType {
+                            name: _,
+                            interfaces: _,
+                        },
+                    ]),
+                    methods: [],
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn interface_decl_with_method() {
+        const SRC: &str = "interface Default {
+            fn default() Self;
+            fn abcd_lol() **i32;
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::InterfaceDecl {
+                    name: _,
+                    is_pub: false,
+
+                    generics: None,
+                    methods: [
+                        Declaration {
+                            kind: DeclarationKind::FnDecl { .. },
+                            ..
+                        },
+
+                        Declaration {
+                            kind: DeclarationKind::FnDecl { .. },
+                            ..
+                        }
+                    ],
+                },
+                ..
+            }])
+        );
+    }
 }
