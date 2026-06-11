@@ -8,6 +8,7 @@ use zeen_lexer::{Token, TokenKind};
 
 pub struct ExprParser<'ctx, 'pr> {
     p: &'pr mut Parser<'ctx>,
+    non_struct_braces: bool,
 }
 
 #[repr(u8)]
@@ -158,7 +159,15 @@ fn character_escape(escape: char) -> Option<char> {
 /// ==@ Expressions Parser @==
 impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
-        Self { p: parser }
+        Self {
+            p: parser,
+            non_struct_braces: false,
+        }
+    }
+
+    pub fn non_struct_braces(mut self) -> Self {
+        self.non_struct_braces = true;
+        self
     }
 
     pub fn errors(&self) -> &[ParserError] {
@@ -240,7 +249,9 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             expr = match self.p.current().kind {
                 TokenKind::OpenParen => self.parse_call(expr)?,
                 TokenKind::OpenBracket => self.parse_slice_access(expr)?,
-                TokenKind::OpenBrace => self.parse_struct_init_fields(expr)?,
+                TokenKind::OpenBrace if !self.non_struct_braces => {
+                    self.parse_struct_init_fields(expr)?
+                }
                 TokenKind::Dot => self.parse_field_access(expr)?,
 
                 _ => break,
@@ -662,7 +673,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
             span,
         });
 
-        if self.p.at(TokenKind::OpenBrace) {
+        if self.p.at(TokenKind::OpenBrace) && !self.non_struct_braces {
             if token.kind == TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::SelfLower) {
                 self.p.report(ParserError::SyntaxError {
                     label: "unknown `self` struct init".into(),
