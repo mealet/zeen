@@ -1026,4 +1026,21 @@ mod tests {
             }])
         );
     }
+
+    #[test]
+    fn link_decl() {
+        const SRC: &str = "extern link \"test.c\";";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ExternLink {
+                    path: _,
+                },
+                ..
+            }])
+        );
+    }
 }
