@@ -544,7 +544,53 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         &mut self,
         start_span: miette::SourceSpan,
     ) -> Option<&'ctx Declaration<'ctx>> {
-        todo!()
+        let implement_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Implement), "implement")?;
+
+        let mut expr_parser = ExprParser::new(self.p).non_struct_braces();
+        let interface = expr_parser.parse()?;
+
+        let _ = self.p.expect(TokenKind::Colon, ":")?;
+
+        // dont blame me, just thanks borrow checker for this repeat
+        let mut expr_parser = ExprParser::new(self.p).non_struct_braces();
+        let object = expr_parser.parse()?;
+
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut methods: SmallVec<[&'ctx Declaration<'ctx>; 8]> = SmallVec::new();
+
+        while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+            let span_start = self.p.current().span;
+            let is_pub = IsPub(false);
+            let is_extern = IsExtern(false);
+
+            let decl = self.parse_fn(span_start, is_pub, is_extern)?;
+
+            debug_assert!(
+                matches!(decl.kind, DeclarationKind::FnDecl { .. })
+            );
+
+            methods.push(decl);
+        }
+
+        let close_brace = self.p.expect(TokenKind::CloseBrace, "}")?;
+        let span = close_brace.merge_span(start_span);
+
+        let _ = self.p.eat(TokenKind::Comma);
+        let methods = self.p.arena.alloc_slice_copy(&methods);
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::ImplementDecl {
+                interface,
+                object,
+                methods
+            },
+            span
+        });
+
+        Some(decl)
     }
 
     fn parse_let(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
