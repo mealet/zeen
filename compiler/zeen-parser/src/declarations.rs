@@ -488,7 +488,56 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         start_span: miette::SourceSpan,
         is_pub: IsPub,
     ) -> Option<&'ctx Declaration<'ctx>> {
-        todo!()
+        let interface_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Interface), "interface")?;
+
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
+
+        let name = (self.p.get_or_intern(name_slice), name_span);
+
+        // will give Option::None if not at bracket token
+        let mut type_parser = TypeParser::new(self.p);
+        let generics = type_parser.parse_generics_declarations();
+
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut methods: SmallVec<[&'ctx Declaration<'ctx>; 8]> = SmallVec::new();
+
+        while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+            let span_start = self.p.current().span;
+            let is_pub = IsPub(false);
+            let is_extern = IsExtern(false);
+
+            let decl = self.parse_fn(span_start, is_pub, is_extern)?;
+
+            debug_assert!(
+                matches!(decl.kind, DeclarationKind::FnDecl { .. })
+            );
+
+            methods.push(decl);
+        }
+
+        let close_brace = self.p.expect(TokenKind::CloseBrace, "}")?;
+        let span = close_brace.merge_span(start_span);
+
+        let _ = self.p.eat(TokenKind::Comma);
+        let methods = self.p.arena.alloc_slice_copy(&methods);
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::InterfaceDecl {
+                name,
+                is_pub: is_pub.0,
+
+                generics,
+                methods,
+            },
+            span
+        });
+
+        Some(decl)
     }
 
     fn parse_implement(

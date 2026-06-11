@@ -54,7 +54,7 @@ pub enum DeclarationKind<'arena> {
         interface: &'arena Expression<'arena>, // must be ident / field access that ends with ident.
         object: &'arena Expression<'arena>,    // here too
 
-        methods: &'arena [Declaration<'arena>], // FnDecl
+        methods: &'arena [&'arena Declaration<'arena>], // FnDecl
     },
 
     EnumDecl {
