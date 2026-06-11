@@ -1104,4 +1104,25 @@ mod tests {
             }])
         );
     }
+
+    #[test]
+    fn let_decl() {
+        const SRC: &str = "extern let abcd: i32;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ExternVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    }
+                },
+                ..
+            }])
+        );
+    }
 }
