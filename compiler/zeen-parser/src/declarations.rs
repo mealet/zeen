@@ -71,7 +71,9 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Import) => self.parse_import(),
-            TokenKind::Keyword(CompilerKeyword::Interface) => self.parse_interface(start_span, is_pub),
+            TokenKind::Keyword(CompilerKeyword::Interface) => {
+                self.parse_interface(start_span, is_pub)
+            }
             TokenKind::Keyword(CompilerKeyword::Implement) => self.parse_implement(start_span),
 
             _ => {
@@ -372,7 +374,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
 
         let ident_token = self.p.expect(TokenKind::Ident, "identifier")?;
         let ident_span = ident_token.span;
-        let ident_slice = &self.p.src[ident_span.offset() .. ident_span.offset() + ident_span.len()];
+        let ident_slice = &self.p.src[ident_span.offset()..ident_span.offset() + ident_span.len()];
 
         module_name.push_str(ident_slice);
 
@@ -384,7 +386,8 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
 
         while self.p.at(TokenKind::Ident) || self.p.at(TokenKind::Dot) {
             let current_span = current.span;
-            let current_slice = &self.p.src[current_span.offset() .. current_span.offset() + current_span.len()];
+            let current_slice =
+                &self.p.src[current_span.offset()..current_span.offset() + current_span.len()];
 
             module_name.push_str(current_slice);
             let _ = self.p.advance_not_eof()?;
@@ -417,7 +420,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             let alias_token = self.p.expect(TokenKind::Ident, "identifier")?;
             let span = alias_token.span;
 
-            let alias_slice = self.p.src[span.offset() .. span.offset() + span.len()].to_owned();
+            let alias_slice = self.p.src[span.offset()..span.offset() + span.len()].to_owned();
             let alias_id = self.p.get_or_intern(alias_slice);
 
             alias = Some((alias_id, alias_token.span));
@@ -427,11 +430,8 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         let _ = self.p.expect(TokenKind::Semicolon, ";")?;
 
         let decl = self.p.arena.alloc(Declaration {
-            kind: DeclarationKind::Import {
-                module,
-                alias,
-            },
-            span: import_kw.merge_span(end), 
+            kind: DeclarationKind::Import { module, alias },
+            span: import_kw.merge_span(end),
         });
 
         Some(decl)
@@ -442,16 +442,20 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Link), "link")?;
 
-        let string_token = self.p.expect(TokenKind::Literal { kind: zeen_lexer::token::LiteralKind::Str { terminated: true } }, "str")?;
+        let string_token = self.p.expect(
+            TokenKind::Literal {
+                kind: zeen_lexer::token::LiteralKind::Str { terminated: true },
+            },
+            "str",
+        )?;
         let token_span = string_token.span;
-        let string_slice = self.p.src[token_span.offset() .. token_span.offset() + token_span.len()].to_owned();
+        let string_slice =
+            self.p.src[token_span.offset()..token_span.offset() + token_span.len()].to_owned();
 
         let path = self.p.get_or_intern(string_slice);
 
         let decl = self.p.arena.alloc(Declaration {
-            kind: DeclarationKind::ExternLink {
-                path,
-            },
+            kind: DeclarationKind::ExternLink { path },
             span: link_kw.merge_span(string_token.span),
         });
 
@@ -465,16 +469,20 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Include), "include")?;
 
-        let string_token = self.p.expect(TokenKind::Literal { kind: zeen_lexer::token::LiteralKind::Str { terminated: true } }, "str")?;
+        let string_token = self.p.expect(
+            TokenKind::Literal {
+                kind: zeen_lexer::token::LiteralKind::Str { terminated: true },
+            },
+            "str",
+        )?;
         let token_span = string_token.span;
-        let string_slice = self.p.src[token_span.offset() .. token_span.offset() + token_span.len()].to_owned();
+        let string_slice =
+            self.p.src[token_span.offset()..token_span.offset() + token_span.len()].to_owned();
 
         let path = self.p.get_or_intern(string_slice);
 
         let decl = self.p.arena.alloc(Declaration {
-            kind: DeclarationKind::ExternInclude {
-                path,
-            },
+            kind: DeclarationKind::ExternInclude { path },
             span: include_kw.merge_span(string_token.span),
         });
 
@@ -494,7 +502,8 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
 
         let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
         let name_span = name_token.span;
-        let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
 
         let name = (self.p.get_or_intern(name_slice), name_span);
 
@@ -513,9 +522,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
 
             let decl = self.parse_fn(span_start, is_pub, is_extern)?;
 
-            debug_assert!(
-                matches!(decl.kind, DeclarationKind::FnDecl { .. })
-            );
+            debug_assert!(matches!(decl.kind, DeclarationKind::FnDecl { .. }));
 
             methods.push(decl);
         }
@@ -534,7 +541,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
                 generics,
                 methods,
             },
-            span
+            span,
         });
 
         Some(decl)
@@ -568,9 +575,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
 
             let decl = self.parse_fn(span_start, is_pub, is_extern)?;
 
-            debug_assert!(
-                matches!(decl.kind, DeclarationKind::FnDecl { .. })
-            );
+            debug_assert!(matches!(decl.kind, DeclarationKind::FnDecl { .. }));
 
             methods.push(decl);
         }
@@ -585,9 +590,9 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             kind: DeclarationKind::ImplementDecl {
                 interface,
                 object,
-                methods
+                methods,
             },
-            span
+            span,
         });
 
         Some(decl)
@@ -600,7 +605,8 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
 
         let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
         let name_span = name_token.span;
-        let name_slice = self.p.src[name_span.offset() .. name_span.offset() + name_span.len()].to_owned();
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
 
         let name = (self.p.get_or_intern(name_slice), name_span);
 
@@ -612,10 +618,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         let _ = self.p.expect(TokenKind::Semicolon, ";")?;
 
         let decl = self.p.arena.alloc(Declaration {
-            kind: DeclarationKind::ExternVar {
-                name,
-                ty
-            },
+            kind: DeclarationKind::ExternVar { name, ty },
             span: ty.merge_span(start_span),
         });
 
@@ -969,7 +972,6 @@ mod tests {
                             ty: _,
                             is_pub: false,
                         },
-
                         zeen_ast::declarations::StructField {
                             name: _,
                             ty: _,
@@ -1011,7 +1013,6 @@ mod tests {
                             ty: _,
                             is_pub: false,
                         },
-
                         zeen_ast::declarations::StructField {
                             name: _,
                             ty: _,
@@ -1023,12 +1024,10 @@ mod tests {
                             kind: DeclarationKind::FnDecl { .. },
                             ..
                         },
-
                         Declaration {
                             kind: DeclarationKind::FnDecl { .. },
                             ..
                         },
-
                         Declaration {
                             kind: DeclarationKind::FnDecl { .. },
                             ..
@@ -1090,20 +1089,9 @@ mod tests {
                 kind: DeclarationKind::EnumDecl {
                     name: _,
                     variants: [
-                        zeen_ast::declarations::EnumVariant {
-                            name: _,
-                            span: _,
-                        },
-
-                        zeen_ast::declarations::EnumVariant {
-                            name: _,
-                            span: _,
-                        },
-
-                        zeen_ast::declarations::EnumVariant {
-                            name: _,
-                            span: _,
-                        },
+                        zeen_ast::declarations::EnumVariant { name: _, span: _ },
+                        zeen_ast::declarations::EnumVariant { name: _, span: _ },
+                        zeen_ast::declarations::EnumVariant { name: _, span: _ },
                     ],
                     is_pub: true,
                 },
@@ -1175,9 +1163,7 @@ mod tests {
         assert_matches!(
             parser.parse_program(),
             Ok([Declaration {
-                kind: DeclarationKind::ExternLink {
-                    path: _,
-                },
+                kind: DeclarationKind::ExternLink { path: _ },
                 ..
             }])
         );
@@ -1192,9 +1178,7 @@ mod tests {
         assert_matches!(
             parser.parse_program(),
             Ok([Declaration {
-                kind: DeclarationKind::ExternInclude {
-                    path: _,
-                },
+                kind: DeclarationKind::ExternInclude { path: _ },
                 ..
             }])
         );
@@ -1281,7 +1265,6 @@ mod tests {
                             name: _,
                             interfaces: _,
                         },
-
                         zeen_ast::declarations::GenericType {
                             name: _,
                             interfaces: _,
@@ -1316,7 +1299,6 @@ mod tests {
                             kind: DeclarationKind::FnDecl { .. },
                             ..
                         },
-
                         Declaration {
                             kind: DeclarationKind::FnDecl { .. },
                             ..

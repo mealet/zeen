@@ -112,7 +112,7 @@ impl<'ctx> Parser<'ctx> {
     }
 
     pub fn current_clone(&self) -> Token {
-        self.current.clone()
+        self.current
     }
 
     pub fn at(&self, kind: TokenKind) -> bool {
@@ -138,7 +138,7 @@ impl<'ctx> Parser<'ctx> {
                 None
             })?;
 
-        let prev = self.current.clone();
+        let prev = self.current;
 
         self.current = next;
 
@@ -183,7 +183,7 @@ impl<'ctx> Parser<'ctx> {
 
     pub fn expect(&mut self, kind: TokenKind, display: &str) -> Option<Token> {
         if self.at(kind) {
-            let cur = self.current.clone();
+            let cur = self.current;
             let _ = self.advance();
 
             Some(cur)
