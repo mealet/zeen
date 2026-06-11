@@ -1062,4 +1062,21 @@ mod tests {
             }])
         );
     }
+
+    #[test]
+    fn include_decl() {
+        const SRC: &str = "extern include \"test.h\";";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ExternInclude {
+                    path: _,
+                },
+                ..
+            }])
+        );
+    }
 }
