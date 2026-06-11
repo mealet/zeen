@@ -22,6 +22,7 @@ pub enum TypeKind<'arena> {
 
     SelfType,
     SelfAlias,
+    VaArgs,
 
     Named {
         name: Spur,

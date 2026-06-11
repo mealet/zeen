@@ -40,6 +40,9 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
             // named
             TokenKind::Ident => self.parse_named(),
 
+            // va args
+            TokenKind::Dot => self.parse_va_args_type(),
+
             TokenKind::Eof => {
                 self.p.report(ParserError::UnexpectedEof {
                     expected: "type".into(),
@@ -335,6 +338,21 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
         let expr = arena.alloc(TypeExpr {
             kind: TypeKind::Const(child),
             span: kw_const.merge_span(child.span),
+        });
+
+        Some(expr)
+    }
+
+    fn parse_va_args_type(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
+        let start = self.p.expect(TokenKind::Dot, ".")?;
+        let _ = self.p.expect(TokenKind::Dot, ".")?;
+        let end = self.p.expect(TokenKind::Dot, ".")?;
+
+        let arena = self.p.arena;
+
+        let expr = arena.alloc(TypeExpr {
+            kind: TypeKind::VaArgs,
+            span: start.merge_span(end.span),
         });
 
         Some(expr)
