@@ -438,7 +438,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
     }
 
     fn parse_link(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
-        let import_kw = self
+        let link_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Link), "link")?;
 
@@ -452,7 +452,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             kind: DeclarationKind::ExternLink {
                 path,
             },
-            span: import_kw.merge_span(string_token.span),
+            span: link_kw.merge_span(string_token.span),
         });
 
         let _ = self.p.eat(TokenKind::Semicolon);
@@ -461,7 +461,26 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
     }
 
     fn parse_include(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
-        todo!()
+        let include_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Include), "include")?;
+
+        let string_token = self.p.expect(TokenKind::Literal { kind: zeen_lexer::token::LiteralKind::Str { terminated: true } }, "str")?;
+        let token_span = string_token.span;
+        let string_slice = self.p.src[token_span.offset() .. token_span.offset() + token_span.len()].to_owned();
+
+        let path = self.p.get_or_intern(string_slice);
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::ExternInclude {
+                path,
+            },
+            span: include_kw.merge_span(string_token.span),
+        });
+
+        let _ = self.p.eat(TokenKind::Semicolon);
+
+        Some(decl)
     }
 
     fn parse_interface(
