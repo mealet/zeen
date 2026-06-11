@@ -206,18 +206,15 @@ struct Value[T: Add, R: Add] {
   Structs and functions can have generic types, there's 2 ways to use them:
 */
 
-// 1. Implicit usage by argument.
-
 fn foo[T: Display](a: T) { /* ... */ }
 
-{
+fn main() {
+
+  // 1. Implicit usage by argument.
   let a: i32 = 10;
   foo(a); // will represent foo[i32]()
-}
 
-// 2. Explicit
-
-{
+  // 2. Explicit
   let a = 123;
   foo #[i64] (a);
 }
@@ -228,11 +225,13 @@ fn foo[T: Display](a: T) { /* ... */ }
   `while (condition) statement`
 */
 
-while (true)
-  let a = 123;
+fn main() {
+  while (true)
+    let a = 123;
 
-while (true) {
-  let a = 123;
+  while (true) {
+    let a = 123;
+  }
 }
 
 /*
@@ -240,9 +239,11 @@ while (true) {
   `for (varname : iterator) statement`
 */
 
-for (i : 10)
-  println!("{}", i);
+fn main() {
+  for (i : 10)
+    println!("{}", i);
 
-for (i : 10) {
-  println!("{}", i);
+  for (i : 10) {
+    println!("{}", i);
+  }
 }
