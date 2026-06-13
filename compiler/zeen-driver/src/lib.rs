@@ -1,7 +1,11 @@
+#![allow(unused)]
+
 mod span;
 
 pub use span::LineOffsets;
 pub use span::LocationSpan;
+
+use std::path::PathBuf;
 
 pub struct MietteDriver {
     reporter: miette::GraphicalReportHandler,
@@ -30,4 +34,30 @@ impl MietteDriver {
 
         Ok(buffer)
     }
+}
+
+pub struct CompilationContext {
+    paths: PathsConfig,
+    mode: CompilationMode,
+    output: CompilationOutput,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum CompilationMode {
+    #[default]
+    Debug,
+    Release,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum CompilationOutput {
+    #[default]
+    Binary,
+    Object,
+    EmitIR,
+}
+
+pub struct PathsConfig {
+    project_root: PathBuf,
+    std_root: PathBuf,
 }
