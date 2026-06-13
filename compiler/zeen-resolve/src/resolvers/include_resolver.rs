@@ -13,6 +13,7 @@ use smol_str::SmolStr;
 use crate::error::ResolveError;
 use zeen_ast::declarations::{Declaration, DeclarationKind};
 
+#[derive(Debug, Clone)]
 struct RawModule<'arena> {
     canonical_path: PathBuf,
     decls: &'arena [&'arena Declaration<'arena>],
@@ -78,7 +79,7 @@ impl<'ctx> ImportResolver<'ctx> {
         root_path: PathBuf,
         root_decls: &'ctx [&'ctx Declaration<'ctx>],
         root_named_src: NamedSource<Arc<String>>,
-    ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
+    ) -> Result<&'ctx [&'ctx Declaration<'ctx>], &[ResolveError]> {
         let root_canonical = canonicalize_best_effort(&root_path);
 
         self.modules.insert(
@@ -92,6 +93,20 @@ impl<'ctx> ImportResolver<'ctx> {
 
         let mut visiting: HashSet<PathBuf> = HashSet::new();
         visiting.insert(root_canonical.clone());
+        self.load_uses(&root_canonical, root_decls, &mut visiting);
+
+        if !self.errors.is_empty() {
+            return Err(&self.errors);
+        }
+
+        let mut merged: Vec<&'ctx Declaration<'ctx>> = Vec::new();
+        let mut visited_merge: HashSet<PathBuf> = HashSet::new();
+
+        self.merge_module(&root_canonical, true, &mut merged, &mut visited_merge);
+
+        if !self.errors.is_empty() {
+            return Err(&self.errors);
+        }
 
         todo!()
     }
@@ -197,7 +212,48 @@ impl<'ctx> ImportResolver<'ctx> {
         Ok(program)
     }
 
-    // fn merge_module(&mut self, ca)
+    fn merge_module(
+        &mut self,
+        canonical: &Path,
+        is_root: bool,
+        out: &mut Vec<&'ctx Declaration<'ctx>>,
+        visited: &mut HashSet<PathBuf>,
+    ) {
+        if !visited.insert(canonical.to_path_buf()) {
+            return;
+        }
+
+        let md = self.modules[canonical].clone();
+        let decls = md.decls;
+
+        for decl in decls {
+            match decl.kind {
+                DeclarationKind::Use { module } => {
+                    let raw = self.interner_resolve(&module.0);
+
+                    let Ok(target) = resolve_use_path(
+                        &raw,
+                        canonical,
+                        md.named_src.clone(),
+                        &self.context.paths.project_root,
+                        self.context.paths.std_root.as_deref(),
+                        module.1,
+                    ) else {
+                        continue;
+                    };
+
+                    let target_canonical = canonicalize_best_effort(&target);
+                    self.merge_module(&target_canonical, false, out, visited);
+                }
+
+                _ => {
+                    if is_root || decl_is_pub(decl) {
+                        out.push(decl);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn resolve_use_path(
