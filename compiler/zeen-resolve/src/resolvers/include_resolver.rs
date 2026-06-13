@@ -113,7 +113,7 @@ impl<'ctx> ImportResolver<'ctx> {
                 current_cannonical,
                 self.named_src(),
                 &self.context.paths.project_root,
-                self.context.paths.std_root.as_ref().map(|x| x.as_path()),
+                self.context.paths.std_root.as_deref(),
                 module.1,
             ) {
                 Ok(pb) => pb,
@@ -145,16 +145,16 @@ impl<'ctx> ImportResolver<'ctx> {
 
             let target_name = target_cannonical
                 .file_name()
-                .unwrap_or(&std::ffi::OsStr::new("unknown"))
-                .to_str()
-                .unwrap_or("unkown");
+                .unwrap_or(std::ffi::OsStr::new("unknown"))
+                .to_string_lossy()
+                .to_string();
 
-            let named_src = NamedSource::new(target_name, Arc::clone(&source));
+            let named_src = NamedSource::new(&target_name, Arc::clone(&source));
 
-            let target_decls = match self.parse_module(source) {
+            let target_decls = match self.parse_module(source, Arc::new(target_name)) {
                 Ok(program) => program,
-                Err(err) => {
-                    self.errors.push(err);
+                Err(mut err) => {
+                    self.errors.append(&mut err);
                     continue;
                 }
             };
@@ -177,8 +177,25 @@ impl<'ctx> ImportResolver<'ctx> {
     fn parse_module(
         &self,
         source: Arc<String>,
-    ) -> Result<&'ctx [&'ctx Declaration<'ctx>], ResolveError> {
-        todo!();
+        filename: Arc<String>,
+    ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
+        let mut tokens = zeen_lexer::tokenize(&source);
+        let mut parser = zeen_parser::Parser::new(
+            filename,
+            Arc::clone(&source),
+            &mut tokens,
+            self.arena,
+            Arc::clone(&self.interner),
+        );
+
+        let program = parser.parse_program().map_err(|errors| {
+            errors
+                .iter()
+                .map(|err| ResolveError::ModuleParseError(err.to_owned()))
+                .collect::<Vec<ResolveError>>()
+        })?;
+
+        Ok(program)
     }
 }
 
@@ -212,7 +229,12 @@ fn resolve_use_path(
         ),
         "std" => match std_dir {
             Some(dir) => (dir.to_path_buf(), &segments[1..]),
-            None => return Err(ResolveError::StdlibNotConfigured { src, span }),
+            None => {
+                return Err(ResolveError::StdlibNotConfigured {
+                    src: current_src,
+                    span,
+                });
+            }
         },
         _ => (current_dir.to_path_buf(), &segments[..]),
     };
