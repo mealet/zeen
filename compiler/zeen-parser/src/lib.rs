@@ -259,7 +259,7 @@ fn is_sync_keyword(kw: &zeen_lexer::token::CompilerKeyword) -> bool {
             | Extern
             | Include
             | Link
-            | Import
+            | Use
             | Struct
             | Enum
             | Interface
@@ -273,6 +273,6 @@ fn is_decl_keyword(kw: &zeen_lexer::token::CompilerKeyword) -> bool {
 
     matches!(
         kw,
-        Public | Fn | Extern | Import | Struct | Enum | Interface | Implement | Type
+        Public | Fn | Extern | Use | Struct | Enum | Interface | Implement | Type
     )
 }

@@ -176,7 +176,7 @@ pub enum CompilerKeyword {
     Extern,
     Include,
     Link,
-    Import,
+    Use,
     Struct,
     Enum,
 
@@ -212,7 +212,7 @@ impl CompilerKeyword {
             "extern" => Some(CompilerKeyword::Extern),
             "include" => Some(CompilerKeyword::Include),
             "link" => Some(CompilerKeyword::Link),
-            "import" => Some(CompilerKeyword::Import),
+            "use" => Some(CompilerKeyword::Use),
             "struct" => Some(CompilerKeyword::Struct),
             "enum" => Some(CompilerKeyword::Enum),
 

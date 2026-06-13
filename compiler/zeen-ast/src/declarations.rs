@@ -76,9 +76,8 @@ pub enum DeclarationKind<'arena> {
         path: Spur,
     },
 
-    Import {
+    Use {
         module: (Spur, SourceSpan),
-        alias: Option<(Spur, SourceSpan)>,
     },
 }
 

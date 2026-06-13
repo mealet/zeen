@@ -70,7 +70,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
             }
             TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
-            TokenKind::Keyword(CompilerKeyword::Import) => self.parse_import(),
+            TokenKind::Keyword(CompilerKeyword::Use) => self.parse_use(),
             TokenKind::Keyword(CompilerKeyword::Interface) => {
                 self.parse_interface(start_span, is_pub)
             }
@@ -365,10 +365,10 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         Some(decl)
     }
 
-    fn parse_import(&mut self) -> Option<&'ctx Declaration<'ctx>> {
-        let import_kw = self
+    fn parse_use(&mut self) -> Option<&'ctx Declaration<'ctx>> {
+        let use_kw = self
             .p
-            .expect(TokenKind::Keyword(CompilerKeyword::Import), "import")?;
+            .expect(TokenKind::Keyword(CompilerKeyword::Use), "use")?;
 
         let mut module_name = String::new();
 
@@ -411,27 +411,13 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
         let module_id = self.p.get_or_intern(module_name);
         let module = (module_id, ident_token.merge_span(current.span));
 
-        let mut alias: Option<(lasso::Spur, miette::SourceSpan)> = None;
         let mut end = current.span;
-
-        if self.p.at(TokenKind::Colon) {
-            let _ = self.p.advance_not_eof()?;
-
-            let alias_token = self.p.expect(TokenKind::Ident, "identifier")?;
-            let span = alias_token.span;
-
-            let alias_slice = self.p.src[span.offset()..span.offset() + span.len()].to_owned();
-            let alias_id = self.p.get_or_intern(alias_slice);
-
-            alias = Some((alias_id, alias_token.span));
-            end = alias_token.span;
-        }
 
         let _ = self.p.expect(TokenKind::Semicolon, ";")?;
 
         let decl = self.p.arena.alloc(Declaration {
-            kind: DeclarationKind::Import { module, alias },
-            span: import_kw.merge_span(end),
+            kind: DeclarationKind::Use { module },
+            span: use_kw.merge_span(end),
         });
 
         Some(decl)
@@ -1102,17 +1088,14 @@ mod tests {
 
     #[test]
     fn import_decl_single() {
-        const SRC: &str = "import std;";
+        const SRC: &str = "use std;";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
         assert_matches!(
             parser.parse_program(),
             Ok([Declaration {
-                kind: DeclarationKind::Import {
-                    module: _,
-                    alias: None,
-                },
+                kind: DeclarationKind::Use { module: _ },
                 ..
             }])
         );
@@ -1120,39 +1103,35 @@ mod tests {
 
     #[test]
     fn import_decl_nested() {
-        const SRC: &str = "import std.io.Stdout;";
+        const SRC: &str = "use std.io.stdout;";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
         assert_matches!(
             parser.parse_program(),
             Ok([Declaration {
-                kind: DeclarationKind::Import {
-                    module: _,
-                    alias: None,
-                },
+                kind: DeclarationKind::Use { module: _ },
                 ..
             }])
         );
     }
 
-    #[test]
-    fn import_decl_with_alias() {
-        const SRC: &str = "import std.io.Stdout : default_output;";
+    // WARNING: Deprecated test
 
-        make_parser!(SRC, tokens, bump, rodeo, parser);
-
-        assert_matches!(
-            parser.parse_program(),
-            Ok([Declaration {
-                kind: DeclarationKind::Import {
-                    module: _,
-                    alias: Some(_),
-                },
-                ..
-            }])
-        );
-    }
+    // #[test]
+    // fn import_decl_with_alias() {
+    //     const SRC: &str = "import std.io.Stdout : default_output;";
+    //
+    //     make_parser!(SRC, tokens, bump, rodeo, parser);
+    //
+    //     assert_matches!(
+    //         parser.parse_program(),
+    //         Ok([Declaration {
+    //             kind: DeclarationKind::Use { module: _ },
+    //             ..
+    //         }])
+    //     );
+    // }
 
     #[test]
     fn link_decl() {
