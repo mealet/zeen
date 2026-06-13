@@ -509,6 +509,7 @@ dependencies = [
  "thiserror",
  "zeen-ast",
  "zeen-driver",
+ "zeen-lexer",
  "zeen-parser",
 ]
 

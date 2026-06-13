@@ -8,16 +8,16 @@ use smallvec::SmallVec;
 use zeen_ast::{Declaration, DeclarationKind, Expression, Statement, TypeExpr, declarations};
 use zeen_lexer::{Token, TokenKind, token::CompilerKeyword};
 
-pub struct DeclParser<'ctx, 'pr> {
-    p: &'pr mut Parser<'ctx>,
+pub struct DeclParser<'tok, 'ctx, 'pr> {
+    p: &'pr mut Parser<'tok, 'ctx>,
 }
 
 struct IsPub(bool);
 struct IsExtern(bool);
 
 /// ==@ Declarations Parser @==
-impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
-    pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
+impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
+    pub fn new(parser: &'pr mut Parser<'tok, 'ctx>) -> Self {
         Self { p: parser }
     }
 
@@ -26,7 +26,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
     }
 }
 
-impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
+impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
     pub fn parse(&mut self) -> Option<&'ctx Declaration<'ctx>> {
         if self.p.panic_mode {
             self.p.sync()
@@ -89,7 +89,7 @@ impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
     }
 }
 
-impl<'ctx, 'pr> DeclParser<'ctx, 'pr> {
+impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
     fn parse_fn(
         &mut self,
         start_span: miette::SourceSpan,

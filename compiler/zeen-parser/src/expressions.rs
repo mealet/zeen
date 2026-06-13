@@ -6,8 +6,8 @@ use strum::FromRepr;
 use zeen_ast::expressions::{self, Expression, ExpressionKind};
 use zeen_lexer::{Token, TokenKind};
 
-pub struct ExprParser<'ctx, 'pr> {
-    p: &'pr mut Parser<'ctx>,
+pub struct ExprParser<'tok, 'ctx, 'pr> {
+    p: &'pr mut Parser<'tok, 'ctx>,
     non_struct_braces: bool,
 }
 
@@ -157,8 +157,8 @@ fn character_escape(escape: char) -> Option<char> {
 }
 
 /// ==@ Expressions Parser @==
-impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
-    pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
+impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
+    pub fn new(parser: &'pr mut Parser<'tok, 'ctx>) -> Self {
         Self {
             p: parser,
             non_struct_braces: false,
@@ -326,7 +326,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
 }
 
 /// Literals Implementations
-impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
+impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     fn parse_literal(
         &mut self,
         literal: zeen_lexer::token::LiteralKind,
@@ -625,7 +625,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 }
 
-impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
+impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     fn parse_ident_or_struct_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let token = self.p.current_clone();
         let token_slice =
@@ -1003,7 +1003,7 @@ impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
     }
 }
 
-impl<'ctx, 'pr> ExprParser<'ctx, 'pr> {
+impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     fn parse_switch(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let switch_kw = self.p.expect(
             TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::Switch),

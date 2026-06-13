@@ -8,12 +8,12 @@ use zeen_lexer::{Token, TokenKind, token};
 
 use smallvec::SmallVec;
 
-pub struct TypeParser<'ctx, 'pr> {
-    p: &'pr mut Parser<'ctx>,
+pub struct TypeParser<'tok, 'ctx, 'pr> {
+    p: &'pr mut Parser<'tok, 'ctx>,
 }
 
-impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
-    pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
+impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
+    pub fn new(parser: &'pr mut Parser<'tok, 'ctx>) -> Self {
         Self { p: parser }
     }
 
@@ -68,7 +68,7 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
     }
 }
 
-impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
+impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
     pub fn parse_generics_declarations(&mut self) -> Option<&'ctx [GenericType<'ctx>]> {
         if self.p.eat(TokenKind::OpenBracket) {
             let mut generics: SmallVec<[GenericType<'ctx>; 8]> = SmallVec::new();
@@ -128,7 +128,7 @@ impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
     }
 }
 
-impl<'ctx, 'pr> TypeParser<'ctx, 'pr> {
+impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
     fn parse_builtin(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
         let token = self.p.current_clone();
         let _ = self.p.advance();

@@ -7,7 +7,7 @@ pub use token::{Token, TokenKind};
 mod tests;
 pub mod token;
 
-pub fn tokenize(input: &str) -> impl Iterator<Item = Token> {
+pub fn tokenize(input: &str) -> impl Iterator<Item = Token> + use<'_> {
     let mut tokenizer = Tokenizer::new(input);
 
     std::iter::from_fn(move || {

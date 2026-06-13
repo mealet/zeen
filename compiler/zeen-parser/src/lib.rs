@@ -17,11 +17,11 @@ pub mod expressions;
 pub mod statements;
 pub mod type_parser;
 
-pub struct Parser<'ctx> {
+pub struct Parser<'tok, 'ctx> {
     src: Arc<String>,
     filename: &'ctx str,
 
-    tokens: &'ctx mut dyn Iterator<Item = Token>,
+    tokens: &'tok mut dyn Iterator<Item = Token>,
 
     arena: &'ctx Bump,
     interner: Arc<Mutex<Rodeo>>,
@@ -33,11 +33,11 @@ pub struct Parser<'ctx> {
     panic_mode: bool,
 }
 
-impl<'ctx> Parser<'ctx> {
+impl<'tok, 'ctx> Parser<'tok, 'ctx> {
     pub fn new(
         filename: &'ctx str,
         src: Arc<String>,
-        tokens: &'ctx mut dyn Iterator<Item = Token>,
+        tokens: &'tok mut dyn Iterator<Item = Token>,
         arena: &'ctx Bump,
         interner: Arc<Mutex<Rodeo>>,
     ) -> Self {

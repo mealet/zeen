@@ -13,14 +13,14 @@ use zeen_ast::{
 };
 use zeen_lexer::{Token, TokenKind, token::CompilerKeyword};
 
-pub struct StmtParser<'ctx, 'pr> {
-    p: &'pr mut Parser<'ctx>,
+pub struct StmtParser<'tok, 'ctx, 'pr> {
+    p: &'pr mut Parser<'tok, 'ctx>,
     expect_optional_semicolon: bool,
 }
 
 /// ==@ Statements Parser @==
-impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
-    pub fn new(parser: &'pr mut Parser<'ctx>) -> Self {
+impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
+    pub fn new(parser: &'pr mut Parser<'tok, 'ctx>) -> Self {
         Self {
             p: parser,
             expect_optional_semicolon: false,
@@ -68,7 +68,7 @@ impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
     }
 }
 
-impl<'ctx, 'pr> StmtParser<'ctx, 'pr> {
+impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
     pub fn parse_let(&mut self) -> Option<&'ctx Statement<'ctx>> {
         let start = self.p.current().span;
         let is_const = self.p.eat(TokenKind::Keyword(CompilerKeyword::Const));
