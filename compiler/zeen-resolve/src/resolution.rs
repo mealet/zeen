@@ -28,10 +28,6 @@ impl NodeKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DefId(u32);
 
-/// Unique identifier for a resolved imported module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ModuleId(u32);
-
 /// Resolution instance that kept in symtable.
 #[derive(Debug, Clone, Copy)]
 pub enum Resolution {
@@ -40,7 +36,6 @@ pub enum Resolution {
     SelfValue(DefId),    // `self` inside structures methods
     SelfType(DefId),     // `Self` alias
     Builtin,             // i32, u32, ...
-    Module(ModuleId),    // `import .. : alias`
 }
 
 /// Keeping definition info here
@@ -77,9 +72,6 @@ pub struct ResolutionResult {
     pub defs: HashMap<DefId, DefInfo>,
     /// (struct, interface) -> methods
     pub impls: HashMap<(DefId, DefId), Vec<DefId>>,
-
-    /// Top-level modules from imports
-    pub modules: HashMap<Spur, ModuleId>,
 }
 
 impl ResolutionResult {

@@ -508,6 +508,7 @@ dependencies = [
  "smol_str",
  "thiserror",
  "zeen-ast",
+ "zeen-driver",
 ]
 
 [[package]]

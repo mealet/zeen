@@ -1,7 +1,7 @@
 use lasso::Spur;
 use std::collections::HashMap;
 
-use crate::resolution::{DefId, ModuleId};
+use crate::resolution::DefId;
 
 // --> Scope
 
@@ -20,7 +20,6 @@ pub enum ScopeKind {
 pub struct ScopeContent {
     pub values: HashMap<Spur, DefId>,
     pub types: HashMap<Spur, DefId>,
-    pub modules: HashMap<Spur, ModuleId>,
 }
 
 #[derive(Debug, Clone)]
@@ -107,16 +106,6 @@ impl SymbolTable {
         None
     }
 
-    pub fn lookup_module(&self, name: Spur) -> Option<ModuleId> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(id) = scope.content.modules.get(&name) {
-                return Some(*id);
-            }
-        }
-
-        None
-    }
-
     // --> Declarations
 
     pub fn declare_value(&mut self, name: Spur, id: DefId) {
@@ -125,9 +114,5 @@ impl SymbolTable {
 
     pub fn declare_type(&mut self, name: Spur, id: DefId) {
         self.current_mut().types.insert(name, id);
-    }
-
-    pub fn declare_module(&mut self, name: Spur, id: ModuleId) {
-        self.current_mut().modules.insert(name, id);
     }
 }
