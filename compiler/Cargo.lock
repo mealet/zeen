@@ -498,6 +498,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeen-resolve"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "miette",
+ "smallvec",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
