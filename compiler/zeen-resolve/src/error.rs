@@ -6,6 +6,11 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic, Clone)]
 pub enum ResolveError {
+    // Transparent Errors
+    #[error("parser error in included module")]
+    #[diagnostic(transparent)]
+    ModuleParseError(#[from] zeen_parser::error::ParserError),
+
     // --> Include Resolver Errors
     #[error("module is not found: `{path}`")]
     #[diagnostic(severity(Error), code(zeen::resolver::include_error))]

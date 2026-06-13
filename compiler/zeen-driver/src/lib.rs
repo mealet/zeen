@@ -37,9 +37,9 @@ impl MietteDriver {
 }
 
 pub struct CompilationContext {
-    paths: PathsConfig,
-    mode: CompilationMode,
-    output: CompilationOutput,
+    pub paths: PathsConfig,
+    pub mode: CompilationMode,
+    pub output: CompilationOutput,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -58,6 +58,6 @@ pub enum CompilationOutput {
 }
 
 pub struct PathsConfig {
-    project_root: PathBuf,
-    std_root: PathBuf,
+    pub project_root: PathBuf,
+    pub std_root: Option<PathBuf>,
 }

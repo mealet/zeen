@@ -95,15 +95,101 @@ impl<'ctx> ImportResolver<'ctx> {
 
         todo!()
     }
+
+    fn load_uses(
+        &mut self,
+        current_cannonical: &Path,
+        decls: &'ctx [&'ctx Declaration<'ctx>],
+        visiting: &mut HashSet<PathBuf>,
+    ) {
+        for decl in decls {
+            let DeclarationKind::Use { module } = &decl.kind else {
+                continue;
+            };
+
+            let raw = self.interner_resolve(&module.0);
+            let target = match resolve_use_path(
+                &raw,
+                current_cannonical,
+                self.named_src(),
+                &self.context.paths.project_root,
+                self.context.paths.std_root.as_ref().map(|x| x.as_path()),
+                module.1,
+            ) {
+                Ok(pb) => pb,
+                Err(err) => {
+                    self.errors.push(err);
+                    continue;
+                }
+            };
+
+            let target_cannonical = canonicalize_best_effort(&target);
+
+            if self.modules.contains_key(&target_cannonical)
+                || visiting.contains(&target_cannonical)
+            {
+                continue;
+            }
+
+            let source = Arc::new(match fs::read_to_string(&target) {
+                Ok(content) => content,
+                Err(err) => {
+                    self.errors.push(ResolveError::IoError {
+                        message: err.to_string().into(),
+                        src: self.named_src(),
+                        span: module.1,
+                    });
+                    continue;
+                }
+            });
+
+            let target_name = target_cannonical
+                .file_name()
+                .unwrap_or(&std::ffi::OsStr::new("unknown"))
+                .to_str()
+                .unwrap_or("unkown");
+
+            let named_src = NamedSource::new(target_name, Arc::clone(&source));
+
+            let target_decls = match self.parse_module(source) {
+                Ok(program) => program,
+                Err(err) => {
+                    self.errors.push(err);
+                    continue;
+                }
+            };
+
+            self.modules.insert(
+                target_cannonical.clone(),
+                RawModule {
+                    named_src,
+                    cannonical_path: target_cannonical.clone(),
+                    decls: target_decls,
+                },
+            );
+
+            visiting.insert(target_cannonical.clone());
+            self.load_uses(&target_cannonical, target_decls, visiting);
+            visiting.remove(&target_cannonical);
+        }
+    }
+
+    fn parse_module(
+        &self,
+        source: Arc<String>,
+    ) -> Result<&'ctx [&'ctx Declaration<'ctx>], ResolveError> {
+        todo!();
+    }
 }
 
 fn resolve_use_path(
     raw: &str,
     current_file: &Path,
+    current_src: NamedSource<Arc<String>>,
+
     project_root: &Path,
     std_dir: Option<&Path>,
 
-    src: NamedSource<Arc<String>>,
     span: SourceSpan,
 ) -> Result<PathBuf, ResolveError> {
     let segments: Vec<&str> = raw.split('.').collect();
@@ -111,7 +197,7 @@ fn resolve_use_path(
     if segments.is_empty() {
         return Err(ResolveError::FileNotFound {
             path: raw.into(),
-            src,
+            src: current_src,
             span,
         });
     }
