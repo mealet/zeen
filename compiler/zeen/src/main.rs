@@ -36,7 +36,7 @@ fn main() {
             let mut tokens = zeen_lexer::tokenize(&content);
 
             let mut parser = zeen_parser::Parser::new(
-                &path,
+                Arc::new(path),
                 std::sync::Arc::clone(&content),
                 &mut tokens,
                 &bump,

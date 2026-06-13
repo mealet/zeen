@@ -1148,6 +1148,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     macro_rules! make_expr_parser {
         ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident, $ep: ident) => {
@@ -1156,7 +1157,7 @@ mod tests {
             let $bump = bumpalo::Bump::new();
             let mut $tokens = zeen_lexer::tokenize($src);
             let mut $parser = Parser::new(
-                "tests.zn",
+                Arc::new("tests.zn".to_string()),
                 src_arc,
                 &mut $tokens,
                 &$bump,

@@ -617,6 +617,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
 
+    use std::sync::Arc;
     use zeen_ast::{Expression, ExpressionKind, Statement, StatementKind, TypeExpr, TypeKind};
 
     macro_rules! make_parser {
@@ -626,7 +627,7 @@ mod tests {
             let $bump = bumpalo::Bump::new();
             let mut $tokens = zeen_lexer::tokenize($src);
             let mut $parser = Parser::new(
-                "tests.zn",
+                Arc::new("tests.zn".to_string()),
                 src_arc,
                 &mut $tokens,
                 &$bump,

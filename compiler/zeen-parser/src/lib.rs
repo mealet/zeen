@@ -19,7 +19,7 @@ pub mod type_parser;
 
 pub struct Parser<'tok, 'ctx> {
     src: Arc<String>,
-    filename: &'ctx str,
+    filename: Arc<String>,
 
     tokens: &'tok mut dyn Iterator<Item = Token>,
 
@@ -35,7 +35,7 @@ pub struct Parser<'tok, 'ctx> {
 
 impl<'tok, 'ctx> Parser<'tok, 'ctx> {
     pub fn new(
-        filename: &'ctx str,
+        filename: Arc<String>,
         src: Arc<String>,
         tokens: &'tok mut dyn Iterator<Item = Token>,
         arena: &'ctx Bump,
@@ -64,7 +64,7 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
 
     pub fn parse_program(
         &mut self,
-    ) -> Result<&'ctx [&'ctx zeen_ast::Declaration<'_>], &'ctx [ParserError]> {
+    ) -> Result<&'ctx [&'ctx zeen_ast::Declaration<'ctx>], &[ParserError]> {
         let mut decls: SmallVec<[&'ctx zeen_ast::Declaration; 8]> = SmallVec::new();
 
         while !self.is_eof() {
@@ -92,7 +92,7 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
     pub fn named_src(&self) -> miette::NamedSource<Arc<String>> {
         let src_ref = Arc::clone(&self.src);
 
-        miette::NamedSource::new(self.filename, src_ref)
+        miette::NamedSource::new(self.filename.as_str(), src_ref)
     }
 
     pub fn get_or_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
