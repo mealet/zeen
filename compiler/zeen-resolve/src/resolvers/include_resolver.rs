@@ -118,7 +118,7 @@ impl<'ctx> ImportResolver<'ctx> {
             ) {
                 Ok(pb) => pb,
                 Err(err) => {
-                    self.errors.push(err);
+                    self.errors.push(*err);
                     continue;
                 }
             };
@@ -209,15 +209,15 @@ fn resolve_use_path(
     std_dir: Option<&Path>,
 
     span: SourceSpan,
-) -> Result<PathBuf, ResolveError> {
+) -> Result<PathBuf, Box<ResolveError>> {
     let segments: Vec<&str> = raw.split('.').collect();
 
     if segments.is_empty() {
-        return Err(ResolveError::FileNotFound {
+        return Err(Box::new(ResolveError::FileNotFound {
             path: raw.into(),
             src: current_src,
             span,
-        });
+        }));
     }
 
     let current_dir = current_file.parent().unwrap_or_else(|| Path::new("."));
@@ -231,10 +231,10 @@ fn resolve_use_path(
         "std" => match std_dir {
             Some(dir) => (dir.to_path_buf(), &segments[1..]),
             None => {
-                return Err(ResolveError::StdlibNotConfigured {
+                return Err(Box::new(ResolveError::StdlibNotConfigured {
                     src: current_src,
                     span,
-                });
+                }));
             }
         },
         _ => (current_dir.to_path_buf(), &segments[..]),
