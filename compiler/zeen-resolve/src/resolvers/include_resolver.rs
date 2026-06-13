@@ -14,7 +14,7 @@ use crate::error::ResolveError;
 use zeen_ast::declarations::{Declaration, DeclarationKind};
 
 struct RawModule<'arena> {
-    cannonical_path: PathBuf,
+    canonical_path: PathBuf,
     decls: &'arena [&'arena Declaration<'arena>],
     named_src: NamedSource<Arc<String>>,
 }
@@ -79,26 +79,26 @@ impl<'ctx> ImportResolver<'ctx> {
         root_decls: &'ctx [&'ctx Declaration<'ctx>],
         root_named_src: NamedSource<Arc<String>>,
     ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
-        let root_cannonical = canonicalize_best_effort(&root_path);
+        let root_canonical = canonicalize_best_effort(&root_path);
 
         self.modules.insert(
-            root_cannonical.clone(),
+            root_canonical.clone(),
             RawModule {
                 decls: root_decls,
-                cannonical_path: root_cannonical.clone(),
+                canonical_path: root_canonical.clone(),
                 named_src: root_named_src,
             },
         );
 
         let mut visiting: HashSet<PathBuf> = HashSet::new();
-        visiting.insert(root_cannonical.clone());
+        visiting.insert(root_canonical.clone());
 
         todo!()
     }
 
     fn load_uses(
         &mut self,
-        current_cannonical: &Path,
+        current_canonical: &Path,
         decls: &'ctx [&'ctx Declaration<'ctx>],
         visiting: &mut HashSet<PathBuf>,
     ) {
@@ -110,7 +110,7 @@ impl<'ctx> ImportResolver<'ctx> {
             let raw = self.interner_resolve(&module.0);
             let target = match resolve_use_path(
                 &raw,
-                current_cannonical,
+                current_canonical,
                 self.named_src(),
                 &self.context.paths.project_root,
                 self.context.paths.std_root.as_deref(),
@@ -123,10 +123,9 @@ impl<'ctx> ImportResolver<'ctx> {
                 }
             };
 
-            let target_cannonical = canonicalize_best_effort(&target);
+            let target_canonical = canonicalize_best_effort(&target);
 
-            if self.modules.contains_key(&target_cannonical)
-                || visiting.contains(&target_cannonical)
+            if self.modules.contains_key(&target_canonical) || visiting.contains(&target_canonical)
             {
                 continue;
             }
@@ -143,7 +142,7 @@ impl<'ctx> ImportResolver<'ctx> {
                 }
             });
 
-            let target_name = target_cannonical
+            let target_name = target_canonical
                 .file_name()
                 .unwrap_or(std::ffi::OsStr::new("unknown"))
                 .to_string_lossy()
@@ -160,17 +159,17 @@ impl<'ctx> ImportResolver<'ctx> {
             };
 
             self.modules.insert(
-                target_cannonical.clone(),
+                target_canonical.clone(),
                 RawModule {
                     named_src,
-                    cannonical_path: target_cannonical.clone(),
+                    canonical_path: target_canonical.clone(),
                     decls: target_decls,
                 },
             );
 
-            visiting.insert(target_cannonical.clone());
-            self.load_uses(&target_cannonical, target_decls, visiting);
-            visiting.remove(&target_cannonical);
+            visiting.insert(target_canonical.clone());
+            self.load_uses(&target_canonical, target_decls, visiting);
+            visiting.remove(&target_canonical);
         }
     }
 
@@ -197,6 +196,8 @@ impl<'ctx> ImportResolver<'ctx> {
 
         Ok(program)
     }
+
+    // fn merge_module(&mut self, ca)
 }
 
 fn resolve_use_path(
