@@ -1,6 +1,7 @@
 use bumpalo::Bump;
 use lasso::{Rodeo, Spur};
 use miette::SourceSpan;
+use smol_str::SmolStr;
 
 use std::sync::{Arc, Mutex};
 
@@ -229,25 +230,23 @@ impl<'ctx> NameResolver<'ctx> {
 
         for generic in generics {
             let def_id = self.define(DefInfo {
-                name: generic.name,
+                name: generic.name.0,
                 kind: DefKind::GenericParam,
-                span: SourceSpan::new(0.into(), 0),
+                span: generic.name.1,
                 decl: None,
             });
 
-            self.table.declare_type(generic.name, def_id);
+            self.table.declare_type(generic.name.0, def_id);
 
             if let Some(bounds) = generic.interfaces {
                 for bound in bounds {
-                    if self.table.lookup_type(*bound).is_none() {
-                        let bound_str = self.interner_resolve(bound);
-
-                        // TODO: Add spans for generic types and interfaces and return here
+                    if self.table.lookup_type(bound.0).is_none() {
+                        let bound_str = self.interner_resolve(&bound.0);
 
                         self.errors.push(ResolveError::UnresolvedType {
                             name: bound_str,
                             src: self.named_src(),
-                            span: SourceSpan::new(0.into(), 0),
+                            span: bound.1,
                         });
                     }
                 }

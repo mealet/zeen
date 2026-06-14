@@ -92,8 +92,8 @@ pub struct FnParam<'arena> {
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct GenericType<'arena> {
-    pub name: Spur,
-    pub interfaces: Option<&'arena [Spur]>,
+    pub name: (Spur, SourceSpan),
+    pub interfaces: Option<&'arena [(Spur, SourceSpan)]>,
 }
 
 // Struct

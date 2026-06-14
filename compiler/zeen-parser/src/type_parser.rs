@@ -83,33 +83,36 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
                     [name_token.span.offset()..name_token.span.offset() + name_token.span.len()]
                     .to_owned();
 
-                let name = self.p.get_or_intern(name_slice);
+                let name = (self.p.get_or_intern(name_slice), name_token.span);
 
-                let interfaces: Option<&'ctx [lasso::Spur]> = if self.p.eat(TokenKind::Colon) {
-                    let mut interfaces_buffer: SmallVec<[lasso::Spur; 8]> = SmallVec::new();
+                let interfaces: Option<&'ctx [(lasso::Spur, miette::SourceSpan)]> =
+                    if self.p.eat(TokenKind::Colon) {
+                        let mut interfaces_buffer: SmallVec<
+                            [(lasso::Spur, miette::SourceSpan); 8],
+                        > = SmallVec::new();
 
-                    while !matches!(
-                        self.p.current().kind,
-                        TokenKind::CloseBracket | TokenKind::Eof | TokenKind::Comma
-                    ) {
-                        let interface_token = self.p.expect(TokenKind::Ident, "identifier")?;
-                        let interface_slice = self.p.src[interface_token.span.offset()
-                            ..interface_token.span.offset() + interface_token.span.len()]
-                            .to_owned();
+                        while !matches!(
+                            self.p.current().kind,
+                            TokenKind::CloseBracket | TokenKind::Eof | TokenKind::Comma
+                        ) {
+                            let interface_token = self.p.expect(TokenKind::Ident, "identifier")?;
+                            let interface_slice = self.p.src[interface_token.span.offset()
+                                ..interface_token.span.offset() + interface_token.span.len()]
+                                .to_owned();
 
-                        let interface_id = self.p.get_or_intern(interface_slice);
-                        interfaces_buffer.push(interface_id);
+                            let interface_id = self.p.get_or_intern(interface_slice);
+                            interfaces_buffer.push((interface_id, interface_token.span));
 
-                        let _ = self.p.eat(TokenKind::Plus);
-                    }
+                            let _ = self.p.eat(TokenKind::Plus);
+                        }
 
-                    let interfaces_arena = self.p.arena.alloc_slice_copy(&interfaces_buffer);
-                    drop(interfaces_buffer);
+                        let interfaces_arena = self.p.arena.alloc_slice_copy(&interfaces_buffer);
+                        drop(interfaces_buffer);
 
-                    Some(interfaces_arena)
-                } else {
-                    None
-                };
+                        Some(interfaces_arena)
+                    } else {
+                        None
+                    };
 
                 let _ = self.p.eat(TokenKind::Comma);
 
@@ -706,7 +709,7 @@ mod tests {
                         span: (6, 3).into()
                     },],
                     generic_args: Some(&[zeen_ast::declarations::GenericType {
-                        name: rodeo.lock().unwrap().get_or_intern("T"),
+                        name: (rodeo.lock().unwrap().get_or_intern("T"), (3, 1).into()),
                         interfaces: None,
                     }]),
                     ret: &TypeExpr {
@@ -737,7 +740,7 @@ mod tests {
                         span: (21, 3).into(),
                     }],
                     generic_args: Some(&[GenericType {
-                        name: { rodeo.lock().unwrap().get_or_intern("T") },
+                        name: ({ rodeo.lock().unwrap().get_or_intern("T") }, (3, 1).into()),
                         interfaces: Some(&[
                             /*
                              * Kinda interesting bug:
@@ -752,8 +755,14 @@ mod tests {
                              *
                              * I've lost 2 hours of debugging for this...
                              */
-                            { rodeo.lock().unwrap().get_or_intern("Add") },
-                            { rodeo.lock().unwrap().get_or_intern("Display") },
+                            (
+                                { rodeo.lock().unwrap().get_or_intern("Add") },
+                                (6, 3).into()
+                            ),
+                            (
+                                { rodeo.lock().unwrap().get_or_intern("Display") },
+                                (12, 7).into()
+                            ),
                         ]),
                     }]),
                     ret: &TypeExpr {
