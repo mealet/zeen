@@ -51,6 +51,37 @@ pub enum ResolveError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("unresolved identifier: {name}")]
+    #[diagnostic(severity(Error), code(zeen::resolver::unresolved_ident))]
+    UnresolvedIdent {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("unresolved type: {name}")]
+    #[diagnostic(severity(Error), code(zeen::resolver::unresolved_type))]
+    UnresolvedType {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("unresolved `self/Self` type")]
+    #[diagnostic(severity(Error), code(zeen::resolver::unresolved_self))]
+    UnresolvedSelf {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Error, Diagnostic, Clone)]

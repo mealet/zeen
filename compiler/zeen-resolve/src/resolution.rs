@@ -26,7 +26,7 @@ impl NodeKey {
 
 /// Unique identifier for a resolver definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DefId(u32);
+pub struct DefId(pub u32);
 
 /// Resolution instance that kept in symtable.
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +36,7 @@ pub enum Resolution {
     SelfValue(DefId),    // `self` inside structures methods
     SelfType(DefId),     // `Self` alias
     Builtin,             // i32, u32, ...
+    Error,
 }
 
 /// Keeping definition info here
@@ -61,7 +62,7 @@ pub enum DefKind {
 }
 
 /// Final output of Name Resolver
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ResolutionResult {
     /// Expr -> Resolution
     pub expr_bindings: HashMap<NodeKey, Resolution>,
