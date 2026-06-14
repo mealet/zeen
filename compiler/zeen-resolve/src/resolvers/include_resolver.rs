@@ -20,7 +20,7 @@ struct RawModule<'arena> {
     named_src: NamedSource<Arc<String>>,
 }
 
-pub struct ImportResolver<'ctx> {
+pub struct IncludeResolver<'ctx> {
     arena: &'ctx Bump,
     interner: Arc<Mutex<Rodeo>>,
     context: zeen_driver::CompilationContext,
@@ -32,7 +32,7 @@ pub struct ImportResolver<'ctx> {
     errors: Vec<ResolveError>,
 }
 
-impl<'ctx> ImportResolver<'ctx> {
+impl<'ctx> IncludeResolver<'ctx> {
     pub fn new(
         filename: &'ctx str,
         src: Arc<String>,

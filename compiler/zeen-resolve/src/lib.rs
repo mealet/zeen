@@ -2,5 +2,5 @@
 
 mod error;
 mod resolution;
-mod resolvers;
+pub mod resolvers;
 mod symbol_table;
