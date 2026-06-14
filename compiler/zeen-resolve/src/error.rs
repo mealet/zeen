@@ -82,6 +82,23 @@ pub enum ResolveError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("this feature is disabled by compiler: {reason}")]
+    #[
+        diagnostic(
+            severity(Error),
+            code(zeen::resolver::disabled_feature),
+            help("visit for more information: https://github.com/mealet/zeen")
+        )
+    ]
+    DisabledFeature {
+        reason: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("\"{reason}\"")]
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Error, Diagnostic, Clone)]

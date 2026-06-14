@@ -72,7 +72,83 @@ impl<'ctx> NameResolver<'ctx> {
         id
     }
 
+    // -> resolve functions
+
     pub fn resolve_module(&mut self, decls: &'ctx [&'ctx Declaration<'ctx>]) {
         todo!()
+    }
+
+    fn declare_toplevel(&mut self, decl: &'ctx Declaration<'ctx>) {
+        match decl.kind {
+            DeclarationKind::FnDecl { name, .. } => {
+                let def_id = self.define(DefInfo {
+                    name: name.0,
+                    kind: DefKind::Function,
+                    span: name.1,
+                    decl: Some(NodeKey::from_decl(decl)),
+                });
+
+                self.table.declare_value(name.0, def_id);
+            }
+
+            DeclarationKind::StructDecl { name, .. } => {
+                let def_id = self.define(DefInfo {
+                    name: name.0,
+                    kind: DefKind::Struct,
+                    span: name.1,
+                    decl: Some(NodeKey::from_decl(decl)),
+                });
+
+                self.table.declare_type(name.0, def_id);
+            }
+
+            DeclarationKind::InterfaceDecl { name, .. } => {
+                let def_id = self.define(DefInfo {
+                    name: name.0,
+                    kind: DefKind::Interface,
+                    span: name.1,
+                    decl: Some(NodeKey::from_decl(decl)),
+                });
+
+                self.table.declare_type(name.0, def_id);
+            }
+
+            DeclarationKind::EnumDecl { name, variants, .. } => {
+                let def_id = self.define(DefInfo {
+                    name: name.0,
+                    kind: DefKind::Enum,
+                    span: name.1,
+                    decl: Some(NodeKey::from_decl(decl)),
+                });
+
+                self.table.declare_type(name.0, def_id);
+
+                for variant in variants {
+                    let variant_id = self.define(DefInfo {
+                        name: variant.name,
+                        kind: DefKind::EnumVariant,
+                        span: variant.span,
+                        decl: Some(NodeKey::from_decl(decl)),
+                    });
+
+                    self.table.declare_value(variant.name, variant_id);
+                }
+            }
+
+            DeclarationKind::ExternVar { name, .. } => {
+                let def_id = self.define(DefInfo {
+                    name: name.0,
+                    kind: DefKind::ExternVar,
+                    span: name.1,
+                    decl: Some(NodeKey::from_decl(decl)),
+                });
+
+                self.table.declare_value(name.0, def_id);
+            }
+
+            DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => {}
+            DeclarationKind::ImplementDecl { .. } => {}
+            DeclarationKind::Use { .. } => {}
+        }
     }
 }
