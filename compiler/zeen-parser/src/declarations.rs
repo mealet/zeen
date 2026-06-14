@@ -435,8 +435,9 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             "str",
         )?;
         let token_span = string_token.span;
-        let string_slice =
-            self.p.src[token_span.offset()..token_span.offset() + token_span.len()].to_owned();
+        let string_slice = self.p.src
+            [token_span.offset() + 1..token_span.offset() + token_span.len() - 1]
+            .to_owned();
 
         let path = self.p.get_or_intern(string_slice);
 
@@ -462,8 +463,9 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             "str",
         )?;
         let token_span = string_token.span;
-        let string_slice =
-            self.p.src[token_span.offset()..token_span.offset() + token_span.len()].to_owned();
+        let string_slice = self.p.src
+            [token_span.offset() + 1..token_span.offset() + token_span.len() - 1]
+            .to_owned();
 
         let path = self.p.get_or_intern(string_slice);
 
