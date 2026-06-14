@@ -82,6 +82,20 @@ impl<'ctx> NameResolver<'ctx> {
         miette::NamedSource::new(self.filename.as_str(), src_ref)
     }
 
+    fn interner_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
+        // compiler is not async/threaded (at least for now), so we're unwrapping lock
+        let mut interner = self.interner.lock().unwrap();
+
+        interner.get_or_intern(value)
+    }
+
+    fn interner_resolve(&self, key: &Spur) -> SmolStr {
+        let interner = self.interner.lock().unwrap();
+        let resolved = interner.resolve(key);
+
+        resolved.into()
+    }
+
     // -> resolve functions
 
     pub fn resolve_module(
@@ -193,6 +207,52 @@ impl<'ctx> NameResolver<'ctx> {
 
     fn resolve_decl(&mut self, decl: &'ctx Declaration<'ctx>) {
         todo!()
+    }
+
+    fn path_expr_to_type_def(&self, expr: &Expression) -> Option<DefId> {
+        match expr.kind {
+            ExpressionKind::Ident { name, .. } => self.table.lookup_type(name),
+            ExpressionKind::FieldAccess { field, .. } => {
+                if let ExpressionKind::Ident { name, .. } = field.kind {
+                    self.table.lookup_type(name)
+                } else {
+                    None
+                }
+            }
+
+            _ => None,
+        }
+    }
+
+    fn declare_generics(&mut self, generics: Option<&[GenericType]>) {
+        let Some(generics) = generics else { return };
+
+        for generic in generics {
+            let def_id = self.define(DefInfo {
+                name: generic.name,
+                kind: DefKind::GenericParam,
+                span: SourceSpan::new(0.into(), 0),
+                decl: None,
+            });
+
+            self.table.declare_type(generic.name, def_id);
+
+            if let Some(bounds) = generic.interfaces {
+                for bound in bounds {
+                    if self.table.lookup_type(*bound).is_none() {
+                        let bound_str = self.interner_resolve(bound);
+
+                        // TODO: Add spans for generic types and interfaces and return here
+
+                        self.errors.push(ResolveError::UnresolvedType {
+                            name: bound_str,
+                            src: self.named_src(),
+                            span: SourceSpan::new(0.into(), 0),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     // --> Statements
