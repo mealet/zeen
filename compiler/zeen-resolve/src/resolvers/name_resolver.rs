@@ -80,8 +80,27 @@ impl<'ctx> NameResolver<'ctx> {
 
     // -> resolve functions
 
-    pub fn resolve_module(&mut self, decls: &'ctx [&'ctx Declaration<'ctx>]) {
-        todo!()
+    pub fn resolve_module(
+        mut self,
+        decls: &'ctx [&'ctx Declaration<'ctx>],
+    ) -> Result<(), Vec<ResolveError>> {
+        for decl in decls {
+            self.declare_toplevel(decl);
+        }
+
+        if !self.errors.is_empty() {
+            return Err(self.errors);
+        }
+
+        for decl in decls {
+            // in future
+        }
+
+        if !self.errors.is_empty() {
+            return Err(self.errors);
+        }
+
+        Ok(())
     }
 
     fn declare_toplevel(&mut self, decl: &'ctx Declaration<'ctx>) {
