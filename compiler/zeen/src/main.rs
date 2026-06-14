@@ -82,7 +82,15 @@ fn main() {
                 &bump,
                 Arc::clone(&rodeo),
                 &mut context,
-            );
+            )
+            .unwrap_or_else(|errors| {
+                for err in errors {
+                    let report_string = driver.report(&err).unwrap();
+                    eprintln!("{}", report_string);
+                }
+
+                std::process::exit(1);
+            });
         }
         Err(err) => {
             eprintln!("Unable to open file: {}", err);
