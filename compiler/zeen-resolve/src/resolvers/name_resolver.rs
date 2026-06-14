@@ -72,6 +72,12 @@ impl<'ctx> NameResolver<'ctx> {
         id
     }
 
+    fn named_src(&self) -> miette::NamedSource<Arc<String>> {
+        let src_ref = Arc::clone(&self.src);
+
+        miette::NamedSource::new(self.filename.as_str(), src_ref)
+    }
+
     // -> resolve functions
 
     pub fn resolve_module(&mut self, decls: &'ctx [&'ctx Declaration<'ctx>]) {
@@ -146,7 +152,15 @@ impl<'ctx> NameResolver<'ctx> {
                 self.table.declare_value(name.0, def_id);
             }
 
-            DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => {}
+            DeclarationKind::ExternInclude { .. } => {
+                self.errors.push(ResolveError::DisabledFeature {
+                    reason: "not supported yet".into(),
+                    src: self.named_src(),
+                    span: decl.span,
+                });
+            }
+
+            DeclarationKind::ExternLink { .. } => {}
             DeclarationKind::ImplementDecl { .. } => {}
             DeclarationKind::Use { .. } => {}
         }
