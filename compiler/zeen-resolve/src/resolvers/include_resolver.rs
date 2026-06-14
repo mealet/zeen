@@ -108,7 +108,13 @@ impl<'ctx> ImportResolver<'ctx> {
             return Err(&self.errors);
         }
 
-        todo!()
+        self.check_collisions(&merged);
+
+        if !self.errors.is_empty() {
+            return Err(&self.errors);
+        }
+
+        Ok(self.arena.alloc_slice_copy(&merged))
     }
 
     fn load_uses(
