@@ -23,7 +23,7 @@ struct RawModule<'arena> {
 pub struct IncludeResolver<'ctx> {
     arena: &'ctx Bump,
     interner: Arc<Mutex<Rodeo>>,
-    context: zeen_driver::CompilationContext,
+    context: &'ctx mut zeen_driver::CompilationContext,
 
     modules: HashMap<PathBuf, RawModule<'ctx>>,
 
@@ -39,7 +39,7 @@ impl<'ctx> IncludeResolver<'ctx> {
 
         arena: &'ctx Bump,
         interner: Arc<Mutex<Rodeo>>,
-        context: zeen_driver::CompilationContext,
+        context: &'ctx mut zeen_driver::CompilationContext,
     ) -> Self {
         Self {
             arena,
@@ -117,6 +117,54 @@ impl<'ctx> IncludeResolver<'ctx> {
         Ok(self.arena.alloc_slice_copy(&merged))
     }
 
+    fn load_links(&mut self, current_canonical: &Path, decls: &'ctx [&'ctx Declaration<'ctx>]) {
+        for decl in decls {
+            let DeclarationKind::ExternLink { path } = decl.kind else {
+                continue;
+            };
+
+            let raw = self.interner_resolve(&path);
+            let joined = current_canonical
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(&raw);
+
+            let target = canonicalize_best_effort(&joined);
+
+            if !target.exists() {
+                self.errors.push(ResolveError::LinkError {
+                    message: "file doesn't exists".into(),
+                    src: self.named_src(),
+                    span: decl.span,
+                });
+                continue;
+            }
+
+            if !target.is_file() {
+                self.errors.push(ResolveError::LinkError {
+                    message: "path is a directory".into(),
+                    src: self.named_src(),
+                    span: decl.span,
+                });
+                continue;
+            }
+
+            if let Some(ext) = target.extension()
+                && ext == "c"
+            {
+            } else {
+                self.errors.push(ResolveError::LinkError {
+                    message: "file extension must be `.c`".into(),
+                    src: self.named_src(),
+                    span: decl.span,
+                });
+                continue;
+            }
+
+            let _ = self.context.paths.linked.insert(target);
+        }
+    }
+
     fn load_uses(
         &mut self,
         current_canonical: &Path,
@@ -190,6 +238,7 @@ impl<'ctx> IncludeResolver<'ctx> {
 
             visiting.insert(target_canonical.clone());
             self.load_uses(&target_canonical, target_decls, visiting);
+            self.load_links(&target_canonical, target_decls);
             visiting.remove(&target_canonical);
         }
     }

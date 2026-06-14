@@ -5,7 +5,7 @@ mod span;
 pub use span::LineOffsets;
 pub use span::LocationSpan;
 
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 
 pub struct MietteDriver {
     reporter: miette::GraphicalReportHandler,
@@ -60,4 +60,5 @@ pub enum CompilationOutput {
 pub struct PathsConfig {
     pub project_root: PathBuf,
     pub std_root: Option<PathBuf>,
+    pub linked: HashSet<PathBuf>,
 }
