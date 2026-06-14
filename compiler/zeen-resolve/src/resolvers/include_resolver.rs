@@ -238,8 +238,8 @@ impl<'ctx> IncludeResolver<'ctx> {
             );
 
             visiting.insert(target_canonical.clone());
-            self.load_uses(&target_canonical, target_decls, visiting);
             self.load_links(&target_canonical, target_decls);
+            self.load_uses(&target_canonical, target_decls, visiting);
             visiting.remove(&target_canonical);
         }
     }
