@@ -93,6 +93,7 @@ impl<'ctx> IncludeResolver<'ctx> {
 
         let mut visiting: HashSet<PathBuf> = HashSet::new();
         visiting.insert(root_canonical.clone());
+        self.load_links(&root_canonical, root_decls);
         self.load_uses(&root_canonical, root_decls, &mut visiting);
 
         if !self.errors.is_empty() {
