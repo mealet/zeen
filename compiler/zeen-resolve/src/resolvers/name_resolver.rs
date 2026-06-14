@@ -93,7 +93,7 @@ impl<'ctx> NameResolver<'ctx> {
         }
 
         for decl in decls {
-            // in future
+            self.resolve_decl(decl);
         }
 
         if !self.errors.is_empty() {
@@ -183,5 +183,9 @@ impl<'ctx> NameResolver<'ctx> {
             DeclarationKind::ImplementDecl { .. } => {}
             DeclarationKind::Use { .. } => {}
         }
+    }
+
+    fn resolve_decl(&mut self, decl: &'ctx Declaration<'ctx>) {
+        todo!()
     }
 }
