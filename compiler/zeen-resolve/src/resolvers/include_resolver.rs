@@ -28,13 +28,13 @@ pub struct IncludeResolver<'ctx> {
     modules: HashMap<PathBuf, RawModule<'ctx>>,
 
     src: Arc<String>,
-    filename: &'ctx str,
+    filename: Arc<String>,
     errors: Vec<ResolveError>,
 }
 
 impl<'ctx> IncludeResolver<'ctx> {
     pub fn new(
-        filename: &'ctx str,
+        filename: Arc<String>,
         src: Arc<String>,
 
         arena: &'ctx Bump,
@@ -71,7 +71,7 @@ impl<'ctx> IncludeResolver<'ctx> {
     fn named_src(&self) -> NamedSource<Arc<String>> {
         let src_ref = Arc::clone(&self.src);
 
-        miette::NamedSource::new(self.filename, src_ref)
+        miette::NamedSource::new(self.filename.as_str(), src_ref)
     }
 
     pub fn resolve(
@@ -265,10 +265,11 @@ impl<'ctx> IncludeResolver<'ctx> {
         #[derive(Eq, Hash, PartialEq, Clone, Copy)]
         enum NamespaceTag {
             Value,
-            Type
+            Type,
         };
 
-        let mut seen: HashMap<(NamespaceTag, Spur), (SourceSpan, &'ctx Declaration<'ctx>)> = HashMap::new();
+        let mut seen: HashMap<(NamespaceTag, Spur), (SourceSpan, &'ctx Declaration<'ctx>)> =
+            HashMap::new();
 
         for decl in merged {
             let entry: (NamespaceTag, Spur, SourceSpan) = match decl.kind {
@@ -315,7 +316,7 @@ impl<'ctx> IncludeResolver<'ctx> {
 
                 self.errors.push(ResolveError::DuplicateDefinition {
                     name,
-                    related: vec![first_definition, second_definition]
+                    related: vec![first_definition, second_definition],
                 });
             } else {
                 seen.insert((ns, name), (span, decl));
@@ -368,7 +369,7 @@ fn resolve_use_path(
             &segments[1..],
         ),
         "std" => match std_dir {
-            Some(dir) => (dir.to_path_buf(), &segments[1..]),
+            Some(dir) => (canonicalize_best_effort(dir), &segments[1..]),
             None => {
                 return Err(Box::new(ResolveError::StdlibNotConfigured {
                     src: current_src,
