@@ -30,6 +30,10 @@ pub struct NameResolver<'ctx> {
     errors: Vec<ResolveError>,
 }
 
+fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
+    matches!(param.ty.kind, TypeKind::SelfType)
+}
+
 impl<'ctx> NameResolver<'ctx> {
     pub fn new(
         filename: Arc<String>,
@@ -185,7 +189,27 @@ impl<'ctx> NameResolver<'ctx> {
         }
     }
 
+    // --> Declarations
+
     fn resolve_decl(&mut self, decl: &'ctx Declaration<'ctx>) {
+        todo!()
+    }
+
+    // --> Statements
+
+    fn resolve_stmt(&mut self, stmt: &'ctx Statement<'ctx>) {
+        todo!()
+    }
+
+    // --> Expressions
+
+    fn resolve_expr(&mut self, expr: &'ctx Expression<'ctx>) {
+        todo!()
+    }
+
+    // --> Types
+
+    fn resolve_type(&mut self, expr: &'ctx TypeExpr<'ctx>) {
         todo!()
     }
 }
