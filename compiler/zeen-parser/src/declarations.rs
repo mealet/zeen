@@ -442,7 +442,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::ExternLink { path },
-            span: link_kw.merge_span(string_token.span),
+            span: string_token.merge_span(start_span),
         });
 
         let _ = self.p.eat(TokenKind::Semicolon);
@@ -469,7 +469,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::ExternInclude { path },
-            span: include_kw.merge_span(string_token.span),
+            span: string_token.merge_span(start_span),
         });
 
         let _ = self.p.eat(TokenKind::Semicolon);
