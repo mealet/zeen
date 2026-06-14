@@ -11,7 +11,7 @@ pub enum ParserError {
     UnknownToken {
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("right here")]
+        #[label]
         span: SourceSpan,
     },
 
@@ -22,7 +22,7 @@ pub enum ParserError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("[`{token_kind}`]")]
+        #[label]
         span: SourceSpan,
     },
 
@@ -33,7 +33,7 @@ pub enum ParserError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("[`{token_kind}`]")]
+        #[label]
         span: SourceSpan,
     },
 
@@ -44,7 +44,7 @@ pub enum ParserError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("but found this")]
+        #[label]
         span: SourceSpan,
     },
 
@@ -55,7 +55,7 @@ pub enum ParserError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("ended up here")]
+        #[label]
         span: SourceSpan,
     },
 
@@ -76,11 +76,11 @@ pub enum ParserError {
     InvalidCharacterEscape {
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("this escape is invalid")]
+        #[label]
         span: SourceSpan,
     },
 
-    #[error("syntax error")]
+    #[error("syntax error: {label}")]
     #[diagnostic(severity(Error), code(zeen::parser::syntax_error))]
     SyntaxError {
         label: SmolStr,
@@ -90,11 +90,11 @@ pub enum ParserError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("{label}")]
+        #[label]
         span: SourceSpan,
     },
 
-    #[error("unknown data type")]
+    #[error("unknown data type: {label}")]
     #[diagnostic(severity(Error), code(zeen::parser::unknown_type))]
     UnknownType {
         label: SmolStr,
@@ -104,18 +104,18 @@ pub enum ParserError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("{label}")]
+        #[label]
         span: SourceSpan,
     },
 
-    #[error("this action is not supported")]
+    #[error("not supported: {label}")]
     #[diagnostic(severity(Error), code(zeen::parser::unsupported_action))]
     UnsupportedAction {
         label: SmolStr,
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("{label}")]
+        #[label]
         span: SourceSpan,
     },
 }

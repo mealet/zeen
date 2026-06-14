@@ -1,5 +1,5 @@
 use smol_str::SmolStr;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
@@ -19,7 +19,7 @@ pub enum ResolveError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("used here")]
+        #[label]
         span: SourceSpan,
     },
 
@@ -30,7 +30,7 @@ pub enum ResolveError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("include resolver returned io error")]
+        #[label]
         span: SourceSpan,
     },
 
@@ -39,10 +39,8 @@ pub enum ResolveError {
     DuplicateDefinition {
         name: SmolStr,
 
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("name `{name}` is already defined")]
-        span: SourceSpan,
+        #[related]
+        related: Vec<DuplicateLocation>,
     },
 
     #[error("standard library is not configured")]
@@ -50,7 +48,17 @@ pub enum ResolveError {
     StdlibNotConfigured {
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("unable to use `std` here")]
+        #[label]
         span: SourceSpan,
     },
+}
+
+#[derive(Debug, Error, Diagnostic, Clone)]
+#[error("definition here")]
+pub struct DuplicateLocation {
+    #[source_code]
+    pub src: NamedSource<String>,
+
+    #[label]
+    pub span: SourceSpan,
 }
