@@ -254,6 +254,83 @@ impl<'ctx> ImportResolver<'ctx> {
             }
         }
     }
+
+    fn check_collisions(&mut self, merged: &[&'ctx Declaration<'ctx>]) {
+        #[derive(Eq, Hash, PartialEq, Clone, Copy)]
+        enum NamespaceTag {
+            Value,
+            Type
+        };
+
+        let mut seen: HashMap<(NamespaceTag, Spur), (SourceSpan, &'ctx Declaration<'ctx>)> = HashMap::new();
+
+        for decl in merged {
+            let entry: (NamespaceTag, Spur, SourceSpan) = match decl.kind {
+                DeclarationKind::FnDecl { name, .. } => (NamespaceTag::Value, name.0, name.1),
+                DeclarationKind::StructDecl { name, .. } => (NamespaceTag::Type, name.0, name.1),
+                DeclarationKind::InterfaceDecl { name, .. } => (NamespaceTag::Type, name.0, name.1),
+                DeclarationKind::EnumDecl { name, .. } => (NamespaceTag::Value, name.0, name.1),
+                DeclarationKind::ExternVar { name, .. } => (NamespaceTag::Value, name.0, name.1),
+                _ => continue,
+            };
+
+            let (ns, name, span) = entry;
+
+            if let Some((first_span, first_decl)) = seen.get(&(ns, name)) {
+                let name = self.interner_resolve(&entry.1);
+
+                let first_definition = {
+                    let path = self.module_path_of(first_decl);
+
+                    let content = fs::read_to_string(&path).expect("why tf this happened");
+                    let filename = path.file_name().unwrap().to_string_lossy();
+
+                    let named_source = NamedSource::new(filename, content);
+
+                    crate::error::DuplicateLocation {
+                        src: named_source,
+                        span: *first_span,
+                    }
+                };
+
+                let second_definition = {
+                    let path = self.module_path_of(decl);
+
+                    let content = fs::read_to_string(&path).expect("why tf this happened");
+                    let filename = path.file_name().unwrap().to_string_lossy();
+
+                    let named_source = NamedSource::new(filename, content);
+
+                    crate::error::DuplicateLocation {
+                        src: named_source,
+                        span,
+                    }
+                };
+
+                self.errors.push(ResolveError::DuplicateDefinition {
+                    name,
+                    related: vec![first_definition, second_definition]
+                });
+            } else {
+                seen.insert((ns, name), (span, decl));
+            }
+        }
+    }
+
+    // fuck... i'll refactor this later (maybe)
+    fn module_path_of(&self, decl: &'ctx Declaration<'ctx>) -> PathBuf {
+        let target_ptr = decl as *const Declaration as usize;
+
+        for module in self.modules.values() {
+            for d in module.decls {
+                if (*d as *const Declaration as usize) == target_ptr {
+                    return module.canonical_path.clone();
+                }
+            }
+        }
+
+        PathBuf::new()
+    }
 }
 
 fn resolve_use_path(
