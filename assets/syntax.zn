@@ -24,7 +24,7 @@
     * i32
     * i64
     * isize (platform specific)
-  
+
   > Unsigned Integers
     * u8
     * u16
@@ -50,41 +50,35 @@
 
     * `const T` - constant types
     * `*T` - pointer type (can be combined: `const *T` / `*const T`)
-    
+
     * `[N]T` - array type (N - comptime size, T - element type)
     * `[]T` - slice type (T - element type)
 
     * `fn ABCD( T, T, .. ) T` - fn type (can be used in vtables, or closures)
 */
 
-/* ====@ Imports @==== */
+/* ====@ Includes @==== */
 
 /*
-  Imports are the core moduling tool for Zeen, main concept is to use
-  them as namespace-imports (like in Rust). Main keyword: `import`.
+  Includes are the core moduling tool for Zeen.
+  Concept is to include public exports from another module and use them with provided names.
 */
 
-// To simply import module `lib` and define its namespace use:
+// Keyword to include: `use`
 
-import lib;
-
-// From now all its public elements will be avaible as: lib.function, lib.structure and etc.
-// You can import it with special alias:
-
-import lib : hello;
-
-// Now this will work like: hello.function, hello.structure, ...
-// You can import its children and give them special aliases. Example:
-
-import std.string : std_string; /* will be avaible as `std_string` */
+use module; // `module.zn`
 
 /*
-  You can import modules from different directories, by default from project directory (where main file).
+  You can include modules from different directories.
   Here's extra keywords for modules dirs managing:
-  * `super` - go to the parent directory (".." analogue). Example: import super.module (`../module.zn`).
-  * `root` - go to project root directory. Example: import root.module (`PROJECT_ROOT_DIR/module.zn`).
-  * `std` / `core` - aliases for specialized Zeen libraries on your computer.
+  * `super` - go to the parent directory (".." analogue).
+  * `root` - go to project root directory.
+  * `std` - alias for specialized Zeen libraries on your computer.
 */
+
+use std.collections.vector; // `STD_PATH/collections/vector.zn`
+use root.module; // `PROJECT_ROOT/module.zn`
+use super.module; // `../module.zn`
 
 /* ====@ Externs @==== */
 
