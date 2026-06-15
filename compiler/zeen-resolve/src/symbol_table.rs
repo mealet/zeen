@@ -41,7 +41,7 @@ pub struct SymbolTable {
 }
 
 // (self / Self) defs
-type SelfDefs = (Option<DefId>, Option<DefId>);
+type SelfDefs = (DefId, Option<DefId>);
 
 impl SymbolTable {
     pub fn new() -> Self {
