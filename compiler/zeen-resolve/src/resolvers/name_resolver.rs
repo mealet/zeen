@@ -281,8 +281,8 @@ impl<'ctx> NameResolver<'ctx> {
                 self.table.pop();
             }
 
-            DeclarationKind::EnumDecl { name, variants, .. } => {
-
+            DeclarationKind::EnumDecl { .. } => {
+                // nothing to resolve (for now at least)
             }
 
             _ => todo!(),
