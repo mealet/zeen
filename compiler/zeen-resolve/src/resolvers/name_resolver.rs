@@ -314,7 +314,12 @@ impl<'ctx> NameResolver<'ctx> {
                 // nothing to resolve (for now at least)
             }
 
-            _ => todo!(),
+            DeclarationKind::ExternVar { ty, .. } => {
+                self.resolve_type(ty);
+            }
+
+            DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => {}
+            DeclarationKind::Use { .. } => {},
         }
     }
 
