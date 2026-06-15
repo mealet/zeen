@@ -207,7 +207,45 @@ impl<'ctx> NameResolver<'ctx> {
     // --> Declarations
 
     fn resolve_decl(&mut self, decl: &'ctx Declaration<'ctx>) {
-        todo!()
+        match decl.kind {
+            DeclarationKind::FnDecl {
+                generics,
+                params,
+                return_type,
+                body,
+                ..
+            } => {
+                self.table.push(ScopeKind::Function);
+                self.declare_generics(generics);
+
+                for param in params {
+                    self.resolve_type(param.ty);
+
+                    if let Some(name) = param.name {
+                        let def_id = self.define(DefInfo {
+                            name,
+                            kind: DefKind::Param,
+                            span: param.span,
+                            decl: None,
+                        });
+
+                        self.table.declare_value(name, def_id);
+                    }
+                }
+
+                if let Some(ret) = return_type {
+                    self.resolve_type(ret);
+                }
+
+                if let Some(body) = body {
+                    self.resolve_stmt(body);
+                }
+
+                self.table.pop();
+            }
+
+            _ => todo!(),
+        }
     }
 
     fn path_expr_to_type_def(&self, expr: &Expression) -> Option<DefId> {
