@@ -97,6 +97,10 @@ impl<'ctx> NameResolver<'ctx> {
         resolved.into()
     }
 
+    fn report(&mut self, error: ResolveError) {
+        self.errors.push(error);
+    }
+
     // -> resolve functions
 
     pub fn resolve_module(
@@ -279,6 +283,31 @@ impl<'ctx> NameResolver<'ctx> {
                 }
 
                 self.table.pop();
+            }
+
+            DeclarationKind::ImplementDecl { interface, object, methods } => {
+                self.resolve_expr(interface);
+                self.resolve_expr(object);
+
+                let object_def = self.path_expr_to_type_def(object);
+                let interface_def = self.path_expr_to_type_def(interface);
+
+                let mut methods_ids = Vec::new();
+
+                if let Some(self_def) = object_def {
+                    for method in methods {
+                        let method_id = self.resolve_method(method, self_def);
+                        methods_ids.push(method_id);
+                    }
+                } else {
+                    for method in methods {
+                        self.resolve_decl(method);
+                    }
+                }
+
+                if let (Some(obj), Some(iface)) = (object_def, interface_def) {
+                    self.result.impls.insert((obj, iface), methods_ids);
+                }
             }
 
             DeclarationKind::EnumDecl { .. } => {
