@@ -244,8 +244,108 @@ impl<'ctx> NameResolver<'ctx> {
                 self.table.pop();
             }
 
+            DeclarationKind::StructDecl {
+                name,
+                generics,
+                fields,
+                methods,
+                ..
+            } => {
+                let self_def = self
+                    .table
+                    .lookup_type(name.0)
+                    .expect("struct is not registered in name resolver pass 1");
+
+                self.table.push(ScopeKind::Block);
+                self.declare_generics(generics);
+
+                for field in fields {
+                    self.resolve_type(field.ty);
+                }
+
+                for method in methods {
+                    self.resolve_method(method, self_def);
+                }
+
+                self.table.pop();
+            }
+
             _ => todo!(),
         }
+    }
+
+    fn resolve_method(&mut self, method: &'ctx Declaration<'ctx>, self_def: DefId) -> DefId {
+        let DeclarationKind::FnDecl {
+            name,
+            generics,
+            params,
+            return_type,
+            body,
+            ..
+        } = method.kind
+        else {
+            unreachable!("method must be FnDecl")
+        };
+
+        let method_id = self.define(DefInfo {
+            name: name.0,
+            kind: DefKind::Function,
+            span: name.1,
+            decl: Some(NodeKey::from_decl(method)),
+        });
+
+        let self_param = params
+            .first()
+            .filter(|param| is_self_param(param))
+            .and_then(|param| param.name);
+
+        let self_param_id = self_param.map(|name| {
+            self.define(DefInfo {
+                name,
+                kind: DefKind::Param,
+                span: method.span,
+                decl: None,
+            })
+        });
+
+        self.table.push(ScopeKind::Method {
+            self_def,
+            self_param: self_param_id,
+        });
+        self.declare_generics(generics);
+
+        for param in params {
+            self.resolve_type(param.ty);
+
+            let Some(pname) = param.name else { continue };
+
+            if is_self_param(param) {
+                if let Some(id) = self_param_id {
+                    self.table.declare_value(pname, id);
+                }
+                continue;
+            }
+
+            let def_id = self.define(DefInfo {
+                name: pname,
+                kind: DefKind::Param,
+                span: param.span,
+                decl: None,
+            });
+            self.table.declare_value(pname, def_id);
+        }
+
+        if let Some(ret) = return_type {
+            self.resolve_type(ret);
+        }
+
+        if let Some(body) = body {
+            self.resolve_stmt(body);
+        }
+
+        self.table.pop();
+
+        method_id
     }
 
     fn path_expr_to_type_def(&self, expr: &Expression) -> Option<DefId> {

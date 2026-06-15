@@ -11,7 +11,7 @@ pub enum ScopeKind {
     Function,
     Block,
     Method {
-        self_def: Option<DefId>,
+        self_def: DefId,
         self_param: Option<DefId>,
     },
 }
