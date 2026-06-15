@@ -270,6 +270,21 @@ impl<'ctx> NameResolver<'ctx> {
                 self.table.pop();
             }
 
+            DeclarationKind::InterfaceDecl { generics, methods, .. } => {
+                self.table.push(ScopeKind::Block);
+                self.declare_generics(generics);
+
+                for method in methods {
+                    self.resolve_decl(method);
+                }
+
+                self.table.pop();
+            }
+
+            DeclarationKind::EnumDecl { name, variants, .. } => {
+
+            }
+
             _ => todo!(),
         }
     }
