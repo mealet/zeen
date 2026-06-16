@@ -603,6 +603,17 @@ impl<'ctx> NameResolver<'ctx> {
                 self.resolve_expr(object);
                 self.resolve_expr(index);
             }
+            
+            ExpressionKind::StructInit { ty, fields } => {
+                self.resolve_expr(ty);
+
+                if let Some(fields) = fields {
+                    for field in fields {
+                        // fields names left for type checker
+                        self.resolve_expr(field.value);
+                    }
+                }
+            }
 
             _ => todo!("all expressions must be handled")
         }
