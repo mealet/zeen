@@ -474,6 +474,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeen-hir"
+version = "0.0.0"
+
+[[package]]
 name = "zeen-lexer"
 version = "0.0.0"
 dependencies = [
