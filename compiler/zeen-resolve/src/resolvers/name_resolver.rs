@@ -551,6 +551,39 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
+            ExpressionKind::Macro(_) => {},
+
+            ExpressionKind::Binary { lhs, rhs, .. } => {
+                self.resolve_expr(lhs);
+                self.resolve_expr(rhs);
+            }
+
+            ExpressionKind::Unary { expr, .. } => {
+                self.resolve_expr(expr);
+            }
+
+            ExpressionKind::Call { callee, args } => {
+                self.resolve_expr(callee);
+
+                for arg in args {
+                    self.resolve_expr(arg);
+                }
+            }
+
+            ExpressionKind::If { condition, then_block, else_block } => {
+                self.resolve_expr(condition);
+
+                self.table.push(ScopeKind::Block);
+                self.resolve_stmt(then_block);
+                self.table.pop();
+
+                if let Some(else_block) = else_block {
+                    self.table.push(ScopeKind::Block);
+                    self.resolve_stmt(else_block);
+                    self.table.pop();
+                }
+            }
+
             _ => todo!("all expressions must be handled")
         }
     }
