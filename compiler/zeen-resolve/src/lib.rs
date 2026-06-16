@@ -45,7 +45,9 @@ pub fn resolve(
     )?;
 
     let mut name_resolver = name_resolver::NameResolver::new(filename, src, arena, interner);
-    name_resolver.resolve_module(resolved_program)?;
+    name_resolver.resolve_module(resolved_program);
+
+    let resolution_result = name_resolver.finish()?;
 
     Ok(())
 }
