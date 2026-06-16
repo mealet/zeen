@@ -621,6 +621,20 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
+            ExpressionKind::Block(stmts) => {
+                self.table.push(ScopeKind::Block);
+
+                for stmt in stmts {
+                    self.resolve_stmt(stmt);
+                }
+
+                self.table.pop();
+            }
+
+            ExpressionKind::Type(ty) => {
+                self.resolve_type(ty);
+            }
+
             _ => todo!("all expressions must be handled")
         }
     }
