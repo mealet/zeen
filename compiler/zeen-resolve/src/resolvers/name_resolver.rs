@@ -687,7 +687,25 @@ impl<'ctx> NameResolver<'ctx> {
 
     // --> Types
 
-    fn resolve_type(&mut self, expr: &'ctx TypeExpr<'ctx>) {
-        todo!()
+    fn resolve_type(&mut self, ty: &'ctx TypeExpr<'ctx>) {
+        match ty.kind {
+            TypeKind::Builtin(_) | TypeKind::VaArgs => {}
+
+            TypeKind::SelfType | TypeKind::SelfAlias => {
+                let resolution = match self.table.enclosing_method() {
+                    Some((self_def, _)) => Resolution::SelfType(self_def),
+                    None => {
+                        self.errors.push(ResolveError::UnresolvedSelf {
+                            src: self.named_src(),
+                            span: ty.span,
+                        });
+
+                        Resolution::Error
+                    }
+                };
+            }
+
+            _ => todo!(),
+        }
     }
 }
