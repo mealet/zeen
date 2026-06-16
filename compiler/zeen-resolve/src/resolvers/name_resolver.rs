@@ -584,6 +584,14 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
+            ExpressionKind::Switch { object, .. } => {
+                self.report(ResolveError::DisabledFeature {
+                    reason: "not supported yet".into(),
+                    src: self.named_src(),
+                    span: object.span,
+                });
+            },
+
             _ => todo!("all expressions must be handled")
         }
     }
