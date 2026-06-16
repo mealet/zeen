@@ -274,7 +274,9 @@ impl<'ctx> NameResolver<'ctx> {
                 self.table.pop();
             }
 
-            DeclarationKind::InterfaceDecl { generics, methods, .. } => {
+            DeclarationKind::InterfaceDecl {
+                generics, methods, ..
+            } => {
                 self.table.push(ScopeKind::Block);
                 self.declare_generics(generics);
 
@@ -285,7 +287,11 @@ impl<'ctx> NameResolver<'ctx> {
                 self.table.pop();
             }
 
-            DeclarationKind::ImplementDecl { interface, object, methods } => {
+            DeclarationKind::ImplementDecl {
+                interface,
+                object,
+                methods,
+            } => {
                 self.resolve_expr(interface);
                 self.resolve_expr(object);
 
@@ -319,7 +325,7 @@ impl<'ctx> NameResolver<'ctx> {
             }
 
             DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => {}
-            DeclarationKind::Use { .. } => {},
+            DeclarationKind::Use { .. } => {}
         }
     }
 
@@ -445,7 +451,12 @@ impl<'ctx> NameResolver<'ctx> {
 
     fn resolve_stmt(&mut self, stmt: &'ctx Statement<'ctx>) {
         match stmt.kind {
-            StatementKind::Let { name, explicit_type, value, is_const } => {
+            StatementKind::Let {
+                name,
+                explicit_type,
+                value,
+                is_const,
+            } => {
                 if let Some(ty) = explicit_type {
                     self.resolve_type(ty);
                 }
@@ -462,8 +473,7 @@ impl<'ctx> NameResolver<'ctx> {
                 });
                 self.table.declare_value(name, def_id);
 
-                self
-                    .result
+                self.result
                     .expr_bindings
                     .insert(NodeKey::from_stmt(stmt), Resolution::Def(def_id));
             }
