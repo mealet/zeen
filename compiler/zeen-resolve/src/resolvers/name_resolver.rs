@@ -444,7 +444,32 @@ impl<'ctx> NameResolver<'ctx> {
     // --> Statements
 
     fn resolve_stmt(&mut self, stmt: &'ctx Statement<'ctx>) {
-        todo!()
+        match stmt.kind {
+            StatementKind::Let { name, explicit_type, value, is_const } => {
+                if let Some(ty) = explicit_type {
+                    self.resolve_type(ty);
+                }
+
+                if let Some(value) = value {
+                    self.resolve_expr(value);
+                }
+
+                let def_id = self.define(DefInfo {
+                    name,
+                    kind: DefKind::Variable { is_const },
+                    span: stmt.span,
+                    decl: None,
+                });
+                self.table.declare_value(name, def_id);
+
+                self
+                    .result
+                    .expr_bindings
+                    .insert(NodeKey::from_stmt(stmt), Resolution::Def(def_id));
+            }
+
+            _ => todo!("all statements must be implemented!"),
+        }
     }
 
     // --> Expressions
