@@ -498,7 +498,7 @@ impl<'ctx> NameResolver<'ctx> {
                 self.resolve_stmt(body);
             }
 
-            StatementKind::Break => {},
+            StatementKind::Break => {}
 
             StatementKind::While { condition, block } => {
                 self.resolve_expr(condition);
@@ -507,8 +507,12 @@ impl<'ctx> NameResolver<'ctx> {
                 self.resolve_stmt(block);
                 self.table.pop();
             }
-            
-            StatementKind::For { varname, iterator, block } => {
+
+            StatementKind::For {
+                varname,
+                iterator,
+                block,
+            } => {
                 self.resolve_expr(iterator);
 
                 self.table.push(ScopeKind::Block);
@@ -535,7 +539,7 @@ impl<'ctx> NameResolver<'ctx> {
 
     fn resolve_expr(&mut self, expr: &'ctx Expression<'ctx>) {
         match expr.kind {
-            ExpressionKind::Literal(_) => {},
+            ExpressionKind::Literal(_) => {}
 
             ExpressionKind::Ident { name, generic_args } => {
                 let resolution = self.resolve_ident(name, expr.span);
@@ -551,7 +555,7 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
-            ExpressionKind::Macro(_) => {},
+            ExpressionKind::Macro(_) => {}
 
             ExpressionKind::Binary { lhs, rhs, .. } => {
                 self.resolve_expr(lhs);
@@ -570,7 +574,11 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
-            ExpressionKind::If { condition, then_block, else_block } => {
+            ExpressionKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 self.resolve_expr(condition);
 
                 self.table.push(ScopeKind::Block);
@@ -590,7 +598,7 @@ impl<'ctx> NameResolver<'ctx> {
                     src: self.named_src(),
                     span: object.span,
                 });
-            },
+            }
 
             ExpressionKind::FieldAccess { object, field } => {
                 self.resolve_expr(object);
@@ -603,7 +611,7 @@ impl<'ctx> NameResolver<'ctx> {
                 self.resolve_expr(object);
                 self.resolve_expr(index);
             }
-            
+
             ExpressionKind::StructInit { ty, fields } => {
                 self.resolve_expr(ty);
 
@@ -649,7 +657,7 @@ impl<'ctx> NameResolver<'ctx> {
 
                     Resolution::Error
                 }
-            }
+            };
         }
 
         if name == self.interner_intern("Self") {
@@ -663,7 +671,7 @@ impl<'ctx> NameResolver<'ctx> {
 
                     Resolution::Error
                 }
-            }
+            };
         }
 
         if let Some(def_id) = self.table.lookup_value(name) {
