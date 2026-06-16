@@ -195,7 +195,7 @@ impl<'ctx> NameResolver<'ctx> {
             }
 
             DeclarationKind::ExternInclude { .. } => {
-                self.errors.push(ResolveError::DisabledFeature {
+                self.report(ResolveError::DisabledFeature {
                     reason: "not supported yet".into(),
                     src: self.named_src(),
                     span: decl.span,
@@ -436,7 +436,7 @@ impl<'ctx> NameResolver<'ctx> {
                     if self.table.lookup_type(bound.0).is_none() {
                         let bound_str = self.interner_resolve(&bound.0);
 
-                        self.errors.push(ResolveError::UnresolvedType {
+                        self.report(ResolveError::UnresolvedType {
                             name: bound_str,
                             src: self.named_src(),
                             span: bound.1,
@@ -534,7 +534,73 @@ impl<'ctx> NameResolver<'ctx> {
     // --> Expressions
 
     fn resolve_expr(&mut self, expr: &'ctx Expression<'ctx>) {
-        todo!()
+        match expr.kind {
+            ExpressionKind::Literal(_) => {},
+
+            ExpressionKind::Ident { name, generic_args } => {
+                let resolution = self.resolve_ident(name, expr.span);
+
+                self.result
+                    .expr_bindings
+                    .insert(NodeKey::from_expr(expr), resolution);
+
+                if let Some(args) = generic_args {
+                    for arg in args {
+                        self.resolve_type(arg);
+                    }
+                }
+            }
+
+            _ => todo!("all expressions must be handled")
+        }
+    }
+
+    fn resolve_ident(&mut self, name: Spur, span: SourceSpan) -> Resolution {
+        if name == self.interner_intern("self") {
+            return match self.table.enclosing_method() {
+                Some((_, Some(self_param))) => Resolution::SelfValue(self_param),
+                _ => {
+                    self.report(ResolveError::UnresolvedSelf {
+                        src: self.named_src(),
+                        span,
+                    });
+
+                    Resolution::Error
+                }
+            }
+        }
+
+        if name == self.interner_intern("Self") {
+            return match self.table.enclosing_method() {
+                Some((self_def, _)) => Resolution::SelfType(self_def),
+                _ => {
+                    self.report(ResolveError::UnresolvedSelf {
+                        src: self.named_src(),
+                        span,
+                    });
+
+                    Resolution::Error
+                }
+            }
+        }
+
+        if let Some(def_id) = self.table.lookup_value(name) {
+            return Resolution::Def(def_id);
+        }
+
+        if let Some(def_id) = self.table.lookup_type(name) {
+            return Resolution::Def(def_id);
+        }
+
+        let name = self.interner_resolve(&name);
+
+        self.report(ResolveError::UnresolvedIdent {
+            name,
+            src: self.named_src(),
+            span,
+        });
+
+        Resolution::Error
     }
 
     // --> Types
