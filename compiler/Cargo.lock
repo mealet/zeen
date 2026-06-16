@@ -476,6 +476,15 @@ dependencies = [
 [[package]]
 name = "zeen-hir"
 version = "0.0.0"
+dependencies = [
+ "lasso",
+ "miette",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-resolve",
+]
 
 [[package]]
 name = "zeen-lexer"

@@ -8,3 +8,10 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+lasso = "0.7.3"
+miette = "7.6.0"
+thiserror = "2.0.18"
+smol_str = "0.3.6"
+zeen-ast = {path = "../zeen-ast"}
+zeen-driver = {path = "../zeen-driver"}
+zeen-resolve = {path = "../zeen-resolve"}
