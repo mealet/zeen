@@ -740,6 +740,18 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
+            TypeKind::Const(inner) | TypeKind::Pointer(inner) => {
+                self.resolve_type(inner);
+            }
+
+            TypeKind::Array { element, len } => {
+                self.resolve_type(element);
+
+                if let Some(len) = len {
+                    self.resolve_expr(len);
+                }
+            }
+
             _ => todo!(),
         }
     }
