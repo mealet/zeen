@@ -32,7 +32,17 @@ pub struct NameResolver<'ctx> {
 }
 
 fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
-    matches!(param.ty.kind, TypeKind::SelfType)
+    is_self_type_kind(&param.ty.kind)
+}
+
+fn is_self_type_kind(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::Const(ty) => is_self_type_kind(&ty.kind),
+
+        TypeKind::SelfType => true,
+
+        _ => false,
+    }
 }
 
 impl<'ctx> NameResolver<'ctx> {
@@ -352,7 +362,8 @@ impl<'ctx> NameResolver<'ctx> {
         let self_param = params
             .first()
             .filter(|param| is_self_param(param))
-            .and_then(|param| param.name);
+            .and_then(|param| param.name)
+            .or(Some(self.interner_intern("self")));
 
         let self_param_id = self_param.map(|name| {
             self.define(DefInfo {
