@@ -592,6 +592,18 @@ impl<'ctx> NameResolver<'ctx> {
                 });
             },
 
+            ExpressionKind::FieldAccess { object, field } => {
+                self.resolve_expr(object);
+
+                // left for type checker, cuz NameResolver doesn't know any fields of objects
+                let _ = field;
+            }
+
+            ExpressionKind::SliceAccess { object, index } => {
+                self.resolve_expr(object);
+                self.resolve_expr(index);
+            }
+
             _ => todo!("all expressions must be handled")
         }
     }
