@@ -478,7 +478,56 @@ impl<'ctx> NameResolver<'ctx> {
                     .insert(NodeKey::from_stmt(stmt), Resolution::Def(def_id));
             }
 
-            _ => todo!("all statements must be implemented!"),
+            StatementKind::Assign { object, value } => {
+                self.resolve_expr(object);
+                self.resolve_expr(value);
+            }
+
+            StatementKind::CompoundAssign { object, value, .. } => {
+                self.resolve_expr(object);
+                self.resolve_expr(value);
+            }
+
+            StatementKind::Return { value } => {
+                if let Some(value) = value {
+                    self.resolve_expr(value);
+                }
+            }
+
+            StatementKind::Defer { body } => {
+                self.resolve_stmt(body);
+            }
+
+            StatementKind::Break => {},
+
+            StatementKind::While { condition, block } => {
+                self.resolve_expr(condition);
+
+                self.table.push(ScopeKind::Block);
+                self.resolve_stmt(block);
+                self.table.pop();
+            }
+            
+            StatementKind::For { varname, iterator, block } => {
+                self.resolve_expr(iterator);
+
+                self.table.push(ScopeKind::Block);
+
+                let def_id = self.define(DefInfo {
+                    name: varname.0,
+                    kind: DefKind::Variable { is_const: false },
+                    span: varname.1,
+                    decl: None,
+                });
+                self.table.declare_value(varname.0, def_id);
+
+                self.resolve_stmt(block);
+                self.table.pop();
+            }
+
+            StatementKind::Expr(expr) => {
+                self.resolve_expr(expr);
+            }
         }
     }
 
