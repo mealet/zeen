@@ -634,8 +634,6 @@ impl<'ctx> NameResolver<'ctx> {
             ExpressionKind::Type(ty) => {
                 self.resolve_type(ty);
             }
-
-            _ => todo!("all expressions must be handled")
         }
     }
 
