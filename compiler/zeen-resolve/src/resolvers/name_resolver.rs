@@ -615,6 +615,12 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
+            ExpressionKind::ArrayInit { elements } => {
+                for elem in elements {
+                    self.resolve_expr(elem);
+                }
+            }
+
             _ => todo!("all expressions must be handled")
         }
     }
