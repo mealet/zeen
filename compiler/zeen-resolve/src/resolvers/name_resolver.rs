@@ -752,7 +752,27 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
-            _ => todo!(),
+            TypeKind::Fn {
+                params,
+                generic_args,
+                ret,
+            } => {
+                for param in params {
+                    self.resolve_type(param);
+                }
+
+                // yeah, we really need this condition to correctly resolve return type
+                if let Some(generics) = generic_args {
+                    self.table.push(ScopeKind::Block);
+
+                    self.declare_generics(Some(generics));
+                    self.resolve_type(ret);
+
+                    self.table.pop();
+                } else {
+                    self.resolve_type(ret);
+                }
+            }
         }
     }
 }
