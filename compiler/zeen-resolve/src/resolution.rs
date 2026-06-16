@@ -15,6 +15,10 @@ impl NodeKey {
         NodeKey(value as *const _ as usize)
     }
 
+    pub fn from_type(value: &TypeExpr) -> Self {
+        NodeKey(value as *const _ as usize)
+    }
+
     pub fn from_stmt(value: &Statement) -> Self {
         NodeKey(value as *const _ as usize)
     }

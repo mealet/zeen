@@ -713,6 +713,33 @@ impl<'ctx> NameResolver<'ctx> {
                 };
             }
 
+            TypeKind::Named { name, generic_args } => {
+                let resolution = match self.table.lookup_type(name) {
+                    Some(def_id) => Resolution::Def(def_id),
+                    None => {
+                        let name = self.interner_resolve(&name);
+
+                        self.errors.push(ResolveError::UnresolvedType {
+                            name,
+                            src: self.named_src(),
+                            span: ty.span,
+                        });
+
+                        Resolution::Error
+                    }
+                };
+
+                self.result
+                    .type_bindings
+                    .insert(NodeKey::from_type(ty), resolution);
+
+                if let Some(args) = generic_args {
+                    for arg in args {
+                        self.resolve_type(arg);
+                    }
+                }
+            }
+
             _ => todo!(),
         }
     }
