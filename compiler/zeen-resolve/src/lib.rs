@@ -14,6 +14,8 @@ use resolvers::{include_resolver, name_resolver};
 use zeen_ast::Declaration;
 use zeen_driver::CompilationContext;
 
+pub use resolution::{DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult};
+
 mod error;
 mod resolution;
 mod resolvers;
