@@ -15,3 +15,6 @@ pub use types::{TypeExpr, TypeKind};
 // members instead of "boxing" them on heap.
 
 // NOTE: `Spur` is a key for `lasso` string interner.
+
+// TODO: Replace spans in AST members with special structs, that keeps span +
+// NamedSource<Arc<String>>, will be necessary on error messages after include resolving.
