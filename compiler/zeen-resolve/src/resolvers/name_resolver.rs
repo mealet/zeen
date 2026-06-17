@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use lasso::{Rodeo, Spur};
-use miette::SourceSpan;
+use miette::{NamedSource, SourceSpan};
 use smol_str::SmolStr;
 
 use std::sync::{Arc, Mutex};
@@ -24,7 +24,9 @@ pub struct NameResolver<'ctx> {
 
     table: SymbolTable,
     result: ResolutionResult,
+
     next_def_id: u32,
+    current_src: NamedSource<Arc<String>>,
 
     src: Arc<String>,
     filename: Arc<String>,
@@ -59,7 +61,9 @@ impl<'ctx> NameResolver<'ctx> {
 
             table: SymbolTable::new(),
             result: ResolutionResult::default(),
+
             next_def_id: 0,
+            current_src: NamedSource::new(filename.as_str(), src.clone()),
 
             src,
             filename,
@@ -88,9 +92,7 @@ impl<'ctx> NameResolver<'ctx> {
     }
 
     fn named_src(&self) -> miette::NamedSource<Arc<String>> {
-        let src_ref = Arc::clone(&self.src);
-
-        miette::NamedSource::new(self.filename.as_str(), src_ref)
+        self.current_src.clone()
     }
 
     fn interner_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
@@ -129,7 +131,7 @@ impl<'ctx> NameResolver<'ctx> {
                 let def_id = self.define(DefInfo {
                     name: name.0,
                     kind: DefKind::Function,
-                    span: name.1,
+                    span: (name.1, decl.span.src()).into(),
                     decl: Some(NodeKey::from_decl(decl)),
                 });
 
@@ -140,7 +142,7 @@ impl<'ctx> NameResolver<'ctx> {
                 let def_id = self.define(DefInfo {
                     name: name.0,
                     kind: DefKind::Struct,
-                    span: name.1,
+                    span: (name.1, decl.span.src()).into(),
                     decl: Some(NodeKey::from_decl(decl)),
                 });
 
@@ -151,7 +153,7 @@ impl<'ctx> NameResolver<'ctx> {
                 let def_id = self.define(DefInfo {
                     name: name.0,
                     kind: DefKind::Interface,
-                    span: name.1,
+                    span: (name.1, decl.span.src()).into(),
                     decl: Some(NodeKey::from_decl(decl)),
                 });
 
@@ -162,7 +164,7 @@ impl<'ctx> NameResolver<'ctx> {
                 let def_id = self.define(DefInfo {
                     name: name.0,
                     kind: DefKind::Enum,
-                    span: name.1,
+                    span: (name.1, decl.span.src()).into(),
                     decl: Some(NodeKey::from_decl(decl)),
                 });
 
@@ -172,7 +174,7 @@ impl<'ctx> NameResolver<'ctx> {
                     let variant_id = self.define(DefInfo {
                         name: variant.name,
                         kind: DefKind::EnumVariant,
-                        span: variant.span,
+                        span: (variant.span, decl.span.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
                     });
 
@@ -184,7 +186,7 @@ impl<'ctx> NameResolver<'ctx> {
                 let def_id = self.define(DefInfo {
                     name: name.0,
                     kind: DefKind::ExternVar,
-                    span: name.1,
+                    span: (name.1, decl.span.src()).into(),
                     decl: Some(NodeKey::from_decl(decl)),
                 });
 
@@ -194,8 +196,8 @@ impl<'ctx> NameResolver<'ctx> {
             DeclarationKind::ExternInclude { .. } => {
                 self.report(ResolveError::DisabledFeature {
                     reason: "not supported yet".into(),
-                    src: self.named_src(),
-                    span: decl.span,
+                    src: decl.span.src(),
+                    span: decl.span.span,
                 });
             }
 
@@ -208,6 +210,8 @@ impl<'ctx> NameResolver<'ctx> {
     // --> Declarations
 
     fn resolve_decl(&mut self, decl: &'ctx Declaration<'ctx>) {
+        self.current_src = decl.span.src();
+
         match decl.kind {
             DeclarationKind::FnDecl {
                 generics,
@@ -217,7 +221,7 @@ impl<'ctx> NameResolver<'ctx> {
                 ..
             } => {
                 self.table.push(ScopeKind::Function);
-                self.declare_generics(generics);
+                self.declare_generics(generics, &decl.span.src);
 
                 for param in params {
                     self.resolve_type(param.ty);
@@ -226,7 +230,7 @@ impl<'ctx> NameResolver<'ctx> {
                         let def_id = self.define(DefInfo {
                             name,
                             kind: DefKind::Param,
-                            span: param.span,
+                            span: (param.span, decl.span.src()).into(),
                             decl: None,
                         });
 
@@ -258,7 +262,7 @@ impl<'ctx> NameResolver<'ctx> {
                     .expect("struct is not registered in name resolver pass 1");
 
                 self.table.push(ScopeKind::Block);
-                self.declare_generics(generics);
+                self.declare_generics(generics, &decl.span.src);
 
                 for field in fields {
                     self.resolve_type(field.ty);
@@ -275,7 +279,7 @@ impl<'ctx> NameResolver<'ctx> {
                 generics, methods, ..
             } => {
                 self.table.push(ScopeKind::Block);
-                self.declare_generics(generics);
+                self.declare_generics(generics, &decl.span.src);
 
                 for method in methods {
                     self.resolve_decl(method);
@@ -342,7 +346,7 @@ impl<'ctx> NameResolver<'ctx> {
         let method_id = self.define(DefInfo {
             name: name.0,
             kind: DefKind::Function,
-            span: name.1,
+            span: (name.1, self.named_src()).into(),
             decl: Some(NodeKey::from_decl(method)),
         });
 
@@ -356,7 +360,7 @@ impl<'ctx> NameResolver<'ctx> {
             self.define(DefInfo {
                 name,
                 kind: DefKind::Param,
-                span: method.span,
+                span: method.span.clone(),
                 decl: None,
             })
         });
@@ -365,7 +369,7 @@ impl<'ctx> NameResolver<'ctx> {
             self_def,
             self_param: self_param_id,
         });
-        self.declare_generics(generics);
+        self.declare_generics(generics, &method.span.src);
 
         for param in params {
             self.resolve_type(param.ty);
@@ -382,7 +386,7 @@ impl<'ctx> NameResolver<'ctx> {
             let def_id = self.define(DefInfo {
                 name: pname,
                 kind: DefKind::Param,
-                span: param.span,
+                span: (param.span, method.span.src()).into(),
                 decl: None,
             });
             self.table.declare_value(pname, def_id);
@@ -416,14 +420,18 @@ impl<'ctx> NameResolver<'ctx> {
         }
     }
 
-    fn declare_generics(&mut self, generics: Option<&[GenericType]>) {
+    fn declare_generics(
+        &mut self,
+        generics: Option<&[GenericType]>,
+        current_src: &miette::NamedSource<Arc<String>>,
+    ) {
         let Some(generics) = generics else { return };
 
         for generic in generics {
             let def_id = self.define(DefInfo {
                 name: generic.name.0,
                 kind: DefKind::GenericParam,
-                span: generic.name.1,
+                span: (generic.name.1, current_src.clone()).into(),
                 decl: None,
             });
 
@@ -436,7 +444,7 @@ impl<'ctx> NameResolver<'ctx> {
 
                         self.report(ResolveError::UnresolvedType {
                             name: bound_str,
-                            src: self.named_src(),
+                            src: current_src.clone(),
                             span: bound.1,
                         });
                     }
@@ -466,7 +474,7 @@ impl<'ctx> NameResolver<'ctx> {
                 let def_id = self.define(DefInfo {
                     name,
                     kind: DefKind::Variable { is_const },
-                    span: stmt.span,
+                    span: (stmt.span, self.named_src()).into(),
                     decl: None,
                 });
                 self.table.declare_value(name, def_id);
@@ -518,7 +526,7 @@ impl<'ctx> NameResolver<'ctx> {
                 let def_id = self.define(DefInfo {
                     name: varname.0,
                     kind: DefKind::Variable { is_const: false },
-                    span: varname.1,
+                    span: (varname.1, self.named_src()).into(),
                     decl: None,
                 });
                 self.table.declare_value(varname.0, def_id);
@@ -763,7 +771,7 @@ impl<'ctx> NameResolver<'ctx> {
                 if let Some(generics) = generic_args {
                     self.table.push(ScopeKind::Block);
 
-                    self.declare_generics(Some(generics));
+                    self.declare_generics(Some(generics), &self.named_src());
                     self.resolve_type(ret);
 
                     self.table.pop();

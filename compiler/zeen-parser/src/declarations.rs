@@ -185,7 +185,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 is_pub: is_pub.0,
                 is_extern: is_extern.0,
             },
-            span,
+            span: (span, self.p.named_src()).into(),
         });
 
         Some(decl)
@@ -304,7 +304,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 fields,
                 methods,
             },
-            span,
+            span: (span, self.p.named_src()).into(),
         });
 
         Some(decl)
@@ -359,7 +359,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 variants,
                 is_pub: is_pub.0,
             },
-            span: close_brace.merge_span(start_span),
+            span: (close_brace.merge_span(start_span), self.p.named_src()).into(),
         });
 
         Some(decl)
@@ -417,7 +417,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::Use { module },
-            span: use_kw.merge_span(end),
+            span: (use_kw.merge_span(end), self.p.named_src()).into(),
         });
 
         Some(decl)
@@ -443,7 +443,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::ExternLink { path },
-            span: string_token.merge_span(start_span),
+            span: (string_token.merge_span(start_span), self.p.named_src()).into(),
         });
 
         let _ = self.p.eat(TokenKind::Semicolon);
@@ -471,7 +471,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::ExternInclude { path },
-            span: string_token.merge_span(start_span),
+            span: (string_token.merge_span(start_span), self.p.named_src()).into(),
         });
 
         let _ = self.p.eat(TokenKind::Semicolon);
@@ -529,7 +529,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 generics,
                 methods,
             },
-            span,
+            span: (span, self.p.named_src()).into(),
         });
 
         Some(decl)
@@ -580,7 +580,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 object,
                 methods,
             },
-            span,
+            span: (span, self.p.named_src()).into(),
         });
 
         Some(decl)
@@ -607,7 +607,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::ExternVar { name, ty },
-            span: ty.merge_span(start_span),
+            span: (ty.merge_span(start_span), self.p.named_src()).into(),
         });
 
         Some(decl)

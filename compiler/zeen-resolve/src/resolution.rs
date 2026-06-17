@@ -2,7 +2,7 @@ use lasso::Spur;
 use miette::SourceSpan;
 use std::collections::HashMap;
 
-use zeen_ast::{Declaration, Expression, Statement, TypeExpr};
+use zeen_ast::{Declaration, Expression, Source, Statement, TypeExpr};
 
 /// A simple representation of allocated AST node as a key.
 /// SAFETY: This thing is very dangerous, can be used when you sure your object is live as long as
@@ -48,7 +48,7 @@ pub enum Resolution {
 pub struct DefInfo {
     pub name: Spur,
     pub kind: DefKind,
-    pub span: SourceSpan,
+    pub span: Source,
     pub decl: Option<NodeKey>, // may be useful
 }
 

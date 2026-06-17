@@ -1,18 +1,19 @@
 use lasso::Spur;
 use miette::SourceSpan;
 
-use crate::{expressions::Expression, statements::Statement, types::TypeExpr};
+use crate::{Source, expressions::Expression, statements::Statement, types::TypeExpr};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Declaration<'arena> {
     pub kind: DeclarationKind<'arena>,
-    pub span: SourceSpan,
+    pub span: Source,
 }
 
 impl Declaration<'_> {
     pub fn merge_span(&self, other: SourceSpan) -> SourceSpan {
-        let start = self.span.offset().min(other.offset());
-        let end = (self.span.offset() + self.span.len()).max(other.offset() + other.len());
+        let start = self.span.span.offset().min(other.offset());
+        let end =
+            (self.span.span.offset() + self.span.span.len()).max(other.offset() + other.len());
 
         SourceSpan::new(start.into(), end - start)
     }
