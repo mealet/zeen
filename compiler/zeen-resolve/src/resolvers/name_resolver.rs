@@ -91,6 +91,12 @@ impl<'ctx> NameResolver<'ctx> {
         id
     }
 
+    fn define_at(&mut self, key: NodeKey, info: DefInfo) -> DefId {
+        let id = self.define(info);
+        self.result.binding_sites.insert(key, id);
+        id
+    }
+
     fn named_src(&self) -> miette::NamedSource<Arc<String>> {
         self.current_src.clone()
     }
@@ -171,12 +177,15 @@ impl<'ctx> NameResolver<'ctx> {
                 self.table.declare_type(name.0, def_id);
 
                 for variant in variants {
-                    let variant_id = self.define(DefInfo {
-                        name: variant.name,
-                        kind: DefKind::EnumVariant,
-                        span: (variant.span, decl.span.src()).into(),
-                        decl: Some(NodeKey::from_decl(decl)),
-                    });
+                    let variant_id = self.define_at(
+                        NodeKey::from_variant(variant),
+                        DefInfo {
+                            name: variant.name,
+                            kind: DefKind::EnumVariant,
+                            span: (variant.span, decl.span.src()).into(),
+                            decl: Some(NodeKey::from_decl(decl)),
+                        },
+                    );
 
                     self.table.declare_value(variant.name, variant_id);
                 }
@@ -227,12 +236,15 @@ impl<'ctx> NameResolver<'ctx> {
                     self.resolve_type(param.ty);
 
                     if let Some(name) = param.name {
-                        let def_id = self.define(DefInfo {
-                            name,
-                            kind: DefKind::Param,
-                            span: (param.span, decl.span.src()).into(),
-                            decl: None,
-                        });
+                        let def_id = self.define_at(
+                            NodeKey::from_param(param),
+                            DefInfo {
+                                name,
+                                kind: DefKind::Param,
+                                span: (param.span, decl.span.src()).into(),
+                                decl: None,
+                            },
+                        );
 
                         self.table.declare_value(name, def_id);
                     }
@@ -266,6 +278,16 @@ impl<'ctx> NameResolver<'ctx> {
 
                 for field in fields {
                     self.resolve_type(field.ty);
+
+                    self.define_at(
+                        NodeKey::from_field(field),
+                        DefInfo {
+                            name: field.name,
+                            kind: DefKind::Field,
+                            span: ((0, 0).into(), decl.span.src()).into(),
+                            decl: Some(NodeKey::from_decl(decl)),
+                        },
+                    );
                 }
 
                 for method in methods {
@@ -350,19 +372,19 @@ impl<'ctx> NameResolver<'ctx> {
             decl: Some(NodeKey::from_decl(method)),
         });
 
-        let self_param = params
-            .first()
-            .filter(|param| is_self_param(param))
-            .and_then(|param| param.name)
-            .or(Some(self.interner_intern("self")));
+        let self_param = params.first().filter(|param| is_self_param(param));
+        let self_intern = self.interner_intern("self");
 
-        let self_param_id = self_param.map(|name| {
-            self.define(DefInfo {
-                name,
-                kind: DefKind::Param,
-                span: method.span.clone(),
-                decl: None,
-            })
+        let self_param_id = self_param.map(|p| {
+            self.define_at(
+                NodeKey::from_param(p),
+                DefInfo {
+                    name: p.name.unwrap_or(self_intern),
+                    kind: DefKind::Param,
+                    span: method.span.clone(),
+                    decl: None,
+                },
+            )
         });
 
         self.table.push(ScopeKind::Method {
@@ -383,12 +405,15 @@ impl<'ctx> NameResolver<'ctx> {
                 continue;
             }
 
-            let def_id = self.define(DefInfo {
-                name: pname,
-                kind: DefKind::Param,
-                span: (param.span, method.span.src()).into(),
-                decl: None,
-            });
+            let def_id = self.define_at(
+                NodeKey::from_param(param),
+                DefInfo {
+                    name: pname,
+                    kind: DefKind::Param,
+                    span: (param.span, method.span.src()).into(),
+                    decl: None,
+                },
+            );
             self.table.declare_value(pname, def_id);
         }
 
@@ -428,12 +453,15 @@ impl<'ctx> NameResolver<'ctx> {
         let Some(generics) = generics else { return };
 
         for generic in generics {
-            let def_id = self.define(DefInfo {
-                name: generic.name.0,
-                kind: DefKind::GenericParam,
-                span: (generic.name.1, current_src.clone()).into(),
-                decl: None,
-            });
+            let def_id = self.define_at(
+                NodeKey::from_generic(generic),
+                DefInfo {
+                    name: generic.name.0,
+                    kind: DefKind::GenericParam,
+                    span: (generic.name.1, current_src.clone()).into(),
+                    decl: None,
+                },
+            );
 
             self.table.declare_type(generic.name.0, def_id);
 
