@@ -80,6 +80,7 @@ pub enum DefKind {
     EnumVariant,
     Variable { is_const: bool },
     Param,
+    Field,
     GenericParam,
     ExternVar,
 }
