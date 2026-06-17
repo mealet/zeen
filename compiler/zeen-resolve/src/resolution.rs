@@ -2,7 +2,10 @@ use lasso::Spur;
 use miette::SourceSpan;
 use std::collections::HashMap;
 
-use zeen_ast::{Declaration, Expression, Source, Statement, TypeExpr};
+use zeen_ast::{
+    Declaration, Expression, Source, Statement, TypeExpr,
+    declarations::{EnumVariant, FnParam, GenericType, StructField},
+};
 
 /// A simple representation of allocated AST node as a key.
 /// SAFETY: This thing is very dangerous, can be used when you sure your object is live as long as
@@ -25,6 +28,22 @@ impl NodeKey {
 
     pub fn from_decl(value: &Declaration) -> Self {
         NodeKey(value as *const _ as usize)
+    }
+
+    pub fn from_param(p: &FnParam) -> Self {
+        NodeKey(p as *const _ as usize)
+    }
+
+    pub fn from_field(f: &StructField) -> Self {
+        NodeKey(f as *const _ as usize)
+    }
+
+    pub fn from_generic(g: &GenericType) -> Self {
+        NodeKey(g as *const _ as usize)
+    }
+
+    pub fn from_variant(v: &EnumVariant) -> Self {
+        NodeKey(v as *const _ as usize)
     }
 }
 
@@ -77,6 +96,8 @@ pub struct ResolutionResult {
     pub defs: HashMap<DefId, DefInfo>,
     /// (struct, interface) -> methods
     pub impls: HashMap<(DefId, DefId), Vec<DefId>>,
+
+    pub binding_sites: HashMap<NodeKey, DefId>,
 }
 
 impl ResolutionResult {
@@ -88,5 +109,21 @@ impl ResolutionResult {
         self.type_bindings
             .get(&NodeKey(texpr as *const _ as usize))
             .copied()
+    }
+
+    pub fn def_of_param(&self, p: &zeen_ast::declarations::FnParam) -> Option<DefId> {
+        self.binding_sites.get(&NodeKey::from_param(p)).copied()
+    }
+
+    pub fn def_of_field(&self, f: &zeen_ast::declarations::StructField) -> Option<DefId> {
+        self.binding_sites.get(&NodeKey::from_field(f)).copied()
+    }
+
+    pub fn def_of_generic(&self, g: &zeen_ast::declarations::GenericType) -> Option<DefId> {
+        self.binding_sites.get(&NodeKey::from_generic(g)).copied()
+    }
+
+    pub fn def_of_variant(&self, v: &zeen_ast::declarations::EnumVariant) -> Option<DefId> {
+        self.binding_sites.get(&NodeKey::from_variant(v)).copied()
     }
 }
