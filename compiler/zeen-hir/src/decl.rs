@@ -26,6 +26,7 @@ pub struct HirDecl {
 pub enum HirDeclKind {
     Fn(Rc<HirFn>),
     Struct(Rc<HirStruct>),
+    Interface(Rc<HirInterface>),
 }
 
 // ==| Decls Structures |==
@@ -82,4 +83,15 @@ pub struct HirField {
     pub name: Spur,
     pub ty: Rc<HirTypeExpr>,
     pub is_pub: bool,
+}
+
+// -> Struct
+
+#[derive(Debug)]
+pub struct HirInterface {
+    pub name: (Spur, SourceSpan),
+    pub is_pub: bool,
+
+    pub generics: Vec<HirGenericParam>,
+    pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn
 }
