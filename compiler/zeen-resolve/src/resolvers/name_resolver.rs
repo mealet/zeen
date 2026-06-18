@@ -139,7 +139,7 @@ impl<'ctx> NameResolver<'ctx> {
                     DefInfo {
                         name: name.0,
                         kind: DefKind::Function,
-                        span: (name.1, decl.span.src()).into(),
+                        span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
                     },
                 );
@@ -153,7 +153,7 @@ impl<'ctx> NameResolver<'ctx> {
                     DefInfo {
                         name: name.0,
                         kind: DefKind::Struct,
-                        span: (name.1, decl.span.src()).into(),
+                        span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
                     },
                 );
@@ -167,7 +167,7 @@ impl<'ctx> NameResolver<'ctx> {
                     DefInfo {
                         name: name.0,
                         kind: DefKind::Interface,
-                        span: (name.1, decl.span.src()).into(),
+                        span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
                     },
                 );
@@ -181,7 +181,7 @@ impl<'ctx> NameResolver<'ctx> {
                     DefInfo {
                         name: name.0,
                         kind: DefKind::Enum,
-                        span: (name.1, decl.span.src()).into(),
+                        span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
                     },
                 );
@@ -194,7 +194,7 @@ impl<'ctx> NameResolver<'ctx> {
                         DefInfo {
                             name: variant.name,
                             kind: DefKind::EnumVariant,
-                            span: (variant.span, decl.span.src()).into(),
+                            span: (variant.span, decl.source.src()).into(),
                             decl: Some(NodeKey::from_decl(decl)),
                         },
                     );
@@ -209,7 +209,7 @@ impl<'ctx> NameResolver<'ctx> {
                     DefInfo {
                         name: name.0,
                         kind: DefKind::ExternVar,
-                        span: (name.1, decl.span.src()).into(),
+                        span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
                     },
                 );
@@ -220,8 +220,8 @@ impl<'ctx> NameResolver<'ctx> {
             DeclarationKind::ExternInclude { .. } => {
                 self.report(ResolveError::DisabledFeature {
                     reason: "not supported yet".into(),
-                    src: decl.span.src(),
-                    span: decl.span.span,
+                    src: decl.source.src(),
+                    span: decl.source.span,
                 });
             }
 
@@ -234,7 +234,7 @@ impl<'ctx> NameResolver<'ctx> {
     // --> Declarations
 
     fn resolve_decl(&mut self, decl: &'ctx Declaration<'ctx>) {
-        self.current_src = decl.span.src();
+        self.current_src = decl.source.src();
 
         match decl.kind {
             DeclarationKind::FnDecl {
@@ -245,7 +245,7 @@ impl<'ctx> NameResolver<'ctx> {
                 ..
             } => {
                 self.table.push(ScopeKind::Function);
-                self.declare_generics(generics, &decl.span.src);
+                self.declare_generics(generics, &decl.source.src);
 
                 for param in params {
                     self.resolve_type(param.ty);
@@ -256,7 +256,7 @@ impl<'ctx> NameResolver<'ctx> {
                             DefInfo {
                                 name,
                                 kind: DefKind::Param,
-                                span: (param.span, decl.span.src()).into(),
+                                span: (param.span, decl.source.src()).into(),
                                 decl: None,
                             },
                         );
@@ -289,7 +289,7 @@ impl<'ctx> NameResolver<'ctx> {
                     .expect("struct is not registered in name resolver pass 1");
 
                 self.table.push(ScopeKind::Block);
-                self.declare_generics(generics, &decl.span.src);
+                self.declare_generics(generics, &decl.source.src);
 
                 for field in fields {
                     self.resolve_type(field.ty);
@@ -299,7 +299,7 @@ impl<'ctx> NameResolver<'ctx> {
                         DefInfo {
                             name: field.name,
                             kind: DefKind::Field,
-                            span: ((0, 0).into(), decl.span.src()).into(),
+                            span: ((0, 0).into(), decl.source.src()).into(),
                             decl: Some(NodeKey::from_decl(decl)),
                         },
                     );
@@ -316,7 +316,7 @@ impl<'ctx> NameResolver<'ctx> {
                 generics, methods, ..
             } => {
                 self.table.push(ScopeKind::Block);
-                self.declare_generics(generics, &decl.span.src);
+                self.declare_generics(generics, &decl.source.src);
 
                 for method in methods {
                     self.resolve_decl(method);
@@ -399,7 +399,7 @@ impl<'ctx> NameResolver<'ctx> {
                 DefInfo {
                     name: p.name.unwrap_or(self_intern),
                     kind: DefKind::Param,
-                    span: method.span.clone(),
+                    span: method.source.clone(),
                     decl: None,
                 },
             )
@@ -409,7 +409,7 @@ impl<'ctx> NameResolver<'ctx> {
             self_def,
             self_param: self_param_id,
         });
-        self.declare_generics(generics, &method.span.src);
+        self.declare_generics(generics, &method.source.src);
 
         for param in params {
             self.resolve_type(param.ty);
@@ -428,7 +428,7 @@ impl<'ctx> NameResolver<'ctx> {
                 DefInfo {
                     name: pname,
                     kind: DefKind::Param,
-                    span: (param.span, method.span.src()).into(),
+                    span: (param.span, method.source.src()).into(),
                     decl: None,
                 },
             );

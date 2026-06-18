@@ -6,14 +6,14 @@ use crate::{Source, expressions::Expression, statements::Statement, types::TypeE
 #[derive(Debug, Clone)]
 pub struct Declaration<'arena> {
     pub kind: DeclarationKind<'arena>,
-    pub span: Source,
+    pub source: Source,
 }
 
 impl Declaration<'_> {
     pub fn merge_span(&self, other: SourceSpan) -> SourceSpan {
-        let start = self.span.span.offset().min(other.offset());
+        let start = self.source.span.offset().min(other.offset());
         let end =
-            (self.span.span.offset() + self.span.span.len()).max(other.offset() + other.len());
+            (self.source.span.offset() + self.source.span.len()).max(other.offset() + other.len());
 
         SourceSpan::new(start.into(), end - start)
     }

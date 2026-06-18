@@ -135,8 +135,8 @@ impl<'ctx> IncludeResolver<'ctx> {
             if !target.exists() {
                 self.errors.push(ResolveError::LinkError {
                     message: "file doesn't exists".into(),
-                    src: decl.span.src.clone(),
-                    span: decl.span.span,
+                    src: decl.source.src.clone(),
+                    span: decl.source.span,
                 });
                 continue;
             }
@@ -144,8 +144,8 @@ impl<'ctx> IncludeResolver<'ctx> {
             if !target.is_file() {
                 self.errors.push(ResolveError::LinkError {
                     message: "path is a directory".into(),
-                    src: decl.span.src.clone(),
-                    span: decl.span.span,
+                    src: decl.source.src.clone(),
+                    span: decl.source.span,
                 });
                 continue;
             }
@@ -156,8 +156,8 @@ impl<'ctx> IncludeResolver<'ctx> {
             } else {
                 self.errors.push(ResolveError::LinkError {
                     message: "file extension must be `.c`".into(),
-                    src: decl.span.src.clone(),
-                    span: decl.span.span,
+                    src: decl.source.src.clone(),
+                    span: decl.source.span,
                 });
                 continue;
             }
