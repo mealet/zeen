@@ -1,7 +1,11 @@
 use zeen_ast::Source;
 use zeen_resolve::DefId;
 
-use crate::HirId;
+use lasso::Spur;
+use miette::SourceSpan;
+use std::rc::Rc;
+
+use crate::{HirId, decl::HirGenericParam, expr::HirExpr};
 
 #[derive(Debug)]
 pub struct HirTypeExpr {
@@ -11,4 +15,31 @@ pub struct HirTypeExpr {
 }
 
 #[derive(Debug)]
-pub enum HirTypeKind {}
+pub enum HirTypeKind {
+    Builtin(zeen_ast::types::BuiltinType),
+
+    SelfType(DefId),
+    SelfAlias(DefId),
+    VaArgs,
+
+    Named {
+        def_id: DefId,
+        generic_args: Vec<Rc<HirTypeExpr>>,
+    },
+
+    Const(Rc<HirTypeExpr>),
+    Pointer(Rc<HirTypeExpr>),
+
+    Array {
+        element: Rc<HirTypeExpr>,
+        len: Option<Rc<HirExpr>>,
+    },
+
+    Fn {
+        params: Vec<Rc<HirTypeExpr>>,
+        generics: Vec<HirGenericParam>,
+        ret: Rc<HirTypeExpr>,
+    },
+
+    Error,
+}
