@@ -231,6 +231,15 @@ impl<'inp> Tokenizer<'inp> {
                 }
             }
 
+            '@' => {
+                if is_ident_start(self.first()) {
+                    let _ = self.ident();
+                    TokenKind::MacroIdent
+                } else {
+                    TokenKind::AtSign
+                }
+            }
+
             ';' => TokenKind::Semicolon,
             ':' => TokenKind::Colon,
             ',' => TokenKind::Comma,
@@ -269,12 +278,17 @@ impl<'inp> Tokenizer<'inp> {
     fn ident(&mut self) -> TokenKind {
         self.eat_while(is_ident_continue);
 
-        if self.first() == '!' {
-            let _ = self.bump();
-            TokenKind::MacroIdent
-        } else {
-            TokenKind::Ident
-        }
+        TokenKind::Ident
+
+        // NOTE: Below code is deprecated version of macro identifier.
+        // It was `macro_name!`, now replaced with `@macro_name`
+        //
+        // if self.first() == '!' {
+        //     let _ = self.bump();
+        //     TokenKind::MacroIdent
+        // } else {
+        //     TokenKind::Ident
+        // }
     }
 
     fn tokenize_ident(&mut self, mut kind: TokenKind) -> TokenKind {

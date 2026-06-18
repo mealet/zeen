@@ -39,6 +39,7 @@ pub enum TokenKind {
     Question,  // ?
     Eq,        // =
     Bang,      // !
+    AtSign,    // @
 
     Lt,         // <
     Gt,         // >
