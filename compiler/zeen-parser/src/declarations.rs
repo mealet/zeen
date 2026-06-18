@@ -83,6 +83,8 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                     span: self.p.current.span,
                 });
 
+                self.p.decl_sync();
+
                 None
             }
         }

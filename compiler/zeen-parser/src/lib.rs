@@ -231,6 +231,21 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
             match self.current().kind {
                 TokenKind::Eof => break,
 
+                TokenKind::OpenBrace => {
+                    let mut braces = 1;
+
+                    while braces > 0 {
+                        match self.current().kind {
+                            TokenKind::OpenBrace => braces += 1,
+                            TokenKind::CloseBrace => braces -= 1,
+                            TokenKind::Eof => break,
+                            _ => {
+                                let _ = self.advance();
+                            }
+                        }
+                    }
+                }
+
                 TokenKind::Keyword(ref kw) if is_decl_keyword(kw) => break,
 
                 _ => {
