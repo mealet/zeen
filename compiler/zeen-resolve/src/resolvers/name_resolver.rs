@@ -134,45 +134,57 @@ impl<'ctx> NameResolver<'ctx> {
     fn declare_toplevel(&mut self, decl: &'ctx Declaration<'ctx>) {
         match decl.kind {
             DeclarationKind::FnDecl { name, .. } => {
-                let def_id = self.define(DefInfo {
-                    name: name.0,
-                    kind: DefKind::Function,
-                    span: (name.1, decl.span.src()).into(),
-                    decl: Some(NodeKey::from_decl(decl)),
-                });
+                let def_id = self.define_at(
+                    NodeKey::from_decl(decl),
+                    DefInfo {
+                        name: name.0,
+                        kind: DefKind::Function,
+                        span: (name.1, decl.span.src()).into(),
+                        decl: Some(NodeKey::from_decl(decl)),
+                    },
+                );
 
                 self.table.declare_value(name.0, def_id);
             }
 
             DeclarationKind::StructDecl { name, .. } => {
-                let def_id = self.define(DefInfo {
-                    name: name.0,
-                    kind: DefKind::Struct,
-                    span: (name.1, decl.span.src()).into(),
-                    decl: Some(NodeKey::from_decl(decl)),
-                });
+                let def_id = self.define_at(
+                    NodeKey::from_decl(decl),
+                    DefInfo {
+                        name: name.0,
+                        kind: DefKind::Struct,
+                        span: (name.1, decl.span.src()).into(),
+                        decl: Some(NodeKey::from_decl(decl)),
+                    },
+                );
 
                 self.table.declare_type(name.0, def_id);
             }
 
             DeclarationKind::InterfaceDecl { name, .. } => {
-                let def_id = self.define(DefInfo {
-                    name: name.0,
-                    kind: DefKind::Interface,
-                    span: (name.1, decl.span.src()).into(),
-                    decl: Some(NodeKey::from_decl(decl)),
-                });
+                let def_id = self.define_at(
+                    NodeKey::from_decl(decl),
+                    DefInfo {
+                        name: name.0,
+                        kind: DefKind::Interface,
+                        span: (name.1, decl.span.src()).into(),
+                        decl: Some(NodeKey::from_decl(decl)),
+                    },
+                );
 
                 self.table.declare_type(name.0, def_id);
             }
 
             DeclarationKind::EnumDecl { name, variants, .. } => {
-                let def_id = self.define(DefInfo {
-                    name: name.0,
-                    kind: DefKind::Enum,
-                    span: (name.1, decl.span.src()).into(),
-                    decl: Some(NodeKey::from_decl(decl)),
-                });
+                let def_id = self.define_at(
+                    NodeKey::from_decl(decl),
+                    DefInfo {
+                        name: name.0,
+                        kind: DefKind::Enum,
+                        span: (name.1, decl.span.src()).into(),
+                        decl: Some(NodeKey::from_decl(decl)),
+                    },
+                );
 
                 self.table.declare_type(name.0, def_id);
 
@@ -192,12 +204,15 @@ impl<'ctx> NameResolver<'ctx> {
             }
 
             DeclarationKind::ExternVar { name, .. } => {
-                let def_id = self.define(DefInfo {
-                    name: name.0,
-                    kind: DefKind::ExternVar,
-                    span: (name.1, decl.span.src()).into(),
-                    decl: Some(NodeKey::from_decl(decl)),
-                });
+                let def_id = self.define_at(
+                    NodeKey::from_decl(decl),
+                    DefInfo {
+                        name: name.0,
+                        kind: DefKind::ExternVar,
+                        span: (name.1, decl.span.src()).into(),
+                        decl: Some(NodeKey::from_decl(decl)),
+                    },
+                );
 
                 self.table.declare_value(name.0, def_id);
             }
@@ -365,12 +380,15 @@ impl<'ctx> NameResolver<'ctx> {
             unreachable!("method must be FnDecl")
         };
 
-        let method_id = self.define(DefInfo {
-            name: name.0,
-            kind: DefKind::Function,
-            span: (name.1, self.named_src()).into(),
-            decl: Some(NodeKey::from_decl(method)),
-        });
+        let method_id = self.define_at(
+            NodeKey::from_decl(method),
+            DefInfo {
+                name: name.0,
+                kind: DefKind::Function,
+                span: (name.1, self.named_src()).into(),
+                decl: Some(NodeKey::from_decl(method)),
+            },
+        );
 
         let self_param = params.first().filter(|param| is_self_param(param));
         let self_intern = self.interner_intern("self");
