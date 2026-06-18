@@ -24,10 +24,13 @@ pub struct HirDecl {
 
 #[derive(Debug)]
 pub enum HirDeclKind {
-    Fn(Rc<HirFn>)
+    Fn(Rc<HirFn>),
+    Struct(Rc<HirStruct>),
 }
 
-// Decls Structures
+// ==| Decls Structures |==
+
+// -> Fn
 
 #[derive(Debug)]
 pub struct HirFn {
@@ -59,4 +62,24 @@ pub struct HirGenericParam {
     pub def_id: DefId,
     pub name: Spur,
     pub bounds: Vec<DefId>,
+}
+
+// -> Struct
+
+#[derive(Debug)]
+pub struct HirStruct {
+    pub name: (Spur, SourceSpan),
+    pub is_pub: bool,
+
+    pub generics: Vec<HirGenericParam>,
+    pub fields: Vec<HirField>,
+    pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn
+}
+
+#[derive(Debug)]
+pub struct HirField {
+    pub def_id: DefId,
+    pub name: Spur,
+    pub ty: Rc<HirTypeExpr>,
+    pub is_pub: bool,
 }
