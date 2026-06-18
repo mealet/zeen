@@ -187,7 +187,35 @@ impl<'res> HirLowering<'res> {
     }
 
     fn lower_generics(&mut self, generics: Option<&[GenericType]>) -> Vec<HirGenericParam> {
-        todo!()
+        let Some(generics) = generics else {
+            return Vec::new();
+        };
+
+        generics
+            .iter()
+            .map(|gtype| {
+                let def_id = self
+                    .resolution
+                    .def_of_generic(gtype)
+                    .unwrap_or(DefId(u32::MAX));
+
+                let bounds = gtype
+                    .interfaces
+                    .map(|ifaces| {
+                        ifaces
+                            .iter()
+                            .filter_map(|name| self.lookup_type_def_by_name(name.0))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                HirGenericParam {
+                    def_id,
+                    name: gtype.name,
+                    bounds,
+                }
+            })
+            .collect()
     }
 
     // > Statements

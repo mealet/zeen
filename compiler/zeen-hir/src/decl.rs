@@ -65,7 +65,7 @@ pub struct HirParam {
 #[derive(Debug, Clone)]
 pub struct HirGenericParam {
     pub def_id: DefId,
-    pub name: Spur,
+    pub name: (Spur, SourceSpan),
     pub bounds: Vec<DefId>,
 }
 
