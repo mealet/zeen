@@ -23,4 +23,13 @@ pub struct HirModule {
     pub decls: Vec<Rc<decl::HirDecl>>,
 }
 
-// TODO: Create HIR tree and do better public exports
+// ====| Public Exports |====
+
+pub use decl::{
+    HirDecl, HirDeclKind, HirEnum, HirEnumVariant, HirField, HirFn, HirGenericParam, HirImplement,
+    HirInterface, HirParam, HirStruct,
+};
+
+pub use expr::{HirExpr, HirExprKind, HirFieldInit};
+pub use stmt::{HirStmt, HirStmtKind};
+pub use types::{HirTypeExpr, HirTypeKind};
