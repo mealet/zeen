@@ -11,7 +11,7 @@ use zeen_ast::{
     statements::{Statement, StatementKind},
     types::{TypeExpr, TypeKind},
 };
-use zeen_resolve::{DefId, Resolution, ResolutionResult};
+use zeen_resolve::{DefId, DefKind, NodeKey, Resolution, ResolutionResult};
 
 pub mod decl;
 pub mod expr;
@@ -61,6 +61,52 @@ impl<'res> HirLowering<'res> {
         let id = HirId(self.next_id);
         self.next_id += 1;
         id
+    }
+
+    // ==> Helpers
+
+    fn resolution_of_stmt(&self, stmt: &Statement) -> Option<Resolution> {
+        self.resolution
+            .expr_bindings
+            .get(&NodeKey::from_stmt(stmt))
+            .copied()
+    }
+
+    fn def_id_of_decl(&self, decl: &Declaration) -> Option<DefId> {
+        let key = NodeKey::from_decl(decl);
+
+        self.resolution
+            .binding_sites
+            .get(&key)
+            .copied()
+    }
+
+    fn lookup_type_def_by_name(&self, name: Spur) -> Option<DefId> {
+        self.resolution
+            .defs
+            .iter()
+            .find(|(_, info)| {
+                info.name == name
+                    && matches!(
+                    info.kind,
+                        DefKind::Interface
+                        | DefKind::Struct
+                        | DefKind::Enum
+                )
+            })
+            .map(|(id, _)| *id)
+    }
+
+    fn path_expr_def_id(&self, expr: &Expression) -> Option<DefId> {
+        let target = match expr.kind {
+            ExpressionKind::FieldAccess { field, .. } => field,
+            _ => expr,
+        };
+
+        match self.resolution.resolution_of_expr(target) {
+            Some(Resolution::Def(id)) => Some(id),
+            _ => None
+        }
     }
 
     // ==> Entry Point
