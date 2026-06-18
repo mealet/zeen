@@ -767,10 +767,10 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
         if let Some(macro_id) = macro_id {
             let mut interner_lock = self.p.interner.lock().unwrap();
-            let macro_name = interner_lock.resolve(&macro_id).to_owned();
+            let macro_name = &interner_lock.resolve(&macro_id).to_owned()[1..];
             drop(interner_lock);
 
-            if matches!(macro_name.as_ref(), "as!" | "sizeof!" | "alignof!") {
+            if matches!(macro_name, "as" | "sizeof" | "alignof") {
                 let mut type_parser = crate::type_parser::TypeParser::new(self.p);
 
                 let parsed_type = type_parser.parse()?;
