@@ -28,6 +28,7 @@ pub enum HirDeclKind {
     Struct(Rc<HirStruct>),
     Interface(Rc<HirInterface>),
     Implement(Rc<HirImplement>),
+    Enum(Rc<HirEnum>),
 }
 
 // ==| Decls Structures |==
@@ -105,4 +106,20 @@ pub struct HirImplement {
     pub object: Option<DefId>,
 
     pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn
+}
+
+// -> Enum
+
+#[derive(Debug, Clone)]
+pub struct HirEnum {
+    pub name: (Spur, SourceSpan),
+    pub is_pub: bool,
+    pub variants: Vec<HirEnumVariant>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirEnumVariant {
+    pub def_id: DefId,
+    pub name: Spur,
+    pub span: SourceSpan,
 }
