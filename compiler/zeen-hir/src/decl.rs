@@ -1,7 +1,15 @@
 use zeen_ast::Source;
 use zeen_resolve::DefId;
 
-use crate::HirId;
+use std::rc::Rc;
+use miette::SourceSpan;
+use lasso::Spur;
+
+use crate::{
+    HirId,
+    stmt::HirStmt,
+    types::HirTypeExpr,
+};
 
 /// Declaration in HIR (High Level Representation) version
 #[derive(Debug)]
@@ -15,4 +23,40 @@ pub struct HirDecl {
 }
 
 #[derive(Debug)]
-pub enum HirDeclKind {}
+pub enum HirDeclKind {
+    Fn(Rc<HirFn>)
+}
+
+// Decls Structures
+
+#[derive(Debug)]
+pub struct HirFn {
+    pub name: (Spur, SourceSpan),
+
+    pub generics: usize,
+    pub params: Vec<Rc<HirParam>>,
+    pub return_type: Option<Rc<HirTypeExpr>>,
+
+    pub body: Option<Rc<HirStmt>>,
+
+    pub is_pub: bool,
+    pub is_extern: bool,
+
+    pub self_param: Option<DefId>,
+}
+
+#[derive(Debug)]
+pub struct HirParam {
+    pub id: HirId,
+    pub def_id: Option<DefId>,
+    pub name: Option<Spur>,
+    pub ty: Rc<HirTypeExpr>,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug)]
+pub struct HirGenericParam {
+    pub def_id: DefId,
+    pub name: Spur,
+    pub bounds: Vec<DefId>,
+}
