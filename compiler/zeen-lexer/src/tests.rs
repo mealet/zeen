@@ -56,7 +56,7 @@ fn ident_after_line_comment() {
 
 #[test]
 fn macro_ident() {
-    const SOURCE: &str = "print!";
+    const SOURCE: &str = "@print";
 
     let mut tokens = tokenize(SOURCE);
 

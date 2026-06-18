@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn fn_decl_public() {
-        const SRC: &str = "public fn foo();";
+        const SRC: &str = "pub fn foo();";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn fn_decl_public_extern() {
-        const SRC: &str = "public extern fn foo();";
+        const SRC: &str = "pub extern fn foo();";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn struct_decl_pub() {
-        const SRC: &str = "public struct Foo {}";
+        const SRC: &str = "pub struct Foo {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -944,7 +944,7 @@ mod tests {
     fn struct_decl_with_fields() {
         const SRC: &str = "struct Foo {
             a: i32,
-            public b: u32
+            pub b: u32
         }";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
@@ -980,9 +980,9 @@ mod tests {
     fn struct_decl_with_methods() {
         const SRC: &str = "struct Foo {
             a: i32,
-            public b: u32,
+            pub b: u32,
 
-            public fn new(a: i32) Self {}
+            pub fn new(a: i32) Self {}
 
             fn asd(self) u32 {}
             fn dsa(const self) i32 {}
@@ -1051,7 +1051,7 @@ mod tests {
 
     #[test]
     fn enum_decl_pub() {
-        const SRC: &str = "public enum Foo {}";
+        const SRC: &str = "pub enum Foo {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -1070,7 +1070,7 @@ mod tests {
 
     #[test]
     fn enum_decl_with_variants() {
-        const SRC: &str = "public enum Foo { A, B, C }";
+        const SRC: &str = "pub enum Foo { A, B, C }";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -1212,7 +1212,7 @@ mod tests {
 
     #[test]
     fn interface_decl_public() {
-        const SRC: &str = "public interface Empty {}";
+        const SRC: &str = "pub interface Empty {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
