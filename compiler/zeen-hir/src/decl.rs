@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// Declaration in HIR (High Level Representation) version
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HirDecl {
     pub id: HirId,
     pub def_id: DefId,
@@ -22,7 +22,7 @@ pub struct HirDecl {
     pub source: Source,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HirDeclKind {
     Fn(Rc<HirFn>),
     Struct(Rc<HirStruct>),
@@ -33,7 +33,7 @@ pub enum HirDeclKind {
 
 // -> Fn
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HirFn {
     pub name: (Spur, SourceSpan),
 
@@ -49,7 +49,7 @@ pub struct HirFn {
     pub self_param: Option<DefId>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HirParam {
     pub id: HirId,
     pub def_id: Option<DefId>,
@@ -58,7 +58,7 @@ pub struct HirParam {
     pub span: SourceSpan,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HirGenericParam {
     pub def_id: DefId,
     pub name: Spur,
@@ -67,7 +67,7 @@ pub struct HirGenericParam {
 
 // -> Struct
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HirStruct {
     pub name: (Spur, SourceSpan),
     pub is_pub: bool,
@@ -77,7 +77,7 @@ pub struct HirStruct {
     pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HirField {
     pub def_id: DefId,
     pub name: Spur,
@@ -87,7 +87,7 @@ pub struct HirField {
 
 // -> Struct
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HirInterface {
     pub name: (Spur, SourceSpan),
     pub is_pub: bool,
