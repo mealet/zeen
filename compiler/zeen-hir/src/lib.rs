@@ -75,10 +75,7 @@ impl<'res> HirLowering<'res> {
     fn def_id_of_decl(&self, decl: &Declaration) -> Option<DefId> {
         let key = NodeKey::from_decl(decl);
 
-        self.resolution
-            .binding_sites
-            .get(&key)
-            .copied()
+        self.resolution.binding_sites.get(&key).copied()
     }
 
     fn lookup_type_def_by_name(&self, name: Spur) -> Option<DefId> {
@@ -88,11 +85,9 @@ impl<'res> HirLowering<'res> {
             .find(|(_, info)| {
                 info.name == name
                     && matches!(
-                    info.kind,
-                        DefKind::Interface
-                        | DefKind::Struct
-                        | DefKind::Enum
-                )
+                        info.kind,
+                        DefKind::Interface | DefKind::Struct | DefKind::Enum
+                    )
             })
             .map(|(id, _)| *id)
     }
@@ -105,7 +100,7 @@ impl<'res> HirLowering<'res> {
 
         match self.resolution.resolution_of_expr(target) {
             Some(Resolution::Def(id)) => Some(id),
-            _ => None
+            _ => None,
         }
     }
 
@@ -121,15 +116,82 @@ impl<'res> HirLowering<'res> {
     }
 
     // ==> Lowering Functions
-    
+
     // > Declarations
 
     fn lower_decl<'ctx>(&mut self, decl: &'ctx Declaration<'ctx>) -> Option<Rc<HirDecl>> {
+        let def_id = self.def_id_of_decl(decl);
+
+        let kind = match decl.kind {
+            DeclarationKind::FnDecl { .. } => HirDeclKind::Fn(Rc::new(self.lower_fn(decl, None))),
+
+            _ => todo!("other declarations must be implemented"),
+        };
+
+        Some(Rc::new(HirDecl {
+            id: self.fresh_id(),
+            def_id: def_id.unwrap_or(DefId(u32::MAX)),
+            kind,
+            source: decl.source.clone(),
+        }))
+    }
+
+    fn lower_fn<'ctx>(&mut self, decl: &'ctx Declaration<'ctx>, self_def: Option<DefId>) -> HirFn {
+        let DeclarationKind::FnDecl {
+            name,
+            generics,
+            params,
+            return_type,
+            body,
+            is_pub,
+            is_extern,
+        } = decl.kind
+        else {
+            unreachable!("lower_fn called on non-FnDecl")
+        };
+
+        let hir_params: Vec<Rc<HirParam>> =
+            params.iter().map(|param| Rc::new(self.lower_param(param))).collect();
+
+        let self_param = if self_def.is_some() {
+            hir_params
+                .iter()
+                .find(|param| matches!(param.ty.kind, HirTypeKind::SelfType(_)))
+                .and_then(|param| param.def_id)
+        } else {
+            None
+        };
+
+        HirFn {
+            name,
+            generics: self.lower_generics(generics),
+            params: hir_params,
+            return_type: return_type.map(|ty| Rc::new(self.lower_type(ty))),
+            body: body.map(|stmt| Rc::new(self.lower_stmt(stmt))),
+            is_pub,
+            is_extern,
+            self_param
+        }
+    }
+
+    fn lower_param(&mut self, param: &FnParam) -> HirParam {
+        let def_id = self.resolution.def_of_param(param);
+        
+        HirParam {
+            id: self.fresh_id(),
+            def_id,
+            name: param.name,
+            ty: Rc::new(self.lower_type(param.ty)),
+            span: param.span
+        }
+    }
+
+    fn lower_generics(&mut self, generics: Option<&[GenericType]>) -> Vec<HirGenericParam> {
         todo!()
     }
 
     // > Statements
-    
+
     fn lower_stmt<'ctx>(&mut self, stmt: &'ctx Statement<'ctx>) -> HirStmt {
         todo!()
     }
