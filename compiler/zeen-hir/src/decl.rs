@@ -41,7 +41,7 @@ pub enum HirDeclKind {
 pub struct HirFn {
     pub name: (Spur, SourceSpan),
 
-    pub generics: usize,
+    pub generics: Vec<HirGenericParam>,
     pub params: Vec<Rc<HirParam>>,
     pub return_type: Option<Rc<HirTypeExpr>>,
 
