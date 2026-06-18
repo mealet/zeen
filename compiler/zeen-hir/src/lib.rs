@@ -66,7 +66,12 @@ impl<'res> HirLowering<'res> {
     // ==> Entry Point
 
     pub fn lower_module<'ctx>(&mut self, decls: &'ctx [&'ctx Declaration<'ctx>]) -> HirModule {
-        todo!()
+        let decls = decls
+            .iter()
+            .filter_map(|decl| self.lower_decl(decl))
+            .collect();
+
+        HirModule { decls }
     }
 
     // ==> Lowering Functions
