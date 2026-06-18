@@ -29,6 +29,15 @@ pub enum HirDeclKind {
     Interface(Rc<HirInterface>),
     Implement(Rc<HirImplement>),
     Enum(Rc<HirEnum>),
+
+    ExternVar {
+        name: Spur,
+        ty: Rc<HirTypeExpr>,
+    },
+
+    // resolved at `zeen-resolve` stage
+    ExternLink,
+    ExternInclude,
 }
 
 // ==| Decls Structures |==
