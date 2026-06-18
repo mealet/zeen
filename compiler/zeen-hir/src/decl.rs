@@ -1,15 +1,11 @@
 use zeen_ast::Source;
 use zeen_resolve::DefId;
 
-use std::rc::Rc;
-use miette::SourceSpan;
 use lasso::Spur;
+use miette::SourceSpan;
+use std::rc::Rc;
 
-use crate::{
-    HirId,
-    stmt::HirStmt,
-    types::HirTypeExpr,
-};
+use crate::{HirId, stmt::HirStmt, types::HirTypeExpr};
 
 /// Declaration in HIR (High Level Representation) version
 #[derive(Debug, Clone)]
@@ -30,10 +26,7 @@ pub enum HirDeclKind {
     Implement(Rc<HirImplement>),
     Enum(Rc<HirEnum>),
 
-    ExternVar {
-        name: Spur,
-        ty: Rc<HirTypeExpr>,
-    },
+    ExternVar { name: Spur, ty: Rc<HirTypeExpr> },
 
     // resolved at `zeen-resolve` stage
     ExternLink,
