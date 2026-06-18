@@ -114,14 +114,14 @@ extern let stdout: **char;
 /* ====@ Functions @==== */
 /*
   Functions can take params, return (or not return) values and use generic types with appliable interfaces.
-  Visibility is changeable (with `public` keyword).
+  Visibility is changeable (with `pub` keyword).
 */
 
 fn foo(a: i32, b: i32) i32 {
   return a + b;
 }
 
-public fn add_print[T: Add + Display](a: T, b: T) {
+pub fn add_print[T: Add + Display](a: T, b: T) {
   println!("result: {}", a + b);
 }
 
@@ -129,13 +129,13 @@ public fn add_print[T: Add + Display](a: T, b: T) {
 /*
   Structures can have fields, generic types and methods.
   To implement extra interface - use `implement` keyword with special separated syntax.
-  Visibility is changeable (with `public` keyword).
+  Visibility is changeable (with `pub` keyword).
 */
 
 struct Foo {
   value: i32,
 
-  public fn new(value: i32) Self {
+  pub fn new(value: i32) Self {
     return Self {
       .value = value
     };
@@ -156,7 +156,7 @@ struct Value[T: Add, R: Add] {
 /* ====@ Enums @==== */
 /*
   Enums are C-like without any extra features, can be casted to any integer.
-  Visibility is changeable (with `public` keyword).
+  Visibility is changeable (with `pub` keyword).
 */
 
 /* ====@ Macros @==== */
