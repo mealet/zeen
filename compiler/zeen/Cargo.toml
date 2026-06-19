@@ -17,3 +17,4 @@ zeen-lexer = {path = "../zeen-lexer"}
 zeen-ast = {path = "../zeen-ast"}
 zeen-parser = {path = "../zeen-parser"}
 zeen-resolve = {path = "../zeen-resolve"}
+zeen-hir = { path = "../zeen-hir" }

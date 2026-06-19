@@ -74,7 +74,7 @@ fn main() {
                 std::process::exit(1);
             });
 
-            zeen_resolve::resolve(
+            let resolution_result = zeen_resolve::resolve(
                 Arc::clone(&filename),
                 Arc::clone(&content),
                 Path::new(&path),
@@ -91,6 +91,11 @@ fn main() {
 
                 std::process::exit(1);
             });
+
+            let mut hir_lowering = zeen_hir::HirLowering::new(&resolution_result);
+            let hir_module = hir_lowering.lower_module(program);
+
+            println!("{:#?}", hir_module);
         }
         Err(err) => {
             eprintln!("Unable to open file: {}", err);

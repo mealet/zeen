@@ -31,7 +31,7 @@ pub fn resolve(
     arena: &Bump,
     interner: Arc<Mutex<Rodeo>>,
     context: &mut CompilationContext,
-) -> Result<(), Vec<ResolveError>> {
+) -> Result<ResolutionResult, Vec<ResolveError>> {
     let mut include_resolver = include_resolver::IncludeResolver::new(
         Arc::clone(&filename),
         Arc::clone(&src),
@@ -51,5 +51,5 @@ pub fn resolve(
 
     let resolution_result = name_resolver.finish()?;
 
-    Ok(())
+    Ok(resolution_result)
 }
