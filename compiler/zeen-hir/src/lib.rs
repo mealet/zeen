@@ -538,7 +538,15 @@ impl<'res> HirLowering<'res> {
                 }
             }
 
-            _ => todo!(),
+            ExpressionKind::ArrayInit { elements } => HirExprKind::ArrayInit {
+                elements: elements.iter().map(|e| Rc::new(self.lower_expr(e))).collect(),
+            },
+
+            ExpressionKind::Block(stmts) => {
+                HirExprKind::Block(stmts.iter().map(|stmt| Rc::new(self.lower_stmt(stmt))).collect())
+            }
+
+            ExpressionKind::Type(ty) => HirExprKind::Type(Rc::new(self.lower_type(ty))),
         };
 
         HirExpr {
