@@ -94,8 +94,6 @@ fn main() {
 
             let mut hir_lowering = zeen_hir::HirLowering::new(&resolution_result);
             let hir_module = hir_lowering.lower_module(program);
-
-            println!("{:#?}", hir_module);
         }
         Err(err) => {
             eprintln!("Unable to open file: {}", err);
