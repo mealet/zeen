@@ -125,7 +125,13 @@ impl<'res> HirLowering<'res> {
         let kind = match decl.kind {
             DeclarationKind::FnDecl { .. } => HirDeclKind::Fn(Rc::new(self.lower_fn(decl, None))),
 
-            DeclarationKind::StructDecl { name, is_pub, generics, fields, methods } => {
+            DeclarationKind::StructDecl {
+                name,
+                is_pub,
+                generics,
+                fields,
+                methods,
+            } => {
                 let self_def = def_id.expect("StructDecl must have DefId, something went wrong");
 
                 let hir_fields: Vec<HirField> = fields
@@ -140,9 +146,7 @@ impl<'res> HirLowering<'res> {
 
                 let hir_methods: Vec<Rc<HirDecl>> = methods
                     .iter()
-                    .filter_map(|method| {
-                        self.lower_decl_as_method(method, Some(self_def))
-                    })
+                    .filter_map(|method| self.lower_decl_as_method(method, Some(self_def)))
                     .collect();
 
                 HirDeclKind::Struct(Rc::new(HirStruct {
@@ -152,6 +156,15 @@ impl<'res> HirLowering<'res> {
                     fields: hir_fields,
                     methods: hir_methods,
                 }))
+            }
+
+            DeclarationKind::InterfaceDecl {
+                name,
+                is_pub,
+                generics,
+                methods,
+            } => {
+                todo!()
             }
 
             _ => todo!("other declarations must be implemented"),
@@ -165,7 +178,11 @@ impl<'res> HirLowering<'res> {
         }))
     }
 
-    fn lower_decl_as_method<'ctx>(&mut self, decl: &'ctx Declaration<'ctx>, self_def: Option<DefId>) -> Option<Rc<HirDecl>> {
+    fn lower_decl_as_method<'ctx>(
+        &mut self,
+        decl: &'ctx Declaration<'ctx>,
+        self_def: Option<DefId>,
+    ) -> Option<Rc<HirDecl>> {
         let def_id = self.def_id_of_decl(decl);
 
         let DeclarationKind::FnDecl { .. } = decl.kind else {
@@ -196,8 +213,10 @@ impl<'res> HirLowering<'res> {
             unreachable!("lower_fn called on non-FnDecl")
         };
 
-        let hir_params: Vec<Rc<HirParam>> =
-            params.iter().map(|param| Rc::new(self.lower_param(param))).collect();
+        let hir_params: Vec<Rc<HirParam>> = params
+            .iter()
+            .map(|param| Rc::new(self.lower_param(param)))
+            .collect();
 
         let self_param = if self_def.is_some() {
             hir_params
@@ -216,19 +235,19 @@ impl<'res> HirLowering<'res> {
             body: body.map(|stmt| Rc::new(self.lower_stmt(stmt))),
             is_pub,
             is_extern,
-            self_param
+            self_param,
         }
     }
 
     fn lower_param(&mut self, param: &FnParam) -> HirParam {
         let def_id = self.resolution.def_of_param(param);
-        
+
         HirParam {
             id: self.fresh_id(),
             def_id,
             name: param.name,
             ty: Rc::new(self.lower_type(param.ty)),
-            span: param.span
+            span: param.span,
         }
     }
 
