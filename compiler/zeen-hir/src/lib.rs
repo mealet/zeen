@@ -223,6 +223,10 @@ impl<'res> HirLowering<'res> {
                 ty: Rc::new(self.lower_type(ty)),
             },
 
+            DeclarationKind::ExternLink { .. } => HirDeclKind::ExternLink,
+            DeclarationKind::ExternInclude { .. } => HirDeclKind::ExternInclude,
+            DeclarationKind::Use { .. } => return None, 
+
             _ => todo!("other declarations must be implemented"),
         };
 
