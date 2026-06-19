@@ -218,6 +218,11 @@ impl<'res> HirLowering<'res> {
                 }))
             }
 
+            DeclarationKind::ExternVar { name, ty } => HirDeclKind::ExternVar {
+                name,
+                ty: Rc::new(self.lower_type(ty)),
+            },
+
             _ => todo!("other declarations must be implemented"),
         };
 

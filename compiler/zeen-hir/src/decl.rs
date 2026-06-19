@@ -26,7 +26,10 @@ pub enum HirDeclKind {
     Implement(Rc<HirImplement>),
     Enum(Rc<HirEnum>),
 
-    ExternVar { name: Spur, ty: Rc<HirTypeExpr> },
+    ExternVar {
+        name: (Spur, SourceSpan),
+        ty: Rc<HirTypeExpr>,
+    },
 
     // resolved at `zeen-resolve` stage
     ExternLink,
