@@ -164,7 +164,17 @@ impl<'res> HirLowering<'res> {
                 generics,
                 methods,
             } => {
-                todo!()
+                let hir_methods: Vec<Rc<HirDecl>> = methods
+                    .iter()
+                    .filter_map(|method| self.lower_decl_as_method(method, None))
+                    .collect();
+
+                HirDeclKind::Interface(Rc::new(HirInterface {
+                    name,
+                    is_pub,
+                    generics: self.lower_generics(generics),
+                    methods: hir_methods
+                }))
             }
 
             _ => todo!("other declarations must be implemented"),
