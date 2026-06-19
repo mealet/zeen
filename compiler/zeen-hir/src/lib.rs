@@ -177,6 +177,26 @@ impl<'res> HirLowering<'res> {
                 }))
             }
 
+            DeclarationKind::ImplementDecl {
+                interface,
+                object,
+                methods
+            } => {
+                let object_def = self.path_expr_def_id(object);
+                let interface_def = self.path_expr_def_id(interface);
+
+                let hir_methods: Vec<Rc<HirDecl>> = methods
+                    .iter()
+                    .filter_map(|m| self.lower_decl_as_method(m, object_def))
+                    .collect();
+
+                HirDeclKind::Implement(Rc::new(HirImplement {
+                    interface: interface_def,
+                    object: object_def,
+                    methods: hir_methods,
+                }))
+            }
+
             _ => todo!("other declarations must be implemented"),
         };
 
