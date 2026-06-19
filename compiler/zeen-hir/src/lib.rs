@@ -177,14 +177,14 @@ impl<'res> HirLowering<'res> {
                     name,
                     is_pub,
                     generics: self.lower_generics(generics),
-                    methods: hir_methods
+                    methods: hir_methods,
                 }))
             }
 
             DeclarationKind::ImplementDecl {
                 interface,
                 object,
-                methods
+                methods,
             } => {
                 let object_def = self.path_expr_def_id(object);
                 let interface_def = self.path_expr_def_id(interface);
@@ -204,14 +204,17 @@ impl<'res> HirLowering<'res> {
             DeclarationKind::EnumDecl {
                 name,
                 variants,
-                is_pub
+                is_pub,
             } => {
                 let hir_variants: Vec<HirEnumVariant> = variants
                     .iter()
                     .map(|variant| HirEnumVariant {
-                        def_id: self.resolution.def_of_variant(variant).unwrap_or(DefId(u32::MAX)),
+                        def_id: self
+                            .resolution
+                            .def_of_variant(variant)
+                            .unwrap_or(DefId(u32::MAX)),
                         name: variant.name,
-                        span: variant.span
+                        span: variant.span,
                     })
                     .collect();
 
@@ -229,7 +232,7 @@ impl<'res> HirLowering<'res> {
 
             DeclarationKind::ExternLink { .. } => HirDeclKind::ExternLink,
             DeclarationKind::ExternInclude { .. } => HirDeclKind::ExternInclude,
-            DeclarationKind::Use { .. } => return None, 
+            DeclarationKind::Use { .. } => return None,
 
             _ => todo!("other declarations must be implemented"),
         };
@@ -355,7 +358,7 @@ impl<'res> HirLowering<'res> {
                 name,
                 explicit_type,
                 value,
-                is_const
+                is_const,
             } => {
                 let def_id = match self.resolution_of_stmt(stmt) {
                     Some(Resolution::Def(id)) => id,
@@ -369,7 +372,7 @@ impl<'res> HirLowering<'res> {
                     value: value.map(|v| Rc::new(self.lower_expr(v))),
                     is_const,
                 }
-            },
+            }
 
             StatementKind::Assign { object, value } => HirStmtKind::Assign {
                 object: Rc::new(self.lower_expr(object)),
@@ -397,7 +400,11 @@ impl<'res> HirLowering<'res> {
                 block: Rc::new(self.lower_stmt(block)),
             },
 
-            StatementKind::For { varname, iterator, block } => {
+            StatementKind::For {
+                varname,
+                iterator,
+                block,
+            } => {
                 let def_id = match self.resolution_of_stmt(stmt) {
                     Some(Resolution::Def(id)) => id,
                     _ => DefId(u32::MAX),
@@ -424,7 +431,99 @@ impl<'res> HirLowering<'res> {
     // > Expressions
 
     fn lower_expr<'ctx>(&mut self, expr: &'ctx Expression<'ctx>) -> HirExpr {
-        todo!()
+        let kind = match expr.kind {
+            ExpressionKind::Literal(lit) => HirExprKind::Literal(lit),
+
+            ExpressionKind::Ident { generic_args, .. } => {
+                let resolution = self.resolution.resolution_of_expr(expr);
+
+                let base = match resolution {
+                    Some(Resolution::Def(id)) => HirExprKind::VarRef(id),
+                    Some(Resolution::GenericParam(id)) => HirExprKind::GenericParamRef(id),
+                    Some(Resolution::SelfValue(id)) => HirExprKind::SelfValue(id),
+                    Some(Resolution::SelfType(_)) => HirExprKind::Error,
+                    Some(Resolution::Builtin) | Some(Resolution::Error) | None => {
+                        HirExprKind::Error
+                    }
+                };
+
+                let _ = generic_args;
+
+                base
+            }
+
+            ExpressionKind::Macro(name) => HirExprKind::Macro(name),
+
+            ExpressionKind::Binary { lhs, rhs, op } => HirExprKind::Binary {
+                lhs: Rc::new(self.lower_expr(lhs)),
+                rhs: Rc::new(self.lower_expr(rhs)),
+                op,
+            },
+
+            ExpressionKind::Unary { expr, op } => HirExprKind::Unary {
+                expr: Rc::new(self.lower_expr(expr)),
+                op,
+            },
+
+            ExpressionKind::Call { callee, args } => {
+                let generic_args = match callee.kind {
+                    ExpressionKind::Ident {
+                        generic_args: Some(gargs),
+                        ..
+                    } => gargs.iter().map(|t| Rc::new(self.lower_type(t))).collect(),
+                    _ => Vec::new(),
+                };
+
+                HirExprKind::Call {
+                    callee: Rc::new(self.lower_expr(callee)),
+                    args: args.iter().map(|a| Rc::new(self.lower_expr(a))).collect(),
+                    generic_args,
+                }
+            }
+
+            ExpressionKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => HirExprKind::If {
+                condition: Rc::new(self.lower_expr(condition)),
+                then_block: Rc::new(self.lower_stmt(then_block)),
+                else_block: else_block.map(|b| Rc::new(self.lower_stmt(b))),
+            },
+
+            ExpressionKind::Switch { .. } => HirExprKind::Switch,
+
+            ExpressionKind::FieldAccess { object, field } => {
+                let (field_name, field_span) = match field.kind {
+                    ExpressionKind::Ident { name, .. } => (name, field.span),
+                    _ => {
+                        return HirExpr {
+                            id: self.fresh_id(),
+                            kind: HirExprKind::Error,
+                            source: (expr.span, self.current_src.clone()).into(),
+                        }
+                    }
+                };
+
+                HirExprKind::FieldAccess {
+                    object: Rc::new(self.lower_expr(object)),
+                    field: (field_name, field_span),
+                }
+            },
+
+            ExpressionKind::SliceAccess { object, index } => HirExprKind::SliceAccess {
+                object: Rc::new(self.lower_expr(object)),
+                index: Rc::new(self.lower_expr(index)),
+            },
+
+            _ => todo!(),
+        };
+
+        HirExpr {
+            id: self.fresh_id(),
+            kind,
+            source: (expr.span, self.current_src.clone()).into(),
+        }
     }
 
     // > Types
