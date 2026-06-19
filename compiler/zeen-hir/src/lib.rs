@@ -125,8 +125,54 @@ impl<'res> HirLowering<'res> {
         let kind = match decl.kind {
             DeclarationKind::FnDecl { .. } => HirDeclKind::Fn(Rc::new(self.lower_fn(decl, None))),
 
+            DeclarationKind::StructDecl { name, is_pub, generics, fields, methods } => {
+                let self_def = def_id.expect("StructDecl must have DefId, something went wrong");
+
+                let hir_fields: Vec<HirField> = fields
+                    .iter()
+                    .map(|field| HirField {
+                        def_id: self.resolution.def_of_field(field).unwrap_or(self_def),
+                        name: field.name,
+                        ty: Rc::new(self.lower_type(field.ty)),
+                        is_pub: field.is_pub,
+                    })
+                    .collect();
+
+                let hir_methods: Vec<Rc<HirDecl>> = methods
+                    .iter()
+                    .filter_map(|method| {
+                        self.lower_decl_as_method(method, Some(self_def))
+                    })
+                    .collect();
+
+                HirDeclKind::Struct(Rc::new(HirStruct {
+                    name,
+                    is_pub,
+                    generics: self.lower_generics(generics),
+                    fields: hir_fields,
+                    methods: hir_methods,
+                }))
+            }
+
             _ => todo!("other declarations must be implemented"),
         };
+
+        Some(Rc::new(HirDecl {
+            id: self.fresh_id(),
+            def_id: def_id.unwrap_or(DefId(u32::MAX)),
+            kind,
+            source: decl.source.clone(),
+        }))
+    }
+
+    fn lower_decl_as_method<'ctx>(&mut self, decl: &'ctx Declaration<'ctx>, self_def: Option<DefId>) -> Option<Rc<HirDecl>> {
+        let def_id = self.def_id_of_decl(decl);
+
+        let DeclarationKind::FnDecl { .. } = decl.kind else {
+            return None;
+        };
+
+        let kind = HirDeclKind::Fn(Rc::new(self.lower_fn(decl, self_def)));
 
         Some(Rc::new(HirDecl {
             id: self.fresh_id(),
