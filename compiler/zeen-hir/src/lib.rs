@@ -197,6 +197,27 @@ impl<'res> HirLowering<'res> {
                 }))
             }
 
+            DeclarationKind::EnumDecl {
+                name,
+                variants,
+                is_pub
+            } => {
+                let hir_variants: Vec<HirEnumVariant> = variants
+                    .iter()
+                    .map(|variant| HirEnumVariant {
+                        def_id: self.resolution.def_of_variant(variant).unwrap_or(DefId(u32::MAX)),
+                        name: variant.name,
+                        span: variant.span
+                    })
+                    .collect();
+
+                HirDeclKind::Enum(Rc::new(HirEnum {
+                    name,
+                    is_pub,
+                    variants: hir_variants,
+                }))
+            }
+
             _ => todo!("other declarations must be implemented"),
         };
 
