@@ -559,6 +559,49 @@ impl<'res> HirLowering<'res> {
     // > Types
 
     fn lower_type<'ctx>(&mut self, ty: &'ctx TypeExpr<'ctx>) -> HirTypeExpr {
-        todo!()
+        let kind = match ty.kind {
+            TypeKind::Builtin(b) => HirTypeKind::Builtin(b),
+            TypeKind::VaArgs => HirTypeKind::VaArgs,
+
+            TypeKind::SelfType | TypeKind::SelfAlias => {
+                match self.resolution.resolution_of_type(ty) {
+                    Some(Resolution::SelfType(id)) if matches!(ty.kind, TypeKind::SelfType) => {
+                        HirTypeKind::SelfType(id)
+                    },
+                    Some(Resolution::SelfType(id)) => HirTypeKind::SelfAlias(id),
+                    _ => HirTypeKind::Error,
+                }
+            }
+
+            TypeKind::Named { generic_args, .. } => {
+                let def_id = match self.resolution.resolution_of_type(ty) {
+                    Some(Resolution::Def(id)) | Some(Resolution::GenericParam(id)) => id,
+                    _ => {
+                        return HirTypeExpr {
+                            id: self.fresh_id(),
+                            kind: HirTypeKind::Error,
+                            source: (ty.span, self.current_src.clone()).into(),
+                        };
+                    }
+                };
+
+                let hir_args = generic_args
+                    .map(|args| args.iter().map(|t| Rc::new(self.lower_type(t))).collect())
+                    .unwrap_or_default();
+
+                HirTypeKind::Named {
+                    def_id,
+                    generic_args: hir_args,
+                }
+            }
+
+            _ => todo!()
+        };
+
+        HirTypeExpr {
+            id: self.fresh_id(),
+            kind,
+            source: (ty.span, self.current_src.clone()).into(),
+        }
     }
 }
