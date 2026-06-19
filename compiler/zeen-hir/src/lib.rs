@@ -595,7 +595,23 @@ impl<'res> HirLowering<'res> {
                 }
             }
 
-            _ => todo!()
+            TypeKind::Const(inner) => HirTypeKind::Const(Rc::new(self.lower_type(inner))),
+            TypeKind::Pointer(inner) => HirTypeKind::Pointer(Rc::new(self.lower_type(inner))),
+
+            TypeKind::Array { element, len } => HirTypeKind::Array {
+                element: Rc::new(self.lower_type(element)),
+                len: len.map(|e| Rc::new(self.lower_expr(e))),
+            },
+
+            TypeKind::Fn {
+                params,
+                generic_args,
+                ret,
+            } => HirTypeKind::Fn {
+                params: params.iter().map(|p| Rc::new(self.lower_type(p))).collect(),
+                generics: self.lower_generics(generic_args),
+                ret: Rc::new(self.lower_type(ret)),
+            },
         };
 
         HirTypeExpr {
