@@ -501,7 +501,7 @@ impl<'res> HirLowering<'res> {
                             id: self.fresh_id(),
                             kind: HirExprKind::Error,
                             source: (expr.span, self.current_src.clone()).into(),
-                        }
+                        };
                     }
                 };
 
@@ -509,7 +509,7 @@ impl<'res> HirLowering<'res> {
                     object: Rc::new(self.lower_expr(object)),
                     field: (field_name, field_span),
                 }
-            },
+            }
 
             ExpressionKind::SliceAccess { object, index } => HirExprKind::SliceAccess {
                 object: Rc::new(self.lower_expr(object)),
@@ -539,12 +539,18 @@ impl<'res> HirLowering<'res> {
             }
 
             ExpressionKind::ArrayInit { elements } => HirExprKind::ArrayInit {
-                elements: elements.iter().map(|e| Rc::new(self.lower_expr(e))).collect(),
+                elements: elements
+                    .iter()
+                    .map(|e| Rc::new(self.lower_expr(e)))
+                    .collect(),
             },
 
-            ExpressionKind::Block(stmts) => {
-                HirExprKind::Block(stmts.iter().map(|stmt| Rc::new(self.lower_stmt(stmt))).collect())
-            }
+            ExpressionKind::Block(stmts) => HirExprKind::Block(
+                stmts
+                    .iter()
+                    .map(|stmt| Rc::new(self.lower_stmt(stmt)))
+                    .collect(),
+            ),
 
             ExpressionKind::Type(ty) => HirExprKind::Type(Rc::new(self.lower_type(ty))),
         };
@@ -567,7 +573,7 @@ impl<'res> HirLowering<'res> {
                 match self.resolution.resolution_of_type(ty) {
                     Some(Resolution::SelfType(id)) if matches!(ty.kind, TypeKind::SelfType) => {
                         HirTypeKind::SelfType(id)
-                    },
+                    }
                     Some(Resolution::SelfType(id)) => HirTypeKind::SelfAlias(id),
                     _ => HirTypeKind::Error,
                 }
