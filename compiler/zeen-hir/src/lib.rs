@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use lasso::Spur;
 use miette::SourceSpan;
@@ -47,6 +47,7 @@ pub use types::{HirTypeExpr, HirTypeKind};
 pub struct HirLowering<'res> {
     resolution: &'res ResolutionResult,
     next_id: u32,
+    current_src: miette::NamedSource<Arc<String>>,
 }
 
 impl<'res> HirLowering<'res> {
@@ -54,6 +55,7 @@ impl<'res> HirLowering<'res> {
         Self {
             resolution,
             next_id: 0,
+            current_src: miette::NamedSource::new("", Arc::new("".into())),
         }
     }
 
@@ -120,6 +122,8 @@ impl<'res> HirLowering<'res> {
     // > Declarations
 
     fn lower_decl<'ctx>(&mut self, decl: &'ctx Declaration<'ctx>) -> Option<Rc<HirDecl>> {
+        self.current_src = decl.source.src();
+
         let def_id = self.def_id_of_decl(decl);
 
         let kind = match decl.kind {
@@ -346,7 +350,75 @@ impl<'res> HirLowering<'res> {
     // > Statements
 
     fn lower_stmt<'ctx>(&mut self, stmt: &'ctx Statement<'ctx>) -> HirStmt {
-        todo!()
+        let kind = match stmt.kind {
+            StatementKind::Let {
+                name,
+                explicit_type,
+                value,
+                is_const
+            } => {
+                let def_id = match self.resolution_of_stmt(stmt) {
+                    Some(Resolution::Def(id)) => id,
+                    _ => DefId(u32::MAX),
+                };
+
+                HirStmtKind::Let {
+                    def_id,
+                    name,
+                    explicit_type: explicit_type.map(|t| Rc::new(self.lower_type(t))),
+                    value: value.map(|v| Rc::new(self.lower_expr(v))),
+                    is_const,
+                }
+            },
+
+            StatementKind::Assign { object, value } => HirStmtKind::Assign {
+                object: Rc::new(self.lower_expr(object)),
+                value: Rc::new(self.lower_expr(value)),
+            },
+
+            StatementKind::CompoundAssign { object, value, op } => HirStmtKind::CompoundAssign {
+                object: Rc::new(self.lower_expr(object)),
+                value: Rc::new(self.lower_expr(value)),
+                op,
+            },
+
+            StatementKind::Return { value } => HirStmtKind::Return {
+                value: value.map(|val| Rc::new(self.lower_expr(val))),
+            },
+
+            StatementKind::Defer { body } => HirStmtKind::Defer {
+                body: Rc::new(self.lower_stmt(body)),
+            },
+
+            StatementKind::Break => HirStmtKind::Break,
+
+            StatementKind::While { condition, block } => HirStmtKind::While {
+                condition: Rc::new(self.lower_expr(condition)),
+                block: Rc::new(self.lower_stmt(block)),
+            },
+
+            StatementKind::For { varname, iterator, block } => {
+                let def_id = match self.resolution_of_stmt(stmt) {
+                    Some(Resolution::Def(id)) => id,
+                    _ => DefId(u32::MAX),
+                };
+
+                HirStmtKind::For {
+                    def_id,
+                    varname,
+                    iterator: Rc::new(self.lower_expr(iterator)),
+                    block: Rc::new(self.lower_stmt(block)),
+                }
+            }
+
+            StatementKind::Expr(expr) => HirStmtKind::Expr(Rc::new(self.lower_expr(expr))),
+        };
+
+        HirStmt {
+            id: self.fresh_id(),
+            kind,
+            source: (stmt.span, self.current_src.clone()).into(),
+        }
     }
 
     // > Expressions
