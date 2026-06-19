@@ -516,6 +516,28 @@ impl<'res> HirLowering<'res> {
                 index: Rc::new(self.lower_expr(index)),
             },
 
+            ExpressionKind::StructInit { ty, fields } => {
+                let ty_def = self.path_expr_def_id(ty);
+
+                let hir_fields: Vec<HirFieldInit> = fields
+                    .map(|fields| {
+                        fields
+                            .iter()
+                            .map(|f| HirFieldInit {
+                                name: f.name,
+                                span: f.span,
+                                value: Rc::new(self.lower_expr(f.value)),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                HirExprKind::StructInit {
+                    ty: (ty_def, ty.span),
+                    fields: hir_fields,
+                }
+            }
+
             _ => todo!(),
         };
 
