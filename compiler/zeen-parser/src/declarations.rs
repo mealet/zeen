@@ -490,16 +490,16 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Interface), "interface")?;
 
+        // will give Option::None if not at bracket token
+        let mut type_parser = TypeParser::new(self.p);
+        let generics = type_parser.parse_generics_declarations();
+
         let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
         let name_span = name_token.span;
         let name_slice =
             self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
 
         let name = (self.p.get_or_intern(name_slice), name_span);
-
-        // will give Option::None if not at bracket token
-        let mut type_parser = TypeParser::new(self.p);
-        let generics = type_parser.parse_generics_declarations();
 
         let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
 
