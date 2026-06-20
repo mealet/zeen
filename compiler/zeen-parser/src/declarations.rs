@@ -1233,7 +1233,7 @@ mod tests {
 
     #[test]
     fn interface_decl_with_generics() {
-        const SRC: &str = "interface Empty[T, R] {}";
+        const SRC: &str = "interface[T, R] Empty {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
