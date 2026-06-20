@@ -531,6 +531,16 @@ dependencies = [
 [[package]]
 name = "zeen-typecheck"
 version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "miette",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-hir",
+ "zeen-resolve",
+]
 
 [[package]]
 name = "zerocopy"
