@@ -981,7 +981,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
             let stmt = stmt_parser.parse().or_else(|| {
                 if self.p.panic_mode {
-                    self.p.sync()
+                    // self.p.sync()
                 }
                 None
             });

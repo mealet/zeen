@@ -55,7 +55,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
     }
 
     fn expect_semicolon(&mut self) -> Option<()> {
-        let _ = self.p.expect(TokenKind::Semicolon, ";");
+        let _ = self.p.expect(TokenKind::Semicolon, ";")?;
         Some(())
     }
 
