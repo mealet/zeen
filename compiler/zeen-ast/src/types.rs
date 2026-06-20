@@ -45,7 +45,7 @@ pub enum TypeKind<'arena> {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum BuiltinType {
     i8,
     i16,
