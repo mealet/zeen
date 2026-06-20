@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn assign_basic() {
-        const SRC: &str = "a = b";
+        const SRC: &str = "a = b;";
 
         make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
 
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn assign_field() {
-        const SRC: &str = "a.field = b";
+        const SRC: &str = "a.field = b;";
 
         make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
 
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn assign_slice() {
-        const SRC: &str = "a[123] = b";
+        const SRC: &str = "a[123] = b;";
 
         make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
 
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn assign_wtf() {
-        const SRC: &str = "123 = a";
+        const SRC: &str = "123 = a;";
 
         make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
 
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn defer_block() {
-        const SRC: &str = "defer { let a = 123; }";
+        const SRC: &str = "defer { let a = 123; };";
 
         make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
 
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn while_block() {
-        const SRC: &str = "while (1 == 1) { let a = 123; }";
+        const SRC: &str = "while (1 == 1) { let a = 123; };";
 
         make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
 
@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn for_block() {
-        const SRC: &str = "for (i : 123) { let a = 123; }";
+        const SRC: &str = "for (i : 123) { let a = 123; };";
 
         make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
 
