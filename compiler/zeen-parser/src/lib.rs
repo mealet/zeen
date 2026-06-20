@@ -239,10 +239,10 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
                             TokenKind::OpenBrace => braces += 1,
                             TokenKind::CloseBrace => braces -= 1,
                             TokenKind::Eof => break,
-                            _ => {
-                                let _ = self.advance();
-                            }
+                            _ => {}
                         }
+
+                        let _ = self.advance();
                     }
                 }
 
