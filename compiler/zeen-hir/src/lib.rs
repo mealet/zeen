@@ -185,9 +185,41 @@ impl<'res> HirLowering<'res> {
                 interface,
                 object,
                 methods,
+                generics,
             } => {
-                let object_def = self.path_expr_def_id(object);
-                let interface_def = self.path_expr_def_id(interface);
+                let object_def = match self.resolution.resolution_of_type(&TypeExpr {
+                    kind: TypeKind::Named {
+                        name: object.0,
+                        generic_args: None,
+                    },
+                    span: object.1,
+                }) {
+                    Some(res) => {
+                        if let Resolution::Def(id) = res {
+                            Some(id)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                let interface_def = match self.resolution.resolution_of_type(&TypeExpr {
+                    kind: TypeKind::Named {
+                        name: interface.0,
+                        generic_args: None,
+                    },
+                    span: interface.1,
+                }) {
+                    Some(res) => {
+                        if let Resolution::Def(id) = res {
+                            Some(id)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
 
                 let hir_methods: Vec<Rc<HirDecl>> = methods
                     .iter()

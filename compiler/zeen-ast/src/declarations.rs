@@ -54,6 +54,7 @@ pub enum DeclarationKind<'arena> {
     ImplementDecl {
         interface: (Spur, SourceSpan),
         object: (Spur, SourceSpan, &'arena [(Spur, SourceSpan)]), // name, span, generics bindings
+        generics: Option<&'arena [GenericType<'arena>]>,
 
         methods: &'arena [&'arena Declaration<'arena>], // FnDecl
     },

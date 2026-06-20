@@ -615,6 +615,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             kind: DeclarationKind::ImplementDecl {
                 interface,
                 object,
+                generics,
                 methods,
             },
             source: (span, self.p.named_src()).into(),

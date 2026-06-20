@@ -319,7 +319,15 @@ impl<'ctx> NameResolver<'ctx> {
                 self.declare_generics(generics, &decl.source.src);
 
                 for method in methods {
-                    self.resolve_decl(method);
+                    let name_interned = self.interner_intern("self");
+                    let self_defined = self.define(DefInfo {
+                        name: name_interned,
+                        kind: DefKind::Struct,
+                        span: decl.source.clone(),
+                        decl: Some(NodeKey::from_decl(decl)),
+                    });
+
+                    self.resolve_method(method, self_defined);
                 }
 
                 self.table.pop();
@@ -329,12 +337,13 @@ impl<'ctx> NameResolver<'ctx> {
                 interface,
                 object,
                 methods,
+                generics,
             } => {
-                self.resolve_expr(interface);
-                self.resolve_expr(object);
+                let interface_def = self.table.lookup_type(interface.0);
+                let object_def = self.table.lookup_type(object.0);
 
-                let object_def = self.path_expr_to_type_def(object);
-                let interface_def = self.path_expr_to_type_def(interface);
+                self.table.push(ScopeKind::Block);
+                self.declare_generics(generics, &decl.source.src);
 
                 let mut methods_ids = Vec::new();
 
@@ -348,6 +357,8 @@ impl<'ctx> NameResolver<'ctx> {
                         self.resolve_decl(method);
                     }
                 }
+
+                self.table.pop();
 
                 if let (Some(obj), Some(iface)) = (object_def, interface_def) {
                     self.result.impls.insert((obj, iface), methods_ids);
@@ -446,21 +457,6 @@ impl<'ctx> NameResolver<'ctx> {
         self.table.pop();
 
         method_id
-    }
-
-    fn path_expr_to_type_def(&self, expr: &Expression) -> Option<DefId> {
-        match expr.kind {
-            ExpressionKind::Ident { name, .. } => self.table.lookup_type(name),
-            ExpressionKind::FieldAccess { field, .. } => {
-                if let ExpressionKind::Ident { name, .. } = field.kind {
-                    self.table.lookup_type(name)
-                } else {
-                    None
-                }
-            }
-
-            _ => None,
-        }
     }
 
     fn declare_generics(
