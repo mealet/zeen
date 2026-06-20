@@ -545,14 +545,49 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Implement), "implement")?;
 
-        let mut expr_parser = ExprParser::new(self.p).non_struct_braces();
-        let interface = expr_parser.parse()?;
+        // will give Option::None if not at bracket token
+        let mut type_parser = TypeParser::new(self.p);
+        let generics = type_parser.parse_generics_declarations();
+
+        let interface_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let interface_span = interface_token.span;
+        let interface_slice = self.p.src
+            [interface_span.offset()..interface_span.offset() + interface_span.len()]
+            .to_owned();
+
+        let interface = (self.p.get_or_intern(interface_slice), interface_span);
 
         let _ = self.p.expect(TokenKind::Colon, ":")?;
 
-        // dont blame me, just thanks borrow checker for this repeat
-        let mut expr_parser = ExprParser::new(self.p).non_struct_braces();
-        let object = expr_parser.parse()?;
+        let object_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let object_span = object_token.span;
+        let object_slice =
+            self.p.src[object_span.offset()..object_span.offset() + object_span.len()].to_owned();
+
+        let mut generic_bindings: Vec<(lasso::Spur, miette::SourceSpan)> = Vec::new();
+
+        if self.p.eat(TokenKind::OpenBracket) {
+            while !(self.p.at(TokenKind::CloseBracket) || self.p.at(TokenKind::Eof)) {
+                let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+                let name_span = name_token.span;
+                let name_slice =
+                    self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+                let name = (self.p.get_or_intern(name_slice), name_span);
+
+                generic_bindings.push(name);
+            }
+
+            let _ = self.p.expect(TokenKind::CloseBracket, "]");
+        }
+
+        let generics_arena: &_ = self.p.arena.alloc_slice_copy(&generic_bindings);
+
+        let object = (
+            self.p.get_or_intern(object_slice),
+            object_span,
+            generics_arena,
+        );
 
         let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
 

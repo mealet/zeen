@@ -52,8 +52,8 @@ pub enum DeclarationKind<'arena> {
     },
 
     ImplementDecl {
-        interface: &'arena Expression<'arena>, // must be ident / field access that ends with ident.
-        object: &'arena Expression<'arena>,    // here too
+        interface: (Spur, SourceSpan),
+        object: (Spur, SourceSpan, &'arena [(Spur, SourceSpan)]), // name, span, generics bindings
 
         methods: &'arena [&'arena Declaration<'arena>], // FnDecl
     },
