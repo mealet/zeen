@@ -163,17 +163,17 @@ struct Value[T: Add, R: Add] {
 /*
   Macros is Zeen are comptime features to level up user experience.
   Avaible macros:
-  * `as!(T, expr) T` - casts expression to specified type.
-  * `sizeof!(T) usize` - returns size of provided type.
-  * `alignof!(T) usize` - returns align of provided type.
+  * `@as(T, expr) T` - casts expression to specified type.
+  * `@sizeof(T) usize` - returns size of provided type.
+  * `@alignof(T) usize` - returns align of provided type.
 
-  * `print!("format string", ...) void` - formats string with values and prints it.
-  * `println!("format string", ...) void` - formats string with values and prints it with new line.
-  * `format!("format string", ...) *char` - formats string with values and puts it on stack.
+  * `@print("format string", ...) void` - formats string with values and prints it.
+  * `@println("format string", ...) void` - formats string with values and prints it with new line.
+  * `@format("format string", ...) *char` - formats string with values and puts it on stack.
 
-  * `panic!("format string", ...) never` - panics (emergency program stop with stack trace) with formatted string.
-  * `unreachable!() never` - tells compiler that this code is unreachable. If runtime reaches that piece - code panics.
-  * `dbg!(expr) expr` - prints debug info about expression and returns it.
+  * `@panic("format string", ...) never` - panics (emergency program stop with stack trace) with formatted string.
+  * `@unreachable() never` - tells compiler that this code is unreachable. If runtime reaches that piece - code panics.
+  * `@dbg(expr) expr` - prints debug info about expression and returns it.
 */
 
 /* ====@ Variables @==== */
