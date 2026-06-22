@@ -25,8 +25,6 @@ pub enum ExpressionKind<'arena> {
         generic_args: Option<&'arena [&'arena crate::types::TypeExpr<'arena>]>,
     },
 
-    Macro(Spur),
-
     Binary {
         lhs: &'arena Expression<'arena>,
         rhs: &'arena Expression<'arena>,
@@ -40,6 +38,11 @@ pub enum ExpressionKind<'arena> {
 
     Call {
         callee: &'arena Expression<'arena>,
+        args: &'arena [&'arena Expression<'arena>],
+    },
+
+    MacroCall {
+        name: (Spur, SourceSpan),
         args: &'arena [&'arena Expression<'arena>],
     },
 

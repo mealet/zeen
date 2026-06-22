@@ -484,8 +484,6 @@ impl<'res> HirLowering<'res> {
                 base
             }
 
-            ExpressionKind::Macro(name) => HirExprKind::Macro(name),
-
             ExpressionKind::Binary { lhs, rhs, op } => HirExprKind::Binary {
                 lhs: Rc::new(self.lower_expr(lhs)),
                 rhs: Rc::new(self.lower_expr(rhs)),
@@ -512,6 +510,8 @@ impl<'res> HirLowering<'res> {
                     generic_args,
                 }
             }
+
+            ExpressionKind::MacroCall { .. } => todo!(),
 
             ExpressionKind::If {
                 condition,

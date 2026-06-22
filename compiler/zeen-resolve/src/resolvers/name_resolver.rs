@@ -603,8 +603,6 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
-            ExpressionKind::Macro(_) => {}
-
             ExpressionKind::Binary { lhs, rhs, .. } => {
                 self.resolve_expr(lhs);
                 self.resolve_expr(rhs);
@@ -617,6 +615,12 @@ impl<'ctx> NameResolver<'ctx> {
             ExpressionKind::Call { callee, args } => {
                 self.resolve_expr(callee);
 
+                for arg in args {
+                    self.resolve_expr(arg);
+                }
+            }
+
+            ExpressionKind::MacroCall { args, .. } => {
                 for arg in args {
                     self.resolve_expr(arg);
                 }

@@ -756,33 +756,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     }
 
     fn parse_call(&mut self, callee: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
-        let macro_id: Option<lasso::Spur> = if let ExpressionKind::Macro(key) = callee.kind {
-            Some(key)
-        } else {
-            None
-        };
-
         let open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
         let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
-
-        if let Some(macro_id) = macro_id {
-            let mut interner_lock = self.p.interner.lock().unwrap();
-            let macro_name = &interner_lock.resolve(&macro_id).to_owned()[1..];
-            drop(interner_lock);
-
-            if matches!(macro_name, "as" | "sizeof" | "alignof") {
-                let mut type_parser = crate::type_parser::TypeParser::new(self.p);
-
-                let parsed_type = type_parser.parse()?;
-                let type_expr = self.p.arena.alloc(Expression {
-                    kind: ExpressionKind::Type(parsed_type),
-                    span: parsed_type.span,
-                });
-
-                args_buffer.push(type_expr);
-                let _ = self.p.eat(TokenKind::Comma);
-            }
-        }
 
         while !matches!(
             self.p.current().kind,
@@ -815,14 +790,50 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         let ident_span = macro_ident.span;
         let ident_slice =
             self.p.src[ident_span.offset()..ident_span.offset() + ident_span.len()].to_owned();
-        let ident_id = self.p.get_or_intern(ident_slice);
+        let ident_id = self.p.get_or_intern(&ident_slice);
 
-        let callee = self.p.arena.alloc(Expression {
-            kind: ExpressionKind::Macro(ident_id),
-            span: macro_ident.span,
+        let open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
+        let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
+
+        if matches!(&ident_slice[1..], "as" | "sizeof" | "alignof") {
+            let mut tp = crate::type_parser::TypeParser::new(self.p);
+            let parsed_type = tp.parse()?;
+
+            let ty_expr = self.p.arena.alloc(Expression {
+                kind: ExpressionKind::Type(parsed_type),
+                span: parsed_type.span,
+            });
+
+            args_buffer.push(ty_expr);
+            let _ = self.p.eat(TokenKind::Comma);
+        }
+
+        while !matches!(
+            self.p.current().kind,
+            TokenKind::CloseParen | TokenKind::Eof
+        ) {
+            let arg = self.parse()?;
+            args_buffer.push(arg);
+
+            if !self.p.at(TokenKind::CloseParen) {
+                self.p.expect(TokenKind::Comma, ",")?;
+            }
+        }
+
+        let close_paren = self.p.expect(TokenKind::CloseParen, ")")?;
+
+        let args = self.p.arena.alloc_slice_copy(&args_buffer);
+        drop(args_buffer);
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::MacroCall {
+                name: (ident_id, ident_span),
+                args,
+            },
+            span: macro_ident.merge_span(close_paren.span),
         });
 
-        self.parse_call(callee)
+        Some(expr)
     }
 
     fn parse_field_access(&mut self, object: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
