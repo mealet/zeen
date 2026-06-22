@@ -21,7 +21,6 @@ pub enum HirExprKind {
     VarRef(DefId),
     GenericParamRef(DefId),
     SelfValue(DefId),
-    Macro(Spur),
 
     Binary {
         lhs: Rc<HirExpr>,
@@ -38,6 +37,11 @@ pub enum HirExprKind {
         callee: Rc<HirExpr>,
         args: Vec<Rc<HirExpr>>,
         generic_args: Vec<Rc<HirTypeExpr>>,
+    },
+
+    MacroCall {
+        kind: MacroKind,
+        args: Vec<Rc<HirExpr>>,
     },
 
     If {
@@ -78,4 +82,21 @@ pub struct HirFieldInit {
     pub name: Spur,
     pub span: SourceSpan,
     pub value: Rc<HirExpr>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacroKind {
+    As,            // @as(T, expr) -> T
+    SizeOf,        // @sizeof(T) -> usize
+    AlignOf,       // @alignof(T) -> usize
+
+    Print,         // @print("format", ...) -> void
+    Println,       // @println("format", ...) -> void
+    Format,        // @format("format", ...) -> *char
+
+    Panic,         // @panic("format", ...) -> never
+    Unreachable,   // @unreachable() -> never
+    Dbg,           // @dbg(expr) -> expr
+
+    Unknown,       // Unknown macro fallback
 }
