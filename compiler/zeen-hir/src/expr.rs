@@ -40,7 +40,7 @@ pub enum HirExprKind {
     },
 
     MacroCall {
-        kind: MacroKind,
+        kind: (HirMacroKind, SourceSpan),
         args: Vec<Rc<HirExpr>>,
     },
 
@@ -85,18 +85,18 @@ pub struct HirFieldInit {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MacroKind {
-    As,            // @as(T, expr) -> T
-    SizeOf,        // @sizeof(T) -> usize
-    AlignOf,       // @alignof(T) -> usize
+pub enum HirMacroKind {
+    As,      // @as(T, expr) -> T
+    SizeOf,  // @sizeof(T) -> usize
+    AlignOf, // @alignof(T) -> usize
 
-    Print,         // @print("format", ...) -> void
-    Println,       // @println("format", ...) -> void
-    Format,        // @format("format", ...) -> *char
+    Print,   // @print("format", ...) -> void
+    Println, // @println("format", ...) -> void
+    Format,  // @format("format", ...) -> *char
 
-    Panic,         // @panic("format", ...) -> never
-    Unreachable,   // @unreachable() -> never
-    Dbg,           // @dbg(expr) -> expr
+    Panic,       // @panic("format", ...) -> never
+    Unreachable, // @unreachable() -> never
+    Dbg,         // @dbg(expr) -> expr
 
-    Unknown,       // Unknown macro fallback
+    Unknown, // Unknown macro fallback
 }

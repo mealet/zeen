@@ -92,7 +92,8 @@ fn main() {
                 std::process::exit(1);
             });
 
-            let mut hir_lowering = zeen_hir::HirLowering::new(&resolution_result);
+            let mut hir_lowering =
+                zeen_hir::HirLowering::new(&resolution_result, Arc::clone(&rodeo));
             let hir_module = hir_lowering.lower_module(program);
         }
         Err(err) => {

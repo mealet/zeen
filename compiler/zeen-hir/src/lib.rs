@@ -1,9 +1,13 @@
 #![allow(unused)]
 
-use std::{rc::Rc, sync::Arc};
+use std::{
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
-use lasso::Spur;
+use lasso::{Rodeo, Spur};
 use miette::SourceSpan;
+use smol_str::SmolStr;
 
 use zeen_ast::{
     declarations::{Declaration, DeclarationKind, FnParam, GenericType},
@@ -38,7 +42,7 @@ pub use decl::{
     HirInterface, HirParam, HirStruct,
 };
 
-pub use expr::{HirExpr, HirExprKind, HirFieldInit};
+pub use expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind};
 pub use stmt::{HirStmt, HirStmtKind};
 pub use types::{HirTypeExpr, HirTypeKind};
 
@@ -46,14 +50,17 @@ pub use types::{HirTypeExpr, HirTypeKind};
 
 pub struct HirLowering<'res> {
     resolution: &'res ResolutionResult,
+    interner: Arc<Mutex<Rodeo>>,
+
     next_id: u32,
     current_src: miette::NamedSource<Arc<String>>,
 }
 
 impl<'res> HirLowering<'res> {
-    pub fn new(resolution: &'res ResolutionResult) -> Self {
+    pub fn new(resolution: &'res ResolutionResult, interner: Arc<Mutex<Rodeo>>) -> Self {
         Self {
             resolution,
+            interner,
             next_id: 0,
             current_src: miette::NamedSource::new("", Arc::new("".into())),
         }
@@ -63,6 +70,20 @@ impl<'res> HirLowering<'res> {
         let id = HirId(self.next_id);
         self.next_id += 1;
         id
+    }
+
+    fn interner_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
+        // compiler is not async/threaded (at least for now), so we're unwrapping lock
+        let mut interner = self.interner.lock().unwrap();
+
+        interner.get_or_intern(value)
+    }
+
+    fn interner_resolve(&self, key: &Spur) -> SmolStr {
+        let interner = self.interner.lock().unwrap();
+        let resolved = interner.resolve(key);
+
+        resolved.into()
     }
 
     // ==> Helpers
@@ -103,6 +124,26 @@ impl<'res> HirLowering<'res> {
         match self.resolution.resolution_of_expr(target) {
             Some(Resolution::Def(id)) => Some(id),
             _ => None,
+        }
+    }
+
+    fn resolve_macro_kind(&self, name: Spur) -> HirMacroKind {
+        let name = self.interner_resolve(&name);
+
+        match name.as_str() {
+            "as" => HirMacroKind::As,
+            "sizeof" => HirMacroKind::SizeOf,
+            "alignof" => HirMacroKind::AlignOf,
+
+            "print" => HirMacroKind::Print,
+            "println" => HirMacroKind::Println,
+            "format" => HirMacroKind::Format,
+
+            "panic" => HirMacroKind::Panic,
+            "unreachable" => HirMacroKind::Unreachable,
+            "dbg" => HirMacroKind::Dbg,
+
+            _ => HirMacroKind::Unknown,
         }
     }
 
@@ -265,8 +306,6 @@ impl<'res> HirLowering<'res> {
             DeclarationKind::ExternLink { .. } => HirDeclKind::ExternLink,
             DeclarationKind::ExternInclude { .. } => HirDeclKind::ExternInclude,
             DeclarationKind::Use { .. } => return None,
-
-            _ => todo!("other declarations must be implemented"),
         };
 
         Some(Rc::new(HirDecl {
@@ -511,7 +550,12 @@ impl<'res> HirLowering<'res> {
                 }
             }
 
-            ExpressionKind::MacroCall { .. } => todo!(),
+            ExpressionKind::MacroCall { name, args } => {
+                HirExprKind::MacroCall {
+                    kind: (self.resolve_macro_kind(name.0), name.1),
+                    args: args.iter().map(|arg| Rc::new(self.lower_expr(arg))).collect()
+                }
+            },
 
             ExpressionKind::If {
                 condition,
