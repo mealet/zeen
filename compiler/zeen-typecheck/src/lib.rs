@@ -1,5 +1,6 @@
 #![allow(unused)]
 
-mod types;
-mod context;
 mod coerce;
+mod context;
+mod error;
+mod types;

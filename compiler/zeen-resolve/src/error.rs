@@ -63,6 +63,7 @@ pub enum ResolveError {
         span: SourceSpan,
     },
 
+    // --> Name Resolver Error
     #[error("unresolved identifier: {name}")]
     #[diagnostic(severity(Error), code(zeen::resolver::unresolved_ident))]
     UnresolvedIdent {

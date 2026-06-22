@@ -110,7 +110,7 @@ pub enum BinaryOp {
     Lt, // <
     Gt, // >
     Le, // <= / =<
-    Ge, // >= / =>
+    Ge, // >=
 
     // Boolean
     LogicalAnd, // &&
@@ -124,6 +124,38 @@ pub enum BinaryOp {
     Shr,    // >>
 }
 
+impl std::fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Add => "+",
+                Self::Sub => "-",
+                Self::Mul => "*",
+                Self::Div => "/",
+                Self::Mod => "%",
+
+                Self::Eq => "==",
+                Self::Ne => "!=",
+                Self::Lt => "<",
+                Self::Gt => ">",
+                Self::Le => "<=",
+                Self::Ge => ">=",
+
+                Self::LogicalAnd => "&&",
+                Self::LogicalOr => "||",
+
+                Self::BitAnd => "&",
+                Self::BitOr => "|",
+                Self::BitXor => "^",
+                Self::Shl => "<<",
+                Self::Shr => ">>",
+            }
+        )
+    }
+}
+
 // Unary
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -133,6 +165,22 @@ pub enum UnaryOp {
     BitNot, // ~
     Deref,  // *a
     AddrOf, // &a
+}
+
+impl std::fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Neg => "-",
+                Self::Not => "!",
+                Self::BitNot => "~",
+                Self::Deref => "*",
+                Self::AddrOf => "&",
+            }
+        )
+    }
 }
 
 // Struct Init

@@ -1,0 +1,154 @@
+use smol_str::SmolStr;
+use std::{path::PathBuf, sync::Arc};
+
+use miette::{Diagnostic, NamedSource, SourceSpan};
+use thiserror::Error;
+
+use zeen_ast::expressions::{BinaryOp, UnaryOp};
+
+#[derive(Debug, Error, Diagnostic, Clone)]
+pub enum TypecheckError {
+    #[error("expected type `{expected}`, but found `{found}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::mismatch))]
+    Mismatch {
+        expected: SmolStr,
+        found: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("unknown field in '{struct_name}': `{field}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::unknown_field))]
+    UnknownField {
+        struct_name: SmolStr,
+        field: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("missing fields in '{struct_name}': {fields}")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::missing_fields))]
+    MissingFields {
+        struct_name: SmolStr,
+        fields: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("provided `{provided}` is not a struct")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::not_a_struct))]
+    NotAStruct {
+        provided: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("object is not callable")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::not_callable))]
+    NotCallable {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("expected {expected} args, but found {found}")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::arg_count_mismatch))]
+    ArgCountMismatch {
+        expected: usize,
+        found: usize,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("unable to infer generic type")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::cannot_infer_generic))]
+    CannotInferGeneric {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+
+        #[label(primary, "infer requested here")]
+        span: SourceSpan,
+
+        #[label("type declared here")]
+        declared: SourceSpan,
+    },
+
+    #[error("binary '{op}' is not supported between: `{lhs_type}` and `{rhs_type}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::not_supported_binary))]
+    BinaryNotSupported {
+        op: BinaryOp,
+        lhs_type: SmolStr,
+        rhs_type: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("unary '{op}' is not supported for: `{child_type}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::not_supported_unary))]
+    UnaryNotSupported {
+        op: UnaryOp,
+        child_type: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("usage of break outside loop")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::break_outside_loop))]
+    BreakOutsideLoop {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("type `{child_type}` is not indexable")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::not_indexable))]
+    NotIndexable {
+        child_type: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("array length must be constant")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::array_length_not_const))]
+    ArrayLengthNotConst {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("attempt to assign to const")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::assign_to_const))]
+    AssignToConst {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+}
