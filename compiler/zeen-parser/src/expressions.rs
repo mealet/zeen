@@ -789,13 +789,13 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
         let ident_span = macro_ident.span;
         let ident_slice =
-            self.p.src[ident_span.offset()..ident_span.offset() + ident_span.len()].to_owned();
+            self.p.src[ident_span.offset() + 1..ident_span.offset() + ident_span.len()].to_owned();
         let ident_id = self.p.get_or_intern(&ident_slice);
 
         let open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
         let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
 
-        if matches!(&ident_slice[1..], "as" | "sizeof" | "alignof") {
+        if matches!(ident_slice.as_str(), "as" | "sizeof" | "alignof") {
             let mut tp = crate::type_parser::TypeParser::new(self.p);
             let parsed_type = tp.parse()?;
 
