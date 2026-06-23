@@ -8,7 +8,7 @@ use crate::{
     types::{StructTypeInfo, TypeId, TypeInterner},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct TypeCheckResult {
     pub interner: TypeInterner,
     pub expr_types: HashMap<HirId, TypeId>,
