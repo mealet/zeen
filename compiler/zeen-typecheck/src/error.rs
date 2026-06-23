@@ -7,7 +7,7 @@ use thiserror::Error;
 use zeen_ast::expressions::{BinaryOp, UnaryOp};
 
 #[derive(Debug, Error, Diagnostic, Clone)]
-pub enum TypecheckError {
+pub enum TypeError {
     #[error("expected type `{expected}`, but found `{found}`")]
     #[diagnostic(severity(Error), code(zeen::typechecker::mismatch))]
     Mismatch {
