@@ -348,7 +348,67 @@ impl<'res> TypeChecker<'res> {
     // > Pass 2
 
     fn compute_structs_capabilities(&mut self, decl: &HirDecl) {
-        todo!()
+        if let HirDeclKind::Struct(_) = &decl.kind {
+            let mut visiting = Vec::new();
+            self.compute_capabilities(decl.def_id, &mut visiting);
+        }
+    }
+
+    fn compute_capabilities(&mut self, def_id: DefId, visiting: &mut Vec<DefId>) -> Capabilities {
+        if visiting.contains(&def_id) {
+            return Capabilities::MOVE_ONLY;
+        }
+        visiting.push(def_id);
+
+        let field_types: Vec<TypeId> = self
+            .result
+            .struct_info
+            .get(&def_id)
+            .map(|info| info.fields.iter().map(|(_, _, ty)| *ty).collect())
+            .unwrap_or_default();
+
+        let mut is_copy = true;
+        let mut needs_drop = false;
+
+        for field_ty in field_types {
+            let caps = self.capabilities_of_type(field_ty, visiting);
+
+            is_copy &= caps.is_copy;
+            needs_drop |= caps.needs_drop;
+        }
+
+        visiting.pop();
+
+        let caps = Capabilities { is_copy, needs_drop };
+
+        if let Some(info) = self.result.struct_info.get_mut(&def_id) {
+            info.capabalities = caps;
+        }
+
+        caps
+    }
+
+    fn capabilities_of_type(&mut self, ty: TypeId, visiting: &mut Vec<DefId>) -> Capabilities {
+        match self.result.interner.get(ty) {
+            Type::Builtin(_)
+            | Type::IntLiteral
+            | Type::FloatLiteral
+            | Type::Interface { .. }
+            | Type::Enum { .. }
+            | Type::Pointer { .. }
+            | Type::Fn { .. }
+            | Type::GenericParam { .. }
+            | Type::Void
+            | Type::Never
+            | Type::Error
+                => Capabilities::COPY,
+
+            Type::Struct { def_id, .. } => self.compute_capabilities(*def_id, visiting),
+
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                self.capabilities_of_type(*element, visiting)
+            }
+        }
     }
 
     // > Pass 3
