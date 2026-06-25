@@ -414,6 +414,47 @@ impl<'res> TypeChecker<'res> {
     // > Pass 3
 
     fn check_decl_body(&mut self, decl: &HirDecl) {
+        match &decl.kind {
+            HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None),
+
+            _ => todo!(),
+        }
+    }
+
+    fn check_fn_body(&mut self, def_id: DefId, hir_fn: &HirFn, self_ty: Option<TypeId>) {
+        let Some(body) = &hir_fn.body else {
+            return;
+        };
+
+        let sig = self
+            .fn_sigs
+            .get(&def_id)
+            .expect("unregistered signature, wtf");
+
+        let mut generic_bindings = HashMap::new();
+
+        for generic in &sig.generics {
+            let ty = self.result.interner.intern(Type::GenericParam(*generic));
+            generic_bindings.insert(*generic, ty);
+        }
+
+        self.ctx.push_fn(
+            FnCtx {
+                return_type: sig.ret,
+                self_type: self_ty,
+                generic_bindings,
+                loop_depth: 0
+            }
+        );
+
+        self.check_stmt(body);
+
+        self.ctx.pop_fn();
+    }
+
+    // Statements
+
+    fn check_stmt(&mut self, stmt: &HirStmt) {
         todo!()
     }
 }
