@@ -417,7 +417,54 @@ impl<'res> TypeChecker<'res> {
         match &decl.kind {
             HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None),
 
-            _ => todo!(),
+            HirDeclKind::Struct(s) => {
+                let self_ty = self.result.interner.intern(Type::Struct {
+                    def_id: decl.def_id,
+                    generic_args: Vec::new(),
+                });
+
+                for method in &s.methods {
+                    self.check_decl_body_as_method(method, self_ty);
+                }
+            }
+
+            HirDeclKind::Interface(i) => {
+                for method in &i.methods {
+                    if let HirDeclKind::Fn(f) = &method.kind {
+                        self.check_fn_body(method.def_id, f, None);
+                    }
+                }
+            }
+
+            HirDeclKind::Implement(imp) => {
+                if let Some(object_def) = imp.object {
+                    let self_ty = self.result.interner.intern(Type::Struct {
+                        def_id: object_def,
+                        generic_args: Vec::new(),
+                    });
+
+                    for method in &imp.methods {
+                        self.check_decl_body_as_method(method, self_ty);
+                    }
+                } else {
+                    for method in &imp.methods {
+                        if let HirDeclKind::Fn(f) = &method.kind {
+                            self.check_fn_body(method.def_id, f, None);
+                        }
+                    }
+                }
+            }
+
+            HirDeclKind::Enum(_)
+            | HirDeclKind::ExternVar { .. }
+            | HirDeclKind::ExternLink
+            | HirDeclKind::ExternInclude => {}
+        }
+    }
+
+    fn check_decl_body_as_method(&mut self, method: &HirDecl, self_ty: TypeId) {
+        if let HirDeclKind::Fn(f) = &method.kind {
+            self.check_fn_body(method.def_id, f, Some(self_ty));
         }
     }
 
