@@ -127,7 +127,34 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            _ => todo!()
+            HirDeclKind::Interface(i) => {
+                for method in &i.methods {
+                    self.declare_signature(method);
+                }
+            }
+
+            HirDeclKind::Implement(imp) => {
+                for method in &imp.methods {
+                    self.declare_signature(method);
+                }
+            }
+
+            HirDeclKind::Enum(e) => {
+                let enum_ty = self.result.interner.intern(Type::Enum {
+                    def_id: decl.def_id
+                });
+
+                for variant in &e.variants {
+                    self.result.def_types.insert(variant.def_id, enum_ty);
+                }
+            }
+
+            HirDeclKind::ExternVar { ty, .. } => {
+                let ty_id = self.lower_hir_type(ty);
+                self.result.def_types.insert(decl.def_id, ty_id);
+            }
+
+            HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {},
         };
     }
 
