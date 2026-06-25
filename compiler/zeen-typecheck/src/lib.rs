@@ -531,6 +531,12 @@ impl<'res> TypeChecker<'res> {
                     .insert(*def_id, *is_const || declared_const);
             }
 
+            HirStmtKind::Assign { object, value } => {
+                let obj_ty = self.synth_expr(object);
+                self.check_expr(value, obj_ty);
+                self.check_not_const_target(object);
+            }
+
             _ => todo!(),
         }
     }
@@ -543,6 +549,51 @@ impl<'res> TypeChecker<'res> {
 
     fn check_expr(&mut self, expr: &HirExpr, expected: TypeId) -> TypeId {
         todo!()
+    }
+
+    fn check_not_const_target(&mut self, target: &HirExpr) {
+        if self.find_const_violation(target) {
+            self.result.errors.push(TypeError::AssignToConst {
+                src: target.source.src(),
+                span: target.source.span,
+            })
+        }
+    }
+
+    fn find_const_violation(&mut self, target: &HirExpr) -> bool {
+        match &target.kind {
+            HirExprKind::Unary { expr: ptr_expr, op: UnaryOp::Deref } => {
+                if let Some(&ptr_ty) = self.result.expr_types.get(&ptr_expr.id)
+                    && let Type::Pointer { is_const: true, .. } = self.result.interner.get(ptr_ty) {
+                    return true;
+                }
+
+                false
+            }
+
+            HirExprKind::FieldAccess { object, .. } => {
+                let field_const = self
+                    .result
+                    .field_resolutions
+                    .get(&target.id)
+                    .and_then(|def_id| self.result.const_bindings.get(def_id))
+                    .copied()
+                    .unwrap_or(false);
+
+                field_const || self.find_const_violation(object)
+            }
+
+            HirExprKind::SliceAccess { object, .. } => self.find_const_violation(object),
+
+            HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => self
+                .result
+                .const_bindings
+                .get(def_id)
+                .copied()
+                .unwrap_or(false),
+
+            _ => false,
+        }
     }
 
     fn default_literal(&mut self, ty: TypeId) -> TypeId {
