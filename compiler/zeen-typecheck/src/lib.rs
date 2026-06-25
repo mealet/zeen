@@ -101,6 +101,32 @@ impl<'res> TypeChecker<'res> {
                 self.declare_fn_signature(decl.def_id, hir_fn);
             }
 
+            HirDeclKind::Struct(s) => {
+                let mut fields = Vec::with_capacity(s.fields.len());
+                
+                for field in &s.fields {
+                    let (ty, is_const) = self.lower_hir_type_with_const(&field.ty);
+
+                    self.result.def_types.insert(field.def_id, ty);
+                    self.result.const_bindings.insert(field.def_id, is_const);
+
+                    fields.push((field.name, field.def_id, ty));
+                }
+
+                self.result.struct_info.insert(
+                    decl.def_id,
+                    StructTypeInfo {
+                        def_id: decl.def_id,
+                        fields,
+                        capabalities: Capabilities::MOVE_ONLY, // currently placeholder, resolved in phase 2
+                    }
+                );
+
+                for method in &s.methods {
+                    self.declare_signature(method);
+                }
+            }
+
             _ => todo!()
         };
     }
