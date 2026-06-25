@@ -413,6 +413,8 @@ impl<'res> TypeChecker<'res> {
 
     // > Pass 3
 
+    // Declarations
+
     fn check_decl_body(&mut self, decl: &HirDecl) {
         match &decl.kind {
             HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None),
@@ -502,6 +504,52 @@ impl<'res> TypeChecker<'res> {
     // Statements
 
     fn check_stmt(&mut self, stmt: &HirStmt) {
+        match &stmt.kind {
+            HirStmtKind::Let { def_id, name, explicit_type, value, is_const } => {
+                let declared = explicit_type
+                    .as_ref()
+                    .map(|t| self.lower_hir_type_with_const(t));
+
+                let declared_ty = declared.map(|(ty, _)| ty);
+                let declared_const = declared.map(|(_, c)| c).unwrap_or(false);
+
+                let value_ty = value.as_ref().map(|val| match declared_ty {
+                    Some(expected) => self.check_expr(val, expected),
+                    None => self.synth_expr(val)
+                });
+
+                let final_ty = match (declared_ty, value_ty) {
+                    (Some(t), _) => t,
+                    (None, Some(t)) => self.default_literal(t),
+                    (None, None) => self.result.interner.error(),
+                };
+
+                self.result.def_types.insert(*def_id, final_ty);
+
+                self.result
+                    .const_bindings
+                    .insert(*def_id, *is_const || declared_const);
+            }
+
+            _ => todo!(),
+        }
+    }
+
+    // Expressions
+
+    fn synth_expr(&mut self, expr: &HirExpr) -> TypeId {
         todo!()
+    }
+
+    fn check_expr(&mut self, expr: &HirExpr, expected: TypeId) -> TypeId {
+        todo!()
+    }
+
+    fn default_literal(&mut self, ty: TypeId) -> TypeId {
+        match self.result.interner.get(ty) {
+            Type::IntLiteral => self.result.interner.builtin(BuiltinType::i32),
+            Type::FloatLiteral => self.result.interner.builtin(BuiltinType::f64),
+            _ => ty,
+        }
     }
 }
