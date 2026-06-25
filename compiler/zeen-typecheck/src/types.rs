@@ -53,6 +53,12 @@ pub enum Type {
     Error,
 }
 
+impl Type {
+    pub fn to_display(&self, interner: &TypeInterner) -> String {
+        todo!()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TypeInterner {
     types: Vec<Type>,
@@ -77,6 +83,11 @@ impl TypeInterner {
 
     pub fn get(&self, id: TypeId) -> &Type {
         &self.types[id.0 as usize]
+    }
+
+    pub fn display_type(&self, id: TypeId) -> String {
+        let ty = self.get(id).clone();
+        ty.to_display(&self)
     }
 
     pub fn builtin(&mut self, b: BuiltinType) -> TypeId {

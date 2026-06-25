@@ -93,3 +93,32 @@ impl BuiltinType {
         }
     }
 }
+
+impl std::fmt::Display for BuiltinType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::i8 => "i8",
+                Self::i16 => "i16",
+                Self::i32 => "i32",
+                Self::i64 => "i64",
+                Self::isize => "isize",
+
+                Self::u8 => "u8",
+                Self::u16 => "u16",
+                Self::u32 => "u32",
+                Self::u64 => "u64",
+                Self::usize => "usize",
+
+                Self::f32 => "f32",
+                Self::f64 => "f64",
+
+                Self::bool => "bool",
+                Self::char => "char",
+                Self::void => "void",
+            }
+        )
+    }
+}

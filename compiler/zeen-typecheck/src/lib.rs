@@ -5,33 +5,34 @@ use std::rc::Rc;
 
 use lasso::Spur;
 use miette::SourceSpan;
+use zeen_ast::Source;
 
 use crate::error::TypeError;
 use crate::{
-    coerce::{try_coerce, CoerceResult},
+    coerce::{CoerceResult, try_coerce},
+    context::{FnCtx, TypeCheckCtx},
     result::{CallResolution, TypeCheckResult},
     types::{Capabilities, StructTypeInfo, Type, TypeId, TypeInterner},
-    context::{FnCtx, TypeCheckCtx},
 };
 
 use zeen_ast::{
-    expressions::{BinaryOp, UnaryOp, Literal},
+    expressions::{BinaryOp, Literal, UnaryOp},
     types::BuiltinType,
 };
 use zeen_hir::{
+    HirId, HirModule,
     decl::{HirDecl, HirDeclKind, HirFn},
     expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind},
     stmt::{HirStmt, HirStmtKind},
     types::{HirTypeExpr, HirTypeKind},
-    HirId, HirModule,
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 
 mod coerce;
 mod context;
 mod error;
-mod types;
 mod result;
+mod types;
 
 pub struct TypeChecker<'res> {
     resolution: &'res ResolutionResult,
@@ -39,7 +40,7 @@ pub struct TypeChecker<'res> {
     result: TypeCheckResult,
     ctx: TypeCheckCtx,
 
-    fn_sigs: HashMap<DefId, FnSignature>
+    fn_sigs: HashMap<DefId, FnSignature>,
 }
 
 struct FnSignature {
@@ -103,7 +104,7 @@ impl<'res> TypeChecker<'res> {
 
             HirDeclKind::Struct(s) => {
                 let mut fields = Vec::with_capacity(s.fields.len());
-                
+
                 for field in &s.fields {
                     let (ty, is_const) = self.lower_hir_type_with_const(&field.ty);
 
@@ -119,7 +120,7 @@ impl<'res> TypeChecker<'res> {
                         def_id: decl.def_id,
                         fields,
                         capabalities: Capabilities::MOVE_ONLY, // currently placeholder, resolved in phase 2
-                    }
+                    },
                 );
 
                 for method in &s.methods {
@@ -141,7 +142,7 @@ impl<'res> TypeChecker<'res> {
 
             HirDeclKind::Enum(e) => {
                 let enum_ty = self.result.interner.intern(Type::Enum {
-                    def_id: decl.def_id
+                    def_id: decl.def_id,
                 });
 
                 for variant in &e.variants {
@@ -154,12 +155,16 @@ impl<'res> TypeChecker<'res> {
                 self.result.def_types.insert(decl.def_id, ty_id);
             }
 
-            HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {},
+            HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {}
         };
     }
 
     fn declare_fn_signature(&mut self, def_id: DefId, hir_fn: &HirFn) {
-        let generics: Vec<DefId> = hir_fn.generics.iter().map(|generic| generic.def_id).collect();
+        let generics: Vec<DefId> = hir_fn
+            .generics
+            .iter()
+            .map(|generic| generic.def_id)
+            .collect();
 
         let params: Vec<TypeId> = hir_fn
             .params
@@ -188,7 +193,14 @@ impl<'res> TypeChecker<'res> {
         });
         self.result.def_types.insert(def_id, fn_ty);
 
-        self.fn_sigs.insert(def_id, FnSignature { params, ret, generics });
+        self.fn_sigs.insert(
+            def_id,
+            FnSignature {
+                params,
+                ret,
+                generics,
+            },
+        );
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {
@@ -212,22 +224,28 @@ impl<'res> TypeChecker<'res> {
                     def_id: *def_id,
                     generic_args: Vec::new(),
                 })
-            },
+            }
 
             HirTypeKind::VaArgs => self.result.interner.void(),
 
-            HirTypeKind::Named { def_id, generic_args } => {
-                let args: Vec<TypeId> =
-                    generic_args.iter().map(|ty| self.lower_hir_type(ty)).collect();
+            HirTypeKind::Named {
+                def_id,
+                generic_args,
+            } => {
+                let args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|ty| self.lower_hir_type(ty))
+                    .collect();
 
                 match self.def_kind(*def_id) {
                     Some(DefKind::GenericParam) => {
                         self.result.interner.intern(Type::GenericParam(*def_id))
                     }
 
-                    Some(DefKind::Interface) => {
-                        self.result.interner.intern(Type::Interface { def_id: *def_id })
-                    }
+                    Some(DefKind::Interface) => self
+                        .result
+                        .interner
+                        .intern(Type::Interface { def_id: *def_id }),
 
                     Some(DefKind::Enum) => {
                         self.result.interner.intern(Type::Enum { def_id: *def_id })
@@ -236,42 +254,51 @@ impl<'res> TypeChecker<'res> {
                     _ => self.result.interner.intern(Type::Struct {
                         def_id: *def_id,
                         generic_args: args,
-                    })
+                    }),
                 }
             }
 
-            HirTypeKind::Const(inner) => {
-                self.lower_hir_type(inner)
-            }
+            HirTypeKind::Const(inner) => self.lower_hir_type(inner),
 
             HirTypeKind::Pointer(inner) => {
                 let is_const = matches!(inner.kind, HirTypeKind::Const(_));
                 let inner_ty = self.lower_hir_type(inner);
-                self.result.interner.intern(Type::Pointer { inner: inner_ty, is_const })
+                self.result.interner.intern(Type::Pointer {
+                    inner: inner_ty,
+                    is_const,
+                })
             }
 
             HirTypeKind::Array { element, len } => {
                 let elem_ty = self.lower_hir_type(element);
                 let len_val = len.as_ref().and_then(|expr| self.eval_const_u64(expr));
-                self.result.interner.intern(Type::Array { element: elem_ty, len: len_val })
-            },
+                self.result.interner.intern(Type::Array {
+                    element: elem_ty,
+                    len: len_val,
+                })
+            }
 
             HirTypeKind::Fn { params, ret, .. } => {
-                let params_tys: Vec<TypeId> =
-                    params.iter().map(|param| self.lower_hir_type(param)).collect();
+                let params_tys: Vec<TypeId> = params
+                    .iter()
+                    .map(|param| self.lower_hir_type(param))
+                    .collect();
                 let ret_ty = self.lower_hir_type(ret);
 
-                self.result.interner.intern(Type::Fn { params: params_tys, ret: ret_ty })
-            },
+                self.result.interner.intern(Type::Fn {
+                    params: params_tys,
+                    ret: ret_ty,
+                })
+            }
 
-            HirTypeKind::Error => self.result.interner.error()
+            HirTypeKind::Error => self.result.interner.error(),
         }
     }
 
     fn eval_const_u64(&mut self, expr: &HirExpr) -> Option<u64> {
         match &expr.kind {
             HirExprKind::Literal(Literal::Int(n)) if *n >= 0 => Some(*n as u64),
-            
+
             HirExprKind::Binary { lhs, rhs, op } => {
                 let lhs_u64 = self.eval_const_u64(lhs)?;
                 let rhs_u64 = self.eval_const_u64(rhs)?;
@@ -288,7 +315,7 @@ impl<'res> TypeChecker<'res> {
                         }
 
                         lhs_u64 - rhs_u64
-                    },
+                    }
                     BinaryOp::Mul => {
                         if lhs_u64 == 0 || rhs_u64 == 0 {
                             self.report(TypeError::ArrayLengthNotConst {
@@ -299,7 +326,7 @@ impl<'res> TypeChecker<'res> {
                         }
 
                         lhs_u64 * rhs_u64
-                    },
+                    }
                     BinaryOp::Div => {
                         if rhs_u64 == 0 {
                             self.report(TypeError::ArrayLengthNotConst {
@@ -310,7 +337,7 @@ impl<'res> TypeChecker<'res> {
                         }
 
                         lhs_u64 / rhs_u64
-                    },
+                    }
                     BinaryOp::Mod => {
                         if rhs_u64 == 0 {
                             self.report(TypeError::ArrayLengthNotConst {
@@ -321,7 +348,7 @@ impl<'res> TypeChecker<'res> {
                         }
 
                         lhs_u64 % rhs_u64
-                    },
+                    }
 
                     _ => {
                         self.report(TypeError::ArrayLengthNotConst {
@@ -331,7 +358,7 @@ impl<'res> TypeChecker<'res> {
                         return None;
                     }
                 };
-                
+
                 Some(result)
             }
 
@@ -379,7 +406,10 @@ impl<'res> TypeChecker<'res> {
 
         visiting.pop();
 
-        let caps = Capabilities { is_copy, needs_drop };
+        let caps = Capabilities {
+            is_copy,
+            needs_drop,
+        };
 
         if let Some(info) = self.result.struct_info.get_mut(&def_id) {
             info.capabalities = caps;
@@ -400,8 +430,7 @@ impl<'res> TypeChecker<'res> {
             | Type::GenericParam { .. }
             | Type::Void
             | Type::Never
-            | Type::Error
-                => Capabilities::COPY,
+            | Type::Error => Capabilities::COPY,
 
             Type::Struct { def_id, .. } => self.compute_capabilities(*def_id, visiting),
 
@@ -487,14 +516,12 @@ impl<'res> TypeChecker<'res> {
             generic_bindings.insert(*generic, ty);
         }
 
-        self.ctx.push_fn(
-            FnCtx {
-                return_type: sig.ret,
-                self_type: self_ty,
-                generic_bindings,
-                loop_depth: 0
-            }
-        );
+        self.ctx.push_fn(FnCtx {
+            return_type: sig.ret,
+            self_type: self_ty,
+            generic_bindings,
+            loop_depth: 0,
+        });
 
         self.check_stmt(body);
 
@@ -505,7 +532,13 @@ impl<'res> TypeChecker<'res> {
 
     fn check_stmt(&mut self, stmt: &HirStmt) {
         match &stmt.kind {
-            HirStmtKind::Let { def_id, name, explicit_type, value, is_const } => {
+            HirStmtKind::Let {
+                def_id,
+                name,
+                explicit_type,
+                value,
+                is_const,
+            } => {
                 let declared = explicit_type
                     .as_ref()
                     .map(|t| self.lower_hir_type_with_const(t));
@@ -515,7 +548,7 @@ impl<'res> TypeChecker<'res> {
 
                 let value_ty = value.as_ref().map(|val| match declared_ty {
                     Some(expected) => self.check_expr(val, expected),
-                    None => self.synth_expr(val)
+                    None => self.synth_expr(val),
                 });
 
                 let final_ty = match (declared_ty, value_ty) {
@@ -551,6 +584,38 @@ impl<'res> TypeChecker<'res> {
         todo!()
     }
 
+    fn coerce_or_error(
+        &mut self,
+        actual: TypeId,
+        expected: TypeId,
+        source: Source,
+        id: HirId,
+    ) -> TypeId {
+        match try_coerce(&self.result.interner, actual, expected) {
+            CoerceResult::Identity => actual,
+            CoerceResult::ErrorRecovery => expected,
+
+            CoerceResult::PinLiteral
+            | CoerceResult::AddConst
+            | CoerceResult::ArrayToSlice
+            | CoerceResult::NeverCoercion => {
+                self.result.record_expr_type(id, expected);
+                expected
+            }
+
+            CoerceResult::Fail => {
+                self.result.errors.push(TypeError::Mismatch {
+                    expected: self.result.interner.display_type(expected).into(),
+                    found: self.result.interner.display_type(actual).into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                actual
+            }
+        }
+    }
+
     fn check_not_const_target(&mut self, target: &HirExpr) {
         if self.find_const_violation(target) {
             self.result.errors.push(TypeError::AssignToConst {
@@ -562,9 +627,13 @@ impl<'res> TypeChecker<'res> {
 
     fn find_const_violation(&mut self, target: &HirExpr) -> bool {
         match &target.kind {
-            HirExprKind::Unary { expr: ptr_expr, op: UnaryOp::Deref } => {
+            HirExprKind::Unary {
+                expr: ptr_expr,
+                op: UnaryOp::Deref,
+            } => {
                 if let Some(&ptr_ty) = self.result.expr_types.get(&ptr_expr.id)
-                    && let Type::Pointer { is_const: true, .. } = self.result.interner.get(ptr_ty) {
+                    && let Type::Pointer { is_const: true, .. } = self.result.interner.get(ptr_ty)
+                {
                     return true;
                 }
 

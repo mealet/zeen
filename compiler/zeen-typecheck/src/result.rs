@@ -21,7 +21,7 @@ pub struct TypeCheckResult {
 }
 
 impl TypeCheckResult {
-    fn record_expr_type(&mut self, id: HirId, ty: TypeId) {
+    pub fn record_expr_type(&mut self, id: HirId, ty: TypeId) {
         self.expr_types.insert(id, ty);
     }
 }
