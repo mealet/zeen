@@ -1,5 +1,6 @@
 use smol_str::SmolStr;
 use std::{path::PathBuf, sync::Arc};
+use zeen_resolve::DefId;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
@@ -146,6 +147,21 @@ pub enum TypeError {
     #[error("attempt to assign to const")]
     #[diagnostic(severity(Error), code(zeen::typechecker::assign_to_const))]
     AssignToConst {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("found dangling definition id: DefId({id})")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::assign_to_const),
+        help("please report this on: https://github.com/mealet/zeen/issues")
+    )]
+    DanglingDefId {
+        id: u32,
+
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label]

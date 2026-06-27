@@ -626,6 +626,18 @@ impl<'res> TypeChecker<'res> {
                 }
             },
 
+            HirExprKind::VarRef(def_id) => self.lookup_def_type(*def_id, expr.source.clone()),
+
+            HirExprKind::GenericParamRef(def_id) => self
+                .ctx
+                .generic_binding(*def_id)
+                .unwrap_or(self.result.interner.intern(Type::GenericParam(*def_id))),
+
+            HirExprKind::SelfValue(def_id) => self
+                .ctx
+                .generic_binding(*def_id)
+                .unwrap_or(self.lookup_def_type(*def_id, expr.source.clone())),
+
             HirExprKind::Block(stmts) => self.synth_block_value_stmts(stmts),
 
             HirExprKind::Type(_) => self.result.interner.error(),
@@ -729,6 +741,21 @@ impl<'res> TypeChecker<'res> {
 
             _ => false,
         }
+    }
+
+    fn lookup_def_type(&mut self, def_id: DefId, source: Source) -> TypeId {
+        self.result
+            .def_types
+            .get(&def_id)
+            .copied()
+            .unwrap_or_else(|| {
+                self.report(TypeError::DanglingDefId {
+                    id: def_id.0,
+                    src: source.src(),
+                    span: source.span,
+                });
+                self.result.interner.error()
+            })
     }
 
     fn default_literal(&mut self, ty: TypeId) -> TypeId {
