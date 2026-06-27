@@ -570,6 +570,12 @@ impl<'res> TypeChecker<'res> {
                 self.check_not_const_target(object);
             }
 
+            HirStmtKind::Expr(expr) => {
+                self.synth_expr(expr);
+            }
+
+            HirStmtKind::Error => {}
+
             stmt => todo!("{:#?}", stmt),
         }
     }
@@ -605,6 +611,11 @@ impl<'res> TypeChecker<'res> {
                     })
                 }
             },
+
+            HirExprKind::Block(stmts) => self.synth_block_value_stmts(stmts),
+
+            HirExprKind::Type(_) => self.result.interner.error(),
+            HirExprKind::Error => self.result.interner.error(),
 
             _ => todo!(),
         }
@@ -700,6 +711,38 @@ impl<'res> TypeChecker<'res> {
             Type::IntLiteral => self.result.interner.builtin(BuiltinType::i32),
             Type::FloatLiteral => self.result.interner.builtin(BuiltinType::f64),
             _ => ty,
+        }
+    }
+
+    fn synth_block_value(&mut self, stmt: &HirStmt) -> TypeId {
+        self.check_stmt(stmt);
+
+        match &stmt.kind {
+            HirStmtKind::Expr(expr) => self
+                .result
+                .expr_types
+                .get(&expr.id)
+                .copied()
+                .unwrap_or(self.result.interner.void()),
+
+            _ => self.result.interner.void(),
+        }
+    }
+
+    fn synth_block_value_stmts(&mut self, stmts: &[Rc<HirStmt>]) -> TypeId {
+        for stmt in stmts {
+            self.check_stmt(stmt);
+        }
+
+        match stmts.last().map(|stmt| &stmt.kind) {
+            Some(HirStmtKind::Expr(expr)) => self
+                .result
+                .expr_types
+                .get(&expr.id)
+                .copied()
+                .unwrap_or(self.result.interner.void()),
+
+            _ => self.result.interner.void(),
         }
     }
 }
