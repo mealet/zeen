@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use lasso::Spur;
 use zeen_ast::types::BuiltinType;
@@ -54,8 +57,60 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn to_display(&self, interner: &TypeInterner) -> String {
-        todo!()
+    pub fn to_display(
+        &self,
+        interner: Arc<Mutex<lasso::Rodeo>>,
+        type_interner: &TypeInterner,
+        resolution_result: &zeen_resolve::ResolutionResult,
+    ) -> String {
+        match self {
+            Type::Builtin(b) => b.to_string(),
+            Type::IntLiteral => "int literal".to_string(),
+            Type::FloatLiteral => "float literal".to_string(),
+
+            Type::Struct { def_id, .. }
+            | Type::Interface { def_id }
+            | Type::Enum { def_id }
+            | Type::GenericParam(def_id) => resolution_result
+                .defs
+                .get(def_id)
+                .map(|info| interner.lock().unwrap().resolve(&info.name).to_string())
+                .unwrap_or("undefined".to_string()),
+
+            Type::Pointer { inner, is_const } => format!(
+                "*{}{}",
+                if *is_const { "const " } else { "" },
+                type_interner.display_type(*inner, interner, resolution_result)
+            ),
+
+            Type::Array { element, len } => format!(
+                "[{}]{}",
+                len.map(|val| val.to_string()).unwrap_or_default(),
+                type_interner.display_type(*element, interner, resolution_result)
+            ),
+
+            Type::Slice { element } => format!(
+                "[]{}",
+                type_interner.display_type(*element, interner, resolution_result)
+            ),
+
+            Type::Fn { params, ret } => {
+                let string_params = params
+                    .iter()
+                    .map(|param| {
+                        type_interner.display_type(*param, Arc::clone(&interner), resolution_result)
+                    })
+                    .collect::<Vec<String>>();
+
+                let string_ret = type_interner.display_type(*ret, interner, resolution_result);
+
+                format!("fn({}) {}", string_params.join(", "), string_ret)
+            }
+
+            Type::Void => "void".into(),
+            Type::Never => "never".into(),
+            Type::Error => "error".into(),
+        }
     }
 }
 
@@ -85,9 +140,14 @@ impl TypeInterner {
         &self.types[id.0 as usize]
     }
 
-    pub fn display_type(&self, id: TypeId) -> String {
+    pub fn display_type(
+        &self,
+        id: TypeId,
+        interner: Arc<Mutex<lasso::Rodeo>>,
+        resolution_result: &zeen_resolve::ResolutionResult,
+    ) -> String {
         let ty = self.get(id).clone();
-        ty.to_display(&self)
+        ty.to_display(interner, &self, resolution_result)
     }
 
     pub fn builtin(&mut self, b: BuiltinType) -> TypeId {
