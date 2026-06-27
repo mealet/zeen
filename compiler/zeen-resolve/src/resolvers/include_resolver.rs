@@ -1,7 +1,9 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 
@@ -22,23 +24,23 @@ struct RawModule<'arena> {
 
 pub struct IncludeResolver<'ctx> {
     arena: &'ctx Bump,
-    interner: Arc<Mutex<Rodeo>>,
+    interner: Rc<RefCell<Rodeo>>,
     context: &'ctx mut zeen_driver::CompilationContext,
 
     modules: HashMap<PathBuf, RawModule<'ctx>>,
 
     src: Arc<String>,
-    filename: Arc<String>,
+    filename: Rc<String>,
     errors: Vec<ResolveError>,
 }
 
 impl<'ctx> IncludeResolver<'ctx> {
     pub fn new(
-        filename: Arc<String>,
+        filename: Rc<String>,
         src: Arc<String>,
 
         arena: &'ctx Bump,
-        interner: Arc<Mutex<Rodeo>>,
+        interner: Rc<RefCell<Rodeo>>,
         context: &'ctx mut zeen_driver::CompilationContext,
     ) -> Self {
         Self {
@@ -55,16 +57,13 @@ impl<'ctx> IncludeResolver<'ctx> {
     }
 
     fn interner_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
-        // compiler is not async/threaded (at least for now), so we're unwrapping lock
-        let mut interner = self.interner.lock().unwrap();
-
+        let mut interner = self.interner.borrow_mut();
         interner.get_or_intern(value)
     }
 
     fn interner_resolve(&self, key: &Spur) -> SmolStr {
-        let interner = self.interner.lock().unwrap();
+        let interner = self.interner.borrow();
         let resolved = interner.resolve(key);
-
         resolved.into()
     }
 
@@ -220,7 +219,7 @@ impl<'ctx> IncludeResolver<'ctx> {
 
             let named_src = NamedSource::new(&target_name, Arc::clone(&source));
 
-            let target_decls = match self.parse_module(source, Arc::new(target_name)) {
+            let target_decls = match self.parse_module(source, Rc::new(target_name)) {
                 Ok(program) => program,
                 Err(mut err) => {
                     self.errors.append(&mut err);
@@ -247,7 +246,7 @@ impl<'ctx> IncludeResolver<'ctx> {
     fn parse_module(
         &self,
         source: Arc<String>,
-        filename: Arc<String>,
+        filename: Rc<String>,
     ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
         let mut tokens = zeen_lexer::tokenize(&source);
         let mut parser = zeen_parser::Parser::new(
@@ -255,7 +254,7 @@ impl<'ctx> IncludeResolver<'ctx> {
             Arc::clone(&source),
             &mut tokens,
             self.arena,
-            Arc::clone(&self.interner),
+            Rc::clone(&self.interner),
         );
 
         let program = parser.parse_program().map_err(|errors| {

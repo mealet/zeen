@@ -1,8 +1,10 @@
 #![allow(unused)]
 
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use lasso::Spur;
 use miette::SourceSpan;
@@ -43,7 +45,7 @@ pub struct TypeChecker<'res> {
 
     result: TypeCheckResult,
     ctx: TypeCheckCtx,
-    interner: Arc<Mutex<lasso::Rodeo>>,
+    interner: Rc<RefCell<lasso::Rodeo>>,
 
     fn_sigs: HashMap<DefId, FnSignature>,
 }
@@ -55,7 +57,7 @@ struct FnSignature {
 }
 
 impl<'res> TypeChecker<'res> {
-    pub fn new(resolution: &'res ResolutionResult, interner: Arc<Mutex<lasso::Rodeo>>) -> Self {
+    pub fn new(resolution: &'res ResolutionResult, interner: Rc<RefCell<lasso::Rodeo>>) -> Self {
         Self {
             resolution,
             result: TypeCheckResult::default(),
@@ -82,7 +84,7 @@ impl<'res> TypeChecker<'res> {
     fn display_type(&self, id: TypeId) -> String {
         self.result
             .interner
-            .display_type(id, Arc::clone(&self.interner), self.resolution)
+            .display_type(id, Rc::clone(&self.interner), self.resolution)
     }
 
     // --> Entry Point

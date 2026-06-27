@@ -4,7 +4,9 @@ use bumpalo::Bump;
 use lasso::Rodeo;
 
 use std::{
+    cell::RefCell,
     path::Path,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 
@@ -22,21 +24,21 @@ mod resolvers;
 mod symbol_table;
 
 pub fn resolve(
-    filename: Arc<String>,
+    filename: Rc<String>,
     src: Arc<String>,
 
     entry_path: &Path,
     entry_program: &[&Declaration<'_>],
 
     arena: &Bump,
-    interner: Arc<Mutex<Rodeo>>,
+    interner: Rc<RefCell<Rodeo>>,
     context: &mut CompilationContext,
 ) -> Result<ResolutionResult, Vec<ResolveError>> {
     let mut include_resolver = include_resolver::IncludeResolver::new(
-        Arc::clone(&filename),
+        Rc::clone(&filename),
         Arc::clone(&src),
         arena,
-        Arc::clone(&interner),
+        Rc::clone(&interner),
         context,
     );
 

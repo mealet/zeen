@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use lasso::Spur;
 use zeen_ast::types::BuiltinType;
@@ -61,7 +58,7 @@ pub enum Type {
 impl Type {
     pub fn to_display(
         &self,
-        interner: Arc<Mutex<lasso::Rodeo>>,
+        interner: Rc<RefCell<lasso::Rodeo>>,
         type_interner: &TypeInterner,
         resolution_result: &zeen_resolve::ResolutionResult,
     ) -> String {
@@ -76,7 +73,7 @@ impl Type {
             | Type::GenericParam(def_id) => resolution_result
                 .defs
                 .get(def_id)
-                .map(|info| interner.lock().unwrap().resolve(&info.name).to_string())
+                .map(|info| interner.borrow().resolve(&info.name).to_string())
                 .unwrap_or("undefined".to_string()),
 
             Type::Pointer { inner, is_const } => format!(
@@ -100,7 +97,7 @@ impl Type {
                 let string_params = params
                     .iter()
                     .map(|param| {
-                        type_interner.display_type(*param, Arc::clone(&interner), resolution_result)
+                        type_interner.display_type(*param, Rc::clone(&interner), resolution_result)
                     })
                     .collect::<Vec<String>>();
 
@@ -145,7 +142,7 @@ impl TypeInterner {
     pub fn display_type(
         &self,
         id: TypeId,
-        interner: Arc<Mutex<lasso::Rodeo>>,
+        interner: Rc<RefCell<lasso::Rodeo>>,
         resolution_result: &zeen_resolve::ResolutionResult,
     ) -> String {
         let ty = self.get(id).clone();

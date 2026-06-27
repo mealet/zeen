@@ -6,7 +6,11 @@ use bumpalo::Bump;
 use lasso::Rodeo;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
-use std::sync::{Arc, Mutex};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
 use error::ParserError;
 use zeen_lexer::{Token, TokenKind};
@@ -19,12 +23,12 @@ pub mod type_parser;
 
 pub struct Parser<'tok, 'ctx> {
     src: Arc<String>,
-    filename: Arc<String>,
+    filename: Rc<String>,
 
     tokens: &'tok mut dyn Iterator<Item = Token>,
 
     arena: &'ctx Bump,
-    interner: Arc<Mutex<Rodeo>>,
+    interner: Rc<RefCell<Rodeo>>,
 
     current: Token,
     peeked: Option<Token>,
@@ -35,11 +39,11 @@ pub struct Parser<'tok, 'ctx> {
 
 impl<'tok, 'ctx> Parser<'tok, 'ctx> {
     pub fn new(
-        filename: Arc<String>,
+        filename: Rc<String>,
         src: Arc<String>,
         tokens: &'tok mut dyn Iterator<Item = Token>,
         arena: &'ctx Bump,
-        interner: Arc<Mutex<Rodeo>>,
+        interner: Rc<RefCell<Rodeo>>,
     ) -> Self {
         let current = tokens
             .next()
@@ -96,9 +100,7 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
     }
 
     pub fn get_or_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
-        // compiler is not async/threaded (at least for now), so we're unwrapping lock
-        let mut interner = self.interner.lock().unwrap();
-
+        let mut interner = self.interner.borrow_mut();
         interner.get_or_intern(value)
     }
 

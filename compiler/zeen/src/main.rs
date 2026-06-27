@@ -6,8 +6,10 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use std::{
+    cell::RefCell,
     collections::HashSet,
     path::Path,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 
@@ -31,13 +33,13 @@ fn main() {
             };
 
             let content = Arc::new(content);
-            let rodeo = Arc::new(Mutex::new(lasso::Rodeo::default()));
+            let rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
             let bump = bumpalo::Bump::default();
 
             let driver = MietteDriver::new();
             let mut tokens = zeen_lexer::tokenize(&content);
 
-            let filename = Arc::new(
+            let filename = Rc::new(
                 Path::new(&path)
                     .file_name()
                     .unwrap_or(std::ffi::OsStr::new(&path))
@@ -46,11 +48,11 @@ fn main() {
             );
 
             let mut parser = zeen_parser::Parser::new(
-                Arc::clone(&filename),
+                Rc::clone(&filename),
                 Arc::clone(&content),
                 &mut tokens,
                 &bump,
-                Arc::clone(&rodeo),
+                Rc::clone(&rodeo),
             );
 
             let program = parser.parse_program().unwrap_or_else(|errors| {
@@ -63,12 +65,12 @@ fn main() {
             });
 
             let resolution_result = zeen_resolve::resolve(
-                Arc::clone(&filename),
+                Rc::clone(&filename),
                 Arc::clone(&content),
                 Path::new(&path),
                 program,
                 &bump,
-                Arc::clone(&rodeo),
+                Rc::clone(&rodeo),
                 &mut context,
             )
             .unwrap_or_else(|errors| {
@@ -81,11 +83,11 @@ fn main() {
             });
 
             let mut hir_lowering =
-                zeen_hir::HirLowering::new(&resolution_result, Arc::clone(&rodeo));
+                zeen_hir::HirLowering::new(&resolution_result, Rc::clone(&rodeo));
             let hir_module = hir_lowering.lower_module(program);
 
             let mut typechecker =
-                zeen_typecheck::TypeChecker::new(&resolution_result, Arc::clone(&rodeo));
+                zeen_typecheck::TypeChecker::new(&resolution_result, Rc::clone(&rodeo));
             typechecker.check_module(&hir_module);
 
             let typechecker_result = typechecker.finish();

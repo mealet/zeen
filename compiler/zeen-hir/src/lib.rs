@@ -1,6 +1,7 @@
 #![allow(unused)]
 
 use std::{
+    cell::RefCell,
     rc::Rc,
     sync::{Arc, Mutex},
 };
@@ -50,14 +51,14 @@ pub use types::{HirTypeExpr, HirTypeKind};
 
 pub struct HirLowering<'res> {
     resolution: &'res ResolutionResult,
-    interner: Arc<Mutex<Rodeo>>,
+    interner: Rc<RefCell<Rodeo>>,
 
     next_id: u32,
     current_src: miette::NamedSource<Arc<String>>,
 }
 
 impl<'res> HirLowering<'res> {
-    pub fn new(resolution: &'res ResolutionResult, interner: Arc<Mutex<Rodeo>>) -> Self {
+    pub fn new(resolution: &'res ResolutionResult, interner: Rc<RefCell<Rodeo>>) -> Self {
         Self {
             resolution,
             interner,
@@ -74,15 +75,13 @@ impl<'res> HirLowering<'res> {
 
     fn interner_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
         // compiler is not async/threaded (at least for now), so we're unwrapping lock
-        let mut interner = self.interner.lock().unwrap();
-
+        let mut interner = self.interner.borrow_mut();
         interner.get_or_intern(value)
     }
 
     fn interner_resolve(&self, key: &Spur) -> SmolStr {
-        let interner = self.interner.lock().unwrap();
+        let interner = self.interner.borrow();
         let resolved = interner.resolve(key);
-
         resolved.into()
     }
 
@@ -550,11 +549,12 @@ impl<'res> HirLowering<'res> {
                 }
             }
 
-            ExpressionKind::MacroCall { name, args } => {
-                HirExprKind::MacroCall {
-                    kind: (self.resolve_macro_kind(name.0), name.1),
-                    args: args.iter().map(|arg| Rc::new(self.lower_expr(arg))).collect()
-                }
+            ExpressionKind::MacroCall { name, args } => HirExprKind::MacroCall {
+                kind: (self.resolve_macro_kind(name.0), name.1),
+                args: args
+                    .iter()
+                    .map(|arg| Rc::new(self.lower_expr(arg)))
+                    .collect(),
             },
 
             ExpressionKind::If {

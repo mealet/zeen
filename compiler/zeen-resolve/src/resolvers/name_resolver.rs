@@ -3,7 +3,11 @@ use lasso::{Rodeo, Spur};
 use miette::{NamedSource, SourceSpan};
 use smol_str::SmolStr;
 
-use std::sync::{Arc, Mutex};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
 use zeen_ast::{
     declarations::{Declaration, DeclarationKind, GenericType},
@@ -20,7 +24,7 @@ use crate::{
 
 pub struct NameResolver<'ctx> {
     arena: &'ctx Bump,
-    interner: Arc<Mutex<Rodeo>>,
+    interner: Rc<RefCell<Rodeo>>,
 
     table: SymbolTable,
     result: ResolutionResult,
@@ -29,7 +33,7 @@ pub struct NameResolver<'ctx> {
     current_src: NamedSource<Arc<String>>,
 
     src: Arc<String>,
-    filename: Arc<String>,
+    filename: Rc<String>,
     errors: Vec<ResolveError>,
 }
 
@@ -49,11 +53,11 @@ fn is_self_type_kind(kind: &TypeKind) -> bool {
 
 impl<'ctx> NameResolver<'ctx> {
     pub fn new(
-        filename: Arc<String>,
+        filename: Rc<String>,
         src: Arc<String>,
 
         arena: &'ctx Bump,
-        interner: Arc<Mutex<Rodeo>>,
+        interner: Rc<RefCell<Rodeo>>,
     ) -> Self {
         Self {
             arena,
@@ -102,16 +106,13 @@ impl<'ctx> NameResolver<'ctx> {
     }
 
     fn interner_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
-        // compiler is not async/threaded (at least for now), so we're unwrapping lock
-        let mut interner = self.interner.lock().unwrap();
-
+        let mut interner = self.interner.borrow_mut();
         interner.get_or_intern(value)
     }
 
     fn interner_resolve(&self, key: &Spur) -> SmolStr {
-        let interner = self.interner.lock().unwrap();
+        let interner = self.interner.borrow();
         let resolved = interner.resolve(key);
-
         resolved.into()
     }
 
