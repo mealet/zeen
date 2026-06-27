@@ -622,7 +622,18 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn check_expr(&mut self, expr: &HirExpr, expected: TypeId) -> TypeId {
-        todo!()
+        let actual = match &expr.kind {
+            HirExprKind::ArrayInit { elements } if elements.is_empty() => {
+                if let Type::Array { .. } = self.result.interner.get(expected).clone() {
+                    self.result.record_expr_type(expr.id, expected);
+                    return expected;
+                }
+                self.synth_expr(expr)
+            }
+            _ => self.synth_expr(expr),
+        };
+
+        self.coerce_or_error(actual, expected, expr.source.clone(), expr.id)
     }
 
     fn coerce_or_error(
