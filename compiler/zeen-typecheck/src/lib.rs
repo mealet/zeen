@@ -577,7 +577,37 @@ impl<'res> TypeChecker<'res> {
     // Expressions
 
     fn synth_expr(&mut self, expr: &HirExpr) -> TypeId {
-        todo!()
+        let ty = self.synth_expr_inner(expr);
+        self.result.record_expr_type(expr.id, ty);
+        ty
+    }
+
+    fn synth_expr_inner(&mut self, expr: &HirExpr) -> TypeId {
+        match &expr.kind {
+            HirExprKind::Literal(lit) => match lit {
+                Literal::Int(_) => self.result.interner.int_literal(),
+                Literal::Float(_) => self.result.interner.float_literal(),
+                Literal::Char(_) => self.result.interner.builtin(BuiltinType::char),
+                Literal::ByteChar(_) => self.result.interner.builtin(BuiltinType::u8),
+                Literal::Bool(_) => self.result.interner.builtin(BuiltinType::bool),
+                Literal::String(_) => {
+                    let char_ty = self.result.interner.builtin(BuiltinType::char);
+                    self.result.interner.intern(Type::Pointer {
+                        inner: char_ty,
+                        is_const: true,
+                    })
+                }
+                Literal::Null => {
+                    let void = self.result.interner.void();
+                    self.result.interner.intern(Type::Pointer {
+                        inner: void,
+                        is_const: false,
+                    })
+                }
+            },
+
+            _ => todo!(),
+        }
     }
 
     fn check_expr(&mut self, expr: &HirExpr, expected: TypeId) -> TypeId {
