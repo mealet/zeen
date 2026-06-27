@@ -455,6 +455,7 @@ dependencies = [
  "zeen-lexer",
  "zeen-parser",
  "zeen-resolve",
+ "zeen-typecheck",
 ]
 
 [[package]]

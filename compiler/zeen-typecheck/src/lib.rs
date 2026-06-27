@@ -570,7 +570,7 @@ impl<'res> TypeChecker<'res> {
                 self.check_not_const_target(object);
             }
 
-            _ => todo!(),
+            stmt => todo!("{:#?}", stmt),
         }
     }
 

@@ -11,18 +11,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[derive(Debug, Error, Diagnostic)]
-#[error("{dbg}")]
-#[diagnostic(severity(Advice))]
-struct SrcDebugger {
-    dbg: String,
-
-    #[source_code]
-    src: NamedSource<String>,
-    #[label("here")]
-    span: SourceSpan,
-}
-
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| {
         eprintln!("No path to file found");
@@ -95,6 +83,20 @@ fn main() {
             let mut hir_lowering =
                 zeen_hir::HirLowering::new(&resolution_result, Arc::clone(&rodeo));
             let hir_module = hir_lowering.lower_module(program);
+
+            let mut typechecker = zeen_typecheck::TypeChecker::new(&resolution_result);
+            typechecker.check_module(&hir_module);
+
+            let typechecker_result = typechecker.finish();
+
+            if !typechecker_result.errors.is_empty() {
+                for err in typechecker_result.errors {
+                    let report_string = driver.report(&err).unwrap();
+                    eprintln!("{}", report_string);
+                }
+
+                std::process::exit(1);
+            }
         }
         Err(err) => {
             eprintln!("Unable to open file: {}", err);

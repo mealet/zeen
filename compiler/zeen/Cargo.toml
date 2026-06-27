@@ -18,3 +18,4 @@ zeen-ast = {path = "../zeen-ast"}
 zeen-parser = {path = "../zeen-parser"}
 zeen-resolve = {path = "../zeen-resolve"}
 zeen-hir = { path = "../zeen-hir" }
+zeen-typecheck = { path = "../zeen-typecheck" }
