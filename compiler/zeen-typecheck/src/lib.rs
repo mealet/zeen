@@ -638,10 +638,52 @@ impl<'res> TypeChecker<'res> {
                 .generic_binding(*def_id)
                 .unwrap_or(self.lookup_def_type(*def_id, expr.source.clone())),
 
+            HirExprKind::MacroCall { kind, args } => {
+                self.check_macro_call(*kind, args, expr.source.clone())
+            }
+
             HirExprKind::Block(stmts) => self.synth_block_value_stmts(stmts),
 
             HirExprKind::Type(_) => self.result.interner.error(),
             HirExprKind::Error => self.result.interner.error(),
+
+            _ => todo!(),
+        }
+    }
+
+    fn check_macro_call(
+        &mut self,
+        kind: (HirMacroKind, SourceSpan),
+        args: &[Rc<HirExpr>],
+        source: Source,
+    ) -> TypeId {
+        match kind.0 {
+            HirMacroKind::Print | HirMacroKind::Println => {
+                for arg in args {
+                    self.synth_expr(arg);
+                }
+                self.result.interner.void()
+            }
+
+            HirMacroKind::Format => {
+                for arg in args {
+                    self.synth_expr(arg);
+                }
+                let char_ty = self.result.interner.builtin(BuiltinType::char);
+
+                self.result.interner.intern(Type::Pointer {
+                    inner: char_ty,
+                    is_const: true,
+                })
+            }
+
+            HirMacroKind::Panic | HirMacroKind::Unreachable => {
+                for arg in args {
+                    self.synth_expr(arg);
+                }
+
+                self.result.interner.never()
+            }
 
             _ => todo!(),
         }
