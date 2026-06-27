@@ -7,6 +7,8 @@ use lasso::Spur;
 use zeen_ast::types::BuiltinType;
 use zeen_resolve::DefId;
 
+use crate::{DEFAULT_FLOAT_LITERAL, DEFAULT_INT_LITERAL};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub u32);
 
@@ -65,8 +67,8 @@ impl Type {
     ) -> String {
         match self {
             Type::Builtin(b) => b.to_string(),
-            Type::IntLiteral => "int literal".to_string(),
-            Type::FloatLiteral => "float literal".to_string(),
+            Type::IntLiteral => DEFAULT_INT_LITERAL.to_string(),
+            Type::FloatLiteral => DEFAULT_FLOAT_LITERAL.to_string(),
 
             Type::Struct { def_id, .. }
             | Type::Interface { def_id }
@@ -147,7 +149,7 @@ impl TypeInterner {
         resolution_result: &zeen_resolve::ResolutionResult,
     ) -> String {
         let ty = self.get(id).clone();
-        ty.to_display(interner, &self, resolution_result)
+        ty.to_display(interner, self, resolution_result)
     }
 
     pub fn builtin(&mut self, b: BuiltinType) -> TypeId {

@@ -84,7 +84,8 @@ fn main() {
                 zeen_hir::HirLowering::new(&resolution_result, Arc::clone(&rodeo));
             let hir_module = hir_lowering.lower_module(program);
 
-            let mut typechecker = zeen_typecheck::TypeChecker::new(&resolution_result);
+            let mut typechecker =
+                zeen_typecheck::TypeChecker::new(&resolution_result, Arc::clone(&rodeo));
             typechecker.check_module(&hir_module);
 
             let typechecker_result = typechecker.finish();

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use lasso::Spur;
 use miette::SourceSpan;
@@ -34,11 +35,15 @@ mod error;
 mod result;
 mod types;
 
+pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
+pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
+
 pub struct TypeChecker<'res> {
     resolution: &'res ResolutionResult,
 
     result: TypeCheckResult,
     ctx: TypeCheckCtx,
+    interner: Arc<Mutex<lasso::Rodeo>>,
 
     fn_sigs: HashMap<DefId, FnSignature>,
 }
@@ -50,11 +55,12 @@ struct FnSignature {
 }
 
 impl<'res> TypeChecker<'res> {
-    pub fn new(resolution: &'res ResolutionResult) -> Self {
+    pub fn new(resolution: &'res ResolutionResult, interner: Arc<Mutex<lasso::Rodeo>>) -> Self {
         Self {
             resolution,
             result: TypeCheckResult::default(),
             ctx: TypeCheckCtx::new(),
+            interner,
             fn_sigs: HashMap::new(),
         }
     }
@@ -71,6 +77,12 @@ impl<'res> TypeChecker<'res> {
 
     fn report(&mut self, err: TypeError) {
         self.result.errors.push(err);
+    }
+
+    fn display_type(&self, id: TypeId) -> String {
+        self.result
+            .interner
+            .display_type(id, Arc::clone(&self.interner), self.resolution)
     }
 
     // --> Entry Point
@@ -657,8 +669,8 @@ impl<'res> TypeChecker<'res> {
 
             CoerceResult::Fail => {
                 self.result.errors.push(TypeError::Mismatch {
-                    expected: self.result.interner.display_type(expected).into(),
-                    found: self.result.interner.display_type(actual).into(),
+                    expected: self.display_type(expected).into(),
+                    found: self.display_type(actual).into(),
                     src: source.src(),
                     span: source.span,
                 });
@@ -719,8 +731,8 @@ impl<'res> TypeChecker<'res> {
 
     fn default_literal(&mut self, ty: TypeId) -> TypeId {
         match self.result.interner.get(ty) {
-            Type::IntLiteral => self.result.interner.builtin(BuiltinType::i32),
-            Type::FloatLiteral => self.result.interner.builtin(BuiltinType::f64),
+            Type::IntLiteral => self.result.interner.builtin(DEFAULT_INT_LITERAL),
+            Type::FloatLiteral => self.result.interner.builtin(DEFAULT_FLOAT_LITERAL),
             _ => ty,
         }
     }
