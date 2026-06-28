@@ -757,11 +757,17 @@ mod tests {
                             */
 
                             /*
-                             * UPDATE 28.06.26:
+                             * UPD 28.06.26:
                              * Since Arc<Mutex<T>> was replaced with Rc<RefCell<T>>, this comment
                              * must be deprecated, but I'll keep this funny story from deep night.
                             */
-                            (rodeo.borrow_mut().get_or_intern("Add"), (6, 3).into()),
+
+                            /*
+                             * UPD 5 minutes later:
+                             * Fuck, this returns runtime error because of `already borrow, I'll fix
+                             * it, one second
+                            */
+                            ({ rodeo.borrow_mut().get_or_intern("Add") }, (6, 3).into()),
                             (rodeo.borrow_mut().get_or_intern("Display"), (12, 7).into()),
                         ]),
                     }]),
