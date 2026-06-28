@@ -130,3 +130,75 @@ pub fn arg_specs(chunks: &[FormatChunk]) -> Vec<FormatSpec> {
         })
         .collect()
 }
+
+// WARNING: Don't blame me, but these tests are written by AI, just to save time, I'm so sorry!
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display() {
+        let chunks = parse_format_string("hello {}!").unwrap();
+        assert_eq!(
+            chunks,
+            vec![
+                FormatChunk::Literal("hello ".into()),
+                FormatChunk::Arg(FormatSpec::Display),
+                FormatChunk::Literal("!".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_debug() {
+        let chunks = parse_format_string("{:?}").unwrap();
+        assert_eq!(chunks, vec![FormatChunk::Arg(FormatSpec::Debug)]);
+    }
+
+    #[test]
+    fn test_hex_oct_bin() {
+        let chunks = parse_format_string("{hex} {oct} {bin}").unwrap();
+        assert_eq!(
+            arg_specs(&chunks),
+            vec![FormatSpec::Hex, FormatSpec::Oct, FormatSpec::Bin]
+        );
+    }
+
+    #[test]
+    fn test_float_precision() {
+        let chunks = parse_format_string("{:.3}").unwrap();
+        assert_eq!(
+            chunks,
+            vec![FormatChunk::Arg(FormatSpec::Float { precision: 3 })]
+        );
+    }
+
+    #[test]
+    fn test_escape_braces() {
+        let chunks = parse_format_string("{{}}").unwrap();
+        assert_eq!(
+            chunks,
+            vec![
+                FormatChunk::Literal("{".into()),
+                FormatChunk::Literal("}".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_unclosed() {
+        assert!(matches!(
+            parse_format_string("{"),
+            Err(FormatParseError::UnclosedBrace { .. })
+        ));
+    }
+
+    #[test]
+    fn test_unknown_spec() {
+        assert!(matches!(
+            parse_format_string("{:q}"),
+            Err(FormatParseError::UnknownSpecifier { .. })
+        ));
+    }
+}
