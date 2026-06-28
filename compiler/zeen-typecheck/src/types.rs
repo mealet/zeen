@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use lasso::Spur;
 use zeen_ast::types::BuiltinType;
-use zeen_resolve::DefId;
+use zeen_resolve::{DefId, DefInfo};
 
 use crate::{DEFAULT_FLOAT_LITERAL, DEFAULT_INT_LITERAL};
 
@@ -198,4 +198,69 @@ pub struct StructTypeInfo {
     /// (name, field DefId, field TypeId)
     pub fields: Vec<(Spur, DefId, TypeId)>,
     pub capabalities: Capabilities,
+}
+
+#[derive(Debug, Clone, Default)]
+#[allow(non_snake_case)]
+pub struct WellKnownInterfaces {
+    pub Display: Option<DefId>,
+    pub Debug: Option<DefId>,
+
+    pub Copy: Option<DefId>,
+    pub Clone: Option<DefId>,
+    pub Drop: Option<DefId>,
+
+    pub Add: Option<DefId>,
+    pub Sub: Option<DefId>,
+    pub Mul: Option<DefId>,
+    pub Div: Option<DefId>,
+
+    pub Neg: Option<DefId>,
+    pub Not: Option<DefId>,
+    pub Cmp: Option<DefId>,
+
+    pub Deref: Option<DefId>,
+    pub DerefAssign: Option<DefId>,
+    pub Slice: Option<DefId>,
+    pub SliceAssign: Option<DefId>,
+}
+
+impl WellKnownInterfaces {
+    pub fn resolve(defs: &HashMap<DefId, DefInfo>, interner: &lasso::Rodeo) -> Self {
+        use zeen_resolve::DefKind;
+
+        let mut out = WellKnownInterfaces::default();
+
+        for (def_id, info) in defs {
+            if !matches!(info.kind, DefKind::Interface) {
+                continue;
+            }
+
+            match interner.resolve(&info.name) {
+                "Display" => out.Display = Some(*def_id),
+                "Debug" => out.Debug = Some(*def_id),
+
+                "Copy" => out.Copy = Some(*def_id),
+                "Clone" => out.Clone = Some(*def_id),
+                "Drop" => out.Drop = Some(*def_id),
+
+                "Add" => out.Add = Some(*def_id),
+                "Sub" => out.Sub = Some(*def_id),
+                "Mul" => out.Mul = Some(*def_id),
+                "Div" => out.Div = Some(*def_id),
+
+                "Neg" => out.Neg = Some(*def_id),
+                "Not" => out.Not = Some(*def_id),
+
+                "Deref" => out.Deref = Some(*def_id),
+                "DerefAssign" => out.DerefAssign = Some(*def_id),
+                "Slice" => out.Slice = Some(*def_id),
+                "SliceAssign" => out.SliceAssign = Some(*def_id),
+
+                _ => {}
+            }
+        }
+
+        out
+    }
 }
