@@ -345,20 +345,22 @@ mod tests {
     use assert_matches::assert_matches;
 
     use std::sync::Arc;
+    use std::{cell::RefCell, rc::Rc};
+
     use zeen_ast::{Expression, ExpressionKind};
 
     macro_rules! make_stmt_parser {
         ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident, $ep: ident) => {
-            let src_arc = std::sync::Arc::new($src.to_string());
-            let $rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
+            let src_arc = Arc::new($src.to_string());
+            let $rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
             let $bump = bumpalo::Bump::new();
             let mut $tokens = zeen_lexer::tokenize($src);
             let mut $parser = Parser::new(
-                Arc::new("tests.zn".to_string()),
+                Rc::new("tests.zn".to_string()),
                 src_arc,
                 &mut $tokens,
                 &$bump,
-                std::sync::Arc::clone(&$rodeo),
+                Rc::clone(&$rodeo),
             );
             let mut $ep = StmtParser::new(&mut $parser);
         };

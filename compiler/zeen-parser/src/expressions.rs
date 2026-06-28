@@ -1159,20 +1159,22 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use std::sync::Arc;
+    use std::{cell::RefCell, rc::Rc};
 
     macro_rules! make_expr_parser {
         ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident, $ep: ident) => {
-            let src_arc = std::sync::Arc::new($src.to_string());
-            let $rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
+            let src_arc = Arc::new($src.to_string());
+            let $rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
             let $bump = bumpalo::Bump::new();
             let mut $tokens = zeen_lexer::tokenize($src);
             let mut $parser = Parser::new(
-                Arc::new("tests.zn".to_string()),
+                Rc::new("tests.zn".to_string()),
                 src_arc,
                 &mut $tokens,
                 &$bump,
-                std::sync::Arc::clone(&$rodeo),
+                Rc::clone(&$rodeo),
             );
             let mut $ep = ExprParser::new(&mut $parser);
         };
@@ -1392,7 +1394,7 @@ mod tests {
 
         {
             let expr = expr_parser.parse().unwrap();
-            let id = rodeo.lock().unwrap().get("hello, world").unwrap();
+            let id = rodeo.borrow_mut().get("hello, world").unwrap();
 
             assert_eq!(
                 expr,
@@ -1405,7 +1407,7 @@ mod tests {
 
         {
             let expr = expr_parser.parse().unwrap();
-            let id = rodeo.lock().unwrap().get("new line \n").unwrap();
+            let id = rodeo.borrow_mut().get("new line \n").unwrap();
 
             assert_eq!(
                 expr,
@@ -1425,7 +1427,7 @@ mod tests {
 
         {
             let expr = expr_parser.parse().unwrap();
-            let id = rodeo.lock().unwrap().get("hello \\n \\0").unwrap();
+            let id = rodeo.borrow_mut().get("hello \\n \\0").unwrap();
 
             assert_eq!(
                 expr,
@@ -1464,7 +1466,7 @@ mod tests {
 
         {
             let expr = expr_parser.parse().unwrap();
-            let spur = rodeo.lock().unwrap().try_get_or_intern("foo").unwrap();
+            let spur = rodeo.borrow_mut().try_get_or_intern("foo").unwrap();
 
             assert_eq!(
                 expr,
@@ -1491,7 +1493,7 @@ mod tests {
             expr_parser.parse().unwrap(),
             &Expression {
                 kind: ExpressionKind::Ident {
-                    name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                    name: { rodeo.borrow_mut().get_or_intern("foo") },
                     generic_args: Some(&[
                         &TypeExpr {
                             kind: TypeKind::Builtin(BuiltinType::i32),
@@ -1522,7 +1524,7 @@ mod tests {
                 kind: ExpressionKind::StructInit {
                     ty: &Expression {
                         kind: ExpressionKind::Ident {
-                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            name: { rodeo.borrow_mut().get_or_intern("foo") },
                             generic_args: None,
                         },
                         span: (0, 3).into()
@@ -1548,7 +1550,7 @@ mod tests {
                 kind: ExpressionKind::StructInit {
                     ty: &Expression {
                         kind: ExpressionKind::Ident {
-                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            name: { rodeo.borrow_mut().get_or_intern("foo") },
                             generic_args: Some(&[
                                 // fmt comment
                                 &TypeExpr {
@@ -1580,7 +1582,7 @@ mod tests {
                 kind: ExpressionKind::StructInit {
                     ty: &Expression {
                         kind: ExpressionKind::Ident {
-                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            name: { rodeo.borrow_mut().get_or_intern("foo") },
                             generic_args: None,
                         },
                         span: (0, 3).into()
@@ -1588,7 +1590,7 @@ mod tests {
                     fields: Some(&[
                         // fmt comment
                         FieldInit {
-                            name: { rodeo.lock().unwrap().get_or_intern("a") },
+                            name: { rodeo.borrow_mut().get_or_intern("a") },
                             value: &Expression {
                                 kind: ExpressionKind::Literal(expressions::Literal::Int(123)),
                                 span: (11, 3).into(),
@@ -1623,7 +1625,7 @@ mod tests {
                 kind: ExpressionKind::Call {
                     callee: &Expression {
                         kind: ExpressionKind::Ident {
-                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            name: { rodeo.borrow_mut().get_or_intern("foo") },
                             generic_args: None,
                         },
                         span: (0, 3).into(),
@@ -1649,7 +1651,7 @@ mod tests {
                 kind: ExpressionKind::Call {
                     callee: &Expression {
                         kind: ExpressionKind::Ident {
-                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            name: { rodeo.borrow_mut().get_or_intern("foo") },
                             generic_args: Some(&[&TypeExpr {
                                 kind: TypeKind::Builtin(BuiltinType::i32),
                                 span: (5, 3).into()
@@ -1676,7 +1678,7 @@ mod tests {
                 kind: ExpressionKind::Call {
                     callee: &Expression {
                         kind: ExpressionKind::Ident {
-                            name: { rodeo.lock().unwrap().get_or_intern("foo") },
+                            name: { rodeo.borrow_mut().get_or_intern("foo") },
                             generic_args: None,
                         },
                         span: (0, 3).into(),

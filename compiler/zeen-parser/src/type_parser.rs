@@ -365,20 +365,20 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use std::{cell::RefCell, rc::Rc};
 
     macro_rules! make_type_parser {
         ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident, $p_name: ident) => {
             let src_arc = std::sync::Arc::new($src.to_string());
-            let $rodeo = std::sync::Arc::new(std::sync::Mutex::new(lasso::Rodeo::default()));
+            let $rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
             let $bump = bumpalo::Bump::new();
             let mut $tokens = zeen_lexer::tokenize($src);
             let mut $parser = Parser::new(
-                Arc::new("tests.zn".to_string()),
+                Rc::new("tests.zn".to_string()),
                 src_arc,
                 &mut $tokens,
                 &$bump,
-                std::sync::Arc::clone(&$rodeo),
+                Rc::clone(&$rodeo),
             );
             let mut $p_name = TypeParser::new(&mut $parser);
         };
@@ -709,7 +709,7 @@ mod tests {
                         span: (6, 3).into()
                     },],
                     generic_args: Some(&[zeen_ast::declarations::GenericType {
-                        name: (rodeo.lock().unwrap().get_or_intern("T"), (3, 1).into()),
+                        name: (rodeo.borrow_mut().get_or_intern("T"), (3, 1).into()),
                         interfaces: None,
                     }]),
                     ret: &TypeExpr {
@@ -740,7 +740,7 @@ mod tests {
                         span: (21, 3).into(),
                     }],
                     generic_args: Some(&[GenericType {
-                        name: ({ rodeo.lock().unwrap().get_or_intern("T") }, (3, 1).into()),
+                        name: ({ rodeo.borrow_mut().get_or_intern("T") }, (3, 1).into()),
                         interfaces: Some(&[
                             /*
                              * Kinda interesting bug:
@@ -754,15 +754,15 @@ mod tests {
                              * for other Mutex users.
                              *
                              * I've lost 2 hours of debugging for this...
-                             */
-                            (
-                                { rodeo.lock().unwrap().get_or_intern("Add") },
-                                (6, 3).into()
-                            ),
-                            (
-                                { rodeo.lock().unwrap().get_or_intern("Display") },
-                                (12, 7).into()
-                            ),
+                            */
+
+                            /*
+                             * UPDATE 28.06.26:
+                             * Since Arc<Mutex<T>> was replaced with Rc<RefCell<T>>, this comment
+                             * must be deprecated, but I'll keep this funny story from deep night.
+                            */
+                            (rodeo.borrow_mut().get_or_intern("Add"), (6, 3).into()),
+                            (rodeo.borrow_mut().get_or_intern("Display"), (12, 7).into()),
                         ]),
                     }]),
                     ret: &TypeExpr {
@@ -845,7 +845,7 @@ mod tests {
             type_parser.parse().unwrap(),
             &TypeExpr {
                 kind: TypeKind::Named {
-                    name: { rodeo.lock().unwrap().get_or_intern("some_struct") },
+                    name: { rodeo.borrow_mut().get_or_intern("some_struct") },
                     generic_args: None,
                 },
                 span: (0, 11).into()
@@ -866,7 +866,7 @@ mod tests {
             type_parser.parse().unwrap(),
             &TypeExpr {
                 kind: TypeKind::Named {
-                    name: { rodeo.lock().unwrap().get_or_intern("some_struct") },
+                    name: { rodeo.borrow_mut().get_or_intern("some_struct") },
                     generic_args: Some(&[
                         &TypeExpr {
                             kind: TypeKind::Builtin(types::BuiltinType::i32),
