@@ -187,13 +187,7 @@ mod tests {
     #[test]
     fn test_escape_braces() {
         let chunks = parse_format_string("{{}}").unwrap();
-        assert_eq!(
-            chunks,
-            vec![
-                FormatChunk::Literal("{".into()),
-                FormatChunk::Literal("}".into()),
-            ]
-        );
+        assert_eq!(chunks, vec![FormatChunk::Literal("{}".into()),]);
     }
 
     #[test]

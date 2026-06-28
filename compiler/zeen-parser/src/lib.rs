@@ -101,7 +101,10 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
 
     pub fn get_or_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
         let mut interner = self.interner.borrow_mut();
-        interner.get_or_intern(value)
+        let val = interner.get_or_intern(value);
+        drop(interner);
+
+        val
     }
 
     pub fn report(&mut self, err: ParserError) {
