@@ -34,6 +34,7 @@ use zeen_resolve::{DefId, DefKind, ResolutionResult};
 mod coerce;
 mod context;
 mod error;
+mod format_str;
 mod result;
 mod types;
 
