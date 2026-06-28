@@ -731,6 +731,8 @@ mod tests {
 
         make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
 
+        let mut rodeo = rodeo.borrow_mut();
+
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -740,7 +742,7 @@ mod tests {
                         span: (21, 3).into(),
                     }],
                     generic_args: Some(&[GenericType {
-                        name: ({ rodeo.borrow_mut().get_or_intern("T") }, (3, 1).into()),
+                        name: ({ rodeo.get_or_intern("T") }, (3, 1).into()),
                         interfaces: Some(&[
                             /*
                              * Kinda interesting bug:
@@ -767,8 +769,8 @@ mod tests {
                              * Fuck, this returns runtime error because of `already borrow, I'll fix
                              * it, one second
                             */
-                            ({ rodeo.borrow_mut().get_or_intern("Add") }, (6, 3).into()),
-                            (rodeo.borrow_mut().get_or_intern("Display"), (12, 7).into()),
+                            (rodeo.get_or_intern("Add"), (6, 3).into()),
+                            (rodeo.get_or_intern("Display"), (12, 7).into()),
                         ]),
                     }]),
                     ret: &TypeExpr {
