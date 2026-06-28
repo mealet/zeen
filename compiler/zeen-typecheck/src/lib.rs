@@ -10,13 +10,14 @@ use lasso::Spur;
 use miette::SourceSpan;
 use zeen_ast::Source;
 
-use crate::error::TypeError;
 use crate::{
     coerce::{CoerceResult, try_coerce},
     context::{FnCtx, TypeCheckCtx},
+    format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
     types::{Capabilities, StructTypeInfo, Type, TypeId, TypeInterner},
 };
+use crate::{error::TypeError, format_str::FormatParseError};
 
 use zeen_ast::{
     expressions::{BinaryOp, Literal, UnaryOp},
@@ -652,6 +653,8 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    // >> Macros
+
     fn check_macro_call(
         &mut self,
         kind: (HirMacroKind, SourceSpan),
@@ -691,6 +694,93 @@ impl<'res> TypeChecker<'res> {
 
             _ => todo!(),
         }
+    }
+
+    fn check_format_macro(&mut self, args: &[Rc<HirExpr>], source: Source) {
+        let Some(fmt_arg) = args.first() else {
+            self.report(TypeError::ExpectedFormatString {
+                src: source.src(),
+                span: source.span,
+            });
+
+            return;
+        };
+
+        let fmt_str: String = match &fmt_arg.kind {
+            HirExprKind::Literal(Literal::String(str_id)) => {
+                let interner = self.interner.borrow();
+                interner.resolve(str_id).to_string()
+            }
+
+            _ => {
+                let (src, span) = (fmt_arg.source.src(), fmt_arg.source.span);
+                self.report(TypeError::ExpectedFormatString { src, span });
+                return;
+            }
+        };
+
+        let chunks = match format_str::parse_format_string(&fmt_str) {
+            Ok(chunks) => chunks,
+            Err(err) => {
+                self.report(format_error_to_diagnostic(&err, &fmt_arg.source));
+
+                // still check remaining args
+                for arg in &args[1..] {
+                    self.synth_expr(arg);
+                }
+
+                return;
+            }
+        };
+
+        let specs = format_str::arg_specs(&chunks);
+        let value_args = &args[1..];
+
+        if specs.len() != value_args.len() {
+            self.report(TypeError::FormatArgCountMismatch {
+                placeholders: specs.len(),
+                args: value_args.len(),
+                src: fmt_arg.source.src(),
+                span: fmt_arg.source.span,
+            });
+            // return;
+        }
+
+        for (spec, arg) in specs.iter().zip(value_args) {
+            let arg_ty = self.synth_expr(arg);
+            let arg_ty = self.default_literal(arg_ty);
+
+            self.check_format_arg(*spec, arg_ty, arg.source.clone());
+        }
+
+        // checking extra args
+        for arg in value_args.iter().skip(specs.len()) {
+            self.synth_expr(arg);
+        }
+
+        todo!()
+    }
+
+    fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, source: Source) {
+        match spec {
+            FormatSpec::Display => {
+                self.check_implements_interface(arg_ty, "Display", todo!(), source)
+            }
+
+            _ => todo!(),
+        }
+    }
+
+    // << Macros
+
+    fn check_implements_interface(
+        &mut self,
+        ty: TypeId,
+        interface_name: &'static str,
+        interface_def: Option<DefId>,
+        source: Source,
+    ) {
+        todo!()
     }
 
     fn check_expr(&mut self, expr: &HirExpr, expected: TypeId) -> TypeId {
@@ -841,6 +931,45 @@ impl<'res> TypeChecker<'res> {
                 .unwrap_or(self.result.interner.void()),
 
             _ => self.result.interner.void(),
+        }
+    }
+}
+
+fn format_error_to_diagnostic(err: &FormatParseError, format_source: &Source) -> TypeError {
+    match err {
+        FormatParseError::UnclosedBrace { offset } => {
+            let src = format_source.src();
+            let span: miette::SourceSpan = (format_source.span.offset() + 1 + offset, 1).into();
+
+            TypeError::FormatParseError {
+                message: "unclosed '{' in format string".into(),
+                src,
+                span,
+            }
+        }
+
+        FormatParseError::UnknownSpecifier { spec, offset } => {
+            let src = format_source.src();
+            let span: miette::SourceSpan =
+                (format_source.span.offset() + 1 + offset, spec.len()).into();
+
+            TypeError::FormatParseError {
+                message: format!("unknown format specifier: '{}'", spec).into(),
+                src,
+                span,
+            }
+        }
+
+        FormatParseError::InvalidPrecision { raw, offset } => {
+            let src = format_source.src();
+            let span: miette::SourceSpan =
+                (format_source.span.offset() + 1 + offset, raw.len()).into();
+
+            TypeError::FormatParseError {
+                message: format!("invalid precision '{raw}' in: `{{:.{raw}}}`").into(),
+                src,
+                span,
+            }
         }
     }
 }

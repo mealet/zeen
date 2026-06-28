@@ -156,7 +156,7 @@ pub enum TypeError {
     #[error("found dangling definition id: DefId({id})")]
     #[diagnostic(
         severity(Error),
-        code(zeen::typechecker::assign_to_const),
+        code(zeen::typechecker::dangling_defid),
         help("please report this on: https://github.com/mealet/zeen/issues")
     )]
     DanglingDefId {
@@ -167,4 +167,38 @@ pub enum TypeError {
         #[label]
         span: SourceSpan,
     },
+
+    // --> Format Errors
+    #[error("expected format string as argument")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]
+    ExpectedFormatString {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("{message}")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::format_parse_error))]
+    FormatParseError {
+        message: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("format string provides {placeholders} placeholders, but found {args}")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::format_parse_error))]
+    FormatArgCountMismatch {
+        placeholders: usize,
+        args: usize,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+    // <-- Format Errors
 }
