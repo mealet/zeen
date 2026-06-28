@@ -77,6 +77,16 @@ pub fn parse_format_string(input: &str) -> Result<Vec<FormatChunk>, FormatParseE
                 chunks.push(FormatChunk::Arg(spec));
             }
 
+            '}' => {
+                if chars.peek().map(|(_, c)| *c) == Some('}') {
+                    chars.next();
+                    literal.push('}');
+                    continue;
+                }
+
+                literal.push('}');
+            }
+
             _ => literal.push(chr),
         }
     }
