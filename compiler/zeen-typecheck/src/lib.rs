@@ -657,6 +657,9 @@ impl<'res> TypeChecker<'res> {
         args: &[Rc<HirExpr>],
         source: Source,
     ) -> TypeId {
+        // TODO: Finish some macro calls, add special verificators where necessary and implement
+        // formats unwrappers for @print, @println and @format
+
         match kind.0 {
             HirMacroKind::Print | HirMacroKind::Println => {
                 for arg in args {
