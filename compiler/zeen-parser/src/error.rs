@@ -22,7 +22,7 @@ pub enum ParserError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label]
+        #[label("{token_kind}")]
         span: SourceSpan,
     },
 

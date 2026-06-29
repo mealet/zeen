@@ -225,7 +225,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             TokenKind::Bang => UnaryOp::Not,
             TokenKind::Tilde => UnaryOp::BitNot,
             TokenKind::Star => UnaryOp::Deref,
-            TokenKind::Ampersand => UnaryOp::AddrOf,
+            TokenKind::Ref => UnaryOp::AddrOf,
 
             _ => return self.parse_postfix(),
         };
@@ -1830,6 +1830,30 @@ mod tests {
         assert!(expr_parser.parse().is_some());
 
         assert!(expr_parser.parse().is_none());
+    }
+
+    #[test]
+    fn addr_of_lit() {
+        const SRC: &str = "&a";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert_eq!(
+            expr_parser.parse().unwrap(),
+            &Expression {
+                kind: ExpressionKind::Unary {
+                    expr: &Expression {
+                        kind: ExpressionKind::Ident {
+                            name: rodeo.borrow_mut().get_or_intern("a"),
+                            generic_args: None,
+                        },
+                        span: (1, 1).into(),
+                    },
+                    op: expressions::UnaryOp::AddrOf,
+                },
+                span: (0, 2).into()
+            }
+        );
     }
 
     // TODO: Add tests for switch expression
