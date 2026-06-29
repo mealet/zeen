@@ -1203,6 +1203,10 @@ impl<'res> TypeChecker<'res> {
 
         let unified = if lhs == rhs {
             Some(lhs)
+        } else if let Type::Pointer { .. } = self.result.interner.get(lhs)
+            && let Type::Builtin(BuiltinType::usize) = self.result.interner.get(rhs)
+        {
+            Some(lhs)
         } else if try_coerce(&self.result.interner, lhs, rhs).is_ok() {
             Some(rhs)
         } else if try_coerce(&self.result.interner, rhs, lhs).is_ok() {
