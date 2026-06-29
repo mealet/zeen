@@ -29,6 +29,8 @@ pub enum CoerceResult {
     PinLiteral,
     /// Type was non const, add const modificator
     AddConst,
+    /// Type was const, remove const modificator
+    RemoveConst,
     // Fixed array to slice: [N]T -> []T
     ArrayToSlice,
     // `never` -> any (for example: @panic(format, ...) macro)
@@ -81,10 +83,21 @@ pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceRe
         ) if from_inner == to_inner => CoerceResult::AddConst,
 
         (
+            Type::Pointer {
+                inner: from_inner,
+                is_const: true,
+            },
+            Type::Pointer {
+                inner: to_inner,
+                is_const: false,
+            },
+        ) if from_inner == to_inner => CoerceResult::AddConst,
+
+        (
             Type::Array {
                 element: from_elem, ..
             },
-            Type::Slice { element: to_elem }
+            Type::Slice { element: to_elem },
         ) if from_elem == to_elem => CoerceResult::ArrayToSlice,
 
         _ => CoerceResult::Fail,
