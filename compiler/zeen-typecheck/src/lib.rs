@@ -1,7 +1,10 @@
 #![allow(unused)]
 
 use std::{
-    cell::RefCell, collections::{HashMap, HashSet}, ops::Deref, rc::Rc
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    ops::Deref,
+    rc::Rc,
 };
 
 use lasso::Spur;
@@ -764,18 +767,89 @@ impl<'res> TypeChecker<'res> {
         for arg in value_args.iter().skip(specs.len()) {
             self.synth_expr(arg);
         }
-
-        todo!()
     }
 
-    fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, source: Source) {
+    fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, source: Source) -> Option<()> {
         match spec {
             FormatSpec::Display => {
-                self.check_implements_interface(arg_ty, "Display", todo!());
+                const IFACE_NAME: &str = "Display";
+
+                let iface_def =
+                    self.well_known_or_report(IFACE_NAME, self.well_known.Display, source)?;
+                self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
+                Some(())
             }
 
-            _ => todo!(),
+            FormatSpec::Debug => {
+                const IFACE_NAME: &str = "Debug";
+
+                let iface_def =
+                    self.well_known_or_report(IFACE_NAME, self.well_known.Display, source)?;
+                self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
+                Some(())
+            }
+
+            FormatSpec::Hex | FormatSpec::Oct | FormatSpec::Bin => {
+                match self.result.interner.get(arg_ty) {
+                    Type::Builtin(b) if coerce::builtin_is_integer(*b) => {}
+                    Type::IntLiteral => {}
+                    Type::Error => {}
+                    _ => {
+                        self.report(TypeError::FormatRequiresInteger {
+                            found: self
+                                .result
+                                .interner
+                                .display_type(arg_ty, Rc::clone(&self.interner), self.resolution)
+                                .into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                        return None;
+                    }
+                }
+
+                Some(())
+            }
+
+            FormatSpec::Float { .. } => {
+                match self.result.interner.get(arg_ty) {
+                    Type::Builtin(b) if coerce::builtin_is_float(*b) => {}
+                    Type::FloatLiteral => {}
+                    Type::Error => {}
+                    _ => {
+                        self.report(TypeError::FormatRequiresFloat {
+                            found: self
+                                .result
+                                .interner
+                                .display_type(arg_ty, Rc::clone(&self.interner), self.resolution)
+                                .into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                        return None;
+                    }
+                }
+
+                Some(())
+            }
         }
+    }
+
+    fn well_known_or_report(
+        &mut self,
+        name: &str,
+        val: Option<DefId>,
+        source: Source,
+    ) -> Option<DefId> {
+        if val.is_none() {
+            self.report(TypeError::InterfaceNotAvaible {
+                name: name.into(),
+                src: source.src(),
+                span: source.span,
+            });
+        }
+
+        val
     }
 
     // << Macros
@@ -787,36 +861,46 @@ impl<'res> TypeChecker<'res> {
         interface_def: DefId,
     ) -> bool {
         match self.result.interner.get(ty) {
-            Type::Builtin(b) => {
-                match b {
-                    BuiltinType::i8
-                    | BuiltinType::i16
-                    | BuiltinType::i32
-                    | BuiltinType::i64
-                    | BuiltinType::isize
-                    | BuiltinType::u8
-                    | BuiltinType::u16
-                    | BuiltinType::u32
-                    | BuiltinType::u64
-                    | BuiltinType::usize
-                    | BuiltinType::f32
-                    | BuiltinType::f64
-                    => ["Display", "Debug", "Copy", "Add", "Sub", "Mul", "Div", "Neg", "Not"].contains(&interface_name),
+            Type::Builtin(b) => match b {
+                BuiltinType::i8
+                | BuiltinType::i16
+                | BuiltinType::i32
+                | BuiltinType::i64
+                | BuiltinType::isize
+                | BuiltinType::u8
+                | BuiltinType::u16
+                | BuiltinType::u32
+                | BuiltinType::u64
+                | BuiltinType::usize
+                | BuiltinType::f32
+                | BuiltinType::f64 => [
+                    "Display", "Debug", "Copy", "Add", "Sub", "Mul", "Div", "Neg", "Not",
+                ]
+                .contains(&interface_name),
 
-                    BuiltinType::bool | BuiltinType::char => ["Display", "Debug", "Copy"].contains(&interface_name),
-
-                    BuiltinType::void => false,
+                BuiltinType::bool | BuiltinType::char => {
+                    ["Display", "Debug", "Copy"].contains(&interface_name)
                 }
+
+                BuiltinType::void => false,
             },
 
-            Type::Pointer { .. } => ["Debug", "Copy", "Add", "Sub", "Deref", "DerefAssign", "Slice", "SliceAssign"].contains(&interface_name),
+            Type::Pointer { .. } => [
+                "Debug",
+                "Copy",
+                "Add",
+                "Sub",
+                "Deref",
+                "DerefAssign",
+                "Slice",
+                "SliceAssign",
+            ]
+            .contains(&interface_name),
 
-            Type::Struct { def_id, .. } | Type::Enum { def_id } => {
-                self
-                    .resolution
-                    .impls
-                    .contains_key(&(*def_id, interface_def))
-            }
+            Type::Struct { def_id, .. } | Type::Enum { def_id } => self
+                .resolution
+                .impls
+                .contains_key(&(*def_id, interface_def)),
 
             // soon... (or i'll find another found to check bounds)
             Type::GenericParam(_) => false,
@@ -829,15 +913,18 @@ impl<'res> TypeChecker<'res> {
                 };
 
                 ["Slice", "SliceAssign"].contains(&interface_name) || copy_or_drop
-            },
+            }
 
-            Type::IntLiteral | Type::FloatLiteral => ["Display", "Debug", "Copy", "Add", "Sub", "Mul", "Div", "Neg", "Not"].contains(&interface_name),
+            Type::IntLiteral | Type::FloatLiteral => [
+                "Display", "Debug", "Copy", "Add", "Sub", "Mul", "Div", "Neg", "Not",
+            ]
+            .contains(&interface_name),
 
             Type::Error | Type::Never => true,
 
             Type::Void | Type::Interface { .. } | Type::Fn { .. } => false,
 
-            _ => todo!()
+            _ => todo!(),
         }
     }
 

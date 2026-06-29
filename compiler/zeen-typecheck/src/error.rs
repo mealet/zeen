@@ -227,5 +227,27 @@ pub enum TypeError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("format requires integer type, but found `{found}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::format_parse_error))]
+    FormatRequiresInteger {
+        found: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("format requires float type, but found `{found}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::format_parse_error))]
+    FormatRequiresFloat {
+        found: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
     // <-- Format Errors
 }
