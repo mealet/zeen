@@ -764,7 +764,7 @@ impl<'res> TypeChecker<'res> {
     fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, source: Source) {
         match spec {
             FormatSpec::Display => {
-                self.check_implements_interface(arg_ty, "Display", todo!(), source);
+                self.check_implements_interface(arg_ty, "Display", todo!());
             }
 
             _ => todo!(),
@@ -778,7 +778,6 @@ impl<'res> TypeChecker<'res> {
         ty: TypeId,
         interface_name: &str,
         interface_def: DefId,
-        source: Source,
     ) -> bool {
         match self.result.interner.get(ty) {
             Type::Builtin(b) => {
@@ -803,9 +802,33 @@ impl<'res> TypeChecker<'res> {
                 }
             },
 
+            Type::Pointer { .. } => ["Debug", "Copy", "Add", "Sub", "Deref", "DerefAssign", "Slice", "SliceAssign"].contains(&interface_name),
+
+            Type::Struct { def_id, .. } | Type::Enum { def_id } => {
+                self
+                    .resolution
+                    .impls
+                    .contains_key(&(*def_id, interface_def))
+            }
+
+            // soon... (or i'll find another found to check bounds)
+            Type::GenericParam(_) => false,
+
+            Type::Array { element, .. } | Type::Slice { element } => {
+                let copy_or_drop = if matches!(interface_name, "Copy" | "Drop") {
+                    self.check_implements_interface(*element, interface_name, interface_def)
+                } else {
+                    false
+                };
+
+                ["Slice", "SliceAssign"].contains(&interface_name) || copy_or_drop
+            },
+
             Type::IntLiteral | Type::FloatLiteral => ["Display", "Debug", "Copy", "Add", "Sub", "Mul", "Div", "Neg", "Not"].contains(&interface_name),
 
             Type::Error | Type::Never => true,
+
+            Type::Void | Type::Interface { .. } | Type::Fn { .. } => false,
 
             _ => todo!()
         }
