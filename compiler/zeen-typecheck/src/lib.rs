@@ -1,9 +1,7 @@
 #![allow(unused)]
 
 use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
+    cell::RefCell, collections::{HashMap, HashSet}, ops::Deref, rc::Rc
 };
 
 use lasso::Spur;
@@ -44,6 +42,7 @@ pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
 pub struct TypeChecker<'res> {
     resolution: &'res ResolutionResult,
+    well_known: WellKnownInterfaces,
 
     result: TypeCheckResult,
     ctx: TypeCheckCtx,
@@ -60,8 +59,16 @@ struct FnSignature {
 
 impl<'res> TypeChecker<'res> {
     pub fn new(resolution: &'res ResolutionResult, interner: Rc<RefCell<lasso::Rodeo>>) -> Self {
+        let well_known;
+
+        {
+            let inter_ref = interner.borrow();
+            well_known = WellKnownInterfaces::resolve(&resolution.defs, inter_ref.deref());
+        }
+
         Self {
             resolution,
+            well_known,
             result: TypeCheckResult::default(),
             ctx: TypeCheckCtx::new(),
             interner,
