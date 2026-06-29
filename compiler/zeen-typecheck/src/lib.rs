@@ -573,7 +573,7 @@ impl<'res> TypeChecker<'res> {
                 let declared_const = declared.map(|(_, c)| c).unwrap_or(false);
 
                 let value_ty = value.as_ref().map(|val| match declared_ty {
-                    Some(expected) => self.check_expr(val, expected),
+                    Some(expected) => self.check_expr(val, expected, true),
                     None => self.synth_expr(val),
                 });
 
@@ -585,14 +585,12 @@ impl<'res> TypeChecker<'res> {
 
                 self.result.def_types.insert(*def_id, final_ty);
 
-                self.result
-                    .const_bindings
-                    .insert(*def_id, *is_const || declared_const);
+                self.result.const_bindings.insert(*def_id, *is_const);
             }
 
             HirStmtKind::Assign { object, value } => {
                 let obj_ty = self.synth_expr(object);
-                self.check_expr(value, obj_ty);
+                self.check_expr(value, obj_ty, false);
                 self.check_not_const_target(object);
             }
 
@@ -652,6 +650,13 @@ impl<'res> TypeChecker<'res> {
 
             HirExprKind::MacroCall { kind, args } => {
                 self.check_macro_call(*kind, args, expr.source.clone())
+            }
+
+            HirExprKind::Binary { lhs, rhs, op } => {
+                let lhs_ty = self.synth_expr(lhs);
+                let rhs_ty = self.synth_expr(rhs);
+
+                self.check_binary_op(*op, lhs_ty, rhs_ty, expr.source.clone())
             }
 
             HirExprKind::Block(stmts) => self.synth_block_value_stmts(stmts),
@@ -1013,7 +1018,7 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_expr(&mut self, expr: &HirExpr, expected: TypeId) -> TypeId {
+    fn check_expr(&mut self, expr: &HirExpr, expected: TypeId, allow_const_remove: bool) -> TypeId {
         let actual = match &expr.kind {
             HirExprKind::ArrayInit { elements } if elements.is_empty() => {
                 if let Type::Array { .. } = self.result.interner.get(expected).clone() {
@@ -1025,7 +1030,13 @@ impl<'res> TypeChecker<'res> {
             _ => self.synth_expr(expr),
         };
 
-        self.coerce_or_error(actual, expected, expr.source.clone(), expr.id)
+        self.coerce_or_error(
+            actual,
+            expected,
+            expr.source.clone(),
+            expr.id,
+            allow_const_remove,
+        )
     }
 
     fn coerce_or_error(
@@ -1034,6 +1045,8 @@ impl<'res> TypeChecker<'res> {
         expected: TypeId,
         source: Source,
         id: HirId,
+
+        allow_const_remove: bool,
     ) -> TypeId {
         match try_coerce(&self.result.interner, actual, expected) {
             CoerceResult::Identity => actual,
@@ -1047,8 +1060,21 @@ impl<'res> TypeChecker<'res> {
                 expected
             }
 
+            CoerceResult::RemoveConst => {
+                if !allow_const_remove {
+                    self.report(TypeError::Mismatch {
+                        expected: self.display_type(expected).into(),
+                        found: self.display_type(actual).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+
+                expected
+            }
+
             CoerceResult::Fail => {
-                self.result.errors.push(TypeError::Mismatch {
+                self.report(TypeError::Mismatch {
                     expected: self.display_type(expected).into(),
                     found: self.display_type(actual).into(),
                     src: source.src(),
