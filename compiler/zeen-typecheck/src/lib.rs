@@ -676,18 +676,14 @@ impl<'res> TypeChecker<'res> {
 
         match kind.0 {
             HirMacroKind::Print | HirMacroKind::Println => {
-                for arg in args {
-                    self.synth_expr(arg);
-                }
+                self.check_format_macro(args, source);
                 self.result.interner.void()
             }
 
             HirMacroKind::Format => {
-                for arg in args {
-                    self.synth_expr(arg);
-                }
-                let char_ty = self.result.interner.builtin(BuiltinType::char);
+                self.check_format_macro(args, source);
 
+                let char_ty = self.result.interner.builtin(BuiltinType::char);
                 self.result.interner.intern(Type::Pointer {
                     inner: char_ty,
                     is_const: true,
