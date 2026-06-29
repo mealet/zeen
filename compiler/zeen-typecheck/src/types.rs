@@ -230,6 +230,7 @@ impl WellKnownInterfaces {
                     | "Div"
                     | "Neg"
                     | "Not"
+                    | "Cmp"
                     | "Deref"
                     | "DerefAssign"
                     | "Slice"

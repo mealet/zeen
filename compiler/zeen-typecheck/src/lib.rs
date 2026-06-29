@@ -1189,6 +1189,154 @@ impl<'res> TypeChecker<'res> {
             _ => self.result.interner.void(),
         }
     }
+
+    fn check_binary_op(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypeId,
+        rhs: TypeId,
+        source: Source,
+    ) -> TypeId {
+        if lhs == self.result.interner.error() || rhs == self.result.interner.error() {
+            return self.result.interner.error();
+        }
+
+        let unified = if lhs == rhs {
+            Some(lhs)
+        } else if try_coerce(&self.result.interner, lhs, rhs).is_ok() {
+            Some(rhs)
+        } else if try_coerce(&self.result.interner, rhs, lhs).is_ok() {
+            Some(lhs)
+        } else {
+            None
+        };
+
+        let Some(operand_ty) = unified else {
+            self.report(TypeError::BinaryNotSupported {
+                op,
+                lhs_type: self.display_type(lhs).into(),
+                rhs_type: self.display_type(rhs).into(),
+                src: source.src(),
+                span: source.span,
+            });
+            return self.result.interner.error();
+        };
+
+        use BinaryOp::*;
+
+        match op {
+            Add | Sub | Mul | Div | Mod | BitAnd | BitOr | BitXor | Shl | Shr => {
+                if self.is_numeric_or_literal(operand_ty) {
+                    return operand_ty;
+                }
+
+                match self.result.interner.get(operand_ty) {
+                    Type::Struct { def_id, .. } => {
+                        let iface_name = format!("{:?}", op);
+
+                        if let Some(iface_def) = self.well_known_or_report(
+                            &iface_name,
+                            self.well_known.get(&iface_name),
+                            source.clone(),
+                        ) {
+                            if self.check_implements_interface(operand_ty, &iface_name, iface_def) {
+                                return operand_ty;
+                            }
+
+                            self.report(TypeError::InterfaceNotImplemented {
+                                name: iface_name.into(),
+                                ty_name: self.display_type(operand_ty).into(),
+                                src: source.src(),
+                                span: source.span,
+                            });
+
+                            return self.result.interner.error();
+                        }
+
+                        self.result.interner.error()
+                    }
+
+                    Type::Pointer { .. } if matches!(op, Add | Sub) => operand_ty,
+
+                    _ => {
+                        self.report(TypeError::BinaryNotSupported {
+                            op,
+                            lhs_type: self.display_type(lhs).into(),
+                            rhs_type: self.display_type(rhs).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                        self.result.interner.error()
+                    }
+                }
+            }
+
+            Eq | Ne | Lt | Gt | Le | Ge => {
+                match self.result.interner.get(operand_ty) {
+                    Type::Builtin(_) => {}
+                    Type::Pointer { .. } => {}
+                    Type::Enum { .. } => {}
+                    Type::IntLiteral | Type::FloatLiteral => {}
+                    Type::Struct { .. } => {
+                        const IFACE_NAME: &str = "Cmp";
+
+                        if let Some(iface_def) = self.well_known_or_report(
+                            IFACE_NAME,
+                            self.well_known.get(IFACE_NAME),
+                            source.clone(),
+                        ) {
+                            if self.check_implements_interface(operand_ty, IFACE_NAME, iface_def) {
+                                return operand_ty;
+                            }
+
+                            self.report(TypeError::InterfaceNotImplemented {
+                                name: IFACE_NAME.into(),
+                                ty_name: self.display_type(operand_ty).into(),
+                                src: source.src(),
+                                span: source.span,
+                            });
+                        }
+                    }
+
+                    _ => {
+                        self.report(TypeError::BinaryNotSupported {
+                            op,
+                            lhs_type: self.display_type(lhs).into(),
+                            rhs_type: self.display_type(rhs).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+                }
+
+                self.result.interner.builtin(BuiltinType::bool)
+            }
+
+            LogicalAnd | LogicalOr => {
+                let bool_ty = self.result.interner.builtin(BuiltinType::bool);
+
+                if operand_ty != bool_ty {
+                    self.report(TypeError::BinaryNotSupported {
+                        op,
+                        lhs_type: self.display_type(lhs).into(),
+                        rhs_type: self.display_type(rhs).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+
+                bool_ty
+            }
+        }
+    }
+
+    fn is_numeric_or_literal(&self, ty: TypeId) -> bool {
+        match self.result.interner.get(ty) {
+            Type::IntLiteral | Type::FloatLiteral => true,
+            Type::Builtin(b) => coerce::builtin_is_integer(*b) || coerce::builtin_is_float(*b),
+            _ => false,
+        }
+    }
 }
 
 fn format_error_to_diagnostic(err: &FormatParseError, format_source: &Source) -> TypeError {
