@@ -183,6 +183,15 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("unknown macro found")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::unknown_macro))]
+    UnknownMacro {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("type `{ty_name}` has no implementation for `{name}` interface")]
     #[diagnostic(severity(Error), code(zeen::typechecker::interface_not_implemented))]
     InterfaceNotImplemented {

@@ -688,14 +688,104 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirMacroKind::Panic | HirMacroKind::Unreachable => {
-                for arg in args {
-                    self.synth_expr(arg);
+                self.check_format_macro(args, source);
+                self.result.interner.never()
+            }
+
+            HirMacroKind::Unreachable => {
+                if !args.is_empty() {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
                 }
 
                 self.result.interner.never()
             }
 
-            _ => todo!(),
+            HirMacroKind::Dbg => {
+                if args.len() != 1 {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                };
+
+                let arg = Rc::clone(&args[0]);
+                let ty = self.synth_expr(arg.as_ref());
+
+                {
+                    const IFACE_NAME: &str = "Debug";
+
+                    if let Some(iface_def) =
+                        self.well_known_or_report(IFACE_NAME, self.well_known.Display, source)
+                    {
+                        self.check_implements_interface(ty, IFACE_NAME, iface_def);
+                    }
+                }
+
+                ty
+            }
+
+            HirMacroKind::SizeOf | HirMacroKind::AlignOf => {
+                if args.len() != 1 {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                };
+
+                if let Some(arg) = args.first() {
+                    self.synth_expr(arg);
+                }
+                self.result.interner.builtin(BuiltinType::usize)
+            }
+
+            HirMacroKind::As => {
+                if args.len() != 2 {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                };
+
+                let target_ty = match &args[0].kind {
+                    HirExprKind::Type(ty_expr) => self.lower_hir_type(ty_expr),
+                    _ => {
+                        self.synth_expr(&args[0]);
+                        self.result.interner.error()
+                    }
+                };
+                self.synth_expr(&args[1]);
+
+                target_ty
+            }
+
+            HirMacroKind::Unknown => {
+                for arg in args {
+                    self.synth_expr(arg);
+                }
+
+                self.report(TypeError::UnknownMacro {
+                    src: source.src(),
+                    span: kind.1,
+                });
+                self.result.interner.error()
+            }
         }
     }
 
