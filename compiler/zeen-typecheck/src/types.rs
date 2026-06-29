@@ -201,28 +201,8 @@ pub struct StructTypeInfo {
 }
 
 #[derive(Debug, Clone, Default)]
-#[allow(non_snake_case)]
 pub struct WellKnownInterfaces {
-    pub Display: Option<DefId>,
-    pub Debug: Option<DefId>,
-
-    pub Copy: Option<DefId>,
-    pub Clone: Option<DefId>,
-    pub Drop: Option<DefId>,
-
-    pub Add: Option<DefId>,
-    pub Sub: Option<DefId>,
-    pub Mul: Option<DefId>,
-    pub Div: Option<DefId>,
-
-    pub Neg: Option<DefId>,
-    pub Not: Option<DefId>,
-    pub Cmp: Option<DefId>,
-
-    pub Deref: Option<DefId>,
-    pub DerefAssign: Option<DefId>,
-    pub Slice: Option<DefId>,
-    pub SliceAssign: Option<DefId>,
+    pub interfaces: HashMap<String, DefId>,
 }
 
 impl WellKnownInterfaces {
@@ -236,50 +216,33 @@ impl WellKnownInterfaces {
                 continue;
             }
 
-            match interner.resolve(&info.name) {
-                "Display" => out.Display = Some(*def_id),
-                "Debug" => out.Debug = Some(*def_id),
+            let name = interner.resolve(&info.name);
 
-                "Copy" => out.Copy = Some(*def_id),
-                "Drop" => out.Drop = Some(*def_id),
-
-                "Add" => out.Add = Some(*def_id),
-                "Sub" => out.Sub = Some(*def_id),
-                "Mul" => out.Mul = Some(*def_id),
-                "Div" => out.Div = Some(*def_id),
-
-                "Neg" => out.Neg = Some(*def_id),
-                "Not" => out.Not = Some(*def_id),
-
-                "Deref" => out.Deref = Some(*def_id),
-                "DerefAssign" => out.DerefAssign = Some(*def_id),
-                "Slice" => out.Slice = Some(*def_id),
-                "SliceAssign" => out.SliceAssign = Some(*def_id),
-
-                _ => {}
+            if matches!(
+                name,
+                "Display"
+                    | "Debug"
+                    | "Copy"
+                    | "Drop"
+                    | "Add"
+                    | "Sub"
+                    | "Mul"
+                    | "Div"
+                    | "Neg"
+                    | "Not"
+                    | "Deref"
+                    | "DerefAssign"
+                    | "Slice"
+                    | "SliceAssign"
+            ) {
+                out.interfaces.insert(name.to_string(), *def_id);
             }
         }
 
         out
     }
 
-    pub fn is_well_known(name: &str) -> bool {
-        matches!(
-            name,
-            "Display"
-                | "Debug"
-                | "Copy"
-                | "Drop"
-                | "Add"
-                | "Sub"
-                | "Mul"
-                | "Div"
-                | "Neg"
-                | "Not"
-                | "Deref"
-                | "DerefAssign"
-                | "Slice"
-                | "SliceAssign"
-        )
+    pub fn get(&self, name: impl AsRef<str>) -> Option<DefId> {
+        self.interfaces.get(name.as_ref()).copied()
     }
 }

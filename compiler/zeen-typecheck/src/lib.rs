@@ -723,9 +723,11 @@ impl<'res> TypeChecker<'res> {
                 {
                     const IFACE_NAME: &str = "Debug";
 
-                    if let Some(iface_def) =
-                        self.well_known_or_report(IFACE_NAME, self.well_known.Display, source)
-                    {
+                    if let Some(iface_def) = self.well_known_or_report(
+                        IFACE_NAME,
+                        self.well_known.get(IFACE_NAME),
+                        source,
+                    ) {
                         self.check_implements_interface(ty, IFACE_NAME, iface_def);
                     }
                 }
@@ -858,7 +860,7 @@ impl<'res> TypeChecker<'res> {
                 const IFACE_NAME: &str = "Display";
 
                 let iface_def =
-                    self.well_known_or_report(IFACE_NAME, self.well_known.Display, source)?;
+                    self.well_known_or_report(IFACE_NAME, self.well_known.get(IFACE_NAME), source)?;
                 self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
                 Some(())
             }
@@ -867,7 +869,7 @@ impl<'res> TypeChecker<'res> {
                 const IFACE_NAME: &str = "Debug";
 
                 let iface_def =
-                    self.well_known_or_report(IFACE_NAME, self.well_known.Display, source)?;
+                    self.well_known_or_report(IFACE_NAME, self.well_known.get(IFACE_NAME), source)?;
                 self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
                 Some(())
             }
