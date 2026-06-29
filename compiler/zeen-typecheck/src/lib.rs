@@ -15,7 +15,7 @@ use crate::{
     context::{FnCtx, TypeCheckCtx},
     format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
-    types::{Capabilities, StructTypeInfo, Type, TypeId, TypeInterner},
+    types::{Capabilities, StructTypeInfo, Type, TypeId, TypeInterner, WellKnownInterfaces},
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -764,7 +764,7 @@ impl<'res> TypeChecker<'res> {
     fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, source: Source) {
         match spec {
             FormatSpec::Display => {
-                self.check_implements_interface(arg_ty, "Display", todo!(), source)
+                self.check_implements_interface(arg_ty, "Display", todo!(), source);
             }
 
             _ => todo!(),
@@ -776,11 +776,39 @@ impl<'res> TypeChecker<'res> {
     fn check_implements_interface(
         &mut self,
         ty: TypeId,
-        interface_name: &'static str,
-        interface_def: Option<DefId>,
+        interface_name: &str,
+        interface_def: DefId,
         source: Source,
-    ) {
-        todo!()
+    ) -> bool {
+        match self.result.interner.get(ty) {
+            Type::Builtin(b) => {
+                match b {
+                    BuiltinType::i8
+                    | BuiltinType::i16
+                    | BuiltinType::i32
+                    | BuiltinType::i64
+                    | BuiltinType::isize
+                    | BuiltinType::u8
+                    | BuiltinType::u16
+                    | BuiltinType::u32
+                    | BuiltinType::u64
+                    | BuiltinType::usize
+                    | BuiltinType::f32
+                    | BuiltinType::f64
+                    => ["Display", "Debug", "Copy", "Add", "Sub", "Mul", "Div", "Neg", "Not"].contains(&interface_name),
+
+                    BuiltinType::bool | BuiltinType::char => ["Display", "Debug", "Copy"].contains(&interface_name),
+
+                    BuiltinType::void => false,
+                }
+            },
+
+            Type::IntLiteral | Type::FloatLiteral => ["Display", "Debug", "Copy", "Add", "Sub", "Mul", "Div", "Neg", "Not"].contains(&interface_name),
+
+            Type::Error | Type::Never => true,
+
+            _ => todo!()
+        }
     }
 
     fn check_expr(&mut self, expr: &HirExpr, expected: TypeId) -> TypeId {

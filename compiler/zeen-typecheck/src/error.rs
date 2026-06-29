@@ -168,6 +168,33 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("interface `{name}` is not avaible here")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::interface_not_avaible),
+        help("try to import 'ops' module from standard library: `use std.ops`")
+    )]
+    InterfaceNotAvaible {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("type `{ty_name}` has no implementation for `{name}` interface")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::interface_not_implemented))]
+    InterfaceNotImplemented {
+        name: SmolStr,
+        ty_name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]

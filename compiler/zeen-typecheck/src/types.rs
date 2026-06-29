@@ -241,7 +241,6 @@ impl WellKnownInterfaces {
                 "Debug" => out.Debug = Some(*def_id),
 
                 "Copy" => out.Copy = Some(*def_id),
-                "Clone" => out.Clone = Some(*def_id),
                 "Drop" => out.Drop = Some(*def_id),
 
                 "Add" => out.Add = Some(*def_id),
@@ -262,5 +261,25 @@ impl WellKnownInterfaces {
         }
 
         out
+    }
+
+    pub fn is_well_known(name: &str) -> bool {
+        matches!(
+            name,
+            "Display"
+                | "Debug"
+                | "Copy"
+                | "Drop"
+                | "Add"
+                | "Sub"
+                | "Mul"
+                | "Div"
+                | "Neg"
+                | "Not"
+                | "Deref"
+                | "DerefAssign"
+                | "Slice"
+                | "SliceAssign"
+        )
     }
 }
