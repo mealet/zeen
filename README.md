@@ -1,7 +1,7 @@
 <div align="center">
   <picture>
     <!-- -->
-    <img src="assets/logo.png" width="15%" alt="Logo" />
+    <img src="assets/logo/Zeen Rounded.png" width="15%" alt="Logo" />
     <!-- -->
   </picture>
 
