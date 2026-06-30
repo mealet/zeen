@@ -1,8 +1,7 @@
 <div align="center">
   <picture>
-    <!-- -->
-    <img src="assets/logo/Zeen Letter Colored.png" width="10%" alt="Logo" />
-    <!-- -->
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/Zeen Letter Black.png">
+    <img alt="logo" src="assets/logo/Zeen Letter White.png" width="10%">
   </picture>
 
   <div>
