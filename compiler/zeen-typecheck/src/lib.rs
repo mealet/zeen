@@ -1454,6 +1454,8 @@ impl<'res> TypeChecker<'res> {
                 Type::Pointer { inner, .. } => *inner,
 
                 Type::Struct { def_id, .. } => {
+                    // TODO: Add type inference from interface function (generic params must be included)
+
                     let iface_name = if self.expect_assign_interface {
                         "DerefAssign"
                     } else {
