@@ -52,6 +52,7 @@ pub struct TypeChecker<'res> {
     interner: Rc<RefCell<lasso::Rodeo>>,
 
     fn_sigs: HashMap<DefId, FnSignature>,
+    expect_assign_interface: bool,
 }
 
 struct FnSignature {
@@ -76,6 +77,7 @@ impl<'res> TypeChecker<'res> {
             ctx: TypeCheckCtx::new(),
             interner,
             fn_sigs: HashMap::new(),
+            expect_assign_interface: false,
         }
     }
 
@@ -589,7 +591,12 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirStmtKind::Assign { object, value } => {
+                let prev_expect = self.expect_assign_interface;
+                self.expect_assign_interface = true;
+
                 let obj_ty = self.synth_expr(object);
+                self.expect_assign_interface = false;
+
                 self.check_expr(value, obj_ty, false);
                 self.check_not_const_target(object);
             }
@@ -657,6 +664,11 @@ impl<'res> TypeChecker<'res> {
                 let rhs_ty = self.synth_expr(rhs);
 
                 self.check_binary_op(*op, lhs_ty, rhs_ty, expr.source.clone())
+            }
+
+            HirExprKind::Unary { expr, op } => {
+                let inner_ty = self.synth_expr(expr);
+                self.check_unary_op(*op, inner_ty, expr.source.clone())
             }
 
             HirExprKind::Block(stmts) => self.synth_block_value_stmts(stmts),
@@ -1331,6 +1343,158 @@ impl<'res> TypeChecker<'res> {
 
                 bool_ty
             }
+        }
+    }
+
+    fn check_unary_op(&mut self, op: UnaryOp, operand: TypeId, source: Source) -> TypeId {
+        if matches!(self.result.interner.get(operand), Type::Error) {
+            return self.result.interner.error();
+        }
+
+        match op {
+            UnaryOp::Neg => {
+                if self.is_numeric_or_literal(operand) {
+                    return operand;
+                }
+
+                match self.result.interner.get(operand) {
+                    Type::Struct { def_id, .. } => {
+                        const IFACE_NAME: &str = "Neg";
+
+                        if let Some(iface_def) = self.well_known_or_report(
+                            IFACE_NAME,
+                            self.well_known.get(IFACE_NAME),
+                            source.clone(),
+                        ) {
+                            if self.check_implements_interface(operand, IFACE_NAME, iface_def) {
+                                return operand;
+                            }
+
+                            self.report(TypeError::InterfaceNotImplemented {
+                                name: IFACE_NAME.into(),
+                                ty_name: self.display_type(operand).into(),
+                                src: source.src(),
+                                span: source.span,
+                            });
+                        }
+
+                        self.result.interner.error()
+                    }
+
+                    _ => {
+                        self.report(TypeError::UnaryNotSupported {
+                            op,
+                            child_type: self.display_type(operand).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                        self.result.interner.error()
+                    }
+                }
+            }
+
+            UnaryOp::Not => {
+                let bool_ty = self.result.interner.builtin(BuiltinType::bool);
+
+                if operand == bool_ty {
+                    return bool_ty;
+                };
+
+                match self.result.interner.get(operand) {
+                    Type::Struct { def_id, .. } => {
+                        const IFACE_NAME: &str = "Not";
+
+                        if let Some(iface_def) = self.well_known_or_report(
+                            IFACE_NAME,
+                            self.well_known.get(IFACE_NAME),
+                            source.clone(),
+                        ) {
+                            if self.check_implements_interface(operand, IFACE_NAME, iface_def) {
+                                return operand;
+                            }
+
+                            self.report(TypeError::InterfaceNotImplemented {
+                                name: IFACE_NAME.into(),
+                                ty_name: self.display_type(operand).into(),
+                                src: source.src(),
+                                span: source.span,
+                            });
+                        }
+
+                        self.result.interner.error()
+                    }
+
+                    _ => {
+                        self.report(TypeError::UnaryNotSupported {
+                            op,
+                            child_type: self.display_type(operand).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                        self.result.interner.error()
+                    }
+                }
+            }
+
+            UnaryOp::BitNot => {
+                if self.is_numeric_or_literal(operand) {
+                    operand
+                } else {
+                    self.report(TypeError::UnaryNotSupported {
+                        op,
+                        child_type: self.display_type(operand).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    self.result.interner.error()
+                }
+            }
+
+            UnaryOp::Deref => match self.result.interner.get(operand) {
+                Type::Pointer { inner, .. } => *inner,
+
+                Type::Struct { def_id, .. } => {
+                    let iface_name = if self.expect_assign_interface {
+                        "DerefAssign"
+                    } else {
+                        "Deref"
+                    };
+
+                    if let Some(iface_def) = self.well_known_or_report(
+                        iface_name,
+                        self.well_known.get(iface_name),
+                        source.clone(),
+                    ) {
+                        if self.check_implements_interface(operand, iface_name, iface_def) {
+                            return operand;
+                        }
+
+                        self.report(TypeError::InterfaceNotImplemented {
+                            name: iface_name.into(),
+                            ty_name: self.display_type(operand).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+
+                    self.result.interner.error()
+                }
+
+                _ => {
+                    self.report(TypeError::UnaryNotSupported {
+                        op,
+                        child_type: self.display_type(operand).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    self.result.interner.error()
+                }
+            },
+
+            UnaryOp::AddrOf => self.result.interner.intern(Type::Pointer {
+                inner: operand,
+                is_const: false,
+            }),
         }
     }
 
