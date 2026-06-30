@@ -1,14 +1,14 @@
 <div align="center">
   <picture>
     <!-- -->
-    <img src="assets/logo/Zeen Rounded.png" width="15%" alt="Logo" />
+    <img src="assets/logo/Zeen Letter Colored.png" width="10%" alt="Logo" />
     <!-- -->
   </picture>
 
   <div>
     <h1>Zeen Programming Language</h1>
     <p>
-      Build efficient software with simple toolchain
+      Zero-cost Efficient Execution Natively
     </p>
   </div>
 </div>
