@@ -169,7 +169,7 @@ impl<'inp> Tokenizer<'inp> {
             '&' => {
                 if matches!(self.first(), ' ' | '\0') {
                     TokenKind::Ampersand
-                } else if self.first() == '&' {
+                } else if self.first() == '&' && self.second() == ' ' {
                     let _ = self.bump();
                     TokenKind::BooleanAnd
                 } else {
