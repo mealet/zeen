@@ -16,6 +16,7 @@ use zeen_lexer::{Token, TokenKind, token::CompilerKeyword};
 pub struct StmtParser<'tok, 'ctx, 'pr> {
     p: &'pr mut Parser<'tok, 'ctx>,
     expect_optional_semicolon: bool,
+    absolutely_no_semicolon: bool,
 }
 
 /// ==@ Statements Parser @==
@@ -24,11 +25,17 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         Self {
             p: parser,
             expect_optional_semicolon: false,
+            absolutely_no_semicolon: false,
         }
     }
 
     pub fn with_optional_semicolon(mut self, flag: bool) -> Self {
         self.expect_optional_semicolon = flag;
+        self
+    }
+
+    pub fn no_semicolon(mut self) -> Self {
+        self.absolutely_no_semicolon = true;
         self
     }
 
@@ -55,11 +62,19 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
     }
 
     fn expect_semicolon(&mut self) -> Option<()> {
+        if self.absolutely_no_semicolon {
+            return Some(());
+        }
+
         let _ = self.p.expect(TokenKind::Semicolon, ";")?;
         Some(())
     }
 
     fn expect_optional_semicolon(&mut self) -> Option<()> {
+        if self.absolutely_no_semicolon {
+            return Some(());
+        }
+
         if self.expect_optional_semicolon {
             let _ = self.p.expect(TokenKind::Semicolon, ";")?;
             return Some(());
@@ -247,7 +262,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         let mut expr_parser = ExprParser::new(self.p);
         let expr = expr_parser.parse()?;
 
-        let _ = self.p.eat(TokenKind::Semicolon);
+        self.expect_optional_semicolon()?;
 
         let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::Expr(expr),

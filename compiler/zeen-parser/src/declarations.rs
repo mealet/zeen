@@ -161,7 +161,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         }
 
         if self.p.at(TokenKind::OpenBrace) {
-            let mut stmt_parser = StmtParser::new(self.p);
+            let mut stmt_parser = StmtParser::new(self.p).no_semicolon();
             body = Some(stmt_parser.parse()?);
         }
 
