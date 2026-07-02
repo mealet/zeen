@@ -109,10 +109,22 @@ pub enum ResolveError {
         #[label("\"{reason}\"")]
         span: SourceSpan,
     },
+
+    #[error("usage of compiler-reserved interface name: `{name}`")]
+    #[diagnostic(severity(Error), code(zeen::resolver::reserved_interface))]
+    ReservedInterface {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Error, Diagnostic, Clone)]
 #[error("definition here")]
+#[diagnostic(severity(Advice))]
 pub struct DuplicateLocation {
     #[source_code]
     pub src: NamedSource<String>,

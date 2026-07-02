@@ -145,8 +145,14 @@ impl<'ctx> NameResolver<'ctx> {
     // -> resolve functions
 
     pub fn resolve_module(&mut self, decls: &'ctx [&'ctx Declaration<'ctx>]) {
+        let old_reports = self.errors.len();
+
         for decl in decls {
             self.declare_toplevel(decl);
+        }
+
+        if self.errors.len() > old_reports {
+            return;
         }
 
         for decl in decls {
@@ -185,6 +191,20 @@ impl<'ctx> NameResolver<'ctx> {
             }
 
             DeclarationKind::InterfaceDecl { name, .. } => {
+                let name_resolved = self.interner_resolve(&name.0);
+
+                for &wk in WellKnownInterfaces::ALL {
+                    if wk.name() == name_resolved {
+                        self.report(ResolveError::ReservedInterface {
+                            name: name_resolved,
+                            src: decl.source.src(),
+                            span: name.1,
+                        });
+
+                        return;
+                    }
+                }
+
                 let def_id = self.define_at(
                     NodeKey::from_decl(decl),
                     DefInfo {
