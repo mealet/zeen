@@ -22,6 +22,7 @@ mod error;
 mod resolution;
 mod resolvers;
 mod symbol_table;
+mod well_known;
 
 pub fn resolve(
     filename: Rc<String>,

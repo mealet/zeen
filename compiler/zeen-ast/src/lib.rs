@@ -39,3 +39,12 @@ impl From<(SourceSpan, NamedSource<Arc<String>>)> for Source {
         }
     }
 }
+
+impl From<(NamedSource<Arc<String>>, SourceSpan)> for Source {
+    fn from(value: (NamedSource<Arc<String>>, SourceSpan)) -> Self {
+        Self {
+            span: value.1,
+            src: value.0,
+        }
+    }
+}

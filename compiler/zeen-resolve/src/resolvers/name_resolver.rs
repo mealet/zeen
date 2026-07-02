@@ -20,6 +20,7 @@ use crate::{
     error::ResolveError,
     resolution::{DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult},
     symbol_table::{ScopeKind, SymbolTable},
+    well_known::WellKnownInterfaces,
 };
 
 pub struct NameResolver<'ctx> {
@@ -59,7 +60,7 @@ impl<'ctx> NameResolver<'ctx> {
         arena: &'ctx Bump,
         interner: Rc<RefCell<Rodeo>>,
     ) -> Self {
-        Self {
+        let mut resolver = Self {
             arena,
             interner,
 
@@ -72,7 +73,11 @@ impl<'ctx> NameResolver<'ctx> {
             src,
             filename,
             errors: Vec::new(),
-        }
+        };
+
+        resolver.inject_well_known_interfaces();
+
+        resolver
     }
 
     pub fn finish(self) -> Result<ResolutionResult, Vec<ResolveError>> {
@@ -118,6 +123,23 @@ impl<'ctx> NameResolver<'ctx> {
 
     fn report(&mut self, error: ResolveError) {
         self.errors.push(error);
+    }
+
+    // -> well known injecter
+
+    fn inject_well_known_interfaces(&mut self) {
+        for &wk in WellKnownInterfaces::ALL {
+            let spur = self.interner.borrow_mut().get_or_intern(wk.name());
+            let def_id = self.define(DefInfo {
+                name: spur,
+                kind: DefKind::Interface,
+                span: (self.named_src(), SourceSpan::from((0, 0))).into(),
+                decl: None,
+            });
+
+            self.table.declare_type(spur, def_id);
+            self.result.well_known.insert(wk, def_id);
+        }
     }
 
     // -> resolve functions
