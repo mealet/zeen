@@ -7,6 +7,8 @@ use thiserror::Error;
 
 use zeen_ast::expressions::{BinaryOp, UnaryOp};
 
+// TODO: Remove `#![allow(unused)]` and delete unused code blocks from codebase when finished TypeChecker
+
 #[derive(Debug, Error, Diagnostic, Clone)]
 pub enum TypeError {
     #[error("expected type `{expected}`, but found `{found}`")]
