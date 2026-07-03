@@ -382,11 +382,64 @@ impl<'ctx> NameResolver<'ctx> {
                 methods,
                 generics,
             } => {
-                let interface_def = self.table.lookup_type(interface.0);
-                let object_def = self.table.lookup_type(object.0);
-
                 self.table.push(ScopeKind::Block);
                 self.declare_generics(generics, &decl.source.src);
+
+                let interface_def = self.table.lookup_type(interface.0);
+
+                if interface_def.is_none() {
+                    let interface_name = self.interner_resolve(&interface.0);
+
+                    self.report(ResolveError::UnresolvedType {
+                        name: interface_name,
+                        src: decl.source.src(),
+                        span: interface.1,
+                    });
+                }
+
+                let (object_name, object_span, object_bindings) = object;
+                let object_def = self.table.lookup_type(object_name);
+
+                if object_def.is_none() {
+                    let object_name = self.interner_resolve(&object_name);
+
+                    self.report(ResolveError::UnresolvedType {
+                        name: object_name,
+                        src: decl.source.src(),
+                        span: object_span,
+                    });
+                }
+
+                self.result.implement_names.insert(
+                    NodeKey::from_decl(decl),
+                    (
+                        interface_def
+                            .map(Resolution::Def)
+                            .unwrap_or(Resolution::Error),
+                        object_def.map(Resolution::Def).unwrap_or(Resolution::Error),
+                    ),
+                );
+
+                for (idx, (binding_name, binding_span)) in object_bindings.iter().enumerate() {
+                    let resolution = match self.table.lookup_type(*binding_name) {
+                        Some(def_id) => Resolution::Def(def_id),
+                        None => {
+                            let name = self.interner_resolve(binding_name);
+
+                            self.report(ResolveError::UnresolvedType {
+                                name,
+                                src: decl.source.src(),
+                                span: *binding_span,
+                            });
+
+                            Resolution::Error
+                        }
+                    };
+
+                    self.result
+                        .type_bindings
+                        .insert(NodeKey::from_binding_slot(decl, idx), resolution);
+                }
 
                 let mut methods_ids = Vec::new();
 
@@ -401,11 +454,11 @@ impl<'ctx> NameResolver<'ctx> {
                     }
                 }
 
-                self.table.pop();
-
                 if let (Some(obj), Some(iface)) = (object_def, interface_def) {
                     self.result.impls.insert((obj, iface), methods_ids);
                 }
+
+                self.table.pop();
             }
 
             DeclarationKind::EnumDecl { .. } => {

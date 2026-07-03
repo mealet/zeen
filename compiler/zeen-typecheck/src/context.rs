@@ -8,6 +8,7 @@ pub struct FnCtx {
     pub return_type: TypeId,
     pub self_type: Option<TypeId>,
     pub generic_bindings: HashMap<DefId, TypeId>,
+    pub generic_bounds: HashMap<DefId, Vec<DefId>>,
     pub loop_depth: u32,
 }
 
@@ -58,5 +59,13 @@ impl TypeCheckCtx {
 
     pub fn bind_generic(&mut self, def_id: DefId, ty: TypeId) {
         self.current_mut().generic_bindings.insert(def_id, ty);
+    }
+
+    pub fn generic_bounds(&self, def_id: DefId) -> &[DefId] {
+        self.stack
+            .last()
+            .and_then(|ctx| ctx.generic_bounds.get(&def_id))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 }

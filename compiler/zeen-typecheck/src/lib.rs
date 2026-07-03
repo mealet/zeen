@@ -548,6 +548,7 @@ impl<'res> TypeChecker<'res> {
             return_type: sig.ret,
             self_type: self_ty,
             generic_bindings,
+            generic_bounds: HashMap::default(),
             loop_depth: 0,
         });
 

@@ -47,6 +47,11 @@ impl NodeKey {
     pub fn from_variant(v: &EnumVariant) -> Self {
         NodeKey(v as *const _ as usize)
     }
+
+    pub fn from_binding_slot(decl: &Declaration, index: usize) -> Self {
+        let base = decl as *const _ as usize;
+        NodeKey(base.wrapping_add(index + 1))
+    }
 }
 
 /// Unique identifier for a resolver definition.
@@ -103,6 +108,8 @@ pub struct ResolutionResult {
     pub binding_sites: HashMap<NodeKey, DefId>,
 
     pub well_known: HashMap<WellKnownInterfaces, DefId>,
+
+    pub implement_names: HashMap<NodeKey, (Resolution, Resolution)>,
 }
 
 impl ResolutionResult {

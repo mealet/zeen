@@ -227,48 +227,65 @@ impl<'res> HirLowering<'res> {
                 methods,
                 generics,
             } => {
-                let object_def = match self.resolution.resolution_of_type(&TypeExpr {
-                    kind: TypeKind::Named {
-                        name: object.0,
-                        generic_args: None,
-                    },
-                    span: object.1,
-                }) {
-                    Some(res) => {
-                        if let Resolution::Def(id) = res {
+                let (interface_def, object_def) = match self
+                    .resolution
+                    .implement_names
+                    .get(&NodeKey::from_decl(decl))
+                {
+                    Some((iface_res, obj_res)) => (
+                        if let Resolution::Def(id) = iface_res {
                             Some(id)
                         } else {
                             None
-                        }
-                    }
-                    _ => None,
+                        },
+                        if let Resolution::Def(id) = obj_res {
+                            Some(id)
+                        } else {
+                            None
+                        },
+                    ),
+
+                    None => (None, None),
                 };
 
-                let interface_def = match self.resolution.resolution_of_type(&TypeExpr {
-                    kind: TypeKind::Named {
-                        name: interface.0,
-                        generic_args: None,
-                    },
-                    span: interface.1,
-                }) {
-                    Some(res) => {
-                        if let Resolution::Def(id) = res {
-                            Some(id)
-                        } else {
-                            None
+                let hir_generics = self.lower_generics(generics);
+
+                let object_bindings: Vec<DefId> = object
+                    .2
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| {
+                        match self
+                            .resolution
+                            .type_bindings
+                            .get(&NodeKey::from_binding_slot(decl, i))
+                        {
+                            Some(Resolution::Def(id)) => *id,
+                            _ => DefId(u32::MAX),
                         }
-                    }
-                    _ => None,
-                };
+                    })
+                    .collect();
+
+                let object_bindings_span = object.2.iter().skip(1).fold(
+                    object.2.first().map(|(_, s)| *s).unwrap_or(object.1),
+                    |acc, (_, s)| {
+                        let start = acc.offset().min(s.offset());
+                        let end = (acc.offset() + acc.len()).max(s.offset() + s.len());
+                        miette::SourceSpan::new(start.into(), end - start)
+                    },
+                );
 
                 let hir_methods: Vec<Rc<HirDecl>> = methods
                     .iter()
-                    .filter_map(|m| self.lower_decl_as_method(m, object_def))
+                    .filter_map(|m| self.lower_decl_as_method(m, object_def.copied()))
                     .collect();
 
                 HirDeclKind::Implement(Rc::new(HirImplement {
-                    interface: interface_def,
-                    object: object_def,
+                    generics: hir_generics,
+                    interface: interface_def.copied(),
+                    object: object_def.copied(),
+                    object_generics_bindings: object_bindings,
+                    object_bindings_span,
                     methods: hir_methods,
                 }))
             }

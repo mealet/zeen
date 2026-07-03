@@ -110,6 +110,10 @@ pub struct HirImplement {
     pub interface: Option<DefId>,
     pub object: Option<DefId>,
 
+    pub generics: Vec<HirGenericParam>,
+    pub object_generics_bindings: Vec<DefId>,
+    pub object_bindings_span: SourceSpan,
+
     pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn
 }
 
