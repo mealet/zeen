@@ -204,6 +204,79 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("signature mismatch in: `{interface}` -> `{method}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::interface_signature_mismatch))]
+    InterfaceMethodSignatureMismatch {
+        interface: SmolStr,
+        method: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("method `{method}` in interface `{interface}` is missing")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::interface_method_missing))]
+    InterfaceMethodMissing {
+        interface: SmolStr,
+        method: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("operator interface `{operator}` is not supported on provided generic")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::generic_op_not_supported))]
+    OperatorNotSupportedOnGeneric {
+        operator: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("type `{name}` expected {expected} generic types, but found {found}")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::generic_count_mismatch))]
+    GenericArgCountMismatch {
+        name: SmolStr,
+        expected: usize,
+        found: usize,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("generic `{generic}` missing interface bound: `{bound}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::generic_missing_bound))]
+    GenericMissingBound {
+        generic: SmolStr,
+        bound: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("generic `{generic}` with bound `{bound}` not satisfied with type: `{ty}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::generic_bound_not_satisfied))]
+    GenericBoundNotSatisfied {
+        generic: SmolStr,
+        bound: SmolStr,
+        ty: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]
