@@ -17,6 +17,7 @@ use zeen_ast::Declaration;
 use zeen_driver::CompilationContext;
 
 pub use resolution::{DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult};
+pub use well_known::WellKnownInterface;
 
 mod error;
 mod resolution;

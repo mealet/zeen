@@ -20,7 +20,7 @@ use crate::{
     error::ResolveError,
     resolution::{DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult},
     symbol_table::{ScopeKind, SymbolTable},
-    well_known::WellKnownInterfaces,
+    well_known::WellKnownInterface,
 };
 
 pub struct NameResolver<'ctx> {
@@ -128,7 +128,7 @@ impl<'ctx> NameResolver<'ctx> {
     // -> well known injecter
 
     fn inject_well_known_interfaces(&mut self) {
-        for &wk in WellKnownInterfaces::ALL {
+        for &wk in WellKnownInterface::ALL {
             let spur = self.interner.borrow_mut().get_or_intern(wk.name());
             let def_id = self.define(DefInfo {
                 name: spur,
@@ -193,7 +193,7 @@ impl<'ctx> NameResolver<'ctx> {
             DeclarationKind::InterfaceDecl { name, .. } => {
                 let name_resolved = self.interner_resolve(&name.0);
 
-                for &wk in WellKnownInterfaces::ALL {
+                for &wk in WellKnownInterface::ALL {
                     if wk.name() == name_resolved {
                         self.report(ResolveError::ReservedInterface {
                             name: name_resolved,

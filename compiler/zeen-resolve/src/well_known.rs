@@ -1,6 +1,6 @@
 /// Compiler reserved interfaces names.
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
-pub enum WellKnownInterfaces {
+pub enum WellKnownInterface {
     Display,
     Debug,
 
@@ -30,8 +30,8 @@ pub enum WellKnownInterfaces {
     SlicePtr,
 }
 
-impl WellKnownInterfaces {
-    pub const ALL: &'static [WellKnownInterfaces] = &[
+impl WellKnownInterface {
+    pub const ALL: &'static [WellKnownInterface] = &[
         Self::Display,
         Self::Debug,
         Self::Copy,
