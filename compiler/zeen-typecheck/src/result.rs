@@ -5,6 +5,7 @@ use zeen_resolve::DefId;
 
 use crate::{
     error::TypeError,
+    format_str::FormatChunk,
     types::{StructTypeInfo, TypeId, TypeInterner},
 };
 
@@ -17,6 +18,7 @@ pub struct TypeCheckResult {
     pub field_resolutions: HashMap<HirId, DefId>,
     pub struct_info: HashMap<DefId, StructTypeInfo>,
     pub const_bindings: HashMap<DefId, bool>,
+    pub format_specs: HashMap<HirId, Vec<FormatChunk>>,
     pub errors: Vec<TypeError>,
 }
 
