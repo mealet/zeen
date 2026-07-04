@@ -16,7 +16,11 @@ use crate::{
     context::{FnCtx, TypeCheckCtx},
     format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
-    types::{Capabilities, StructTypeInfo, Type, TypeId, TypeInterner, WellKnownInterfaces},
+    types::{Capabilities, StructTypeInfo, Type, TypeId, TypeInterner},
+    well_known::{
+        WellKnownInterfacesMap, binary_op_to_well_known, builtin_well_known_interfaces,
+        unary_op_to_well_known,
+    },
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -39,19 +43,21 @@ mod error;
 mod format_str;
 mod result;
 mod types;
+mod well_known;
 
 pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
 pub struct TypeChecker<'res> {
     resolution: &'res ResolutionResult,
-    well_known: WellKnownInterfaces,
+    well_known: WellKnownInterfacesMap,
 
     result: TypeCheckResult,
     ctx: TypeCheckCtx,
     interner: Rc<RefCell<lasso::Rodeo>>,
 
     fn_sigs: HashMap<DefId, FnSignature>,
+    struct_generics: HashMap<DefId, Vec<DefId>>,
     expect_assign_interface: bool,
 }
 
@@ -63,20 +69,14 @@ struct FnSignature {
 
 impl<'res> TypeChecker<'res> {
     pub fn new(resolution: &'res ResolutionResult, interner: Rc<RefCell<lasso::Rodeo>>) -> Self {
-        let well_known;
-
-        {
-            let inter_ref = interner.borrow();
-            well_known = WellKnownInterfaces::resolve(&resolution.defs, inter_ref.deref());
-        }
-
         Self {
             resolution,
-            well_known,
+            well_known: WellKnownInterfacesMap::from_resolution(resolution),
             result: TypeCheckResult::default(),
             ctx: TypeCheckCtx::new(),
             interner,
             fn_sigs: HashMap::new(),
+            struct_generics: HashMap::new(),
             expect_assign_interface: false,
         }
     }
@@ -131,6 +131,9 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Struct(s) => {
+                self.struct_generics
+                    .insert(decl.def_id, s.generics.iter().map(|g| g.def_id).collect());
+
                 let mut fields = Vec::with_capacity(s.fields.len());
 
                 for field in &s.fields {
@@ -147,7 +150,7 @@ impl<'res> TypeChecker<'res> {
                     StructTypeInfo {
                         def_id: decl.def_id,
                         fields,
-                        capabalities: Capabilities::MOVE_ONLY, // currently placeholder, resolved in phase 2
+                        capabalities: Capabilities::MOVE_ONLY,
                     },
                 );
 
@@ -163,9 +166,7 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Implement(imp) => {
-                for method in &imp.methods {
-                    self.declare_signature(method);
-                }
+                self.declare_implement_signature(imp, decl.source.clone());
             }
 
             HirDeclKind::Enum(e) => {
@@ -192,6 +193,12 @@ impl<'res> TypeChecker<'res> {
             .generics
             .iter()
             .map(|generic| generic.def_id)
+            .collect();
+
+        let generic_bounds: HashMap<DefId, Vec<DefId>> = hir_fn
+            .generics
+            .iter()
+            .map(|g| (g.def_id, g.bounds.clone()))
             .collect();
 
         let params: Vec<TypeId> = hir_fn
@@ -229,6 +236,48 @@ impl<'res> TypeChecker<'res> {
                 generics,
             },
         );
+    }
+
+    fn declare_implement_signature(&mut self, imp: &zeen_hir::HirImplement, source: Source) {
+        for method in &imp.methods {
+            self.declare_signature(method);
+        }
+
+        let Some(object_def) = imp.object else { return };
+
+        let struct_generics = self
+            .struct_generics
+            .get(&object_def)
+            .cloned()
+            .unwrap_or_default();
+
+        if imp.object_generics_bindings.len() != struct_generics.len() {
+            let name_id = self
+                .resolution
+                .defs
+                .get(&object_def)
+                .expect("object def id is wrong")
+                .name;
+            let interner = self.interner.borrow();
+            let name = interner.resolve(&name_id).into();
+
+            drop(interner);
+
+            self.report(TypeError::GenericArgCountMismatch {
+                name,
+                expected: struct_generics.len(),
+                found: imp.object_generics_bindings.len(),
+                src: source.src(),
+                span: imp.object_bindings_span,
+            });
+        }
+
+        let Some(iface_def) = imp.interface else {
+            return;
+        };
+        // let Some(&wk) = self.well_known.;
+
+        todo!()
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {
