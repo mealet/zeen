@@ -65,7 +65,7 @@ impl WellKnownInterface {
             Self::Display => "display",
             Self::Debug => "debug",
 
-            Self::Copy => "copy",
+            Self::Copy => "",
             Self::Drop => "drop",
 
             Self::Eq => "eq",
@@ -94,15 +94,13 @@ impl WellKnownInterface {
 
     pub fn shape(self) -> MethodShape {
         match self {
-            Self::Display
-            | Self::Debug
-            | Self::Drop
-            | Self::Copy
-            | Self::Neg
-            | Self::Not
-            | Self::BitNot
-            | Self::Deref
-            | Self::DerefPtr => MethodShape::Unary,
+            Self::Display | Self::Debug | Self::Neg | Self::Not | Self::BitNot | Self::Deref => {
+                MethodShape::Unary
+            }
+
+            Self::DerefPtr => MethodShape::UnaryPtr,
+            Self::Drop => MethodShape::UnaryVoid,
+            Self::Copy => MethodShape::Empty,
 
             Self::Eq
             | Self::Add
@@ -116,16 +114,25 @@ impl WellKnownInterface {
             | Self::Shl
             | Self::Shr => MethodShape::Binary,
 
-            Self::Slice | Self::SlicePtr => MethodShape::Indexed,
+            Self::Slice => MethodShape::Indexed,
+            Self::SlicePtr => MethodShape::IndexedPtr,
         }
     }
 }
 
 /// `Unary` - `fn method(self) R`
+/// `UnaryVoid` - `fn method(self)`
+/// `UnaryPtr` - `fn method(self) *R`
 /// `Binary` - `fn method(self, rhs: Self) R`
-/// `Indexed` - `fn method(self, index: usize) R` (example: for Slice = R, SlicePtr = *R)
+/// `Indexed` - `fn method(self, index: usize) R`
+/// `IndexedPtr` - `fn method(self, index: usize) *R`
+/// `Empty` - no method required (for Copy interface)
 pub enum MethodShape {
     Unary,
+    UnaryVoid,
+    UnaryPtr,
     Binary,
     Indexed,
+    IndexedPtr,
+    Empty,
 }

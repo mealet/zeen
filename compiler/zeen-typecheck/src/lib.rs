@@ -35,7 +35,7 @@ use zeen_hir::{
     stmt::{HirStmt, HirStmtKind},
     types::{HirTypeExpr, HirTypeKind},
 };
-use zeen_resolve::{DefId, DefKind, ResolutionResult};
+use zeen_resolve::{DefId, DefKind, MethodShape, ResolutionResult, WellKnownInterface};
 
 mod coerce;
 mod context;
@@ -275,9 +275,167 @@ impl<'res> TypeChecker<'res> {
         let Some(iface_def) = imp.interface else {
             return;
         };
-        // let Some(&wk) = self.well_known.;
+        let Some(&wk) = self.well_known.reverse.get(&iface_def) else {
+            return;
+        };
 
-        todo!()
+        let self_generic_args: Vec<TypeId> = struct_generics
+            .iter()
+            .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
+            .collect();
+
+        let self_struct_ty = self.result.interner.intern(Type::Struct {
+            def_id: object_def,
+            generic_args: self_generic_args,
+        });
+
+        if !wk.method_name().is_empty() {
+            let mut method_found = false;
+
+            for method in &imp.methods {
+                let name_matches = self
+                    .resolution
+                    .defs
+                    .get(&method.def_id)
+                    .map(|info| self.interner.borrow().resolve(&info.name) == wk.method_name())
+                    .unwrap_or(false);
+
+                if name_matches {
+                    method_found = true;
+
+                    self.validate_op_interface_impl(
+                        wk,
+                        iface_def,
+                        method.def_id,
+                        self_struct_ty,
+                        method.source.clone(),
+                    );
+                }
+            }
+
+            if !method_found {
+                let iface_name_id = self
+                    .resolution
+                    .defs
+                    .get(&iface_def)
+                    .expect("interface def id doesn't match")
+                    .name;
+
+                let interner = self.interner.borrow();
+                let interface: smol_str::SmolStr = interner.resolve(&iface_name_id).into();
+
+                drop(interner);
+
+                self.report(TypeError::InterfaceMethodMissing {
+                    interface,
+                    method: wk.method_name().into(),
+                    src: source.src(),
+                    span: imp.object_bindings_span,
+                });
+            }
+        }
+    }
+
+    fn validate_op_interface_impl(
+        &mut self,
+        wk: WellKnownInterface,
+        iface_def: DefId,
+        method_def_id: DefId,
+        self_struct_ty: TypeId,
+        source: Source,
+    ) {
+        // TODO: Add method signature helper in mismatch error
+
+        let Some(sig) = self.fn_sigs.get(&method_def_id) else {
+            return;
+        };
+
+        let params = sig.params.clone();
+        let ret = sig.ret;
+
+        let iface_name_id = self
+            .resolution
+            .defs
+            .get(&iface_def)
+            .expect("interface def id doesn't match")
+            .name;
+        let method_name_id = self
+            .resolution
+            .defs
+            .get(&method_def_id)
+            .expect("interface def id doesn't match")
+            .name;
+
+        let interner = self.interner.borrow();
+        let interface_name: smol_str::SmolStr = interner.resolve(&iface_name_id).into();
+        let method_name: smol_str::SmolStr = interner.resolve(&method_name_id).into();
+
+        drop(interner);
+
+        match wk.shape() {
+            MethodShape::Unary => {
+                let signature =
+                    params.len() == 1 && !matches!(self.result.interner.get(ret), Type::Void);
+
+                if !signature {
+                    self.report(TypeError::InterfaceMethodSignatureMismatch {
+                        interface: interface_name.clone(),
+                        method: method_name.clone(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+            }
+
+            MethodShape::UnaryVoid => {
+                let signature =
+                    params.len() == 1 && matches!(self.result.interner.get(ret), Type::Void);
+
+                if !signature {
+                    self.report(TypeError::InterfaceMethodSignatureMismatch {
+                        interface: interface_name.clone(),
+                        method: method_name.clone(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+            }
+
+            MethodShape::UnaryPtr => {
+                let signature = params.len() == 1
+                    && matches!(
+                        self.result.interner.get(ret),
+                        Type::Pointer {
+                            is_const: false,
+                            ..
+                        },
+                    );
+
+                if !signature {
+                    self.report(TypeError::InterfaceMethodSignatureMismatch {
+                        interface: interface_name.clone(),
+                        method: method_name.clone(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+            }
+
+            MethodShape::Binary => {
+                if params.len() != 1 {
+                    self.report(TypeError::InterfaceMethodSignatureMismatch {
+                        interface: interface_name.clone(),
+                        method: method_name.clone(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+
+                // if params[0] != self_struct_ty {}
+            }
+
+            _ => todo!(),
+        };
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {
