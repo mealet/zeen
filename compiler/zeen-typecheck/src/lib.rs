@@ -455,10 +455,17 @@ impl<'res> TypeChecker<'res> {
             HirTypeKind::Builtin(builtin) => self.result.interner.builtin(*builtin),
 
             HirTypeKind::SelfType(def_id) | HirTypeKind::SelfAlias(def_id) => {
-                self.result.interner.intern(Type::Struct {
-                    def_id: *def_id,
-                    generic_args: Vec::new(),
-                })
+                match self.def_kind(*def_id) {
+                    Some(DefKind::InterfaceSelfPlaceholder) => self
+                        .result
+                        .interner
+                        .intern(Type::InterfaceSelfPlaceholder(*def_id)),
+
+                    _ => self.result.interner.intern(Type::Struct {
+                        def_id: *def_id,
+                        generic_args: Vec::new(),
+                    }),
+                }
             }
 
             HirTypeKind::VaArgs => self.result.interner.void(),
