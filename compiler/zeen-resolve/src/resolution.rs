@@ -13,7 +13,7 @@ use crate::well_known::WellKnownInterface;
 /// SAFETY: This thing is very dangerous, can be used when you sure your object is live as long as
 /// NodeKey does. In compiler it is used with arena (lives whole program cycle) allocated objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NodeKey(usize);
+pub struct NodeKey(pub usize);
 
 impl NodeKey {
     pub fn from_expr(value: &Expression) -> Self {
@@ -83,6 +83,7 @@ pub enum DefKind {
     Function,
     Struct,
     Interface,
+    InterfaceSelfPlaceholder,
     Enum,
     EnumVariant,
     Variable { is_const: bool },
@@ -99,17 +100,14 @@ pub struct ResolutionResult {
     pub expr_bindings: HashMap<NodeKey, Resolution>,
     /// Type Expr -> Resolution
     pub type_bindings: HashMap<NodeKey, Resolution>,
-
     /// All known defs
     pub defs: HashMap<DefId, DefInfo>,
     /// (struct, interface) -> methods
     pub impls: HashMap<(DefId, DefId), Vec<DefId>>,
-
     pub binding_sites: HashMap<NodeKey, DefId>,
-
     pub well_known: HashMap<WellKnownInterface, DefId>,
-
     pub implement_names: HashMap<NodeKey, (Resolution, Resolution)>,
+    pub interface_self_placeholders: HashMap<DefId, DefId>,
 }
 
 impl ResolutionResult {

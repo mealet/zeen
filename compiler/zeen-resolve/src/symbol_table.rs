@@ -14,6 +14,10 @@ pub enum ScopeKind {
         self_def: DefId,
         self_param: Option<DefId>,
     },
+    InterfaceMethod {
+        self_placeholder: DefId,
+        self_param: Option<DefId>,
+    },
 }
 
 #[derive(Debug, Default, Clone)]
@@ -78,6 +82,26 @@ impl SymbolTable {
             } = scope.kind
             {
                 return Some((self_def, self_param));
+            }
+        }
+
+        None
+    }
+
+    pub fn enclosing_method_or_interface(&self) -> Option<SelfDefs> {
+        for scope in self.scopes.iter().rev() {
+            match scope.kind {
+                ScopeKind::Method {
+                    self_def,
+                    self_param,
+                } => return Some((self_def, self_param)),
+
+                ScopeKind::InterfaceMethod {
+                    self_placeholder,
+                    self_param,
+                } => return Some((self_placeholder, self_param)),
+
+                _ => {}
             }
         }
 

@@ -39,17 +39,13 @@ pub struct NameResolver<'ctx> {
 }
 
 fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
-    is_self_type_kind(&param.ty.kind)
-}
+    let mut ty_kind = &param.ty.kind;
 
-fn is_self_type_kind(kind: &TypeKind) -> bool {
-    match kind {
-        TypeKind::Const(ty) => is_self_type_kind(&ty.kind),
-
-        TypeKind::SelfType => true,
-
-        _ => false,
+    while let TypeKind::Const(inner) = ty_kind {
+        ty_kind = &inner.kind;
     }
+
+    matches!(ty_kind, TypeKind::SelfType)
 }
 
 impl<'ctx> NameResolver<'ctx> {
@@ -216,6 +212,17 @@ impl<'ctx> NameResolver<'ctx> {
                 );
 
                 self.table.declare_type(name.0, def_id);
+
+                let self_placeholder = self.define(DefInfo {
+                    name: name.0,
+                    kind: DefKind::InterfaceSelfPlaceholder,
+                    span: (name.1, decl.source.src()).into(),
+                    decl: None,
+                });
+
+                self.result
+                    .interface_self_placeholders
+                    .insert(def_id, self_placeholder);
             }
 
             DeclarationKind::EnumDecl { name, variants, .. } => {
@@ -358,19 +365,20 @@ impl<'ctx> NameResolver<'ctx> {
             DeclarationKind::InterfaceDecl {
                 generics, methods, ..
             } => {
+                let iface_def = self
+                    .result
+                    .binding_sites
+                    .get(&NodeKey::from_decl(decl))
+                    .copied()
+                    .expect("interface must be registered in pass 1");
+
+                let self_placeholder = self.result.interface_self_placeholders[&iface_def];
+
                 self.table.push(ScopeKind::Block);
                 self.declare_generics(generics, &decl.source.src);
 
                 for method in methods {
-                    let name_interned = self.interner_intern("self");
-                    let self_defined = self.define(DefInfo {
-                        name: name_interned,
-                        kind: DefKind::Struct,
-                        span: decl.source.clone(),
-                        decl: Some(NodeKey::from_decl(decl)),
-                    });
-
-                    self.resolve_method(method, self_defined);
+                    self.resolve_interface_method(method, self_placeholder);
                 }
 
                 self.table.pop();
@@ -519,6 +527,91 @@ impl<'ctx> NameResolver<'ctx> {
         self.declare_generics(generics, &method.source.src);
 
         for param in params {
+            self.resolve_type(param.ty);
+
+            let Some(pname) = param.name else { continue };
+
+            if is_self_param(param) {
+                if let Some(id) = self_param_id {
+                    self.table.declare_value(pname, id);
+                }
+                continue;
+            }
+
+            let def_id = self.define_at(
+                NodeKey::from_param(param),
+                DefInfo {
+                    name: pname,
+                    kind: DefKind::Param,
+                    span: (param.span, method.source.src()).into(),
+                    decl: None,
+                },
+            );
+            self.table.declare_value(pname, def_id);
+        }
+
+        if let Some(ret) = return_type {
+            self.resolve_type(ret);
+        }
+
+        if let Some(body) = body {
+            self.resolve_stmt(body);
+        }
+
+        self.table.pop();
+
+        method_id
+    }
+
+    fn resolve_interface_method(
+        &mut self,
+        method: &'ctx Declaration,
+        self_placeholder: DefId,
+    ) -> DefId {
+        let DeclarationKind::FnDecl {
+            name,
+            generics,
+            params,
+            return_type,
+            body,
+            ..
+        } = &method.kind
+        else {
+            unreachable!("inetrface methods must be FnDecl")
+        };
+
+        let method_id = self.define_at(
+            NodeKey::from_decl(method),
+            DefInfo {
+                name: name.0,
+                kind: DefKind::Function,
+                span: (name.1, method.source.src()).into(),
+                decl: Some(NodeKey::from_decl(method)),
+            },
+        );
+
+        let self_param_node = params.first().filter(|p| is_self_param(p));
+        let self_param_id = self_param_node.and_then(|p| {
+            p.name.map(|pname| {
+                self.define_at(
+                    NodeKey::from_param(p),
+                    DefInfo {
+                        name: pname,
+                        kind: DefKind::Param,
+                        span: (p.span, method.source.src()).into(),
+                        decl: None,
+                    },
+                )
+            })
+        });
+
+        self.table.push(ScopeKind::InterfaceMethod {
+            self_placeholder,
+            self_param: self_param_id,
+        });
+        self.declare_generics(*generics, &method.source.src);
+
+        for param in *params {
             self.resolve_type(param.ty);
 
             let Some(pname) = param.name else { continue };
@@ -795,7 +888,7 @@ impl<'ctx> NameResolver<'ctx> {
 
     fn resolve_ident(&mut self, name: Spur, span: SourceSpan) -> Resolution {
         if name == self.interner_intern("self") {
-            return match self.table.enclosing_method() {
+            return match self.table.enclosing_method_or_interface() {
                 Some((_, Some(self_param))) => Resolution::SelfValue(self_param),
                 _ => {
                     self.report(ResolveError::UnresolvedSelf {
@@ -809,7 +902,7 @@ impl<'ctx> NameResolver<'ctx> {
         }
 
         if name == self.interner_intern("Self") {
-            return match self.table.enclosing_method() {
+            return match self.table.enclosing_method_or_interface() {
                 Some((self_def, _)) => Resolution::SelfType(self_def),
                 _ => {
                     self.report(ResolveError::UnresolvedSelf {
@@ -848,7 +941,7 @@ impl<'ctx> NameResolver<'ctx> {
             TypeKind::Builtin(_) | TypeKind::VaArgs => {}
 
             TypeKind::SelfType | TypeKind::SelfAlias => {
-                let resolution = match self.table.enclosing_method() {
+                let resolution = match self.table.enclosing_method_or_interface() {
                     Some((self_def, _)) => Resolution::SelfType(self_def),
                     None => {
                         self.errors.push(ResolveError::UnresolvedSelf {
@@ -859,6 +952,10 @@ impl<'ctx> NameResolver<'ctx> {
                         Resolution::Error
                     }
                 };
+
+                self.result
+                    .type_bindings
+                    .insert(NodeKey(ty as *const _ as usize), resolution);
             }
 
             TypeKind::Named { name, generic_args } => {
