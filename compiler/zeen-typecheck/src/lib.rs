@@ -672,6 +672,8 @@ impl<'res> TypeChecker<'res> {
             Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.capabilities_of_type(*element, visiting)
             }
+
+            Type::InterfaceSelfPlaceholder(def_id) => self.compute_capabilities(*def_id, visiting),
         }
     }
 

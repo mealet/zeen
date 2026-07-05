@@ -49,6 +49,7 @@ pub enum Type {
     },
 
     GenericParam(DefId),
+    InterfaceSelfPlaceholder(DefId),
 
     Void,
     Never,
@@ -105,6 +106,8 @@ impl Type {
 
                 format!("fn({}) {}", string_params.join(", "), string_ret)
             }
+
+            Type::InterfaceSelfPlaceholder(_) => "Self".into(),
 
             Type::Void => "void".into(),
             Type::Never => "never".into(),
