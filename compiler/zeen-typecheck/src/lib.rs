@@ -49,7 +49,7 @@ pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
 pub struct TypeChecker<'res> {
-    resolution: &'res ResolutionResult,
+    resolution: &'res mut ResolutionResult,
     well_known: WellKnownInterfacesMap,
 
     result: TypeCheckResult,
@@ -58,6 +58,8 @@ pub struct TypeChecker<'res> {
 
     fn_sigs: HashMap<DefId, FnSignature>,
     struct_generics: HashMap<DefId, Vec<DefId>>,
+    interface_methods: HashMap<DefId, Vec<DefId>>,
+
     expect_assign_interface: bool,
 }
 
@@ -68,17 +70,26 @@ struct FnSignature {
 }
 
 impl<'res> TypeChecker<'res> {
-    pub fn new(resolution: &'res ResolutionResult, interner: Rc<RefCell<lasso::Rodeo>>) -> Self {
-        Self {
+    pub fn new(
+        resolution: &'res mut ResolutionResult,
+        interner: Rc<RefCell<lasso::Rodeo>>,
+    ) -> Self {
+        let well_known = WellKnownInterfacesMap::from_resolution(resolution);
+
+        let mut checker = Self {
             resolution,
-            well_known: WellKnownInterfacesMap::from_resolution(resolution),
+            well_known,
             result: TypeCheckResult::default(),
             ctx: TypeCheckCtx::new(),
             interner,
             fn_sigs: HashMap::new(),
             struct_generics: HashMap::new(),
             expect_assign_interface: false,
-        }
+            interface_methods: HashMap::new(),
+        };
+
+        checker.inject_well_known_interfaces_methods();
+        checker
     }
 
     pub fn finish(self) -> TypeCheckResult {
@@ -99,6 +110,10 @@ impl<'res> TypeChecker<'res> {
         self.result
             .interner
             .display_type(id, Rc::clone(&self.interner), self.resolution)
+    }
+
+    fn inject_well_known_interfaces_methods(&mut self) {
+        todo!()
     }
 
     // --> Entry Point
@@ -160,6 +175,9 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Interface(i) => {
+                self.interface_methods
+                    .insert(decl.def_id, i.methods.iter().map(|m| m.def_id).collect());
+
                 for method in &i.methods {
                     self.declare_signature(method);
                 }

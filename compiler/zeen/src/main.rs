@@ -64,7 +64,7 @@ fn main() {
                 std::process::exit(1);
             });
 
-            let resolution_result = zeen_resolve::resolve(
+            let mut resolution_result = zeen_resolve::resolve(
                 Rc::clone(&filename),
                 Arc::clone(&content),
                 Path::new(&path),
@@ -87,7 +87,7 @@ fn main() {
             let hir_module = hir_lowering.lower_module(program);
 
             let mut typechecker =
-                zeen_typecheck::TypeChecker::new(&resolution_result, Rc::clone(&rodeo));
+                zeen_typecheck::TypeChecker::new(&mut resolution_result, Rc::clone(&rodeo));
             typechecker.check_module(&hir_module);
 
             let typechecker_result = typechecker.finish();
