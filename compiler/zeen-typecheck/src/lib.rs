@@ -891,7 +891,7 @@ impl<'res> TypeChecker<'res> {
                 .unwrap_or(self.lookup_def_type(*def_id, expr.source.clone())),
 
             HirExprKind::MacroCall { kind, args } => {
-                self.check_macro_call(*kind, args, expr.source.clone())
+                self.check_macro_call(expr.id, *kind, args, expr.source.clone())
             }
 
             HirExprKind::Binary { lhs, rhs, op } => {
@@ -919,18 +919,19 @@ impl<'res> TypeChecker<'res> {
 
     fn check_macro_call(
         &mut self,
+        call_id: HirId,
         kind: (HirMacroKind, SourceSpan),
         args: &[Rc<HirExpr>],
         source: Source,
     ) -> TypeId {
         match kind.0 {
             HirMacroKind::Print | HirMacroKind::Println => {
-                self.check_format_macro(args, source);
+                self.check_format_macro(call_id, args, source);
                 self.result.interner.void()
             }
 
             HirMacroKind::Format => {
-                self.check_format_macro(args, source);
+                self.check_format_macro(call_id, args, source);
 
                 let char_ty = self.result.interner.builtin(BuiltinType::char);
                 self.result.interner.intern(Type::Pointer {
@@ -940,7 +941,7 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirMacroKind::Panic | HirMacroKind::Unreachable => {
-                self.check_format_macro(args, source);
+                self.check_format_macro(call_id, args, source);
                 self.result.interner.never()
             }
 
@@ -1043,7 +1044,7 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_format_macro(&mut self, args: &[Rc<HirExpr>], source: Source) {
+    fn check_format_macro(&mut self, call_id: HirId, args: &[Rc<HirExpr>], source: Source) {
         let Some(fmt_arg) = args.first() else {
             self.report(TypeError::ExpectedFormatString {
                 src: source.src(),
@@ -1079,6 +1080,8 @@ impl<'res> TypeChecker<'res> {
                 return;
             }
         };
+
+        self.result.format_specs.insert(call_id, chunks.clone());
 
         let specs = format_str::arg_specs(&chunks);
         let value_args = &args[1..];
