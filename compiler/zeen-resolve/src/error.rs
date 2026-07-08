@@ -43,6 +43,22 @@ pub enum ResolveError {
         related: Vec<DuplicateLocation>,
     },
 
+    // NOTE: Help's link must be replaced when docs are out
+    #[error("name `{name}` is reserved by compiler's core")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::resolver::core_reserved),
+        help("see compiler's core libraries at: https://github.com/mealet/zeen")
+    )]
+    CoreReserved {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("standard library is not configured")]
     #[diagnostic(severity(Error), code(zeen::resolver::std_not_configured))]
     StdlibNotConfigured {

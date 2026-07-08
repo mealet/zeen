@@ -94,16 +94,27 @@ impl<'ctx> IncludeResolver<'ctx> {
         let mut out: Vec<&'ctx Declaration<'ctx>> = Vec::new();
 
         for (name, content) in core_files {
-            let source = Arc::new(name.to_string());
-            let filename = Rc::new(content.to_string());
+            let source = Arc::new(content.to_string());
+            let filename = Rc::new(name.to_string());
 
-            let parsed_module = self.parse_module(source, filename)?;
+            let parsed_module = self.parse_module(Arc::clone(&source), filename)?;
             parsed_module.iter().for_each(|decl| out.push(decl));
+
+            self.modules.insert(
+                Path::new(name).to_path_buf(),
+                RawModule {
+                    decls: parsed_module,
+                    canonical_path: Path::new(name).to_path_buf(),
+                    named_src: NamedSource::new(name, source),
+                },
+            );
         }
 
         root_decls.iter().for_each(|decl| out.push(decl));
 
         let out_arena = self.arena.alloc_slice_copy(&out);
+
+        self.check_collisions(out_arena);
 
         Ok(out_arena)
     }
@@ -372,6 +383,25 @@ impl<'ctx> IncludeResolver<'ctx> {
 
                 let first_definition = {
                     let path = self.module_path_of(first_decl);
+
+                    if path.to_string_lossy().starts_with("core") {
+                        let redefinition_src = {
+                            let path = self.module_path_of(decl);
+
+                            let content = fs::read_to_string(&path).expect("why tf this happened");
+                            let filename = path.file_name().unwrap().to_string_lossy();
+
+                            NamedSource::new(filename, Arc::new(content))
+                        };
+
+                        self.errors.push(ResolveError::CoreReserved {
+                            name,
+                            src: redefinition_src,
+                            span,
+                        });
+
+                        continue;
+                    }
 
                     let content = fs::read_to_string(&path).expect("why tf this happened");
                     let filename = path.file_name().unwrap().to_string_lossy();

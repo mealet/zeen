@@ -49,11 +49,11 @@ pub fn resolve(
         entry_program,
         miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
         &core_files,
-    );
+    )?;
 
     let resolved_program = include_resolver.resolve(
         entry_path.to_path_buf(),
-        entry_program,
+        resolved_core_injections,
         miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
     )?;
 
