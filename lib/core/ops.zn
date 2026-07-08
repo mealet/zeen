@@ -1,0 +1,102 @@
+/// `Display` interface is used to display structure in format macros (print, println, format, etc.).
+pub interface Display {
+  fn display(self) *char;
+}
+
+/// `Debug` interface is used to display structure in debug macros (dbg, print/println with "{:?}" specifier).
+pub interface Debug {
+  fn debug(self) *char;
+}
+
+/// Empty marker to tell compiler that structure can be copied (simple load instructions).
+pub interface Copy {}
+
+/// Interface for `==` operator between structures.
+pub interface Eq {
+  fn eq(const self, other: *Self) bool
+}
+
+/// `+` operator
+pub interface Add {
+  fn add(self, other: Self) Self;
+}
+
+/// `-` operator
+pub interface Sub {
+  fn sub(self, other: Self) Self;
+}
+
+/// `*` operator
+pub interface Mul {
+  fn mul(self, other: Self) Self;
+}
+
+/// `/` operator
+pub interface Div {
+  fn div(self, other: Self) Self;
+}
+
+/// `%` operator
+pub interface Mod {
+  fn mod(self, other: Self) Self;
+}
+
+/// `&` operator
+pub interface BitAnd {
+  fn bit_and(self, other: Self) Self;
+}
+
+/// `|` operator
+pub interface BitOr {
+  fn bit_or(self, other: Self) Self;
+}
+
+/// `^` operator
+pub interface BitXor {
+  fn bit_xor(self, other: Self) Self;
+}
+
+/// `<<` operator
+pub interface BitShl {
+  fn bit_shl(self, other: Self) Self;
+}
+
+/// `>>` operator
+pub interface BitShr {
+  fn bit_shr(self, other: Self) Self;
+}
+
+/// `~` operator
+pub interface BitNot {
+  fn bit_not(self) Self;
+}
+
+/// `-` operator
+pub interface Neg {
+  fn neg(self) Self;
+}
+
+/// `!` operator
+pub interface Not {
+  fn not(self) Self;
+}
+
+/// Dereference operator (`*expr`).
+pub interface[T] Deref {
+  fn deref(const self) T;
+}
+
+/// Dereference operator with pointer access (example: `*lvalue = rvalue`, uses DerefPtr for lvalue).
+pub interface[T] DerefPtr {
+  fn deref_ptr(const self) *T;
+}
+
+/// Slice operation (expr[index] -> T)
+pub interface[T] Slice {
+  fn slice(const self, index: usize) T;
+}
+
+/// Slice operation with pointer access (`lvalue[index] = rvalue`)
+pub interface[T] SlicePtr {
+  fn slice_ptr(const self, index: usize) *T;
+}
