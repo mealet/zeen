@@ -73,6 +73,41 @@ impl<'ctx> IncludeResolver<'ctx> {
         miette::NamedSource::new(self.filename.as_str(), src_ref)
     }
 
+    pub fn resolve_core_injects(
+        &mut self,
+        root_path: PathBuf,
+        root_decls: &'ctx [&'ctx Declaration<'ctx>],
+        root_named_src: NamedSource<Arc<String>>,
+        core_files: &[(&'static str, &'static str)],
+    ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
+        let root_canonical = canonicalize_best_effort(&root_path);
+
+        self.modules.insert(
+            root_canonical.clone(),
+            RawModule {
+                decls: root_decls,
+                canonical_path: root_canonical.clone(),
+                named_src: root_named_src,
+            },
+        );
+
+        let mut out: Vec<&'ctx Declaration<'ctx>> = Vec::new();
+
+        for (name, content) in core_files {
+            let source = Arc::new(name.to_string());
+            let filename = Rc::new(content.to_string());
+
+            let parsed_module = self.parse_module(source, filename)?;
+            parsed_module.iter().for_each(|decl| out.push(decl));
+        }
+
+        root_decls.iter().for_each(|decl| out.push(decl));
+
+        let out_arena = self.arena.alloc_slice_copy(&out);
+
+        Ok(out_arena)
+    }
+
     pub fn resolve(
         &mut self,
         root_path: PathBuf,

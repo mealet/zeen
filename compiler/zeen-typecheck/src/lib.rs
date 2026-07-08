@@ -17,10 +17,6 @@ use crate::{
     format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
     types::{Capabilities, StructTypeInfo, Type, TypeId, TypeInterner},
-    well_known::{
-        WellKnownInterfacesMap, binary_op_to_well_known, builtin_well_known_interfaces,
-        unary_op_to_well_known,
-    },
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -35,7 +31,7 @@ use zeen_hir::{
     stmt::{HirStmt, HirStmtKind},
     types::{HirTypeExpr, HirTypeKind},
 };
-use zeen_resolve::{DefId, DefKind, ResolutionResult, WellKnownInterface};
+use zeen_resolve::{DefId, DefKind, ResolutionResult};
 
 mod coerce;
 mod context;
@@ -43,14 +39,13 @@ mod error;
 mod format_str;
 mod result;
 mod types;
-mod well_known;
 
 pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
 pub struct TypeChecker<'res> {
     resolution: &'res mut ResolutionResult,
-    well_known: WellKnownInterfacesMap,
+    expect_assign_interface: bool,
 
     result: TypeCheckResult,
     ctx: TypeCheckCtx,
@@ -59,8 +54,6 @@ pub struct TypeChecker<'res> {
     fn_sigs: HashMap<DefId, FnSignature>,
     struct_generics: HashMap<DefId, Vec<DefId>>,
     interface_methods: HashMap<DefId, Vec<DefId>>,
-
-    expect_assign_interface: bool,
 }
 
 struct FnSignature {
@@ -74,11 +67,8 @@ impl<'res> TypeChecker<'res> {
         resolution: &'res mut ResolutionResult,
         interner: Rc<RefCell<lasso::Rodeo>>,
     ) -> Self {
-        let well_known = WellKnownInterfacesMap::from_resolution(resolution);
-
-        let mut checker = Self {
+        Self {
             resolution,
-            well_known,
             result: TypeCheckResult::default(),
             ctx: TypeCheckCtx::new(),
             interner,
@@ -86,10 +76,7 @@ impl<'res> TypeChecker<'res> {
             struct_generics: HashMap::new(),
             expect_assign_interface: false,
             interface_methods: HashMap::new(),
-        };
-
-        checker.inject_well_known_interfaces_methods();
-        checker
+        }
     }
 
     pub fn finish(self) -> TypeCheckResult {
@@ -293,9 +280,6 @@ impl<'res> TypeChecker<'res> {
         let Some(iface_def) = imp.interface else {
             return;
         };
-        let Some(&wk) = self.well_known.reverse.get(&iface_def) else {
-            return;
-        };
 
         let self_generic_args: Vec<TypeId> = struct_generics
             .iter()
@@ -306,91 +290,6 @@ impl<'res> TypeChecker<'res> {
             def_id: object_def,
             generic_args: self_generic_args,
         });
-
-        if !wk.method_name().is_empty() {
-            let mut method_found = false;
-
-            for method in &imp.methods {
-                let name_matches = self
-                    .resolution
-                    .defs
-                    .get(&method.def_id)
-                    .map(|info| self.interner.borrow().resolve(&info.name) == wk.method_name())
-                    .unwrap_or(false);
-
-                if name_matches {
-                    method_found = true;
-
-                    self.validate_op_interface_impl(
-                        wk,
-                        iface_def,
-                        method.def_id,
-                        self_struct_ty,
-                        method.source.clone(),
-                    );
-                }
-            }
-
-            if !method_found {
-                let iface_name_id = self
-                    .resolution
-                    .defs
-                    .get(&iface_def)
-                    .expect("interface def id doesn't match")
-                    .name;
-
-                let interner = self.interner.borrow();
-                let interface: smol_str::SmolStr = interner.resolve(&iface_name_id).into();
-
-                drop(interner);
-
-                self.report(TypeError::InterfaceMethodMissing {
-                    interface,
-                    method: wk.method_name().into(),
-                    src: source.src(),
-                    span: imp.object_bindings_span,
-                });
-            }
-        }
-    }
-
-    fn validate_op_interface_impl(
-        &mut self,
-        wk: WellKnownInterface,
-        iface_def: DefId,
-        method_def_id: DefId,
-        self_struct_ty: TypeId,
-        source: Source,
-    ) {
-        // TODO: Add method signature helper in mismatch error
-
-        let Some(sig) = self.fn_sigs.get(&method_def_id) else {
-            return;
-        };
-
-        let params = sig.params.clone();
-        let ret = sig.ret;
-
-        let iface_name_id = self
-            .resolution
-            .defs
-            .get(&iface_def)
-            .expect("interface def id doesn't match")
-            .name;
-        let method_name_id = self
-            .resolution
-            .defs
-            .get(&method_def_id)
-            .expect("interface def id doesn't match")
-            .name;
-
-        let interner = self.interner.borrow();
-        let interface_name: smol_str::SmolStr = interner.resolve(&iface_name_id).into();
-        let method_name: smol_str::SmolStr = interner.resolve(&method_name_id).into();
-
-        drop(interner);
-
-        todo!()
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {
@@ -911,15 +810,9 @@ impl<'res> TypeChecker<'res> {
                 let ty = self.synth_expr(arg.as_ref());
 
                 {
-                    const IFACE_NAME: &str = "Debug";
+                    // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
 
-                    if let Some(iface_def) = self.well_known_or_report(
-                        IFACE_NAME,
-                        self.well_known.get(IFACE_NAME),
-                        source,
-                    ) {
-                        self.check_implements_interface(ty, IFACE_NAME, iface_def);
-                    }
+                    // self.check_implements_interface(ty, IFACE_NAME, iface_def);
                 }
 
                 ty
@@ -1049,20 +942,16 @@ impl<'res> TypeChecker<'res> {
     fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, source: Source) -> Option<()> {
         match spec {
             FormatSpec::Display => {
-                const IFACE_NAME: &str = "Display";
+                // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
 
-                let iface_def =
-                    self.well_known_or_report(IFACE_NAME, self.well_known.get(IFACE_NAME), source)?;
-                self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
+                // self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
                 Some(())
             }
 
             FormatSpec::Debug => {
-                const IFACE_NAME: &str = "Debug";
+                // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
 
-                let iface_def =
-                    self.well_known_or_report(IFACE_NAME, self.well_known.get(IFACE_NAME), source)?;
-                self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
+                // self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
                 Some(())
             }
 
@@ -1423,26 +1312,28 @@ impl<'res> TypeChecker<'res> {
 
                 match self.result.interner.get(operand_ty) {
                     Type::Struct { def_id, .. } => {
+                        // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
+
                         let iface_name = format!("{:?}", op);
 
-                        if let Some(iface_def) = self.well_known_or_report(
-                            &iface_name,
-                            self.well_known.get(&iface_name),
-                            source.clone(),
-                        ) {
-                            if self.check_implements_interface(operand_ty, &iface_name, iface_def) {
-                                return operand_ty;
-                            }
-
-                            self.report(TypeError::InterfaceNotImplemented {
-                                name: iface_name.into(),
-                                ty_name: self.display_type(operand_ty).into(),
-                                src: source.src(),
-                                span: source.span,
-                            });
-
-                            return self.result.interner.error();
-                        }
+                        // if let Some(iface_def) = self.well_known_or_report(
+                        //     &iface_name,
+                        //     self.well_known.get(&iface_name),
+                        //     source.clone(),
+                        // ) {
+                        //     if self.check_implements_interface(operand_ty, &iface_name, iface_def) {
+                        //         return operand_ty;
+                        //     }
+                        //
+                        //     self.report(TypeError::InterfaceNotImplemented {
+                        //         name: iface_name.into(),
+                        //         ty_name: self.display_type(operand_ty).into(),
+                        //         src: source.src(),
+                        //         span: source.span,
+                        //     });
+                        //
+                        //     return self.result.interner.error();
+                        // }
 
                         self.result.interner.error()
                     }
@@ -1469,24 +1360,24 @@ impl<'res> TypeChecker<'res> {
                     Type::Enum { .. } => {}
                     Type::IntLiteral | Type::FloatLiteral => {}
                     Type::Struct { .. } => {
-                        const IFACE_NAME: &str = "Cmp";
+                        // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
 
-                        if let Some(iface_def) = self.well_known_or_report(
-                            IFACE_NAME,
-                            self.well_known.get(IFACE_NAME),
-                            source.clone(),
-                        ) {
-                            if self.check_implements_interface(operand_ty, IFACE_NAME, iface_def) {
-                                return operand_ty;
-                            }
-
-                            self.report(TypeError::InterfaceNotImplemented {
-                                name: IFACE_NAME.into(),
-                                ty_name: self.display_type(operand_ty).into(),
-                                src: source.src(),
-                                span: source.span,
-                            });
-                        }
+                        // if let Some(iface_def) = self.well_known_or_report(
+                        //     IFACE_NAME,
+                        //     self.well_known.get(IFACE_NAME),
+                        //     source.clone(),
+                        // ) {
+                        //     if self.check_implements_interface(operand_ty, IFACE_NAME, iface_def) {
+                        //         return operand_ty;
+                        //     }
+                        //
+                        //     self.report(TypeError::InterfaceNotImplemented {
+                        //         name: IFACE_NAME.into(),
+                        //         ty_name: self.display_type(operand_ty).into(),
+                        //         src: source.src(),
+                        //         span: source.span,
+                        //     });
+                        // }
                     }
 
                     _ => {
@@ -1534,24 +1425,24 @@ impl<'res> TypeChecker<'res> {
 
                 match self.result.interner.get(operand) {
                     Type::Struct { def_id, .. } => {
-                        const IFACE_NAME: &str = "Neg";
+                        // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
 
-                        if let Some(iface_def) = self.well_known_or_report(
-                            IFACE_NAME,
-                            self.well_known.get(IFACE_NAME),
-                            source.clone(),
-                        ) {
-                            if self.check_implements_interface(operand, IFACE_NAME, iface_def) {
-                                return operand;
-                            }
-
-                            self.report(TypeError::InterfaceNotImplemented {
-                                name: IFACE_NAME.into(),
-                                ty_name: self.display_type(operand).into(),
-                                src: source.src(),
-                                span: source.span,
-                            });
-                        }
+                        // if let Some(iface_def) = self.well_known_or_report(
+                        //     IFACE_NAME,
+                        //     self.well_known.get(IFACE_NAME),
+                        //     source.clone(),
+                        // ) {
+                        //     if self.check_implements_interface(operand, IFACE_NAME, iface_def) {
+                        //         return operand;
+                        //     }
+                        //
+                        //     self.report(TypeError::InterfaceNotImplemented {
+                        //         name: IFACE_NAME.into(),
+                        //         ty_name: self.display_type(operand).into(),
+                        //         src: source.src(),
+                        //         span: source.span,
+                        //     });
+                        // }
 
                         self.result.interner.error()
                     }
@@ -1577,24 +1468,26 @@ impl<'res> TypeChecker<'res> {
 
                 match self.result.interner.get(operand) {
                     Type::Struct { def_id, .. } => {
+                        // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
+
                         const IFACE_NAME: &str = "Not";
 
-                        if let Some(iface_def) = self.well_known_or_report(
-                            IFACE_NAME,
-                            self.well_known.get(IFACE_NAME),
-                            source.clone(),
-                        ) {
-                            if self.check_implements_interface(operand, IFACE_NAME, iface_def) {
-                                return operand;
-                            }
-
-                            self.report(TypeError::InterfaceNotImplemented {
-                                name: IFACE_NAME.into(),
-                                ty_name: self.display_type(operand).into(),
-                                src: source.src(),
-                                span: source.span,
-                            });
-                        }
+                        // if let Some(iface_def) = self.well_known_or_report(
+                        //     IFACE_NAME,
+                        //     self.well_known.get(IFACE_NAME),
+                        //     source.clone(),
+                        // ) {
+                        //     if self.check_implements_interface(operand, IFACE_NAME, iface_def) {
+                        //         return operand;
+                        //     }
+                        //
+                        //     self.report(TypeError::InterfaceNotImplemented {
+                        //         name: IFACE_NAME.into(),
+                        //         ty_name: self.display_type(operand).into(),
+                        //         src: source.src(),
+                        //         span: source.span,
+                        //     });
+                        // }
 
                         self.result.interner.error()
                     }
@@ -1630,6 +1523,7 @@ impl<'res> TypeChecker<'res> {
 
                 Type::Struct { def_id, .. } => {
                     // TODO: Add type inference from interface function (generic params must be included)
+                    // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
 
                     let iface_name = if self.expect_assign_interface {
                         "DerefAssign"
@@ -1637,22 +1531,22 @@ impl<'res> TypeChecker<'res> {
                         "Deref"
                     };
 
-                    if let Some(iface_def) = self.well_known_or_report(
-                        iface_name,
-                        self.well_known.get(iface_name),
-                        source.clone(),
-                    ) {
-                        if self.check_implements_interface(operand, iface_name, iface_def) {
-                            return operand;
-                        }
-
-                        self.report(TypeError::InterfaceNotImplemented {
-                            name: iface_name.into(),
-                            ty_name: self.display_type(operand).into(),
-                            src: source.src(),
-                            span: source.span,
-                        });
-                    }
+                    // if let Some(iface_def) = self.well_known_or_report(
+                    //     iface_name,
+                    //     self.well_known.get(iface_name),
+                    //     source.clone(),
+                    // ) {
+                    //     if self.check_implements_interface(operand, iface_name, iface_def) {
+                    //         return operand;
+                    //     }
+                    //
+                    //     self.report(TypeError::InterfaceNotImplemented {
+                    //         name: iface_name.into(),
+                    //         ty_name: self.display_type(operand).into(),
+                    //         src: source.src(),
+                    //         span: source.span,
+                    //     });
+                    // }
 
                     self.result.interner.error()
                 }

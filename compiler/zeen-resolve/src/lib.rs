@@ -17,13 +17,11 @@ use zeen_ast::Declaration;
 use zeen_driver::CompilationContext;
 
 pub use resolution::{DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult};
-pub use well_known::WellKnownInterface;
 
 mod error;
 mod resolution;
 mod resolvers;
 mod symbol_table;
-mod well_known;
 
 pub fn resolve(
     filename: Rc<String>,
@@ -36,12 +34,21 @@ pub fn resolve(
     interner: Rc<RefCell<Rodeo>>,
     context: &mut CompilationContext,
 ) -> Result<ResolutionResult, Vec<ResolveError>> {
+    let core_files = context.core_files.clone();
+
     let mut include_resolver = include_resolver::IncludeResolver::new(
         Rc::clone(&filename),
         Arc::clone(&src),
         arena,
         Rc::clone(&interner),
         context,
+    );
+
+    let resolved_core_injections = include_resolver.resolve_core_injects(
+        entry_path.to_path_buf(),
+        entry_program,
+        miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
+        &core_files,
     );
 
     let resolved_program = include_resolver.resolve(

@@ -38,6 +38,7 @@ impl MietteDriver {
 
 pub struct CompilationContext {
     pub paths: PathsConfig,
+    pub core_files: Vec<(&'static str, &'static str)>,
     pub mode: CompilationMode,
     pub output: CompilationOutput,
 }

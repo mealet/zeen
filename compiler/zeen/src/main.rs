@@ -13,6 +13,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
+
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| {
         eprintln!("No path to file found");
@@ -28,6 +30,7 @@ fn main() {
                     std_root: Some(Path::new("compiler").into()),
                     linked: HashSet::new(),
                 },
+                core_files: CORE_FILES.iter().map(|file| file.to_basic()).collect(),
                 mode: Default::default(),
                 output: Default::default(),
             };

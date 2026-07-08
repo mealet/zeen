@@ -7,8 +7,6 @@ use zeen_ast::{
     declarations::{EnumVariant, FnParam, GenericType, StructField},
 };
 
-use crate::well_known::WellKnownInterface;
-
 /// A simple representation of allocated AST node as a key.
 /// SAFETY: This thing is very dangerous, can be used when you sure your object is live as long as
 /// NodeKey does. In compiler it is used with arena (lives whole program cycle) allocated objects.
@@ -105,7 +103,6 @@ pub struct ResolutionResult {
     /// (struct, interface) -> methods
     pub impls: HashMap<(DefId, DefId), Vec<DefId>>,
     pub binding_sites: HashMap<NodeKey, DefId>,
-    pub well_known: HashMap<WellKnownInterface, DefId>,
     pub implement_names: HashMap<NodeKey, (Resolution, Resolution)>,
     pub interface_self_placeholders: HashMap<DefId, DefId>,
 }
