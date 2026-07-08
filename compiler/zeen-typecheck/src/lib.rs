@@ -35,7 +35,7 @@ use zeen_hir::{
     stmt::{HirStmt, HirStmtKind},
     types::{HirTypeExpr, HirTypeKind},
 };
-use zeen_resolve::{DefId, DefKind, MethodShape, ResolutionResult, WellKnownInterface};
+use zeen_resolve::{DefId, DefKind, ResolutionResult, WellKnownInterface};
 
 mod coerce;
 mod context;
@@ -390,70 +390,7 @@ impl<'res> TypeChecker<'res> {
 
         drop(interner);
 
-        match wk.shape() {
-            MethodShape::Unary => {
-                let signature =
-                    params.len() == 1 && !matches!(self.result.interner.get(ret), Type::Void);
-
-                if !signature {
-                    self.report(TypeError::InterfaceMethodSignatureMismatch {
-                        interface: interface_name.clone(),
-                        method: method_name.clone(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-                }
-            }
-
-            MethodShape::UnaryVoid => {
-                let signature =
-                    params.len() == 1 && matches!(self.result.interner.get(ret), Type::Void);
-
-                if !signature {
-                    self.report(TypeError::InterfaceMethodSignatureMismatch {
-                        interface: interface_name.clone(),
-                        method: method_name.clone(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-                }
-            }
-
-            MethodShape::UnaryPtr => {
-                let signature = params.len() == 1
-                    && matches!(
-                        self.result.interner.get(ret),
-                        Type::Pointer {
-                            is_const: false,
-                            ..
-                        },
-                    );
-
-                if !signature {
-                    self.report(TypeError::InterfaceMethodSignatureMismatch {
-                        interface: interface_name.clone(),
-                        method: method_name.clone(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-                }
-            }
-
-            MethodShape::Binary => {
-                if params.len() != 1 {
-                    self.report(TypeError::InterfaceMethodSignatureMismatch {
-                        interface: interface_name.clone(),
-                        method: method_name.clone(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-                }
-
-                // if params[0] != self_struct_ty {}
-            }
-
-            _ => todo!(),
-        };
+        todo!()
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {

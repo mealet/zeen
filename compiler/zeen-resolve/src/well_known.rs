@@ -91,48 +91,4 @@ impl WellKnownInterface {
             Self::SlicePtr => "slice_ptr",
         }
     }
-
-    pub fn shape(self) -> MethodShape {
-        match self {
-            Self::Display | Self::Debug | Self::Neg | Self::Not | Self::BitNot | Self::Deref => {
-                MethodShape::Unary
-            }
-
-            Self::DerefPtr => MethodShape::UnaryPtr,
-            Self::Drop => MethodShape::UnaryVoid,
-            Self::Copy => MethodShape::Empty,
-
-            Self::Eq
-            | Self::Add
-            | Self::Sub
-            | Self::Mul
-            | Self::Div
-            | Self::Mod
-            | Self::BitAnd
-            | Self::BitOr
-            | Self::BitXor
-            | Self::Shl
-            | Self::Shr => MethodShape::Binary,
-
-            Self::Slice => MethodShape::Indexed,
-            Self::SlicePtr => MethodShape::IndexedPtr,
-        }
-    }
-}
-
-/// `Unary` - `fn method(self) R`
-/// `UnaryVoid` - `fn method(self)`
-/// `UnaryPtr` - `fn method(self) *R`
-/// `Binary` - `fn method(self, rhs: Self) R`
-/// `Indexed` - `fn method(self, index: usize) R`
-/// `IndexedPtr` - `fn method(self, index: usize) *R`
-/// `Empty` - no method required (for Copy interface)
-pub enum MethodShape {
-    Unary,
-    UnaryVoid,
-    UnaryPtr,
-    Binary,
-    Indexed,
-    IndexedPtr,
-    Empty,
 }
