@@ -38,6 +38,10 @@ pub static CORE_FILES: &[CoreFile] = &[
                 continue;
             }
 
+            if path.extension().and_then(|ext| ext.to_str()) != Some("zn") {
+                continue;
+            }
+
             let stem = path.file_stem().unwrap().to_str().unwrap();
             let content = fs::read_to_string(&path).unwrap();
 
