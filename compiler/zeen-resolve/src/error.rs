@@ -43,7 +43,7 @@ pub enum ResolveError {
         related: Vec<DuplicateLocation>,
     },
 
-    // NOTE: Help's link must be replaced when docs are out
+    // TODO: Help's link must be replaced when docs are out
     #[error("name `{name}` is reserved by compiler's core")]
     #[diagnostic(
         severity(Error),
