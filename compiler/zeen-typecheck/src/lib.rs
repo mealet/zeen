@@ -742,7 +742,7 @@ impl<'res> TypeChecker<'res> {
                 self.check_unary_op(*op, inner_ty, expr.source.clone())
             }
 
-            HirExprKind::Block(stmts) => self.synth_block_value_stmts(stmts),
+            HirExprKind::Block { stmts, trailing: _ } => self.synth_block_value_stmts(stmts),
 
             HirExprKind::Type(_) => self.result.interner.error(),
             HirExprKind::Error => self.result.interner.error(),

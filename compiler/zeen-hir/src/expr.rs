@@ -71,7 +71,10 @@ pub enum HirExprKind {
         elements: Vec<Rc<HirExpr>>,
     },
 
-    Block(Vec<Rc<HirStmt>>),
+    Block {
+        stmts: Vec<Rc<HirStmt>>,
+        trailing: Option<Rc<HirExpr>>,
+    },
     Type(Rc<HirTypeExpr>),
 
     Error,

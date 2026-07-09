@@ -640,12 +640,13 @@ impl<'res> HirLowering<'res> {
                     .collect(),
             },
 
-            ExpressionKind::Block { stmts, trailing } => HirExprKind::Block(
-                stmts
+            ExpressionKind::Block { stmts, trailing } => HirExprKind::Block {
+                stmts: stmts
                     .iter()
                     .map(|stmt| Rc::new(self.lower_stmt(stmt)))
                     .collect(),
-            ),
+                trailing: trailing.map(|expr| Rc::new(self.lower_expr(expr))),
+            },
 
             ExpressionKind::Type(ty) => HirExprKind::Type(Rc::new(self.lower_type(ty))),
         };
