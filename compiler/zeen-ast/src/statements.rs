@@ -45,11 +45,8 @@ pub enum StatementKind<'arena> {
         value: Option<&'arena Expression<'arena>>,
     },
 
-    Defer {
-        body: &'arena Statement<'arena>,
-    },
-
     Break,
+    Continue,
 
     While {
         condition: &'arena Expression<'arena>,

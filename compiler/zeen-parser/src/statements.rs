@@ -52,7 +52,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::Let | CompilerKeyword::Const) => self.parse_let(),
             TokenKind::Keyword(CompilerKeyword::Return) => self.parse_return(),
             TokenKind::Keyword(CompilerKeyword::Break) => self.parse_break(),
-            TokenKind::Keyword(CompilerKeyword::Defer) => self.parse_defer(),
+            TokenKind::Keyword(CompilerKeyword::Continue) => self.parse_continue(),
             TokenKind::Keyword(CompilerKeyword::While) => self.parse_while(),
             TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(),
             TokenKind::OpenBrace => self.parse_block(),
@@ -183,18 +183,16 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         Some(stmt)
     }
 
-    pub fn parse_defer(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        let defer_kw = self
+    pub fn parse_continue(&mut self) -> Option<&'ctx Statement<'ctx>> {
+        let break_kw = self
             .p
-            .expect(TokenKind::Keyword(CompilerKeyword::Defer), "defer")?;
+            .expect(TokenKind::Keyword(CompilerKeyword::Continue), "continue")?;
 
-        let body = self.parse()?;
-
-        let _ = self.p.eat(TokenKind::Semicolon);
+        self.expect_optional_semicolon()?;
 
         let stmt = self.p.arena.alloc(Statement {
-            kind: StatementKind::Defer { body },
-            span: body.merge_span(defer_kw.span),
+            kind: StatementKind::Continue,
+            span: break_kw.span,
         });
 
         Some(stmt)
@@ -708,56 +706,6 @@ mod tests {
             stmt_parser.parse().unwrap(),
             Statement {
                 kind: StatementKind::Break,
-                ..
-            }
-        );
-
-        assert!(stmt_parser.parse().is_none());
-    }
-
-    #[test]
-    fn defer_basic() {
-        const SRC: &str = "defer let a = 123;";
-
-        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
-
-        assert_matches!(
-            stmt_parser.parse().unwrap(),
-            Statement {
-                kind: StatementKind::Defer {
-                    body: Statement {
-                        kind: StatementKind::Let { .. },
-                        ..
-                    }
-                },
-                ..
-            }
-        );
-
-        assert!(stmt_parser.parse().is_none());
-    }
-
-    #[test]
-    fn defer_block() {
-        const SRC: &str = "defer { let a = 123; };";
-
-        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
-
-        assert_matches!(
-            stmt_parser.parse().unwrap(),
-            Statement {
-                kind: StatementKind::Defer {
-                    body: Statement {
-                        kind: StatementKind::Expr(Expression {
-                            kind: ExpressionKind::Block {
-                                stmts: _,
-                                trailing: None,
-                            },
-                            ..
-                        }),
-                        ..
-                    }
-                },
                 ..
             }
         );

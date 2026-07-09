@@ -697,11 +697,8 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
-            StatementKind::Defer { body } => {
-                self.resolve_stmt(body);
-            }
-
             StatementKind::Break => {}
+            StatementKind::Continue => {}
 
             StatementKind::While { condition, block } => {
                 self.resolve_expr(condition);

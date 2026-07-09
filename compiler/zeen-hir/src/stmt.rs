@@ -44,6 +44,7 @@ pub enum HirStmtKind {
     },
 
     Break,
+    Continue,
 
     While {
         condition: Rc<HirExpr>,

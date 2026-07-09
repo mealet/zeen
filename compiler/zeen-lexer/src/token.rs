@@ -165,10 +165,10 @@ pub enum CompilerKeyword {
     While,
     For,
     Break,
+    Continue,
 
     Let,
     Const,
-    Defer,
     Switch,
     Return,
 
@@ -201,10 +201,10 @@ impl CompilerKeyword {
             "while" => Some(CompilerKeyword::While),
             "for" => Some(CompilerKeyword::For),
             "break" => Some(CompilerKeyword::Break),
+            "continue" => Some(CompilerKeyword::Continue),
 
             "let" => Some(CompilerKeyword::Let),
             "const" => Some(CompilerKeyword::Const),
-            "defer" => Some(CompilerKeyword::Defer),
             "switch" => Some(CompilerKeyword::Switch),
             "return" => Some(CompilerKeyword::Return),
 

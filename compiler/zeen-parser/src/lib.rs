@@ -273,9 +273,9 @@ fn is_sync_keyword(kw: &zeen_lexer::token::CompilerKeyword) -> bool {
         If | While
             | For
             | Break
+            | Continue
             | Let
             | Const
-            | Defer
             | Switch
             | Return
             | Public
