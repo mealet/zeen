@@ -38,13 +38,16 @@ pub struct NameResolver<'ctx> {
 }
 
 fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
-    let mut ty_kind = &param.ty.kind;
-
-    while let TypeKind::Const(inner) = ty_kind {
-        ty_kind = &inner.kind;
+    fn is_self_inner(ty: &TypeKind) -> bool {
+        match ty {
+            TypeKind::SelfType => true,
+            TypeKind::Const(inner) => is_self_inner(&inner.kind),
+            TypeKind::Pointer(inner) => is_self_inner(&inner.kind),
+            _ => false,
+        }
     }
 
-    matches!(ty_kind, TypeKind::SelfType)
+    is_self_inner(&param.ty.kind)
 }
 
 impl<'ctx> NameResolver<'ctx> {
