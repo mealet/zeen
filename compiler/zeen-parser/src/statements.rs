@@ -714,6 +714,23 @@ mod tests {
     }
 
     #[test]
+    fn continue_stmt() {
+        const SRC: &str = "continue;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Continue,
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
     fn while_single() {
         const SRC: &str = "while (1 == 1) let a = 123;";
 
