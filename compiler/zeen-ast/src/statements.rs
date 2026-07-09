@@ -63,4 +63,5 @@ pub enum StatementKind<'arena> {
     },
 
     Expr(&'arena Expression<'arena>),
+    TrailingExpr(&'arena Expression<'arena>), // tech node, converts to Expr
 }

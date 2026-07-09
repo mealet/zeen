@@ -735,6 +735,8 @@ impl<'ctx> NameResolver<'ctx> {
             StatementKind::Expr(expr) => {
                 self.resolve_expr(expr);
             }
+
+            StatementKind::TrailingExpr(_) => panic!("that was not supposed to happen"),
         }
     }
 
@@ -836,11 +838,15 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
-            ExpressionKind::Block(stmts) => {
+            ExpressionKind::Block { stmts, trailing } => {
                 self.table.push(ScopeKind::Block);
 
                 for stmt in stmts {
                     self.resolve_stmt(stmt);
+                }
+
+                if let Some(expr) = trailing {
+                    self.resolve_expr(expr);
                 }
 
                 self.table.pop();

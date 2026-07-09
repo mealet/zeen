@@ -986,6 +986,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         let mut stmts_buffer: SmallVec<[&'ctx zeen_ast::statements::Statement<'ctx>; 8]> =
             SmallVec::new();
 
+        let prev_reports = self.p.errors.len();
+
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
             let mut stmt_parser =
                 crate::statements::StmtParser::new(self.p).with_optional_semicolon(true);
@@ -1002,11 +1004,30 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             }
         }
 
+        if self.p.panic_mode || self.p.errors.len() > prev_reports {
+            return None;
+        }
+
         let close = self.p.expect(TokenKind::CloseBrace, "}")?;
-        let stmts = self.p.arena.alloc_slice_copy(&stmts_buffer);
+        let mut stmts = self.p.arena.alloc_slice_copy(&stmts_buffer);
+
+        let trailing = stmts.last().and_then(|stmt| {
+            if let zeen_ast::statements::StatementKind::TrailingExpr(expr) = stmt.kind {
+                Some(expr)
+            } else {
+                None
+            }
+        });
+
+        if trailing.is_some() {
+            let len = stmts.len();
+            let without_last = &mut stmts[..len - 1];
+
+            stmts = without_last;
+        }
 
         let expr = self.p.arena.alloc(Expression {
-            kind: ExpressionKind::Block(stmts),
+            kind: ExpressionKind::Block { stmts, trailing },
             span: open.merge_span(close.span),
         });
 

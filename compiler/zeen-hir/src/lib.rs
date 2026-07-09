@@ -506,6 +506,8 @@ impl<'res> HirLowering<'res> {
             }
 
             StatementKind::Expr(expr) => HirStmtKind::Expr(Rc::new(self.lower_expr(expr))),
+
+            StatementKind::TrailingExpr(_) => unreachable!(),
         };
 
         HirStmt {
@@ -638,7 +640,7 @@ impl<'res> HirLowering<'res> {
                     .collect(),
             },
 
-            ExpressionKind::Block(stmts) => HirExprKind::Block(
+            ExpressionKind::Block { stmts, trailing } => HirExprKind::Block(
                 stmts
                     .iter()
                     .map(|stmt| Rc::new(self.lower_stmt(stmt)))

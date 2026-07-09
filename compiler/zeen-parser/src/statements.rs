@@ -277,6 +277,11 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
         let lhs;
 
+        if self.p.at(TokenKind::Eof) {
+            // apparently we've already reported that and reached EOF due sync
+            return None;
+        }
+
         {
             let mut expr_parser = ExprParser::new(self.p);
             lhs = expr_parser.parse_non_binary()?;
@@ -343,10 +348,16 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
         // expr in statement
 
-        self.expect_optional_semicolon()?;
+        let mut kind = StatementKind::Expr(lhs);
+
+        if self.p.at(TokenKind::CloseBrace) {
+            kind = StatementKind::TrailingExpr(lhs);
+        } else {
+            self.expect_optional_semicolon()?;
+        }
 
         let stmt = self.p.arena.alloc(Statement {
-            kind: StatementKind::Expr(lhs),
+            kind,
             span: lhs.span,
         });
 
@@ -738,7 +749,10 @@ mod tests {
                 kind: StatementKind::Defer {
                     body: Statement {
                         kind: StatementKind::Expr(Expression {
-                            kind: ExpressionKind::Block(..),
+                            kind: ExpressionKind::Block {
+                                stmts: _,
+                                trailing: None,
+                            },
                             ..
                         }),
                         ..

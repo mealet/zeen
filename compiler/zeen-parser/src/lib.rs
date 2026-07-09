@@ -187,6 +187,10 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
     }
 
     pub fn expect(&mut self, kind: TokenKind, display: &str) -> Option<Token> {
+        if self.panic_mode {
+            return None;
+        }
+
         if self.at(kind) {
             let cur = self.current;
             let _ = self.advance();
