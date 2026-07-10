@@ -2,6 +2,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use lasso::Spur;
 use zeen_ast::types::BuiltinType;
+use zeen_hir::HirTypeKind;
 use zeen_resolve::{DefId, DefInfo};
 
 use crate::{DEFAULT_FLOAT_LITERAL, DEFAULT_INT_LITERAL};
@@ -201,4 +202,53 @@ pub struct StructTypeInfo {
     /// (name, field DefId, field TypeId)
     pub fields: Vec<(Spur, DefId, TypeId)>,
     pub capabalities: Capabilities,
+}
+
+/// Enum for `self` reciever representation:
+/// - `fn method(self)` - Value (takes ownership)
+/// - `fn method(const self)` - ValueConst (takes ownership, const binding)
+/// - `fn method(*self)` - RefMut (no ownership transfer, mutable pointer)
+/// - `fn method(*const self)` - RefMut (no ownership transfer, const pointer)
+///
+/// **Please note that** pointers of `self` are constant variables (not data, variables), that means
+/// you cannot reassign self pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfMode {
+    Value,
+    ValueConst,
+    RefMut,
+    RefConst,
+}
+
+impl SelfMode {
+    pub fn takes_ownership(self) -> bool {
+        matches!(self, SelfMode::Value | SelfMode::ValueConst)
+    }
+
+    pub fn is_const(self) -> bool {
+        matches!(self, SelfMode::ValueConst | SelfMode::RefConst)
+    }
+}
+
+/// Extracts `SelfMode` representation from TypeKind
+pub fn self_mode_of(ty: &HirTypeKind) -> Option<SelfMode> {
+    match ty {
+        HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_) => Some(SelfMode::Value),
+
+        HirTypeKind::Const(inner) => match &inner.kind {
+            HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_) => Some(SelfMode::ValueConst),
+            _ => None,
+        },
+
+        HirTypeKind::Pointer(inner) => match &inner.kind {
+            HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_) => Some(SelfMode::RefMut),
+            HirTypeKind::Const(c)
+                if matches!(c.kind, HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_))
+            =>  Some(SelfMode::RefConst),
+
+            _ => None,
+        }
+
+        _ => None
+    }
 }
