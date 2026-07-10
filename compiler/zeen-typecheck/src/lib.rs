@@ -799,6 +799,10 @@ impl<'res> TypeChecker<'res> {
                 self.check_unary_op(*op, inner_ty, expr.source.clone())
             }
 
+            HirExprKind::Call { callee, args, generic_args } => {
+                self.check_call(expr.id, callee, args, generic_args, expr.source.clone())
+            }
+
             HirExprKind::Block { stmts, trailing: _ } => self.synth_block_value_stmts(stmts),
 
             HirExprKind::Type(_) => self.result.interner.error(),
@@ -1749,15 +1753,135 @@ impl<'res> TypeChecker<'res> {
         bindings: &mut HashMap<DefId, TypeId>,
         source: Source,
     ) {
-        todo!()
+        match (self.result.interner.get(param_ty).clone(), self.result.interner.get(arg_ty).clone()) {
+            (Type::GenericParam(g), _) => {
+                if let Some(existing) = bindings.get(&g).copied() {
+                    if existing != arg_ty && !try_coerce(&self.result.interner, arg_ty, existing).is_ok() {
+                        self.result.errors.push(TypeError::GenericConflict {
+                            param: self.display_type(param_ty).into(),
+                            first: self.display_type(existing).into(),
+                            second: self.display_type(arg_ty).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+                } else {
+                    bindings.insert(g, arg_ty);
+                }
+            }
+
+            (Type::Pointer { inner: pinner, .. }, Type::Pointer { inner: ainner, .. }) => {
+                self.unify_for_inference(pinner, ainner, bindings, source);
+            }
+
+            (Type::Array { element: pelem, .. }, Type::Array { element: aelem, .. })
+            | (Type::Slice { element: pelem }, Type::Slice { element: aelem })
+            | (Type::Array { element: pelem, .. }, Type::Slice { element: aelem })
+            | (Type::Slice { element: pelem }, Type::Array { element: aelem, .. }) => {
+                self.unify_for_inference(pelem, aelem, bindings, source);
+            }
+
+            (Type::Struct { def_id: pd, generic_args: pa }, Type::Struct { def_id: ad, generic_args: aa }) if pd == ad => {
+                for (p, a) in pa.iter().zip(aa.iter()) {
+                    self.unify_for_inference(*p, *a, bindings, source.clone());
+                }
+            }
+
+            (Type::Fn { params: pp, ret: pr }, Type::Fn { params: ap, ret: ar }) if pp.len() == ap.len() => {
+                for (p, a) in pp.iter().zip(ap.iter()) {
+                    self.unify_for_inference(*p, *a, bindings, source.clone());
+                }
+                self.unify_for_inference(pr, ar, bindings, source);
+            }
+
+            _ => {}
+        }
     }
 
     fn type_satisfies_interface(&self, ty: TypeId, def: DefId) -> bool {
         todo!()
     }
 
-    fn substitute_generics(&mut self, ret: TypeId, bindings: &HashMap<DefId, TypeId>) -> TypeId {
-        todo!()
+    fn substitute_generics(
+        &mut self,
+        ty: TypeId,
+        bindings: &HashMap<DefId, TypeId>,
+    ) -> TypeId {
+        match self.result.interner.get(ty).clone() {
+            Type::GenericParam(g) => bindings.get(&g).copied().unwrap_or(ty),
+
+            Type::Pointer { inner, is_const } => {
+                let new_inner = self.substitute_generics(inner, bindings);
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Array { element, len } => {
+                let new_element = self.substitute_generics(element, bindings);
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Array {
+                        element: new_element,
+                        len,
+                    })
+                }
+            }
+
+            Type::Slice { element } => {
+                let new_element = self.substitute_generics(element, bindings);
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Slice {
+                        element: new_element,
+                    })
+                }
+            }
+
+            Type::Struct { def_id, generic_args } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .copied()
+                    .map(|a| self.substitute_generics(a, bindings))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Fn { params, ret } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .copied()
+                    .map(|p| self.substitute_generics(p, bindings))
+                    .collect();
+                let new_ret = self.substitute_generics(ret, bindings);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Fn {
+                        params: new_params,
+                        ret: new_ret,
+                    })
+                }
+            }
+
+            _ => ty,
+        }
     }
 
     fn check_binary_op(

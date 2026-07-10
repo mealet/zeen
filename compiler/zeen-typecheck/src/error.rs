@@ -281,6 +281,19 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("generic conflict for `{param}`: expected `{first}`, but found `{second}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::generic_conflict))]
+    GenericConflict {
+        param: SmolStr,
+        first: SmolStr,
+        second: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("cannot move value through pointer")]
     #[diagnostic(
         severity(Error),
