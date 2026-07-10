@@ -1077,6 +1077,77 @@ impl<'res> TypeChecker<'res> {
 
     // << Macros
 
+    fn check_field_access(
+        &mut self,
+        id: HirId,
+        object: &HirExpr,
+        field: (Spur, SourceSpan),
+    ) -> TypeId {
+        let obj_ty = self.synth_expr(object);
+        let (field_name, field_span) = field;
+
+        let struct_def = match self.result.interner.get(obj_ty) {
+            Type::Struct { def_id, .. } => def_id,
+            Type::Pointer { inner, .. } => match self.result.interner.get(*inner) {
+                Type::Struct { def_id, .. } => def_id,
+                Type::Error => return self.result.interner.error(),
+                _ => {
+                    self.result.errors.push(TypeError::NotAStruct {
+                        provided: self.display_type(obj_ty).into(),
+                        src: object.source.src(),
+                        span: field_span,
+                    });
+                    return self.result.interner.error();
+                }
+            },
+
+            Type::Error => return self.result.interner.error(),
+
+            _ => {
+                self.result.errors.push(TypeError::NotAStruct {
+                    provided: self.display_type(obj_ty).into(),
+                    src: object.source.src(),
+                    span: field_span,
+                });
+                return self.result.interner.error();
+            }
+        };
+
+        let Some(info) = self.result.struct_info.get(struct_def) else {
+            return self.result.interner.error();
+        };
+
+        match info
+            .fields
+            .iter()
+            .find(|(n, _, _)| *n == field_name)
+            .map(|(_, d, t)| (*d, *t))
+        {
+            Some((field_def, ty)) => {
+                self.result.field_resolutions.insert(id, field_def);
+                ty
+            }
+            None => {
+                let interner = self.interner.borrow();
+
+                let struct_name_id = self.resolution.defs.get(struct_def).expect("wtf").name;
+
+                let struct_name = interner.resolve(&struct_name_id).into();
+                let field_name = interner.resolve(&field_name).into();
+
+                drop(interner);
+
+                self.result.errors.push(TypeError::UnknownField {
+                    struct_name,
+                    field: field_name,
+                    src: object.source.src(),
+                    span: field_span,
+                });
+                self.result.interner.error()
+            }
+        }
+    }
+
     fn check_implements_interface(
         &mut self,
         ty: TypeId,
@@ -1252,7 +1323,19 @@ impl<'res> TypeChecker<'res> {
                     .copied()
                     .unwrap_or(false);
 
-                field_const || self.find_const_violation(object)
+                let object_is_const_ptr = self
+                    .result
+                    .expr_types
+                    .get(&object.id)
+                    .map(|&ty| {
+                        matches!(
+                            self.result.interner.get(ty),
+                            Type::Pointer { is_const: true, .. }
+                        )
+                    })
+                    .unwrap_or(false);
+
+                field_const || object_is_const_ptr || self.find_const_violation(object)
             }
 
             HirExprKind::SliceAccess { object, .. } => self.find_const_violation(object),
