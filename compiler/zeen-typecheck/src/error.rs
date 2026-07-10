@@ -58,9 +58,11 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("object is not callable")]
+    #[error("type `{ty}` is not callable")]
     #[diagnostic(severity(Error), code(zeen::typechecker::not_callable))]
     NotCallable {
+        ty: SmolStr,
+
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label]
@@ -88,8 +90,8 @@ pub enum TypeError {
         #[label(primary, "infer requested here")]
         span: SourceSpan,
 
-        #[label("type declared here")]
-        declared: SourceSpan,
+        #[related]
+        declared: Vec<InferGenericDeclared>,
     },
 
     #[error("binary '{op}' is not supported between: `{lhs_type}` and `{rhs_type}`")]
@@ -279,6 +281,19 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("cannot move value through pointer")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::move_through_ptr),
+        help("try to dereference value from pointer: *EXPR")
+    )]
+    CannotMoveThroughPointer {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]
@@ -334,4 +349,15 @@ pub enum TypeError {
         span: SourceSpan,
     },
     // <-- Format Errors
+}
+
+#[derive(Debug, Error, Diagnostic, Clone)]
+#[error("type declared here")]
+#[diagnostic(severity(Advice))]
+pub struct InferGenericDeclared {
+    #[source_code]
+    pub src: NamedSource<Arc<String>>,
+
+    #[label]
+    pub span: SourceSpan,
 }
