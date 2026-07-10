@@ -16,7 +16,7 @@ use crate::{
     context::{FnCtx, TypeCheckCtx},
     format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
-    types::{Capabilities, StructTypeInfo, Type, TypeId, TypeInterner},
+    types::{Capabilities, SelfMode, StructTypeInfo, Type, TypeId, TypeInterner, self_mode_of},
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -54,12 +54,15 @@ pub struct TypeChecker<'res> {
     fn_sigs: HashMap<DefId, FnSignature>,
     struct_generics: HashMap<DefId, Vec<DefId>>,
     interface_methods: HashMap<DefId, Vec<DefId>>,
+    struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
 }
 
 struct FnSignature {
     params: Vec<TypeId>,
     ret: TypeId,
     generics: Vec<DefId>,
+    generic_bounds: HashMap<DefId, Vec<DefId>>,
+    self_mode: Option<SelfMode>,
 }
 
 impl<'res> TypeChecker<'res> {
@@ -76,6 +79,7 @@ impl<'res> TypeChecker<'res> {
             struct_generics: HashMap::new(),
             expect_assign_interface: false,
             interface_methods: HashMap::new(),
+            struct_methods: HashMap::new(),
         }
     }
 
@@ -158,6 +162,13 @@ impl<'res> TypeChecker<'res> {
 
                 for method in &s.methods {
                     self.declare_signature(method);
+
+                    if let HirDeclKind::Fn(f) = &method.kind {
+                        self.struct_methods
+                            .entry(decl.def_id)
+                            .or_default()
+                            .insert(f.name.0, method.def_id);
+                    }
                 }
             }
 
@@ -206,15 +217,29 @@ impl<'res> TypeChecker<'res> {
             .map(|g| (g.def_id, g.bounds.clone()))
             .collect();
 
+        let self_mode = hir_fn.params.first().and_then(|p| self_mode_of(&p.ty.kind));
+
         let params: Vec<TypeId> = hir_fn
             .params
             .iter()
-            .map(|param| {
+            .enumerate()
+            .map(|(idx, param)| {
                 let (ty, is_const) = self.lower_hir_type_with_const(&param.ty);
+
+                let effective_const = if idx == 0 {
+                    match self_mode_of(&param.ty.kind) {
+                        Some(SelfMode::ValueConst) | Some(SelfMode::RefConst) => true,
+                        _ => is_const,
+                    }
+                } else {
+                    is_const
+                };
 
                 if let Some(param_def) = param.def_id {
                     self.result.def_types.insert(param_def, ty);
-                    self.result.const_bindings.insert(param_def, is_const);
+                    self.result
+                        .const_bindings
+                        .insert(param_def, effective_const);
                 }
 
                 ty
@@ -239,6 +264,8 @@ impl<'res> TypeChecker<'res> {
                 params,
                 ret,
                 generics,
+                generic_bounds,
+                self_mode,
             },
         );
     }
@@ -246,6 +273,13 @@ impl<'res> TypeChecker<'res> {
     fn declare_implement_signature(&mut self, imp: &zeen_hir::HirImplement, source: Source) {
         for method in &imp.methods {
             self.declare_signature(method);
+
+            if let (HirDeclKind::Fn(f), Some(object_def)) = (&method.kind, imp.object) {
+                self.struct_methods
+                    .entry(object_def)
+                    .or_default()
+                    .insert(f.name.0, method.def_id);
+            }
         }
 
         let Some(object_def) = imp.object else { return };
@@ -553,7 +587,7 @@ impl<'res> TypeChecker<'res> {
                 });
 
                 for method in &s.methods {
-                    self.check_decl_body_as_method(method, self_ty);
+                    self.check_decl_body_as_method(method, decl.def_id);
                 }
             }
 
@@ -573,7 +607,7 @@ impl<'res> TypeChecker<'res> {
                     });
 
                     for method in &imp.methods {
-                        self.check_decl_body_as_method(method, self_ty);
+                        self.check_decl_body_as_method(method, object_def);
                     }
                 } else {
                     for method in &imp.methods {
@@ -591,13 +625,13 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_decl_body_as_method(&mut self, method: &HirDecl, self_ty: TypeId) {
+    fn check_decl_body_as_method(&mut self, method: &HirDecl, struct_def: DefId) {
         if let HirDeclKind::Fn(f) = &method.kind {
-            self.check_fn_body(method.def_id, f, Some(self_ty));
+            self.check_fn_body(method.def_id, f, Some(struct_def));
         }
     }
 
-    fn check_fn_body(&mut self, def_id: DefId, hir_fn: &HirFn, self_ty: Option<TypeId>) {
+    fn check_fn_body(&mut self, def_id: DefId, hir_fn: &HirFn, struct_def: Option<DefId>) {
         let Some(body) = &hir_fn.body else {
             return;
         };
@@ -607,23 +641,46 @@ impl<'res> TypeChecker<'res> {
             .get(&def_id)
             .expect("unregistered signature, wtf");
 
+        let self_type = struct_def.map(|sd| {
+            let base_struct_ty = self.result.interner.intern(Type::Struct {
+                def_id: sd,
+                generic_args: Vec::new(),
+            });
+
+            match sig.self_mode {
+                Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_struct_ty,
+                Some(SelfMode::RefMut) => self.result.interner.intern(Type::Pointer {
+                    inner: base_struct_ty,
+                    is_const: false,
+                }),
+                Some(SelfMode::RefConst) => self.result.interner.intern(Type::Pointer {
+                    inner: base_struct_ty,
+                    is_const: true,
+                }),
+            }
+        });
+
         let mut generic_bindings = HashMap::new();
+        let mut generic_bounds = HashMap::new();
 
         for generic in &sig.generics {
             let ty = self.result.interner.intern(Type::GenericParam(*generic));
             generic_bindings.insert(*generic, ty);
         }
 
+        for (g, bounds) in &sig.generic_bounds {
+            generic_bounds.insert(*g, bounds.clone());
+        }
+
         self.ctx.push_fn(FnCtx {
             return_type: sig.ret,
-            self_type: self_ty,
+            self_type,
             generic_bindings,
-            generic_bounds: HashMap::default(),
+            generic_bounds,
             loop_depth: 0,
         });
 
         self.check_stmt(body);
-
         self.ctx.pop_fn();
     }
 
