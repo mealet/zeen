@@ -1799,12 +1799,75 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn resolve_iface_name(&self, iface_def: DefId) -> Option<String> {
+        self.resolution
+            .defs
+            .get(&iface_def)
+            .map(|info| {
+                self.interner.borrow().resolve(&info.name).to_string()
+            })
+    }
+
+    fn builtin_interface_names(b: BuiltinType) -> &'static [&'static str] {
+        use BuiltinType::*;
+
+        match b {
+            i8 | i16 | i32 | i64 | isize => &[
+                "Display", "Debug", "Eq",
+                "Add", "Sub", "Mul", "Div", "Mod",
+                "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "BitNot",
+                "Neg",
+            ],
+
+            u8 | u16 | u32 | u64 | usize => &[
+                "Display", "Debug", "Eq",
+                "Add", "Sub", "Mul", "Div", "Mod",
+                "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "BitNot",
+            ],
+
+            f32 | f64 => &[
+                "Display", "Debug", "Eq",
+                "Add", "Sub", "Mul", "Div",
+                "Neg",
+            ],
+
+            bool => &["Display", "Debug", "Eq", "Not"],
+
+            char => &["Display", "Debug", "Eq"],
+
+            void => &[],
+        }       
+    }
+
+    fn enum_interface_names() -> &'static [&'static str] {
+        &["Display", "Debug", "Eq"]
+    }
+
     fn type_satisfies_interface(&self, ty: TypeId, iface_def: DefId) -> bool {
         match self.result.interner.get(ty).clone() {
             Type::Error => true,
 
+            Type::Builtin(b) => match self.resolve_iface_name(iface_def) {
+                Some(name) => Self::builtin_interface_names(b).contains(&name.as_str()),
+                None => false,
+            },
+
+            Type::IntLiteral => match self.resolve_iface_name(iface_def) {
+                Some(name) => Self::builtin_interface_names(DEFAULT_INT_LITERAL).contains(&name.as_str()),
+                None => false,
+            },
+
+            Type::FloatLiteral => match self.resolve_iface_name(iface_def) {
+                Some(name) => Self::builtin_interface_names(DEFAULT_FLOAT_LITERAL).contains(&name.as_str()),
+                None => false,
+            },
+
+            Type::Enum { .. } => match self.resolve_iface_name(iface_def) {
+                Some(name) => Self::enum_interface_names().contains(&name.as_str()),
+                None => false,
+            },
+
             Type::Struct { def_id, .. } => self.resolution.impls.contains_key(&(def_id, iface_def)),
-            Type::Enum { def_id } => self.resolution.impls.contains_key(&(def_id, iface_def)),
 
             _ => false,
         }
