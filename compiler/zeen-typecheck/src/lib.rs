@@ -1815,68 +1815,50 @@ impl<'res> TypeChecker<'res> {
                 if new_inner == inner {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Pointer {
-                        inner: new_inner,
-                        is_const,
-                    })
+                    self.result.interner.intern(Type::Pointer { inner: new_inner, is_const })
                 }
             }
 
             Type::Array { element, len } => {
-                let new_element = self.substitute_generics(element, bindings);
-                if new_element == element {
+                let new_elem = self.substitute_generics(element, bindings);
+                if new_elem == element {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Array {
-                        element: new_element,
-                        len,
-                    })
+                    self.result.interner.intern(Type::Array { element: new_elem, len })
                 }
             }
 
             Type::Slice { element } => {
-                let new_element = self.substitute_generics(element, bindings);
-                if new_element == element {
+                let new_elem = self.substitute_generics(element, bindings);
+                if new_elem == element {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Slice {
-                        element: new_element,
-                    })
+                    self.result.interner.intern(Type::Slice { element: new_elem })
                 }
             }
 
             Type::Struct { def_id, generic_args } => {
                 let new_args: Vec<TypeId> = generic_args
                     .iter()
-                    .copied()
-                    .map(|a| self.substitute_generics(a, bindings))
+                    .map(|a| self.substitute_generics(*a, bindings))
                     .collect();
-
                 if new_args == generic_args {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Struct {
-                        def_id,
-                        generic_args: new_args,
-                    })
+                    self.result.interner.intern(Type::Struct { def_id, generic_args: new_args })
                 }
             }
 
             Type::Fn { params, ret } => {
                 let new_params: Vec<TypeId> = params
                     .iter()
-                    .copied()
-                    .map(|p| self.substitute_generics(p, bindings))
+                    .map(|p| self.substitute_generics(*p, bindings))
                     .collect();
                 let new_ret = self.substitute_generics(ret, bindings);
-
                 if new_params == params && new_ret == ret {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Fn {
-                        params: new_params,
-                        ret: new_ret,
-                    })
+                    self.result.interner.intern(Type::Fn { params: new_params, ret: new_ret })
                 }
             }
 
