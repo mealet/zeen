@@ -1712,14 +1712,13 @@ impl<'res> TypeChecker<'res> {
     fn infer_or_check_arg(
         &mut self,
         param_ty: TypeId,
-        arg: &Rc<HirExpr>,
+        arg: &HirExpr,
         bindings: &mut HashMap<DefId, TypeId>,
         source: Source,
     ) {
         if self.type_contains_generic(param_ty) {
             let arg_ty = self.synth_expr(arg);
             let arg_ty = self.default_literal(arg_ty);
-
             self.result.record_expr_type(arg.id, arg_ty);
             self.unify_for_inference(param_ty, arg_ty, bindings, source);
         } else {
@@ -1798,8 +1797,15 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn type_satisfies_interface(&self, ty: TypeId, def: DefId) -> bool {
-        todo!()
+    fn type_satisfies_interface(&self, ty: TypeId, iface_def: DefId) -> bool {
+        match self.result.interner.get(ty).clone() {
+            Type::Error => true,
+
+            Type::Struct { def_id, .. } => self.resolution.impls.contains_key(&(def_id, iface_def)),
+            Type::Enum { def_id } => self.resolution.impls.contains_key(&(def_id, iface_def)),
+
+            _ => false,
+        }
     }
 
     fn substitute_generics(
