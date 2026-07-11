@@ -1745,6 +1745,7 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    // I just hope I'll never touch this code again
     fn unify_for_inference(
         &mut self,
         param_ty: TypeId,
@@ -1753,18 +1754,19 @@ impl<'res> TypeChecker<'res> {
         source: Source,
     ) {
         match (self.result.interner.get(param_ty).clone(), self.result.interner.get(arg_ty).clone()) {
-            (Type::GenericParam(g), _) => {
-                if let Some(existing) = bindings.get(&g).copied() {
-                    if existing != arg_ty && !try_coerce(&self.result.interner, arg_ty, existing).is_ok() {
-                        self.result.errors.push(TypeError::GenericConflict {
-                            param: self.display_type(param_ty).into(),
-                            first: self.display_type(existing).into(),
-                            second: self.display_type(arg_ty).into(),
-                            src: source.src(),
-                            span: source.span,
-                        });
-                    }
-                } else {
+            (Type::GenericParam(g), _) => match bindings.get(&g) {
+                Some(&existing) if existing != arg_ty && !try_coerce(&self.result.interner, arg_ty, existing).is_ok() => {
+                    self.result.errors.push(TypeError::GenericConflict {
+                        param: self.display_type(param_ty).into(),
+                        first: self.display_type(existing).into(),
+                        second: self.display_type(arg_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+
+                Some(_) => {},
+                None => {
                     bindings.insert(g, arg_ty);
                 }
             }
