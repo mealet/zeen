@@ -307,6 +307,15 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("implement on non-struct type found")]
+    #[diagnostic(severity(Error), code(zeen::typecheck::implement_non_struct))]
+    ImplementNonStruct {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]

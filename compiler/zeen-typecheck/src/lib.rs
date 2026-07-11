@@ -284,6 +284,15 @@ impl<'res> TypeChecker<'res> {
 
         let Some(object_def) = imp.object else { return };
 
+        // implement block on enum
+        if !matches!(self.def_kind(object_def), Some(DefKind::Struct)) {
+            self.report(TypeError::ImplementNonStruct {
+                src: source.src(),
+                span: imp.object_bindings_span,
+            });
+            return;
+        }
+
         let struct_generics = self
             .struct_generics
             .get(&object_def)
