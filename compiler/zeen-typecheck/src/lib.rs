@@ -689,7 +689,19 @@ impl<'res> TypeChecker<'res> {
             loop_depth: 0,
         });
 
-        self.check_stmt(body);
+        match &body.kind {
+            HirStmtKind::Expr(block_expr) => {
+                if let HirExprKind::Block { stmts, trailing } = &block_expr.kind {
+                    let ty = self.check_block(stmts, trailing, Some(sig.ret), &block_expr.source);
+                    self.result.record_expr_type(block_expr.id, ty);
+                } else {
+                    self.check_stmt(body);
+                }
+            }
+
+            _ => self.check_stmt(body)
+        };
+
         self.ctx.pop_fn();
     }
 
@@ -738,6 +750,28 @@ impl<'res> TypeChecker<'res> {
                 self.check_not_const_target(object);
             }
 
+            HirStmtKind::Return { value } => {
+                let expected = self.ctx.current().return_type;
+
+                match value {
+                    Some(v) => {
+                        self.check_expr(v, expected, false);
+                    }
+
+                    None => {
+                        let void = self.result.interner.void();
+                        if !try_coerce(&self.result.interner, void, expected).is_ok() {
+                            self.report(TypeError::Mismatch {
+                                expected: self.display_type(expected).into(),
+                                found: self.display_type(void).into(),
+                                src: stmt.source.src(),
+                                span: stmt.source.span,
+                            });
+                        }
+                    }
+                }
+            }
+
             HirStmtKind::Expr(expr) => {
                 self.synth_expr(expr);
             }
@@ -745,6 +779,25 @@ impl<'res> TypeChecker<'res> {
             HirStmtKind::Error => {}
 
             stmt => todo!("{:#?}", stmt),
+        }
+    }
+
+    fn check_stmt_as_block_value(&mut self, stmt: &HirStmt, expected: Option<TypeId>) -> TypeId {
+        match &stmt.kind {
+            HirStmtKind::Expr(block_expr) => {
+                if let HirExprKind::Block { stmts, trailing } = &block_expr.kind {
+                    let ty = self.check_block(stmts, trailing, expected, &block_expr.source);
+                    self.result.record_expr_type(block_expr.id, ty);
+                    ty
+                } else {
+                    self.check_stmt(stmt);
+                    self.result.interner.void()
+                }
+            }
+            _ => {
+                self.check_stmt(stmt);
+                self.result.interner.void()
+            }
         }
     }
 
@@ -812,12 +865,91 @@ impl<'res> TypeChecker<'res> {
                 self.check_call(expr.id, callee, args, generic_args, expr.source.clone())
             }
 
-            HirExprKind::Block { stmts, trailing: _ } => self.synth_block_value_stmts(stmts),
+            HirExprKind::If { condition, then_block, else_block } => {
+                let bool_ty = self.result.interner.builtin(BuiltinType::bool);
+                self.check_expr(condition, bool_ty, false);
+
+                let then_ty = self.check_stmt_as_block_value(then_block, None);
+                match else_block {
+                    Some(else_b) => {
+                        let else_ty = self.check_stmt_as_block_value(else_b, None);
+                        self.unify_branches(then_ty, else_ty, expr.source.clone())
+                    }
+                    None => self.result.interner.void(),
+                }
+            }
+
+            HirExprKind::Block { stmts, trailing, } => self.check_block(stmts, trailing, None, &expr.source),
 
             HirExprKind::Type(_) => self.result.interner.error(),
             HirExprKind::Error => self.result.interner.error(),
 
             _ => todo!(),
+        }
+    }
+
+    fn check_block(
+        &mut self,
+        stmts: &[Rc<HirStmt>],
+        trailing: &Option<Rc<HirExpr>>,
+        expected: Option<TypeId>,
+        source: &Source,
+    ) -> TypeId {
+        for stmt in stmts {
+            self.check_stmt(stmt);
+        }
+
+        match trailing {
+            Some(expr) => match expected {
+                Some(exp) => self.check_expr(expr, exp, false),
+                None => self.synth_expr(expr),
+            },
+            None => {
+                let diverges = stmts.last().is_some_and(|s| self.stmt_diverges(s));
+                let actual = if diverges {
+                    self.result.interner.never()
+                } else {
+                    self.result.interner.void()
+                };
+
+                match expected {
+                    Some(exp) => match try_coerce(&self.result.interner, actual, exp) {
+                        CoerceResult::Fail => {
+                            self.report(TypeError::Mismatch {
+                                expected: self.display_type(exp).into(),
+                                found: self.display_type(actual).into(),
+                                src: source.src(),
+                                span: source.span,
+                            });
+
+                            actual
+                        },
+                        _ => exp,
+                    },
+                    None => actual,
+                }
+            }
+        }
+    }
+
+    fn stmt_diverges(&self, stmt: &HirStmt) -> bool {
+        match &stmt.kind {
+            HirStmtKind::Return { .. } | HirStmtKind::Break | HirStmtKind::Continue => true,
+            HirStmtKind::Expr(e) => self.expr_diverges(e),
+            _ => false,
+        }
+    }
+
+    fn expr_diverges(&self, expr: &HirExpr) -> bool {
+        match &expr.kind {
+            HirExprKind::If { then_block, else_block: Some(else_b), .. } => {
+                self.stmt_diverges(then_block) && self.stmt_diverges(else_b)
+            }
+            HirExprKind::Block { stmts, trailing } => {
+                stmts.iter().any(|s| self.stmt_diverges(s))
+                    || trailing.as_ref().is_some_and(|t| self.expr_diverges(t))
+            }
+            _ => false,
         }
     }
 
@@ -1170,6 +1302,13 @@ impl<'res> TypeChecker<'res> {
                 }
                 self.synth_expr(expr)
             }
+
+            HirExprKind::Block { stmts, trailing } => {
+                let ty = self.check_block(stmts, trailing, Some(expected), &expr.source);
+                self.result.record_expr_type(expr.id, ty);
+                return ty;
+            }
+
             _ => self.synth_expr(expr),
         };
 
@@ -1236,6 +1375,34 @@ impl<'res> TypeChecker<'res> {
                 span: target.source.span,
             })
         }
+    }
+
+    fn unify_branches(&mut self, a: TypeId, b: TypeId, source: Source) -> TypeId {
+        if a == b {
+            return a;
+        }
+
+        if matches!(self.result.interner.get(a), Type::Never) {
+            return b;
+        }
+        if matches!(self.result.interner.get(b), Type::Never) {
+            return a;
+        }
+
+        if try_coerce(&self.result.interner, b, a).is_ok() {
+            return a;
+        }
+        if try_coerce(&self.result.interner, a, b).is_ok() {
+            return b;
+        }
+
+        self.result.errors.push(TypeError::Mismatch {
+            expected: self.display_type(a).into(),
+            found: self.display_type(b).into(),
+            src: source.src(),
+            span: source.span
+        });
+        self.result.interner.error()
     }
 
     fn find_const_violation(&mut self, target: &HirExpr) -> bool {
@@ -1318,23 +1485,6 @@ impl<'res> TypeChecker<'res> {
 
         match &stmt.kind {
             HirStmtKind::Expr(expr) => self
-                .result
-                .expr_types
-                .get(&expr.id)
-                .copied()
-                .unwrap_or(self.result.interner.void()),
-
-            _ => self.result.interner.void(),
-        }
-    }
-
-    fn synth_block_value_stmts(&mut self, stmts: &[Rc<HirStmt>]) -> TypeId {
-        for stmt in stmts {
-            self.check_stmt(stmt);
-        }
-
-        match stmts.last().map(|stmt| &stmt.kind) {
-            Some(HirStmtKind::Expr(expr)) => self
                 .result
                 .expr_types
                 .get(&expr.id)

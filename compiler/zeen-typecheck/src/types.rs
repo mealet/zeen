@@ -243,12 +243,14 @@ pub fn self_mode_of(ty: &HirTypeKind) -> Option<SelfMode> {
         HirTypeKind::Pointer(inner) => match &inner.kind {
             HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_) => Some(SelfMode::RefMut),
             HirTypeKind::Const(c)
-                if matches!(c.kind, HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_))
-            =>  Some(SelfMode::RefConst),
+                if matches!(c.kind, HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_)) =>
+            {
+                Some(SelfMode::RefConst)
+            }
 
             _ => None,
-        }
+        },
 
-        _ => None
+        _ => None,
     }
 }
