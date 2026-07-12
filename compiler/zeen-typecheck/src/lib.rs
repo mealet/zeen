@@ -54,6 +54,7 @@ pub struct TypeChecker<'res> {
     fn_sigs: HashMap<DefId, FnSignature>,
     struct_generics: HashMap<DefId, Vec<DefId>>,
     interface_methods: HashMap<DefId, Vec<DefId>>,
+    interface_generics: HashMap<DefId, Vec<DefId>>,
     struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
 }
 
@@ -79,6 +80,7 @@ impl<'res> TypeChecker<'res> {
             struct_generics: HashMap::new(),
             expect_assign_interface: false,
             interface_methods: HashMap::new(),
+            interface_generics: HashMap::new(),
             struct_methods: HashMap::new(),
         }
     }
@@ -180,6 +182,9 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Interface(i) => {
+                self.interface_generics
+                    .insert(decl.def_id, i.generics.iter().map(|g| g.def_id).collect());
+
                 self.interface_methods
                     .insert(decl.def_id, i.methods.iter().map(|m| m.def_id).collect());
 
@@ -331,15 +336,9 @@ impl<'res> TypeChecker<'res> {
             return;
         };
 
-        let self_generic_args: Vec<TypeId> = struct_generics
-            .iter()
-            .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
-            .collect();
+        let imp_generics: Vec<DefId> = imp.generics.iter().map(|g| g.def_id).collect();
 
-        let self_struct_ty = self.result.interner.intern(Type::Struct {
-            def_id: object_def,
-            generic_args: self_generic_args,
-        });
+        self.check_implement_matches_interface(imp, iface_def, object_def, &imp_generics, &((imp.object_bindings_span, source.src()).into()));
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {
@@ -2026,6 +2025,186 @@ impl<'res> TypeChecker<'res> {
             }
 
             _ => ty,
+        }
+    }
+
+    fn substitute_self(&mut self, ty: TypeId, self_ty: TypeId) -> TypeId {
+        match self.result.interner.get(ty).clone() {
+            Type::InterfaceSelfPlaceholder(_) => self_ty,
+
+            Type::Pointer { inner, is_const } => {
+                let new_inner = self.substitute_self(inner, self_ty);
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Pointer { inner: new_inner, is_const })
+                }
+            }
+
+            Type::Array { element, len } => {
+                let new_elem = self.substitute_self(element, self_ty);
+                if new_elem == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Array { element: new_elem, len })
+                }
+            }
+
+            Type::Slice { element } => {
+                let new_elem = self.substitute_self(element, self_ty);
+                if new_elem == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Slice { element: new_elem })
+                }
+            }
+
+            Type::Struct { def_id, generic_args } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|a| self.substitute_self(*a, self_ty))
+                    .collect();
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Struct { def_id, generic_args: new_args })
+                }
+            }
+
+            Type::Fn { params, ret } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|p| self.substitute_self(*p, self_ty))
+                    .collect();
+                let new_ret = self.substitute_self(ret, self_ty);
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Fn { params: new_params, ret: new_ret })
+                }
+            }
+
+            _ => ty,
+        }
+    }
+
+    fn method_name_of(&self, def_id: DefId) -> Option<String> {
+        self.resolution
+            .defs
+            .get(&def_id)
+            .map(|info| self.interner.borrow().resolve(&info.name).to_string())
+    }
+
+    fn check_method_signature_matches(
+        &mut self,
+        iface_def: DefId,
+        iface_method_def: DefId,
+        impl_method_def: DefId,
+        self_struct_ty: TypeId,
+        imp_generics: &[DefId],
+        source: &Source,
+    ) {
+        let iface_generics = self.interface_generics.get(&iface_def).cloned().unwrap_or_default();
+
+        let mut generic_subst: HashMap<DefId, TypeId> = HashMap::new();
+        for (iface_g, imp_g) in iface_generics.iter().zip(imp_generics.iter()) {
+            let imp_g_ty = self.result.interner.intern(Type::GenericParam(*imp_g));
+            generic_subst.insert(*iface_g, imp_g_ty);
+        }
+
+        let Some(iface_sig) = self.fn_sigs.get(&iface_method_def) else { return };
+        let iface_params_raw = iface_sig.params.clone();
+        let iface_ret_raw = iface_sig.ret;
+
+        let iface_params: Vec<TypeId> = iface_params_raw
+            .iter()
+            .map(|&p| {
+                let p = self.substitute_self(p, self_struct_ty);
+                self.substitute_generics(p, &generic_subst)
+            })
+            .collect();
+
+        let iface_ret = {
+            let r = self.substitute_self(iface_ret_raw, self_struct_ty);
+            self.substitute_generics(r, &generic_subst)
+        };
+
+        let Some(impl_sig) = self.fn_sigs.get(&impl_method_def) else { return };
+        let impl_params = impl_sig.params.clone();
+        let impl_ret = impl_sig.ret;
+
+        let params_match = iface_params.len() == impl_params.len()
+            && iface_params.iter().zip(impl_params.iter()).all(|(a, b)| *a == *b);
+        let ret_matches = iface_ret == impl_ret;
+
+        if !params_match || !ret_matches {
+            let method_name = self.method_name_of(iface_method_def).unwrap_or_default();
+            let iface_name = self.method_name_of(iface_def).unwrap_or_default();
+            let expected_signature = self.format_signature(&method_name, &iface_params, iface_ret);
+
+            self.report(TypeError::InterfaceMethodSignatureMismatch {
+                interface: iface_name.into(),
+                method: method_name.into(),
+                signature: expected_signature.into(),
+                src: source.src(),
+                span: source.span,
+            });
+        }
+    }
+
+    fn check_implement_matches_interface(
+        &mut self,
+        imp: &zeen_hir::HirImplement,
+        iface_def: DefId,
+        object_def: DefId,
+        imp_generics: &[DefId],
+        source: &Source
+    ) {
+        let Some(interface_methods) = self.interface_methods.get(&iface_def).cloned() else { return };
+
+        let struct_generics = self.struct_generics.get(&object_def).cloned().unwrap_or_default();
+        let self_generic_args: Vec<TypeId> = struct_generics
+            .iter()
+            .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
+            .collect();
+        let self_struct_ty = self.result.interner.intern(Type::Struct {
+            def_id: object_def,
+            generic_args: self_generic_args,
+        });
+
+        let mut impl_method_names: HashMap<String, DefId> = HashMap::new();
+        for method in &imp.methods {
+            if let Some(name) = self.method_name_of(method.def_id) {
+                impl_method_names.insert(name, method.def_id);
+            }
+        }
+
+        let mut matched_names: HashSet<String> = HashSet::new();
+
+        for &iface_method_def in &interface_methods {
+            let Some(method_name) = self.method_name_of(iface_method_def) else { continue };
+            matched_names.insert(method_name.clone());
+
+            match impl_method_names.get(&method_name) {
+                None => {
+                    self.report(TypeError::InterfaceMethodMissing {
+                        interface: self.method_name_of(iface_def).unwrap_or_default().into(),
+                        method: method_name.into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+                Some(&impl_method_def) => {
+                    self.check_method_signature_matches(
+                        iface_def,
+                        iface_method_def,
+                        impl_method_def,
+                        self_struct_ty,
+                        imp_generics,
+                        source,
+                    );
+                }
+            }
         }
     }
 

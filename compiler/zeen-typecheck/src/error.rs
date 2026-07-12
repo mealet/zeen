@@ -209,10 +209,15 @@ pub enum TypeError {
     },
 
     #[error("signature mismatch in: `{interface}` -> `{method}`")]
-    #[diagnostic(severity(Error), code(zeen::typechecker::interface_signature_mismatch))]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::interface_signature_mismatch),
+        help("expected signature: `{signature}`")
+    )]
     InterfaceMethodSignatureMismatch {
         interface: SmolStr,
         method: SmolStr,
+        signature: SmolStr,
 
         #[source_code]
         src: NamedSource<Arc<String>>,
