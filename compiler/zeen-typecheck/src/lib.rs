@@ -103,6 +103,13 @@ impl<'res> TypeChecker<'res> {
             .display_type(id, Rc::clone(&self.interner), self.resolution)
     }
 
+    fn format_signature(&self, method_name: &str, params: &[TypeId], ret: TypeId) -> String {
+        let param_strs: Vec<String> = params.iter().map(|&p| self.display_type(p)).collect();
+        let params_joined = param_strs.join(", ");
+
+        format!("fn {}({}) {}", method_name, params_joined, self.display_type(ret))
+    }
+
     fn inject_well_known_interfaces_methods(&mut self) {
         todo!()
     }
