@@ -136,6 +136,17 @@ pub enum ResolveError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("private item is not accessible here: `{name}`")]
+    #[diagnostic(severity(Error), code(zeen::resolver::private_item))]
+    PrivateItemNotAccessible {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Error, Diagnostic, Clone)]

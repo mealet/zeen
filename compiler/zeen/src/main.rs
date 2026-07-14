@@ -67,7 +67,7 @@ fn main() {
                 std::process::exit(1);
             });
 
-            let mut resolution_result = zeen_resolve::resolve(
+            let (resolved_program, mut resolution_result) = zeen_resolve::resolve(
                 Rc::clone(&filename),
                 Arc::clone(&content),
                 Path::new(&path),
@@ -87,7 +87,7 @@ fn main() {
 
             let mut hir_lowering =
                 zeen_hir::HirLowering::new(&resolution_result, Rc::clone(&rodeo));
-            let hir_module = hir_lowering.lower_module(program);
+            let hir_module = hir_lowering.lower_module(resolved_program);
 
             drop(bump);
 

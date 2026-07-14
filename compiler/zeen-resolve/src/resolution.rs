@@ -74,6 +74,7 @@ pub struct DefInfo {
     pub kind: DefKind,
     pub span: Source,
     pub decl: Option<NodeKey>, // may be useful
+    pub is_pub: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -115,6 +115,33 @@ impl<'ctx> NameResolver<'ctx> {
         resolved.into()
     }
 
+    fn check_visibility(&mut self, def_id: DefId, source: &zeen_ast::Source) {
+        let Some(info) = self.result.defs.get(&def_id) else {
+            return;
+        };
+        if info.is_pub {
+            return;
+        }
+
+        if !Self::same_source_file(&info.span.src(), &self.current_src) {
+            let interner = self.interner.borrow();
+
+            let name = interner.resolve(&info.name).into();
+
+            drop(interner);
+
+            self.report(ResolveError::PrivateItemNotAccessible {
+                name,
+                src: source.src(),
+                span: source.span,
+            });
+        }
+    }
+
+    fn same_source_file(a: &NamedSource<Arc<String>>, b: &NamedSource<Arc<String>>) -> bool {
+        std::ptr::eq(a.inner() as *const _, b.inner() as *const _)
+    }
+
     fn report(&mut self, error: ResolveError) {
         self.errors.push(error);
     }
@@ -139,7 +166,7 @@ impl<'ctx> NameResolver<'ctx> {
 
     fn declare_toplevel(&mut self, decl: &'ctx Declaration<'ctx>) {
         match decl.kind {
-            DeclarationKind::FnDecl { name, .. } => {
+            DeclarationKind::FnDecl { name, is_pub, .. } => {
                 let def_id = self.define_at(
                     NodeKey::from_decl(decl),
                     DefInfo {
@@ -147,13 +174,14 @@ impl<'ctx> NameResolver<'ctx> {
                         kind: DefKind::Function,
                         span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
+                        is_pub,
                     },
                 );
 
                 self.table.declare_value(name.0, def_id);
             }
 
-            DeclarationKind::StructDecl { name, .. } => {
+            DeclarationKind::StructDecl { name, is_pub, .. } => {
                 let def_id = self.define_at(
                     NodeKey::from_decl(decl),
                     DefInfo {
@@ -161,13 +189,14 @@ impl<'ctx> NameResolver<'ctx> {
                         kind: DefKind::Struct,
                         span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
+                        is_pub,
                     },
                 );
 
                 self.table.declare_type(name.0, def_id);
             }
 
-            DeclarationKind::InterfaceDecl { name, .. } => {
+            DeclarationKind::InterfaceDecl { name, is_pub, .. } => {
                 let name_resolved = self.interner_resolve(&name.0);
 
                 let def_id = self.define_at(
@@ -177,6 +206,7 @@ impl<'ctx> NameResolver<'ctx> {
                         kind: DefKind::Interface,
                         span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
+                        is_pub,
                     },
                 );
 
@@ -187,6 +217,7 @@ impl<'ctx> NameResolver<'ctx> {
                     kind: DefKind::InterfaceSelfPlaceholder,
                     span: (name.1, decl.source.src()).into(),
                     decl: None,
+                    is_pub: false,
                 });
 
                 self.result
@@ -194,7 +225,12 @@ impl<'ctx> NameResolver<'ctx> {
                     .insert(def_id, self_placeholder);
             }
 
-            DeclarationKind::EnumDecl { name, variants, .. } => {
+            DeclarationKind::EnumDecl {
+                name,
+                variants,
+                is_pub,
+                ..
+            } => {
                 let def_id = self.define_at(
                     NodeKey::from_decl(decl),
                     DefInfo {
@@ -202,6 +238,7 @@ impl<'ctx> NameResolver<'ctx> {
                         kind: DefKind::Enum,
                         span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
+                        is_pub,
                     },
                 );
 
@@ -215,6 +252,7 @@ impl<'ctx> NameResolver<'ctx> {
                             kind: DefKind::EnumVariant,
                             span: (variant.span, decl.source.src()).into(),
                             decl: Some(NodeKey::from_decl(decl)),
+                            is_pub: true,
                         },
                     );
 
@@ -230,6 +268,7 @@ impl<'ctx> NameResolver<'ctx> {
                         kind: DefKind::ExternVar,
                         span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
+                        is_pub: false,
                     },
                 );
 
@@ -277,6 +316,7 @@ impl<'ctx> NameResolver<'ctx> {
                                 kind: DefKind::Param,
                                 span: (param.span, decl.source.src()).into(),
                                 decl: None,
+                                is_pub: false,
                             },
                         );
 
@@ -320,6 +360,7 @@ impl<'ctx> NameResolver<'ctx> {
                             kind: DefKind::Field,
                             span: ((0, 0).into(), decl.source.src()).into(),
                             decl: Some(NodeKey::from_decl(decl)),
+                            is_pub: field.is_pub,
                         },
                     );
                 }
@@ -458,6 +499,7 @@ impl<'ctx> NameResolver<'ctx> {
             params,
             return_type,
             body,
+            is_pub,
             ..
         } = method.kind
         else {
@@ -471,6 +513,7 @@ impl<'ctx> NameResolver<'ctx> {
                 kind: DefKind::Function,
                 span: (name.1, self.named_src()).into(),
                 decl: Some(NodeKey::from_decl(method)),
+                is_pub,
             },
         );
 
@@ -485,6 +528,7 @@ impl<'ctx> NameResolver<'ctx> {
                     kind: DefKind::Param,
                     span: method.source.clone(),
                     decl: None,
+                    is_pub: false,
                 },
             )
         });
@@ -514,6 +558,7 @@ impl<'ctx> NameResolver<'ctx> {
                     kind: DefKind::Param,
                     span: (param.span, method.source.src()).into(),
                     decl: None,
+                    is_pub: false,
                 },
             );
             self.table.declare_value(pname, def_id);
@@ -543,6 +588,7 @@ impl<'ctx> NameResolver<'ctx> {
             params,
             return_type,
             body,
+            is_pub,
             ..
         } = &method.kind
         else {
@@ -556,6 +602,7 @@ impl<'ctx> NameResolver<'ctx> {
                 kind: DefKind::Function,
                 span: (name.1, method.source.src()).into(),
                 decl: Some(NodeKey::from_decl(method)),
+                is_pub: *is_pub,
             },
         );
 
@@ -569,6 +616,7 @@ impl<'ctx> NameResolver<'ctx> {
                         kind: DefKind::Param,
                         span: (p.span, method.source.src()).into(),
                         decl: None,
+                        is_pub: false,
                     },
                 )
             })
@@ -599,6 +647,7 @@ impl<'ctx> NameResolver<'ctx> {
                     kind: DefKind::Param,
                     span: (param.span, method.source.src()).into(),
                     decl: None,
+                    is_pub: false,
                 },
             );
             self.table.declare_value(pname, def_id);
@@ -632,6 +681,7 @@ impl<'ctx> NameResolver<'ctx> {
                     kind: DefKind::GenericParam,
                     span: (generic.name.1, current_src.clone()).into(),
                     decl: None,
+                    is_pub: false,
                 },
             );
 
@@ -676,6 +726,7 @@ impl<'ctx> NameResolver<'ctx> {
                     kind: DefKind::Variable { is_const },
                     span: (stmt.span, self.named_src()).into(),
                     decl: None,
+                    is_pub: false,
                 });
                 self.table.declare_value(name, def_id);
 
@@ -725,6 +776,7 @@ impl<'ctx> NameResolver<'ctx> {
                     kind: DefKind::Variable { is_const: false },
                     span: (varname.1, self.named_src()).into(),
                     decl: None,
+                    is_pub: false,
                 });
                 self.table.declare_value(varname.0, def_id);
 
@@ -888,10 +940,12 @@ impl<'ctx> NameResolver<'ctx> {
         }
 
         if let Some(def_id) = self.table.lookup_value(name) {
+            self.check_visibility(def_id, &(self.current_src.clone(), span).into());
             return Resolution::Def(def_id);
         }
 
         if let Some(def_id) = self.table.lookup_type(name) {
+            self.check_visibility(def_id, &(self.current_src.clone(), span).into());
             return Resolution::Def(def_id);
         }
 

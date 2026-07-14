@@ -109,7 +109,12 @@ impl<'res> TypeChecker<'res> {
         let param_strs: Vec<String> = params.iter().map(|&p| self.display_type(p)).collect();
         let params_joined = param_strs.join(", ");
 
-        format!("fn {}({}) {}", method_name, params_joined, self.display_type(ret))
+        format!(
+            "fn {}({}) {}",
+            method_name,
+            params_joined,
+            self.display_type(ret)
+        )
     }
 
     fn inject_well_known_interfaces_methods(&mut self) {
@@ -338,7 +343,13 @@ impl<'res> TypeChecker<'res> {
 
         let imp_generics: Vec<DefId> = imp.generics.iter().map(|g| g.def_id).collect();
 
-        self.check_implement_matches_interface(imp, iface_def, object_def, &imp_generics, &((imp.object_bindings_span, source.src()).into()));
+        self.check_implement_matches_interface(
+            imp,
+            iface_def,
+            object_def,
+            &imp_generics,
+            &((imp.object_bindings_span, source.src()).into()),
+        );
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {
@@ -705,7 +716,7 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            _ => self.check_stmt(body)
+            _ => self.check_stmt(body),
         };
 
         self.ctx.pop_fn();
@@ -867,11 +878,17 @@ impl<'res> TypeChecker<'res> {
                 self.check_unary_op(*op, inner_ty, expr.source.clone())
             }
 
-            HirExprKind::Call { callee, args, generic_args } => {
-                self.check_call(expr.id, callee, args, generic_args, expr.source.clone())
-            }
+            HirExprKind::Call {
+                callee,
+                args,
+                generic_args,
+            } => self.check_call(expr.id, callee, args, generic_args, expr.source.clone()),
 
-            HirExprKind::If { condition, then_block, else_block } => {
+            HirExprKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let bool_ty = self.result.interner.builtin(BuiltinType::bool);
                 self.check_expr(condition, bool_ty, false);
 
@@ -885,7 +902,9 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            HirExprKind::Block { stmts, trailing, } => self.check_block(stmts, trailing, None, &expr.source),
+            HirExprKind::Block { stmts, trailing } => {
+                self.check_block(stmts, trailing, None, &expr.source)
+            }
 
             HirExprKind::Type(_) => self.result.interner.error(),
             HirExprKind::Error => self.result.interner.error(),
@@ -929,7 +948,7 @@ impl<'res> TypeChecker<'res> {
                             });
 
                             actual
-                        },
+                        }
                         _ => exp,
                     },
                     None => actual,
@@ -948,9 +967,11 @@ impl<'res> TypeChecker<'res> {
 
     fn expr_diverges(&self, expr: &HirExpr) -> bool {
         match &expr.kind {
-            HirExprKind::If { then_block, else_block: Some(else_b), .. } => {
-                self.stmt_diverges(then_block) && self.stmt_diverges(else_b)
-            }
+            HirExprKind::If {
+                then_block,
+                else_block: Some(else_b),
+                ..
+            } => self.stmt_diverges(then_block) && self.stmt_diverges(else_b),
             HirExprKind::Block { stmts, trailing } => {
                 stmts.iter().any(|s| self.stmt_diverges(s))
                     || trailing.as_ref().is_some_and(|t| self.expr_diverges(t))
@@ -1406,7 +1427,7 @@ impl<'res> TypeChecker<'res> {
             expected: self.display_type(a).into(),
             found: self.display_type(b).into(),
             src: source.src(),
-            span: source.span
+            span: source.span,
         });
         self.result.interner.error()
     }
@@ -1844,9 +1865,15 @@ impl<'res> TypeChecker<'res> {
         bindings: &mut HashMap<DefId, TypeId>,
         source: Source,
     ) {
-        match (self.result.interner.get(param_ty).clone(), self.result.interner.get(arg_ty).clone()) {
+        match (
+            self.result.interner.get(param_ty).clone(),
+            self.result.interner.get(arg_ty).clone(),
+        ) {
             (Type::GenericParam(g), _) => match bindings.get(&g) {
-                Some(&existing) if existing != arg_ty && !try_coerce(&self.result.interner, arg_ty, existing).is_ok() => {
+                Some(&existing)
+                    if existing != arg_ty
+                        && !try_coerce(&self.result.interner, arg_ty, existing).is_ok() =>
+                {
                     self.result.errors.push(TypeError::GenericConflict {
                         param: self.display_type(param_ty).into(),
                         first: self.display_type(existing).into(),
@@ -1856,11 +1883,11 @@ impl<'res> TypeChecker<'res> {
                     });
                 }
 
-                Some(_) => {},
+                Some(_) => {}
                 None => {
                     bindings.insert(g, arg_ty);
                 }
-            }
+            },
 
             (Type::Pointer { inner: pinner, .. }, Type::Pointer { inner: ainner, .. }) => {
                 self.unify_for_inference(pinner, ainner, bindings, source);
@@ -1873,13 +1900,31 @@ impl<'res> TypeChecker<'res> {
                 self.unify_for_inference(pelem, aelem, bindings, source);
             }
 
-            (Type::Struct { def_id: pd, generic_args: pa }, Type::Struct { def_id: ad, generic_args: aa }) if pd == ad => {
+            (
+                Type::Struct {
+                    def_id: pd,
+                    generic_args: pa,
+                },
+                Type::Struct {
+                    def_id: ad,
+                    generic_args: aa,
+                },
+            ) if pd == ad => {
                 for (p, a) in pa.iter().zip(aa.iter()) {
                     self.unify_for_inference(*p, *a, bindings, source.clone());
                 }
             }
 
-            (Type::Fn { params: pp, ret: pr }, Type::Fn { params: ap, ret: ar }) if pp.len() == ap.len() => {
+            (
+                Type::Fn {
+                    params: pp,
+                    ret: pr,
+                },
+                Type::Fn {
+                    params: ap,
+                    ret: ar,
+                },
+            ) if pp.len() == ap.len() => {
                 for (p, a) in pp.iter().zip(ap.iter()) {
                     self.unify_for_inference(*p, *a, bindings, source.clone());
                 }
@@ -1894,9 +1939,7 @@ impl<'res> TypeChecker<'res> {
         self.resolution
             .defs
             .get(&iface_def)
-            .map(|info| {
-                self.interner.borrow().resolve(&info.name).to_string()
-            })
+            .map(|info| self.interner.borrow().resolve(&info.name).to_string())
     }
 
     fn builtin_interface_names(b: BuiltinType) -> &'static [&'static str] {
@@ -1904,30 +1947,23 @@ impl<'res> TypeChecker<'res> {
 
         match b {
             i8 | i16 | i32 | i64 | isize => &[
-                "Display", "Debug", "Eq",
-                "Add", "Sub", "Mul", "Div", "Mod",
-                "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "BitNot",
-                "Neg",
+                "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
+                "BitXor", "Shl", "Shr", "BitNot", "Neg",
             ],
 
             u8 | u16 | u32 | u64 | usize => &[
-                "Display", "Debug", "Eq",
-                "Add", "Sub", "Mul", "Div", "Mod",
-                "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "BitNot",
+                "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
+                "BitXor", "Shl", "Shr", "BitNot",
             ],
 
-            f32 | f64 => &[
-                "Display", "Debug", "Eq",
-                "Add", "Sub", "Mul", "Div",
-                "Neg",
-            ],
+            f32 | f64 => &["Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Neg"],
 
             bool => &["Display", "Debug", "Eq", "Not"],
 
             char => &["Display", "Debug", "Eq"],
 
             void => &[],
-        }       
+        }
     }
 
     fn enum_interface_names() -> &'static [&'static str] {
@@ -1944,12 +1980,16 @@ impl<'res> TypeChecker<'res> {
             },
 
             Type::IntLiteral => match self.resolve_iface_name(iface_def) {
-                Some(name) => Self::builtin_interface_names(DEFAULT_INT_LITERAL).contains(&name.as_str()),
+                Some(name) => {
+                    Self::builtin_interface_names(DEFAULT_INT_LITERAL).contains(&name.as_str())
+                }
                 None => false,
             },
 
             Type::FloatLiteral => match self.resolve_iface_name(iface_def) {
-                Some(name) => Self::builtin_interface_names(DEFAULT_FLOAT_LITERAL).contains(&name.as_str()),
+                Some(name) => {
+                    Self::builtin_interface_names(DEFAULT_FLOAT_LITERAL).contains(&name.as_str())
+                }
                 None => false,
             },
 
@@ -1964,11 +2004,7 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn substitute_generics(
-        &mut self,
-        ty: TypeId,
-        bindings: &HashMap<DefId, TypeId>,
-    ) -> TypeId {
+    fn substitute_generics(&mut self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> TypeId {
         match self.result.interner.get(ty).clone() {
             Type::GenericParam(g) => bindings.get(&g).copied().unwrap_or(ty),
 
@@ -1977,7 +2013,10 @@ impl<'res> TypeChecker<'res> {
                 if new_inner == inner {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Pointer { inner: new_inner, is_const })
+                    self.result.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
                 }
             }
 
@@ -1986,7 +2025,10 @@ impl<'res> TypeChecker<'res> {
                 if new_elem == element {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Array { element: new_elem, len })
+                    self.result.interner.intern(Type::Array {
+                        element: new_elem,
+                        len,
+                    })
                 }
             }
 
@@ -1995,11 +2037,16 @@ impl<'res> TypeChecker<'res> {
                 if new_elem == element {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Slice { element: new_elem })
+                    self.result
+                        .interner
+                        .intern(Type::Slice { element: new_elem })
                 }
             }
 
-            Type::Struct { def_id, generic_args } => {
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
                 let new_args: Vec<TypeId> = generic_args
                     .iter()
                     .map(|a| self.substitute_generics(*a, bindings))
@@ -2007,7 +2054,10 @@ impl<'res> TypeChecker<'res> {
                 if new_args == generic_args {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Struct { def_id, generic_args: new_args })
+                    self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
                 }
             }
 
@@ -2020,7 +2070,10 @@ impl<'res> TypeChecker<'res> {
                 if new_params == params && new_ret == ret {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Fn { params: new_params, ret: new_ret })
+                    self.result.interner.intern(Type::Fn {
+                        params: new_params,
+                        ret: new_ret,
+                    })
                 }
             }
 
@@ -2037,7 +2090,10 @@ impl<'res> TypeChecker<'res> {
                 if new_inner == inner {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Pointer { inner: new_inner, is_const })
+                    self.result.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
                 }
             }
 
@@ -2046,7 +2102,10 @@ impl<'res> TypeChecker<'res> {
                 if new_elem == element {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Array { element: new_elem, len })
+                    self.result.interner.intern(Type::Array {
+                        element: new_elem,
+                        len,
+                    })
                 }
             }
 
@@ -2055,11 +2114,16 @@ impl<'res> TypeChecker<'res> {
                 if new_elem == element {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Slice { element: new_elem })
+                    self.result
+                        .interner
+                        .intern(Type::Slice { element: new_elem })
                 }
             }
 
-            Type::Struct { def_id, generic_args } => {
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
                 let new_args: Vec<TypeId> = generic_args
                     .iter()
                     .map(|a| self.substitute_self(*a, self_ty))
@@ -2067,7 +2131,10 @@ impl<'res> TypeChecker<'res> {
                 if new_args == generic_args {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Struct { def_id, generic_args: new_args })
+                    self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
                 }
             }
 
@@ -2080,7 +2147,10 @@ impl<'res> TypeChecker<'res> {
                 if new_params == params && new_ret == ret {
                     ty
                 } else {
-                    self.result.interner.intern(Type::Fn { params: new_params, ret: new_ret })
+                    self.result.interner.intern(Type::Fn {
+                        params: new_params,
+                        ret: new_ret,
+                    })
                 }
             }
 
@@ -2104,7 +2174,11 @@ impl<'res> TypeChecker<'res> {
         imp_generics: &[DefId],
         source: &Source,
     ) {
-        let iface_generics = self.interface_generics.get(&iface_def).cloned().unwrap_or_default();
+        let iface_generics = self
+            .interface_generics
+            .get(&iface_def)
+            .cloned()
+            .unwrap_or_default();
 
         let mut generic_subst: HashMap<DefId, TypeId> = HashMap::new();
         for (iface_g, imp_g) in iface_generics.iter().zip(imp_generics.iter()) {
@@ -2112,7 +2186,9 @@ impl<'res> TypeChecker<'res> {
             generic_subst.insert(*iface_g, imp_g_ty);
         }
 
-        let Some(iface_sig) = self.fn_sigs.get(&iface_method_def) else { return };
+        let Some(iface_sig) = self.fn_sigs.get(&iface_method_def) else {
+            return;
+        };
         let iface_params_raw = iface_sig.params.clone();
         let iface_ret_raw = iface_sig.ret;
 
@@ -2129,12 +2205,17 @@ impl<'res> TypeChecker<'res> {
             self.substitute_generics(r, &generic_subst)
         };
 
-        let Some(impl_sig) = self.fn_sigs.get(&impl_method_def) else { return };
+        let Some(impl_sig) = self.fn_sigs.get(&impl_method_def) else {
+            return;
+        };
         let impl_params = impl_sig.params.clone();
         let impl_ret = impl_sig.ret;
 
         let params_match = iface_params.len() == impl_params.len()
-            && iface_params.iter().zip(impl_params.iter()).all(|(a, b)| *a == *b);
+            && iface_params
+                .iter()
+                .zip(impl_params.iter())
+                .all(|(a, b)| *a == *b);
         let ret_matches = iface_ret == impl_ret;
 
         if !params_match || !ret_matches {
@@ -2158,11 +2239,17 @@ impl<'res> TypeChecker<'res> {
         iface_def: DefId,
         object_def: DefId,
         imp_generics: &[DefId],
-        source: &Source
+        source: &Source,
     ) {
-        let Some(interface_methods) = self.interface_methods.get(&iface_def).cloned() else { return };
+        let Some(interface_methods) = self.interface_methods.get(&iface_def).cloned() else {
+            return;
+        };
 
-        let struct_generics = self.struct_generics.get(&object_def).cloned().unwrap_or_default();
+        let struct_generics = self
+            .struct_generics
+            .get(&object_def)
+            .cloned()
+            .unwrap_or_default();
         let self_generic_args: Vec<TypeId> = struct_generics
             .iter()
             .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
@@ -2182,7 +2269,9 @@ impl<'res> TypeChecker<'res> {
         let mut matched_names: HashSet<String> = HashSet::new();
 
         for &iface_method_def in &interface_methods {
-            let Some(method_name) = self.method_name_of(iface_method_def) else { continue };
+            let Some(method_name) = self.method_name_of(iface_method_def) else {
+                continue;
+            };
             matched_names.insert(method_name.clone());
 
             match impl_method_names.get(&method_name) {

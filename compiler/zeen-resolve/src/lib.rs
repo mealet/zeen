@@ -23,17 +23,19 @@ mod resolution;
 mod resolvers;
 mod symbol_table;
 
-pub fn resolve(
+type ResolvedProgram<'ctx> = (&'ctx [&'ctx Declaration<'ctx>], ResolutionResult);
+
+pub fn resolve<'ctx>(
     filename: Rc<String>,
     src: Arc<String>,
 
     entry_path: &Path,
-    entry_program: &[&Declaration<'_>],
+    entry_program: &'ctx [&'ctx Declaration<'_>],
 
-    arena: &Bump,
+    arena: &'ctx Bump,
     interner: Rc<RefCell<Rodeo>>,
-    context: &mut CompilationContext,
-) -> Result<ResolutionResult, Vec<ResolveError>> {
+    context: &'ctx mut CompilationContext,
+) -> Result<ResolvedProgram<'ctx>, Vec<ResolveError>> {
     let core_files = context.core_files.clone();
 
     let mut include_resolver = include_resolver::IncludeResolver::new(
@@ -62,5 +64,5 @@ pub fn resolve(
 
     let resolution_result = name_resolver.finish()?;
 
-    Ok(resolution_result)
+    Ok((resolved_program, resolution_result))
 }

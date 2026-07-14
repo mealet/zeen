@@ -348,9 +348,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
 
                 _ => {
-                    if is_root || decl_is_pub(decl) {
-                        out.push(decl);
-                    }
+                    out.push(decl);
                 }
             }
         }
@@ -367,18 +365,25 @@ impl<'ctx> IncludeResolver<'ctx> {
             HashMap::new();
 
         for decl in merged {
-            let entry: (NamespaceTag, Spur, SourceSpan) = match decl.kind {
-                DeclarationKind::FnDecl { name, .. } => (NamespaceTag::Value, name.0, name.1),
-                DeclarationKind::StructDecl { name, .. } => (NamespaceTag::Type, name.0, name.1),
-                DeclarationKind::InterfaceDecl { name, .. } => (NamespaceTag::Type, name.0, name.1),
-                DeclarationKind::EnumDecl { name, .. } => (NamespaceTag::Value, name.0, name.1),
-                DeclarationKind::ExternVar { name, .. } => (NamespaceTag::Value, name.0, name.1),
+            let entry: (NamespaceTag, Spur, SourceSpan, bool) = match decl.kind {
+                DeclarationKind::FnDecl { name, is_pub, .. } => (NamespaceTag::Value, name.0, name.1, is_pub),
+                DeclarationKind::StructDecl { name, is_pub, .. } => (NamespaceTag::Type, name.0, name.1, is_pub),
+                DeclarationKind::InterfaceDecl { name, is_pub, .. } => (NamespaceTag::Type, name.0, name.1, is_pub),
+                DeclarationKind::EnumDecl { name, is_pub, .. } => (NamespaceTag::Value, name.0, name.1, is_pub),
+                DeclarationKind::ExternVar { name, .. } => (NamespaceTag::Value, name.0, name.1, false),
                 _ => continue,
             };
 
-            let (ns, name, span) = entry;
+            let (ns, name, span, is_pub) = entry;
 
             if let Some((first_span, first_decl)) = seen.get(&(ns, name)) {
+                let first_is_pub = decl_is_pub(first_decl);
+                let same_file = self.module_path_of(first_decl) == self.module_path_of(decl);
+
+                if !(is_pub || first_is_pub || same_file) {
+                    return;
+                }
+
                 let name = self.interner_resolve(&entry.1);
 
                 let first_definition = {
