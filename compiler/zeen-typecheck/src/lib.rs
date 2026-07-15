@@ -885,6 +885,11 @@ impl<'res> TypeChecker<'res> {
                 self.check_field_access(expr.id, object, field)
             }
 
+            HirExprKind::StructInit { ty, fields } => {
+                let (ty_def, ty_span) = *ty;
+                self.check_struct_init(ty_def, fields, ty_span, &expr.source)
+            }
+
             HirExprKind::Binary { lhs, rhs, op } => {
                 let lhs_ty = self.synth_expr(lhs);
                 let rhs_ty = self.synth_expr(rhs);
@@ -1353,6 +1358,84 @@ impl<'res> TypeChecker<'res> {
                 self.result.interner.error()
             }
         }
+    }
+
+    fn check_struct_init(
+        &mut self,
+        ty_def: Option<DefId>,
+        fields: &[HirFieldInit],
+        ty_span: SourceSpan,
+        init_source: &Source,
+    ) -> TypeId {
+        // TODO: This is a temp version, needs to improve, get generics handling, unifications and etc.
+
+        let Some(def_id) = ty_def else {
+            for f in fields {
+                self.synth_expr(&f.value);
+            }
+            return self.result.interner.error();
+        };
+
+        let struct_ty = self.result.interner.intern(Type::Struct {
+            def_id,
+            generic_args: Vec::new(),
+        });
+
+        let field_table: Vec<StructFieldInfo> = self
+            .result
+            .struct_info
+            .get(&def_id)
+            .map(|info| info.fields.clone())
+            .unwrap_or_default();
+
+        let expected_names: HashSet<Spur> = field_table.iter().map(|info| info.name).collect();
+        let mut provided_names: HashSet<Spur> = HashSet::with_capacity(fields.len());
+
+        for f in fields {
+            provided_names.insert(f.name);
+
+            let Some(info) = field_table.iter().find(|i| i.name == f.name) else {
+                let interner = self.interner.borrow();
+                let field = interner.resolve(&f.name).into();
+                drop(interner);
+
+                self.report(TypeError::UnknownField {
+                    struct_name: self.display_type(struct_ty).into(),
+                    field,
+                    src: init_source.src(),
+                    span: f.span,
+                });
+                self.synth_expr(&f.value);
+                continue;
+            };
+        }
+
+        let missing: Vec<Spur> = expected_names
+            .difference(&provided_names)
+            .copied()
+            .collect();
+
+        if !missing.is_empty() {
+            let interner = self.interner.borrow();
+
+            let missing_stringified: Vec<String> = missing
+                .iter()
+                .map(|name| format!("`{}`", interner.resolve(name)))
+                .collect();
+
+            let fields = missing_stringified.join(", ").into();
+
+            drop(interner);
+
+            self.report(TypeError::MissingFields {
+                struct_name: self.display_type(struct_ty).into(),
+                fields,
+                src: init_source.src(),
+                span: init_source.span,
+            });
+        }
+
+        struct_ty
     }
 
     fn check_expr(&mut self, expr: &HirExpr, expected: TypeId, allow_const_remove: bool) -> TypeId {
