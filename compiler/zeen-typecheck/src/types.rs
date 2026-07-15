@@ -200,8 +200,17 @@ impl Capabilities {
 pub struct StructTypeInfo {
     pub def_id: DefId,
     /// (name, field DefId, field TypeId)
-    pub fields: Vec<(Spur, DefId, TypeId)>,
+    pub fields: Vec<StructFieldInfo>,
     pub capabalities: Capabilities,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructFieldInfo {
+    pub name: Spur,
+    pub field_def: DefId,
+    pub field_ty: TypeId,
+    pub struct_def: DefId,
+    pub is_pub: bool,
 }
 
 /// Enum for `self` reciever representation:

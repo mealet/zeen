@@ -16,7 +16,10 @@ use crate::{
     context::{FnCtx, TypeCheckCtx},
     format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
-    types::{Capabilities, SelfMode, StructTypeInfo, Type, TypeId, TypeInterner, self_mode_of},
+    types::{
+        Capabilities, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId, TypeInterner,
+        self_mode_of,
+    },
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -162,7 +165,13 @@ impl<'res> TypeChecker<'res> {
                     self.result.def_types.insert(field.def_id, ty);
                     self.result.const_bindings.insert(field.def_id, is_const);
 
-                    fields.push((field.name, field.def_id, ty));
+                    fields.push(StructFieldInfo {
+                        name: field.name,
+                        field_def: field.def_id,
+                        field_ty: ty,
+                        struct_def: decl.def_id,
+                        is_pub: field.is_pub,
+                    });
                 }
 
                 self.result.struct_info.insert(
@@ -547,7 +556,12 @@ impl<'res> TypeChecker<'res> {
             .result
             .struct_info
             .get(&def_id)
-            .map(|info| info.fields.iter().map(|(_, _, ty)| *ty).collect())
+            .map(|info| {
+                info.fields
+                    .iter()
+                    .map(|field_info| field_info.field_ty)
+                    .collect()
+            })
             .unwrap_or_default();
 
         let mut is_copy = true;
@@ -700,6 +714,7 @@ impl<'res> TypeChecker<'res> {
 
         self.ctx.push_fn(FnCtx {
             return_type: sig.ret,
+            struct_def,
             self_type,
             generic_bindings,
             generic_bounds,
@@ -1285,19 +1300,35 @@ impl<'res> TypeChecker<'res> {
             }
         };
 
-        let Some(info) = self.result.struct_info.get(struct_def) else {
+        let Some(info) = self.result.struct_info.get(struct_def).cloned() else {
             return self.result.interner.error();
         };
 
-        match info
-            .fields
-            .iter()
-            .find(|(n, _, _)| *n == field_name)
-            .map(|(_, d, t)| (*d, *t))
-        {
-            Some((field_def, ty)) => {
-                self.result.field_resolutions.insert(id, field_def);
-                ty
+        match info.fields.iter().find(|f| f.name == field_name) {
+            Some(f) => {
+                self.result.field_resolutions.insert(id, f.field_def);
+
+                let same_struct = self
+                    .ctx
+                    .current()
+                    .struct_def
+                    .map(|def| def == f.struct_def)
+                    .unwrap_or(false);
+
+                if !f.is_pub && !same_struct {
+                    let interner = self.interner.borrow();
+                    let name = interner.resolve(&field_name).into();
+
+                    drop(interner);
+
+                    self.report(TypeError::PrivateItemNotAccessible {
+                        name,
+                        src: object.source.src(),
+                        span: field_span,
+                    });
+                }
+
+                f.field_ty
             }
             None => {
                 let interner = self.interner.borrow();
@@ -1670,7 +1701,7 @@ impl<'res> TypeChecker<'res> {
             .result
             .struct_info
             .get(&struct_def)
-            .map(|info| info.fields.iter().any(|(n, _, _)| *n == field_name))
+            .map(|info| info.fields.iter().any(|f| f.name == field_name))
             .unwrap_or(false);
 
         if is_field {

@@ -7,6 +7,7 @@ use zeen_resolve::DefId;
 pub struct FnCtx {
     pub return_type: TypeId,
     pub self_type: Option<TypeId>,
+    pub struct_def: Option<DefId>,
     pub generic_bindings: HashMap<DefId, TypeId>,
     pub generic_bounds: HashMap<DefId, Vec<DefId>>,
     pub loop_depth: u32,

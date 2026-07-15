@@ -321,6 +321,17 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("private item is not accessible: `{name}`")]
+    #[diagnostic(severity(Error), code(zeen::typecheck::private_item))]
+    PrivateItemNotAccessible {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]
