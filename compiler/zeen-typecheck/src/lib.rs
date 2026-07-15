@@ -881,6 +881,10 @@ impl<'res> TypeChecker<'res> {
                 self.check_macro_call(expr.id, *kind, args, expr.source.clone())
             }
 
+            HirExprKind::FieldAccess { object, field } => {
+                self.check_field_access(expr.id, object, field)
+            }
+
             HirExprKind::Binary { lhs, rhs, op } => {
                 let lhs_ty = self.synth_expr(lhs);
                 let rhs_ty = self.synth_expr(rhs);
@@ -1268,10 +1272,10 @@ impl<'res> TypeChecker<'res> {
         &mut self,
         id: HirId,
         object: &HirExpr,
-        field: (Spur, SourceSpan),
+        field: &(Spur, SourceSpan),
     ) -> TypeId {
         let obj_ty = self.synth_expr(object);
-        let (field_name, field_span) = field;
+        let (field_name, field_span) = *field;
 
         let struct_def = match self.result.interner.get(obj_ty) {
             Type::Struct { def_id, .. } => def_id,
