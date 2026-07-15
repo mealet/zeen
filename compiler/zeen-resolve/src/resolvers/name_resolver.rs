@@ -139,7 +139,8 @@ impl<'ctx> NameResolver<'ctx> {
     }
 
     fn same_source_file(a: &NamedSource<Arc<String>>, b: &NamedSource<Arc<String>>) -> bool {
-        std::ptr::eq(a.inner() as *const _, b.inner() as *const _)
+        // TODO: Needs improvement, maybe mark each source with its own ID and verify it.
+        a.name() == b.name()
     }
 
     fn report(&mut self, error: ResolveError) {
