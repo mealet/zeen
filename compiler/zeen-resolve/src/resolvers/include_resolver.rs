@@ -380,10 +380,6 @@ impl<'ctx> IncludeResolver<'ctx> {
                 let first_is_pub = decl_is_pub(first_decl);
                 let same_file = self.module_path_of(first_decl) == self.module_path_of(decl);
 
-                if !(is_pub || first_is_pub || same_file) {
-                    return;
-                }
-
                 let name = self.interner_resolve(&entry.1);
 
                 let first_definition = {
