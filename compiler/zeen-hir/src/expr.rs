@@ -64,6 +64,7 @@ pub enum HirExprKind {
 
     StructInit {
         ty: (Option<DefId>, SourceSpan),
+        generic_args: Vec<Rc<HirTypeExpr>>,
         fields: Vec<HirFieldInit>,
     },
 

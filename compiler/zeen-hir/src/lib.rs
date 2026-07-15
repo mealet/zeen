@@ -624,8 +624,11 @@ impl<'res> HirLowering<'res> {
                     })
                     .unwrap_or_default();
 
+                let generic_args = self.generic_args_of_expr(ty);
+
                 HirExprKind::StructInit {
                     ty: (ty_def, ty.span),
+                    generic_args,
                     fields: hir_fields,
                 }
             }
@@ -653,6 +656,20 @@ impl<'res> HirLowering<'res> {
             kind,
             source: (expr.span, self.current_src.clone()).into(),
         }
+    }
+
+    fn generic_args_of_expr(&mut self, expr: &Expression) -> Vec<Rc<HirTypeExpr>> {
+        let ExpressionKind::Ident {
+            generic_args: Some(args),
+            ..
+        } = expr.kind
+        else {
+            return Vec::new();
+        };
+
+        args.iter()
+            .map(|ty_expr| Rc::new(self.lower_type(ty_expr)))
+            .collect()
     }
 
     // > Types

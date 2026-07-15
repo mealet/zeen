@@ -81,17 +81,16 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("unable to infer generic type")]
+    #[error("unable to infer `{generic_name}` generic type")]
     #[diagnostic(severity(Error), code(zeen::typechecker::cannot_infer_generic))]
     CannotInferGeneric {
+        generic_name: SmolStr,
+
         #[source_code]
         src: NamedSource<Arc<String>>,
 
         #[label(primary, "infer requested here")]
         span: SourceSpan,
-
-        #[related]
-        declared: Vec<InferGenericDeclared>,
     },
 
     #[error("binary '{op}' is not supported between: `{lhs_type}` and `{rhs_type}`")]
@@ -387,15 +386,4 @@ pub enum TypeError {
         span: SourceSpan,
     },
     // <-- Format Errors
-}
-
-#[derive(Debug, Error, Diagnostic, Clone)]
-#[error("type declared here")]
-#[diagnostic(severity(Advice))]
-pub struct InferGenericDeclared {
-    #[source_code]
-    pub src: NamedSource<Arc<String>>,
-
-    #[label]
-    pub span: SourceSpan,
 }

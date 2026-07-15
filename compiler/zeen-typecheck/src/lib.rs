@@ -890,9 +890,13 @@ impl<'res> TypeChecker<'res> {
                 self.check_field_access(expr.id, object, field)
             }
 
-            HirExprKind::StructInit { ty, fields } => {
+            HirExprKind::StructInit {
+                ty,
+                fields,
+                generic_args,
+            } => {
                 let (ty_def, ty_span) = *ty;
-                self.check_struct_init(ty_def, fields, ty_span, &expr.source)
+                self.check_struct_init(ty_def, generic_args, fields, ty_span, &expr.source)
             }
 
             HirExprKind::Binary { lhs, rhs, op } => {
@@ -1368,12 +1372,11 @@ impl<'res> TypeChecker<'res> {
     fn check_struct_init(
         &mut self,
         ty_def: Option<DefId>,
+        ty_generic_args: &[Rc<HirTypeExpr>],
         fields: &[HirFieldInit],
         ty_span: SourceSpan,
         init_source: &Source,
     ) -> TypeId {
-        // TODO: This is a temp version, needs to improve, get generics handling, unifications and etc.
-
         let Some(def_id) = ty_def else {
             for f in fields {
                 self.synth_expr(&f.value);
@@ -1381,10 +1384,11 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         };
 
-        let struct_ty = self.result.interner.intern(Type::Struct {
-            def_id,
-            generic_args: Vec::new(),
-        });
+        let struct_generics = self
+            .struct_generics
+            .get(&def_id)
+            .cloned()
+            .unwrap_or_default();
 
         let field_table: Vec<StructFieldInfo> = self
             .result
@@ -1393,8 +1397,33 @@ impl<'res> TypeChecker<'res> {
             .map(|info| info.fields.clone())
             .unwrap_or_default();
 
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        if !ty_generic_args.is_empty() {
+            if ty_generic_args.len() != struct_generics.len() {
+                let interner = self.interner.borrow();
+
+                let name = interner.resolve(&self.resolution.defs[&def_id].name).into();
+
+                drop(interner);
+
+                self.report(TypeError::GenericArgCountMismatch {
+                    name,
+                    expected: struct_generics.len(),
+                    found: ty_generic_args.len(),
+                    src: init_source.src(),
+                    span: ty_span,
+                });
+            }
+
+            for (g, explicit) in struct_generics.iter().zip(ty_generic_args.iter()) {
+                let ty = self.lower_hir_type(explicit);
+                bindings.insert(*g, ty);
+            }
+        }
+
         let expected_names: HashSet<Spur> = field_table.iter().map(|info| info.name).collect();
         let mut provided_names: HashSet<Spur> = HashSet::with_capacity(fields.len());
+        let mut field_value_types: HashMap<Spur, TypeId> = HashMap::with_capacity(fields.len());
 
         for f in fields {
             provided_names.insert(f.name);
@@ -1402,17 +1431,73 @@ impl<'res> TypeChecker<'res> {
             let Some(info) = field_table.iter().find(|i| i.name == f.name) else {
                 let interner = self.interner.borrow();
                 let field = interner.resolve(&f.name).into();
+                let struct_name = interner.resolve(&self.resolution.defs[&def_id].name).into();
                 drop(interner);
 
                 self.report(TypeError::UnknownField {
-                    struct_name: self.display_type(struct_ty).into(),
                     field,
+                    struct_name,
                     src: init_source.src(),
                     span: f.span,
                 });
                 self.synth_expr(&f.value);
                 continue;
             };
+
+            let value_ty = self.synth_expr(&f.value);
+            let value_ty = self.default_literal(value_ty);
+            field_value_types.insert(f.name, value_ty);
+
+            if self.type_contains_generic(info.field_ty) {
+                self.unify_for_inference(
+                    info.field_ty,
+                    value_ty,
+                    &mut bindings,
+                    (f.span, init_source.src()).into(),
+                );
+            }
+        }
+
+        for g in &struct_generics {
+            if !bindings.contains_key(g) {
+                let interner = self.interner.borrow();
+                let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                drop(interner);
+
+                self.report(TypeError::CannotInferGeneric {
+                    generic_name,
+                    src: init_source.src(),
+                    span: init_source.span,
+                });
+
+                bindings.insert(*g, self.result.interner.error());
+            }
+        }
+
+        let resolved_args: Vec<TypeId> = struct_generics.iter().map(|g| bindings[g]).collect();
+        let struct_ty = self.result.interner.intern(Type::Struct {
+            def_id,
+            generic_args: resolved_args,
+        });
+
+        for f in fields {
+            let Some(info) = field_table.iter().find(|i| i.name == f.name).cloned() else {
+                continue;
+            };
+
+            let expected_ty = self.substitute_generics(info.field_ty, &bindings);
+            let actual_ty = field_value_types
+                .get(&f.name)
+                .copied()
+                .unwrap_or(expected_ty);
+
+            self.coerce_or_error(
+                actual_ty,
+                expected_ty,
+                f.value.source.clone(),
+                f.value.id,
+                false,
+            );
         }
 
         let missing: Vec<Spur> = expected_names
@@ -1422,15 +1507,13 @@ impl<'res> TypeChecker<'res> {
 
         if !missing.is_empty() {
             let interner = self.interner.borrow();
-
             let missing_stringified: Vec<String> = missing
                 .iter()
-                .map(|name| format!("`{}`", interner.resolve(name)))
+                .map(|x| format!("`{}`", interner.resolve(x)))
                 .collect();
+            drop(interner);
 
             let fields = missing_stringified.join(", ").into();
-
-            drop(interner);
 
             self.report(TypeError::MissingFields {
                 struct_name: self.display_type(struct_ty).into(),
@@ -1707,15 +1790,14 @@ impl<'res> TypeChecker<'res> {
 
         for g in &sig_generics {
             if !bindings.contains_key(g) {
-                let declared = &self.resolution.defs.get(g).expect("wtf").span;
+                let interner = self.interner.borrow();
+                let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                drop(interner);
 
                 self.report(TypeError::CannotInferGeneric {
+                    generic_name,
                     src: source.src(),
                     span: source.span,
-                    declared: vec![error::InferGenericDeclared {
-                        src: declared.src(),
-                        span: declared.span,
-                    }],
                 });
 
                 bindings.insert(*g, self.result.interner.error());
@@ -1848,15 +1930,14 @@ impl<'res> TypeChecker<'res> {
 
         for g in &sig_generics {
             if !bindings.contains_key(g) {
-                let declared = &self.resolution.defs.get(g).expect("wtf").span;
+                let interner = self.interner.borrow();
+                let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                drop(interner);
 
                 self.report(TypeError::CannotInferGeneric {
+                    generic_name,
                     src: source.src(),
                     span: source.span,
-                    declared: vec![error::InferGenericDeclared {
-                        src: declared.src(),
-                        span: declared.span,
-                    }],
                 });
 
                 bindings.insert(*g, self.result.interner.error());
