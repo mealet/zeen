@@ -174,6 +174,11 @@ impl<'res> TypeChecker<'res> {
                     });
                 }
 
+                // for something like: `let a: Foo = Foo;`
+                self.result
+                    .def_types
+                    .insert(decl.def_id, self.result.interner.void());
+
                 self.result.struct_info.insert(
                     decl.def_id,
                     StructTypeInfo {
