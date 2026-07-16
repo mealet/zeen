@@ -1291,10 +1291,17 @@ impl<'res> TypeChecker<'res> {
         let obj_ty = self.synth_expr(object);
         let (field_name, field_span) = *field;
 
-        let struct_def = match self.result.interner.get(obj_ty) {
-            Type::Struct { def_id, .. } => def_id,
-            Type::Pointer { inner, .. } => match self.result.interner.get(*inner) {
-                Type::Struct { def_id, .. } => def_id,
+        let (struct_def, struct_generic_args) = match self.result.interner.get(obj_ty).clone() {
+            Type::Struct {
+                def_id,
+                generic_args,
+                ..
+            } => (def_id, generic_args),
+            Type::Pointer { inner, .. } => match self.result.interner.get(inner).clone() {
+                Type::Struct {
+                    def_id,
+                    generic_args,
+                } => (def_id, generic_args),
                 Type::Error => return self.result.interner.error(),
                 _ => {
                     self.result.errors.push(TypeError::NotAStruct {
@@ -1318,7 +1325,7 @@ impl<'res> TypeChecker<'res> {
             }
         };
 
-        let Some(info) = self.result.struct_info.get(struct_def).cloned() else {
+        let Some(info) = self.result.struct_info.get(&struct_def).cloned() else {
             return self.result.interner.error();
         };
 
@@ -1333,6 +1340,12 @@ impl<'res> TypeChecker<'res> {
                     .map(|def| def == f.struct_def)
                     .unwrap_or(false);
 
+                let struct_generics = self
+                    .struct_generics
+                    .get(&struct_def)
+                    .cloned()
+                    .unwrap_or_default();
+
                 if !f.is_pub && !same_struct {
                     let interner = self.interner.borrow();
                     let name = interner.resolve(&field_name).into();
@@ -1346,12 +1359,18 @@ impl<'res> TypeChecker<'res> {
                     });
                 }
 
-                f.field_ty
+                let bindings: HashMap<DefId, TypeId> = struct_generics
+                    .iter()
+                    .copied()
+                    .zip(struct_generic_args.iter().copied())
+                    .collect();
+
+                self.substitute_generics(f.field_ty, &bindings)
             }
             None => {
                 let interner = self.interner.borrow();
 
-                let struct_name_id = self.resolution.defs.get(struct_def).expect("wtf").name;
+                let struct_name_id = self.resolution.defs.get(&struct_def).expect("wtf").name;
 
                 let struct_name = interner.resolve(&struct_name_id).into();
                 let field_name = interner.resolve(&field_name).into();
