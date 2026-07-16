@@ -69,14 +69,41 @@ impl Type {
             Type::IntLiteral => DEFAULT_INT_LITERAL.to_string(),
             Type::FloatLiteral => DEFAULT_FLOAT_LITERAL.to_string(),
 
-            Type::Struct { def_id, .. }
-            | Type::Interface { def_id }
-            | Type::Enum { def_id }
-            | Type::GenericParam(def_id) => resolution_result
-                .defs
-                .get(def_id)
-                .map(|info| interner.borrow().resolve(&info.name).to_string())
-                .unwrap_or("undefined".to_string()),
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let name = resolution_result
+                    .defs
+                    .get(def_id)
+                    .map(|info| interner.borrow().resolve(&info.name).to_string())
+                    .unwrap_or("undefined".to_string());
+
+                if generic_args.is_empty() {
+                    name
+                } else {
+                    let args: Vec<String> = generic_args
+                        .iter()
+                        .map(|&a| {
+                            type_interner.get(a).to_display(
+                                Rc::clone(&interner),
+                                type_interner,
+                                resolution_result,
+                            )
+                        })
+                        .collect();
+
+                    format!("{}[{}]", name, args.join(", "))
+                }
+            }
+
+            Type::Interface { def_id } | Type::Enum { def_id } | Type::GenericParam(def_id) => {
+                resolution_result
+                    .defs
+                    .get(def_id)
+                    .map(|info| interner.borrow().resolve(&info.name).to_string())
+                    .unwrap_or("undefined".to_string())
+            }
 
             Type::Pointer { inner, is_const } => format!(
                 "*{}{}",
