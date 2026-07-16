@@ -128,9 +128,17 @@ impl<'res> TypeChecker<'res> {
 
     pub fn check_module(&mut self, module: &HirModule) {
         // Few words here: we're doing multiple passes here:
+        // 0. Register struct generic params (for lower_hir_type_inner)
         // 1. Declare signatures
         // 2. Check and infer if structs have Copy and Drop capabilities
         // 3. Check declarations bodies
+
+        for decl in &module.decls {
+            if let HirDeclKind::Struct(s) = &decl.kind {
+                self.struct_generics
+                    .insert(decl.def_id, s.generics.iter().map(|g| g.def_id).collect());
+            }
+        }
 
         for decl in &module.decls {
             self.declare_signature(decl);
@@ -154,8 +162,10 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Struct(s) => {
-                self.struct_generics
-                    .insert(decl.def_id, s.generics.iter().map(|g| g.def_id).collect());
+                // Code below is moved to `check_module` parent function (Pass 0).
+                //
+                // self.struct_generics
+                //     .insert(decl.def_id, s.generics.iter().map(|g| g.def_id).collect());
 
                 let mut fields = Vec::with_capacity(s.fields.len());
 
@@ -421,10 +431,34 @@ impl<'res> TypeChecker<'res> {
                         self.result.interner.intern(Type::Enum { def_id: *def_id })
                     }
 
-                    _ => self.result.interner.intern(Type::Struct {
-                        def_id: *def_id,
-                        generic_args: args,
-                    }),
+                    _ => {
+                        let struct_generics = self
+                            .struct_generics
+                            .get(def_id)
+                            .cloned()
+                            .unwrap_or_default();
+
+                        if !struct_generics.is_empty() && args.len() != struct_generics.len() {
+                            let interner = self.interner.borrow();
+                            let name = interner.resolve(&self.resolution.defs[def_id].name).into();
+                            drop(interner);
+
+                            self.report(TypeError::GenericArgCountMismatch {
+                                name,
+                                expected: struct_generics.len(),
+                                found: args.len(),
+                                src: ty.source.src(),
+                                span: ty.source.span,
+                            });
+
+                            return self.result.interner.error();
+                        }
+
+                        self.result.interner.intern(Type::Struct {
+                            def_id: *def_id,
+                            generic_args: args,
+                        })
+                    }
                 }
             }
 
