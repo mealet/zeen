@@ -401,10 +401,22 @@ impl<'res> TypeChecker<'res> {
                         .interner
                         .intern(Type::InterfaceSelfPlaceholder(*def_id)),
 
-                    _ => self.result.interner.intern(Type::Struct {
-                        def_id: *def_id,
-                        generic_args: Vec::new(),
-                    }),
+                    _ => {
+                        let struct_generics = self
+                            .struct_generics
+                            .get(def_id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let generic_args: Vec<TypeId> = struct_generics
+                            .iter()
+                            .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
+                            .collect();
+
+                        self.result.interner.intern(Type::Struct {
+                            def_id: *def_id,
+                            generic_args,
+                        })
+                    }
                 }
             }
 
@@ -2120,14 +2132,116 @@ impl<'res> TypeChecker<'res> {
 
     fn check_associated_fn_call(
         &mut self,
-        caller_expr: (HirId, &HirExpr),
+        caller: (HirId, &HirExpr),
         struct_def: DefId,
         field: (Spur, SourceSpan),
         args: &[Rc<HirExpr>],
         explicit_generic_args: &[Rc<HirTypeExpr>],
         source: &Source,
     ) -> Option<TypeId> {
-        todo!()
+        let (call_id, caller_expr) = caller;
+        let (field_name, field_span) = field;
+
+        let method_def_id = *self.struct_methods.get(&struct_def)?.get(&field_name)?;
+        let self_mode = self.fn_sigs[&method_def_id].self_mode;
+
+        if self_mode.is_some() {
+            self.report(TypeError::AssociatedCallOnInstaneMethod {
+                src: source.src(),
+                span: field_span,
+            });
+            return Some(self.result.interner.error());
+        }
+
+        self.check_method_visibility(
+            method_def_id,
+            struct_def,
+            caller_expr,
+            &(field_span, source.src()).into(),
+        );
+
+        let sig_params = self.fn_sigs[&method_def_id].params.clone();
+        let sig_ret = self.fn_sigs[&method_def_id].ret;
+        let sig_generics = self.fn_sigs[&method_def_id].generics.clone();
+
+        if args.len() != sig_params.len() {
+            self.report(TypeError::ArgCountMismatch {
+                expected: sig_params.len(),
+                found: args.len(),
+                src: source.src(),
+                span: source.span,
+            });
+        }
+
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+
+        for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
+            let ty = self.lower_hir_type(explicit);
+            bindings.insert(*g, ty);
+        }
+
+        for (param_ty, arg) in sig_params.iter().zip(args.iter()) {
+            self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+        }
+
+        for g in &sig_generics {
+            if !bindings.contains_key(g) {
+                let interner = self.interner.borrow();
+                let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                drop(interner);
+
+                self.report(TypeError::CannotInferGeneric {
+                    generic_name,
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                bindings.insert(*g, self.result.interner.error());
+            }
+        }
+
+        for g in &sig_generics {
+            let concrete_ty = bindings[g];
+            let bounds = self.fn_sigs[&method_def_id]
+                .generic_bounds
+                .get(g)
+                .cloned()
+                .unwrap_or_default();
+
+            for iface_def in bounds {
+                if !self.type_satisfies_interface(concrete_ty, iface_def) {
+                    let interner = self.interner.borrow();
+
+                    let generic = interner.resolve(&self.resolution.defs[g].name).into();
+                    let bound = interner
+                        .resolve(&self.resolution.defs[&iface_def].name)
+                        .into();
+                    let ty = self.display_type(concrete_ty).into();
+
+                    drop(interner);
+
+                    self.report(TypeError::GenericBoundNotSatisfied {
+                        generic,
+                        bound,
+                        ty,
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+            }
+        }
+
+        let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
+
+        self.result.call_resolutions.insert(
+            call_id,
+            CallResolution {
+                fn_def: method_def_id,
+                generic_args: resolved_generic_args,
+            },
+        );
+
+        Some(self.substitute_generics(sig_ret, &bindings))
     }
 
     fn check_call_via_fn_type(

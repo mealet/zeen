@@ -331,6 +331,15 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("associated call on instance method found")]
+    #[diagnostic(severity(Error), code(zeen::typecheck::associated_call_on_method))]
+    AssociatedCallOnInstaneMethod {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]
