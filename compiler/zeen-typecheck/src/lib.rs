@@ -67,6 +67,7 @@ struct FnSignature {
     generics: Vec<DefId>,
     generic_bounds: HashMap<DefId, Vec<DefId>>,
     self_mode: Option<SelfMode>,
+    is_pub: bool,
 }
 
 impl<'res> TypeChecker<'res> {
@@ -307,6 +308,7 @@ impl<'res> TypeChecker<'res> {
                 generics,
                 generic_bounds,
                 self_mode,
+                is_pub: hir_fn.is_pub,
             },
         );
     }
@@ -1901,6 +1903,40 @@ impl<'res> TypeChecker<'res> {
         self.substitute_generics(sig_ret, &bindings)
     }
 
+    fn check_method_visibility(
+        &mut self,
+        method_def_id: DefId,
+        owner_struct: DefId,
+        caller_expr: &HirExpr,
+        source: &Source,
+    ) {
+        let Some(sig) = self.fn_sigs.get(&method_def_id) else {
+            return;
+        };
+        if sig.is_pub {
+            return;
+        }
+
+        let Some(method_info) = self.resolution.defs.get(&method_def_id) else {
+            return;
+        };
+
+        let current_struct = self.ctx.current().struct_def;
+
+        if Some(owner_struct) != current_struct {
+            let name = self
+                .method_name_of(method_def_id)
+                .unwrap_or_default()
+                .into();
+
+            self.report(TypeError::PrivateItemNotAccessible {
+                name,
+                src: source.src(),
+                span: source.span,
+            });
+        }
+    }
+
     fn try_check_method_call(
         &mut self,
         call_id: HirId,
@@ -1912,17 +1948,40 @@ impl<'res> TypeChecker<'res> {
     ) -> Option<TypeId> {
         let (field_name, field_span) = field;
 
+        // If object is a direct ref to struct type - associated fn call
+        if let HirExprKind::VarRef(referenced_def) = &object.kind
+            && matches!(self.def_kind(*referenced_def), Some(DefKind::Struct))
+        {
+            return self.check_associated_fn_call(
+                (call_id, object),
+                *referenced_def,
+                (field_name, field_span),
+                args,
+                explicit_generic_args,
+                &source,
+            );
+        }
+
+        // Otherwise it is instance call
         let obj_ty = self.synth_expr(object);
 
-        let (struct_def, obj_is_ptr, ptr_is_const) = match self.result.interner.get(obj_ty).clone()
-        {
-            Type::Struct { def_id, .. } => (def_id, false, false),
-            Type::Pointer { inner, is_const } => match self.result.interner.get(inner) {
-                Type::Struct { def_id, .. } => (*def_id, true, is_const),
+        let (struct_def, struct_generic_args, obj_is_ptr, ptr_is_const) =
+            match self.result.interner.get(obj_ty).clone() {
+                Type::Struct {
+                    def_id,
+                    generic_args,
+                } => (def_id, generic_args, false, false),
+                Type::Pointer { inner, is_const } => {
+                    match self.result.interner.get(inner).clone() {
+                        Type::Struct {
+                            def_id,
+                            generic_args,
+                        } => (def_id, generic_args, true, is_const),
+                        _ => return None,
+                    }
+                }
                 _ => return None,
-            },
-            _ => return None,
-        };
+            };
 
         let is_field = self
             .result
@@ -1937,11 +1996,20 @@ impl<'res> TypeChecker<'res> {
 
         let method_def_id = *self.struct_methods.get(&struct_def)?.get(&field_name)?;
         let sig = &self.fn_sigs[&method_def_id];
+        let self_mode = sig.self_mode;
 
         let sig_params = sig.params.clone();
         let sig_ret = sig.ret;
         let sig_generics = sig.generics.clone();
-        let self_mode = sig.self_mode;
+
+        let _ = self_mode?; // wth i didn't even knew this exist in Rust
+
+        self.check_method_visibility(
+            method_def_id,
+            struct_def,
+            object,
+            &(field_span, source.src()).into(),
+        );
 
         if args.len() != sig_params.len() {
             self.report(TypeError::ArgCountMismatch {
@@ -1970,7 +2038,16 @@ impl<'res> TypeChecker<'res> {
             _ => {}
         }
 
-        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        let struct_generics = self
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
+        let mut bindings: HashMap<DefId, TypeId> = struct_generics
+            .iter()
+            .copied()
+            .zip(struct_generic_args.iter().copied())
+            .collect();
 
         for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
             let ty = self.lower_hir_type(explicit);
@@ -2039,6 +2116,18 @@ impl<'res> TypeChecker<'res> {
         );
 
         Some(self.substitute_generics(sig_ret, &bindings))
+    }
+
+    fn check_associated_fn_call(
+        &mut self,
+        caller_expr: (HirId, &HirExpr),
+        struct_def: DefId,
+        field: (Spur, SourceSpan),
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        source: &Source,
+    ) -> Option<TypeId> {
+        todo!()
     }
 
     fn check_call_via_fn_type(

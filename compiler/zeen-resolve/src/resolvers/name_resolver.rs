@@ -19,6 +19,7 @@ use zeen_ast::{
 use crate::{
     error::ResolveError,
     resolution::{DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult},
+    same_source_file,
     symbol_table::{ScopeKind, SymbolTable},
 };
 
@@ -123,7 +124,7 @@ impl<'ctx> NameResolver<'ctx> {
             return;
         }
 
-        if !Self::same_source_file(&info.span.src(), &self.current_src) {
+        if !same_source_file(&info.span.src(), &self.current_src) {
             let interner = self.interner.borrow();
 
             let name = interner.resolve(&info.name).into();
@@ -136,11 +137,6 @@ impl<'ctx> NameResolver<'ctx> {
                 span: source.span,
             });
         }
-    }
-
-    fn same_source_file(a: &NamedSource<Arc<String>>, b: &NamedSource<Arc<String>>) -> bool {
-        // TODO: Needs improvement, maybe mark each source with its own ID and verify it.
-        a.name() == b.name()
     }
 
     fn report(&mut self, error: ResolveError) {

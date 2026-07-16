@@ -2,6 +2,7 @@
 
 use bumpalo::Bump;
 use lasso::Rodeo;
+use miette::NamedSource;
 
 use std::{
     cell::RefCell,
@@ -65,4 +66,9 @@ pub fn resolve<'ctx>(
     let resolution_result = name_resolver.finish()?;
 
     Ok((resolved_program, resolution_result))
+}
+
+pub fn same_source_file(a: &NamedSource<Arc<String>>, b: &NamedSource<Arc<String>>) -> bool {
+    // TODO: Needs improvement, maybe mark each source with its own ID and verify it.
+    a.name() == b.name()
 }
