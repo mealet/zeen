@@ -59,6 +59,7 @@ pub struct TypeChecker<'res> {
     interface_methods: HashMap<DefId, Vec<DefId>>,
     interface_generics: HashMap<DefId, Vec<DefId>>,
     struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
+    enum_variants: HashMap<DefId, Vec<DefId>>,
 }
 
 struct FnSignature {
@@ -86,6 +87,7 @@ impl<'res> TypeChecker<'res> {
             interface_methods: HashMap::new(),
             interface_generics: HashMap::new(),
             struct_methods: HashMap::new(),
+            enum_variants: HashMap::new(),
         }
     }
 
@@ -231,6 +233,9 @@ impl<'res> TypeChecker<'res> {
                 let enum_ty = self.result.interner.intern(Type::Enum {
                     def_id: decl.def_id,
                 });
+
+                let variant_ids: Vec<DefId> = e.variants.iter().map(|v| v.def_id).collect();
+                self.enum_variants.insert(decl.def_id, variant_ids);
 
                 for variant in &e.variants {
                     self.result.def_types.insert(variant.def_id, enum_ty);
@@ -1336,8 +1341,21 @@ impl<'res> TypeChecker<'res> {
         object: &HirExpr,
         field: &(Spur, SourceSpan),
     ) -> TypeId {
-        let obj_ty = self.synth_expr(object);
         let (field_name, field_span) = *field;
+
+        if let HirExprKind::VarRef(referenced_def) = &object.kind
+            && matches!(self.def_kind(*referenced_def), Some(DefKind::Enum))
+        {
+            return self.check_enum_variant_access(
+                id,
+                *referenced_def,
+                field_name,
+                field_span,
+                &object.source,
+            );
+        }
+
+        let obj_ty = self.synth_expr(object);
 
         let (struct_def, struct_generic_args) = match self.result.interner.get(obj_ty).clone() {
             Type::Struct {
@@ -2128,6 +2146,51 @@ impl<'res> TypeChecker<'res> {
         );
 
         Some(self.substitute_generics(sig_ret, &bindings))
+    }
+
+    fn check_enum_variant_access(
+        &mut self,
+        id: HirId,
+        enum_def: DefId,
+        field_name: Spur,
+        field_span: SourceSpan,
+        source: &Source,
+    ) -> TypeId {
+        let Some(variant_defs) = self.enum_variants.get(&enum_def) else {
+            return self.result.interner.error();
+        };
+
+        let variant_def_id = variant_defs.iter().find(|&v| {
+            self.resolution
+                .defs
+                .get(v)
+                .map(|info| info.name == field_name)
+                .unwrap_or(false)
+        });
+
+        let enum_ty = self.result.interner.intern(Type::Enum { def_id: enum_def });
+
+        match variant_def_id {
+            Some(&variant_def) => {
+                self.result.field_resolutions.insert(id, variant_def);
+                enum_ty
+            }
+
+            None => {
+                let interner = self.interner.borrow();
+                let field_name = interner.resolve(&field_name).into();
+                drop(interner);
+
+                self.report(TypeError::UnknownEnumVariant {
+                    name: self.display_type(enum_ty).into(),
+                    variant: field_name,
+                    src: source.src(),
+                    span: field_span,
+                });
+
+                self.result.interner.error()
+            }
+        }
     }
 
     fn check_associated_fn_call(
