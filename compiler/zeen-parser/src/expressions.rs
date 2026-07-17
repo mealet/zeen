@@ -1722,7 +1722,7 @@ mod tests {
 
     #[test]
     fn basic_macro_call() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "@foo(123, 321)";
 
@@ -1733,7 +1733,7 @@ mod tests {
 
     #[test]
     fn type_required_macro_call() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "@as(*const i32, 123) @sizeof([]void) @alignof(some_struct)";
 
@@ -1748,7 +1748,7 @@ mod tests {
 
     #[test]
     fn field_access() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "field.with_generic#[i32].lets_init_struct { .a = 123 } .and_call_fn()";
 
@@ -1761,7 +1761,7 @@ mod tests {
 
     #[test]
     fn if_expr() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "if (1 == 1) 123";
 
@@ -1774,7 +1774,7 @@ mod tests {
 
     #[test]
     fn if_else_expr() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "if (1 == 1) 123 else 321";
 
@@ -1788,7 +1788,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn if_without_parentheses() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "if 1 == 1 123";
 
@@ -1802,7 +1802,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn if_without_then() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "if (1 == 1) ";
 
@@ -1816,7 +1816,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn if_else_without_expr() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "if (1 == 1) 123 else";
 
@@ -1829,7 +1829,7 @@ mod tests {
 
     #[test]
     fn array_init() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "[1, 1.0, \"hello\", foo(), field.sub_field.some_struct#[i32] {.a = 123, .b = 321} .call()]";
 
@@ -1842,7 +1842,7 @@ mod tests {
 
     #[test]
     fn block_expr() {
-        // NOTE: In this case we're just assuming that it parses
+        // In this case we're just assuming that it parses
 
         const SRC: &str = "{ let a = 123; let b = 321; }";
 
