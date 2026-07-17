@@ -54,12 +54,16 @@ pub struct TypeChecker<'res> {
     interner: Rc<RefCell<lasso::Rodeo>>,
 
     fn_sigs: HashMap<DefId, FnSignature>,
-    struct_generics: HashMap<DefId, Vec<DefId>>,
+
     interface_registry: InterfaceRegistry,
     interface_methods: HashMap<DefId, Vec<DefId>>,
     interface_generics: HashMap<DefId, Vec<DefId>>,
+
+    struct_generics: HashMap<DefId, Vec<DefId>>,
     struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
     enum_variants: HashMap<DefId, Vec<DefId>>,
+
+    impl_generic_to_struct_generic: HashMap<(DefId, DefId), HashMap<DefId, DefId>>,
 }
 
 struct FnSignature {
@@ -82,15 +86,16 @@ impl<'res> TypeChecker<'res> {
             resolution,
             result: TypeCheckResult::default(),
             ctx: TypeCheckCtx::new(),
+            expect_assign_interface: false,
             interner,
             fn_sigs: HashMap::new(),
-            struct_generics: HashMap::new(),
-            expect_assign_interface: false,
             interface_registry,
             interface_methods: HashMap::new(),
             interface_generics: HashMap::new(),
+            struct_generics: HashMap::new(),
             struct_methods: HashMap::new(),
             enum_variants: HashMap::new(),
+            impl_generic_to_struct_generic: HashMap::new(),
         }
     }
 
@@ -369,6 +374,17 @@ impl<'res> TypeChecker<'res> {
                 src: source.src(),
                 span: imp.object_bindings_span,
             });
+        } else {
+            if let Some(iface_def) = imp.interface {
+                let mapping: HashMap<DefId, DefId> = imp
+                    .object_generics_bindings
+                    .iter()
+                    .copied()
+                    .zip(struct_generics.iter().copied())
+                    .collect();
+
+                self.impl_generic_to_struct_generic.insert((object_def, iface_def), mapping);
+            }
         }
 
         let Some(iface_def) = imp.interface else {
@@ -2674,11 +2690,19 @@ impl<'res> TypeChecker<'res> {
         }
 
         let struct_generics = self.struct_generics.get(&struct_def).cloned().unwrap_or_default();
-        let bindings: HashMap<DefId, TypeId> = struct_generics
+        let mut bindings: HashMap<DefId, TypeId> = struct_generics
             .iter()
             .copied()
             .zip(struct_generic_args.iter().copied())
             .collect();
+
+        if let Some(impl_to_struct) = self.impl_generic_to_struct_generic.get(&(struct_def, iface_def)) {
+            for (&impl_g, &struct_g) in impl_to_struct {
+                if let Some(&concrete) = bindings.get(&struct_g) {
+                    bindings.insert(impl_g, concrete);
+                }
+            }
+        }
 
         for (param_ty, &arg_ty) in sig_params.iter().zip(explicit_args.iter()) {
             let expected = self.substitute_generics(*param_ty, &bindings);
