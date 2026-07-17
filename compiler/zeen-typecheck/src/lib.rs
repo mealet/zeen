@@ -1088,10 +1088,15 @@ impl<'res> TypeChecker<'res> {
                 let arg = Rc::clone(&args[0]);
                 let ty = self.synth_expr(arg.as_ref());
 
-                {
-                    // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
+                let implements_iface = self.type_implements_debug(ty);
 
-                    // self.check_implements_interface(ty, IFACE_NAME, iface_def);
+                if !implements_iface {
+                    self.report(TypeError::InterfaceNotImplemented {
+                        name: "Debug".into(),
+                        ty_name: self.display_type(ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
                 }
 
                 ty
@@ -1150,6 +1155,59 @@ impl<'res> TypeChecker<'res> {
                 });
                 self.result.interner.error()
             }
+        }
+    }
+
+    fn type_implements_display(&self, ty: TypeId) -> bool {
+        match self.result.interner.get(ty).clone() {
+            Type::Struct { def_id, .. } => self.struct_implements_by_name(def_id, "Display"),
+            Type::IntLiteral | Type::FloatLiteral => true,
+            Type::Never | Type::Error => true,
+            Type::Enum { .. } => true,
+
+            Type::Array { element, .. } | Type::Slice { element } => {
+                self.type_implements_display(element)
+            }
+            
+            Type::GenericParam(g) => {
+                let cur = self.ctx.current();
+
+                let Some(bounds) = cur.generic_bounds.get(&g) else { return false };
+                let Some(iface) = self.interface_registry.get("Display") else { return false };
+
+                bounds.contains(&iface)
+            }
+
+            Type::Builtin(_) => true,
+
+            _ => false,
+        }
+    }
+
+    fn type_implements_debug(&self, ty: TypeId) -> bool {
+        match self.result.interner.get(ty).clone() {
+            Type::Struct { def_id, .. } => self.struct_implements_by_name(def_id, "Debug"),
+            Type::IntLiteral | Type::FloatLiteral => true,
+            Type::Never | Type::Error => true,
+            Type::Enum { .. } => true,
+
+            Type::Array { element, .. } | Type::Slice { element } => {
+                self.type_implements_debug(element)
+            }
+            
+            Type::GenericParam(g) => {
+                let cur = self.ctx.current();
+
+                let Some(bounds) = cur.generic_bounds.get(&g) else { return false };
+                let Some(iface) = self.interface_registry.get("Debug") else { return false };
+
+                bounds.contains(&iface)
+            }
+
+            Type::Builtin(_) => true,
+            Type::Pointer { .. } => true,
+
+            _ => false,
         }
     }
 
@@ -1218,20 +1276,32 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, source: Source) -> Option<()> {
+    fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, source: Source) {
         match spec {
             FormatSpec::Display => {
-                // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
+                let implements_iface = self.type_implements_display(arg_ty);
 
-                // self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
-                Some(())
+                if !implements_iface {
+                    self.report(TypeError::InterfaceNotImplemented {
+                        name: "Display".into(),
+                        ty_name: self.display_type(arg_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                };
             }
 
             FormatSpec::Debug => {
-                // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
+                let implements_iface = self.type_implements_debug(arg_ty);
 
-                // self.check_implements_interface(arg_ty, IFACE_NAME, iface_def);
-                Some(())
+                if !implements_iface {
+                    self.report(TypeError::InterfaceNotImplemented {
+                        name: "Debug".into(),
+                        ty_name: self.display_type(arg_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                };
             }
 
             FormatSpec::Hex | FormatSpec::Oct | FormatSpec::Bin => {
@@ -1249,11 +1319,9 @@ impl<'res> TypeChecker<'res> {
                             src: source.src(),
                             span: source.span,
                         });
-                        return None;
                     }
                 }
 
-                Some(())
             }
 
             FormatSpec::Float { .. } => {
@@ -1271,11 +1339,8 @@ impl<'res> TypeChecker<'res> {
                             src: source.src(),
                             span: source.span,
                         });
-                        return None;
                     }
                 }
-
-                Some(())
             }
         }
     }
