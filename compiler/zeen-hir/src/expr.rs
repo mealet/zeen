@@ -100,6 +100,7 @@ pub enum HirMacroKind {
 
     Panic,       // @panic("format", ...) -> never
     Unreachable, // @unreachable() -> never
+    Todo,        // @todo() -> never
     Dbg,         // @dbg(expr) -> expr
 
     Unknown, // Unknown macro fallback

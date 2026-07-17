@@ -1055,8 +1055,12 @@ impl<'res> TypeChecker<'res> {
                 })
             }
 
-            HirMacroKind::Panic | HirMacroKind::Unreachable => {
+            HirMacroKind::Panic  => {
                 self.check_format_macro(call_id, args, source);
+                self.result.interner.never()
+            }
+
+            HirMacroKind::Unreachable | HirMacroKind::Todo => {
                 self.result.interner.never()
             }
 

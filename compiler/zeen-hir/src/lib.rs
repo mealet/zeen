@@ -140,6 +140,7 @@ impl<'res> HirLowering<'res> {
 
             "panic" => HirMacroKind::Panic,
             "unreachable" => HirMacroKind::Unreachable,
+            "todo" => HirMacroKind::Todo,
             "dbg" => HirMacroKind::Dbg,
 
             _ => HirMacroKind::Unknown,
