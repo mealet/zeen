@@ -1904,7 +1904,7 @@ impl<'res> TypeChecker<'res> {
 
         if Some(owner_struct) != current_struct {
             let name = self
-                .method_name_of(method_def_id)
+                .def_name(method_def_id)
                 .unwrap_or_default()
                 .into();
 
@@ -2407,13 +2407,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn resolve_iface_name(&self, iface_def: DefId) -> Option<String> {
-        self.resolution
-            .defs
-            .get(&iface_def)
-            .map(|info| self.interner.borrow().resolve(&info.name).to_string())
-    }
-
     fn builtin_interface_names(b: BuiltinType) -> &'static [&'static str] {
         use BuiltinType::*;
 
@@ -2446,26 +2439,26 @@ impl<'res> TypeChecker<'res> {
         match self.result.interner.get(ty).clone() {
             Type::Error => true,
 
-            Type::Builtin(b) => match self.resolve_iface_name(iface_def) {
+            Type::Builtin(b) => match self.def_name(iface_def) {
                 Some(name) => Self::builtin_interface_names(b).contains(&name.as_str()),
                 None => false,
             },
 
-            Type::IntLiteral => match self.resolve_iface_name(iface_def) {
+            Type::IntLiteral => match self.def_name(iface_def) {
                 Some(name) => {
                     Self::builtin_interface_names(DEFAULT_INT_LITERAL).contains(&name.as_str())
                 }
                 None => false,
             },
 
-            Type::FloatLiteral => match self.resolve_iface_name(iface_def) {
+            Type::FloatLiteral => match self.def_name(iface_def) {
                 Some(name) => {
                     Self::builtin_interface_names(DEFAULT_FLOAT_LITERAL).contains(&name.as_str())
                 }
                 None => false,
             },
 
-            Type::Enum { .. } => match self.resolve_iface_name(iface_def) {
+            Type::Enum { .. } => match self.def_name(iface_def) {
                 Some(name) => Self::enum_interface_names().contains(&name.as_str()),
                 None => false,
             },
@@ -2630,7 +2623,7 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn method_name_of(&self, def_id: DefId) -> Option<String> {
+    fn def_name(&self, def_id: DefId) -> Option<String> {
         self.resolution
             .defs
             .get(&def_id)
@@ -2691,8 +2684,8 @@ impl<'res> TypeChecker<'res> {
         let ret_matches = iface_ret == impl_ret;
 
         if !params_match || !ret_matches {
-            let method_name = self.method_name_of(iface_method_def).unwrap_or_default();
-            let iface_name = self.method_name_of(iface_def).unwrap_or_default();
+            let method_name = self.def_name(iface_method_def).unwrap_or_default();
+            let iface_name = self.def_name(iface_def).unwrap_or_default();
             let expected_signature = self.format_signature(&method_name, &iface_params, iface_ret);
 
             self.report(TypeError::InterfaceMethodSignatureMismatch {
@@ -2733,7 +2726,7 @@ impl<'res> TypeChecker<'res> {
 
         let mut impl_method_names: HashMap<String, DefId> = HashMap::new();
         for method in &imp.methods {
-            if let Some(name) = self.method_name_of(method.def_id) {
+            if let Some(name) = self.def_name(method.def_id) {
                 impl_method_names.insert(name, method.def_id);
             }
         }
@@ -2741,7 +2734,7 @@ impl<'res> TypeChecker<'res> {
         let mut matched_names: HashSet<String> = HashSet::new();
 
         for &iface_method_def in &interface_methods {
-            let Some(method_name) = self.method_name_of(iface_method_def) else {
+            let Some(method_name) = self.def_name(iface_method_def) else {
                 continue;
             };
             matched_names.insert(method_name.clone());
@@ -2749,7 +2742,7 @@ impl<'res> TypeChecker<'res> {
             match impl_method_names.get(&method_name) {
                 None => {
                     self.report(TypeError::InterfaceMethodMissing {
-                        interface: self.method_name_of(iface_def).unwrap_or_default().into(),
+                        interface: self.def_name(iface_def).unwrap_or_default().into(),
                         method: method_name.into(),
                         src: source.src(),
                         span: source.span,
