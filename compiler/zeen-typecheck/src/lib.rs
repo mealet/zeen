@@ -783,7 +783,7 @@ impl<'res> TypeChecker<'res> {
                 self.expect_assign_interface = true;
 
                 let obj_ty = self.synth_expr(object);
-                self.expect_assign_interface = false;
+                self.expect_assign_interface = prev_expect;
 
                 self.check_expr(value, obj_ty, false);
                 self.check_not_const_target(object);
@@ -3023,95 +3023,128 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         }
 
-        match op {
-            UnaryOp::Neg => {
-                if self.is_numeric_or_literal(operand) {
-                    return operand;
+        if let UnaryOp::AddrOf = op {
+            return self.result.interner.intern(Type::Pointer { inner: operand, is_const: false });
+        }
+
+        if let UnaryOp::Deref = op
+        && let Type::Struct { def_id, generic_args } = self.result.interner.get(operand).clone() {
+            return if self.expect_assign_interface {
+                match self.call_interface_method(
+                    def_id, &generic_args, "DerefPtr", "deref_ptr", &[], &source
+                ) {
+                    Some(ptr_ty) => {
+                        match self.result.interner.get(ptr_ty).clone() {
+                            Type::Pointer { inner, .. } => inner,
+                            _ => ptr_ty,
+                        }
+                    },
+                    None => self.result.interner.error(),
                 }
-
-                match self.result.interner.get(operand) {
-                    Type::Struct { def_id, .. } => {
-                        // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
-
-                        // if let Some(iface_def) = self.well_known_or_report(
-                        //     IFACE_NAME,
-                        //     self.well_known.get(IFACE_NAME),
-                        //     source.clone(),
-                        // ) {
-                        //     if self.check_implements_interface(operand, IFACE_NAME, iface_def) {
-                        //         return operand;
-                        //     }
-                        //
-                        //     self.report(TypeError::InterfaceNotImplemented {
-                        //         name: IFACE_NAME.into(),
-                        //         ty_name: self.display_type(operand).into(),
-                        //         src: source.src(),
-                        //         span: source.span,
-                        //     });
-                        // }
-
-                        self.result.interner.error()
-                    }
-
-                    _ => {
-                        self.report(TypeError::UnaryNotSupported {
-                            op,
-                            child_type: self.display_type(operand).into(),
-                            src: source.src(),
-                            span: source.span,
-                        });
-                        self.result.interner.error()
-                    }
+            } else {
+                match self.call_interface_method(
+                    def_id, &generic_args, "Deref", "deref", &[], &source
+                ) {
+                    Some(t) => t,
+                    None => self.result.interner.error(),
                 }
-            }
+            };
+        }
 
-            UnaryOp::Not => {
-                let bool_ty = self.result.interner.builtin(BuiltinType::bool);
-
-                if operand == bool_ty {
-                    return bool_ty;
+        match self.result.interner.get(operand).clone() {
+            Type::Struct { def_id, generic_args } => {
+                let Some((iface_name, method_name)) = types::unary_op_interface(op) else {
+                    self.report(TypeError::UnaryNotSupported {
+                        op,
+                        child_type: self.display_type(operand).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
                 };
 
-                match self.result.interner.get(operand) {
-                    Type::Struct { def_id, .. } => {
-                        // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
+                let (iface_name, method_name) = if matches!(op, UnaryOp::Deref) && self.expect_assign_interface {
+                    ("DerefAssign", "deref_assign")
+                } else {
+                    (iface_name, method_name)
+                };
 
-                        const IFACE_NAME: &str = "Not";
-
-                        // if let Some(iface_def) = self.well_known_or_report(
-                        //     IFACE_NAME,
-                        //     self.well_known.get(IFACE_NAME),
-                        //     source.clone(),
-                        // ) {
-                        //     if self.check_implements_interface(operand, IFACE_NAME, iface_def) {
-                        //         return operand;
-                        //     }
-                        //
-                        //     self.report(TypeError::InterfaceNotImplemented {
-                        //         name: IFACE_NAME.into(),
-                        //         ty_name: self.display_type(operand).into(),
-                        //         src: source.src(),
-                        //         span: source.span,
-                        //     });
-                        // }
-
-                        self.result.interner.error()
-                    }
-
-                    _ => {
-                        self.report(TypeError::UnaryNotSupported {
-                            op,
-                            child_type: self.display_type(operand).into(),
-                            src: source.src(),
-                            span: source.span,
-                        });
-                        self.result.interner.error()
-                    }
+                match self.call_interface_method(def_id, &generic_args, iface_name, method_name, &[], &source) {
+                    Some(ret_ty) => ret_ty,
+                    None => self.result.interner.error(),
                 }
             }
 
-            UnaryOp::BitNot => {
-                if self.is_numeric_or_literal(operand) {
+            Type::GenericParam(g) => {
+                let Some((iface_name, method_name)) = types::unary_op_interface(op) else {
+                    self.report(TypeError::UnaryNotSupported {
+                        op,
+                        child_type: self.display_type(operand).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                };
+
+                let (iface_name, _) = if matches!(op, UnaryOp::Deref) && self.expect_assign_interface {
+                    ("DerefAssign", "deref_assign")
+                } else {
+                    (iface_name, method_name)
+                };
+
+                let Some(iface_def) = self.interface_registry.get(iface_name) else {
+                    self.report(TypeError::InterfaceNotAvailable {
+                        name: iface_name.into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                };
+
+                let bounds = self.ctx.generic_bounds(g);
+                if !bounds.contains(&iface_def) {
+                    self.result.errors.push(TypeError::GenericMissingBound {
+                        generic: self.def_name(g).unwrap_or_default().into(),
+                        bound: iface_name.into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
+                operand
+            }
+
+            Type::Pointer { inner, .. } if matches!(op, UnaryOp::Deref) => inner,
+
+            Type::Builtin(b) => {
+                let Some((iface_name, _)) = types::unary_op_interface(op) else {
+                    self.report(TypeError::UnaryNotSupported {
+                        op,
+                        child_type: self.display_type(operand).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                };
+                if Self::builtin_interface_names(b).contains(&iface_name) {
+                    match op {
+                        UnaryOp::Not => self.result.interner.builtin(BuiltinType::bool),
+                        _ => operand,
+                    }
+                } else {
+                    self.report(TypeError::UnaryNotSupported {
+                        op,
+                        child_type: self.display_type(operand).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    self.result.interner.error()
+                }
+            }
+
+            Type::IntLiteral | Type::FloatLiteral => {
+                if matches!(op, UnaryOp::Neg | UnaryOp::BitNot) {
                     operand
                 } else {
                     self.report(TypeError::UnaryNotSupported {
@@ -3124,54 +3157,15 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            UnaryOp::Deref => match self.result.interner.get(operand) {
-                Type::Pointer { inner, .. } => *inner,
-
-                Type::Struct { def_id, .. } => {
-                    // TODO: Add type inference from interface function (generic params must be included)
-                    // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
-
-                    let iface_name = if self.expect_assign_interface {
-                        "DerefAssign"
-                    } else {
-                        "Deref"
-                    };
-
-                    // if let Some(iface_def) = self.well_known_or_report(
-                    //     iface_name,
-                    //     self.well_known.get(iface_name),
-                    //     source.clone(),
-                    // ) {
-                    //     if self.check_implements_interface(operand, iface_name, iface_def) {
-                    //         return operand;
-                    //     }
-                    //
-                    //     self.report(TypeError::InterfaceNotImplemented {
-                    //         name: iface_name.into(),
-                    //         ty_name: self.display_type(operand).into(),
-                    //         src: source.src(),
-                    //         span: source.span,
-                    //     });
-                    // }
-
-                    self.result.interner.error()
-                }
-
-                _ => {
-                    self.report(TypeError::UnaryNotSupported {
-                        op,
-                        child_type: self.display_type(operand).into(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-                    self.result.interner.error()
-                }
-            },
-
-            UnaryOp::AddrOf => self.result.interner.intern(Type::Pointer {
-                inner: operand,
-                is_const: false,
-            }),
+            _ => {
+                self.report(TypeError::UnaryNotSupported {
+                    op,
+                    child_type: self.display_type(operand).into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+                self.result.interner.error()
+            }
         }
     }
 
