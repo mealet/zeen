@@ -208,18 +208,18 @@ impl TypeInterner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
     pub is_copy: bool,
-    pub needs_drop: bool,
+    pub has_explicit_drop: bool,
 }
 
 impl Capabilities {
     pub const COPY: Capabilities = Capabilities {
         is_copy: true,
-        needs_drop: false,
+        has_explicit_drop: false,
     };
 
     pub const MOVE_ONLY: Capabilities = Capabilities {
         is_copy: false,
-        needs_drop: false,
+        has_explicit_drop: false,
     };
 }
 

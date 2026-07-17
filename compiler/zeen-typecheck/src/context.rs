@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::types::TypeId;
-use zeen_resolve::DefId;
+use zeen_resolve::{DefId, DefKind, ResolutionResult};
 
 #[derive(Debug)]
 pub struct FnCtx {
@@ -15,6 +15,10 @@ pub struct FnCtx {
 
 pub struct TypeCheckCtx {
     stack: Vec<FnCtx>,
+}
+
+pub struct InterfaceRegistry {
+    by_name: HashMap<String, DefId>,
 }
 
 impl TypeCheckCtx {
@@ -68,5 +72,22 @@ impl TypeCheckCtx {
             .and_then(|ctx| ctx.generic_bounds.get(&def_id))
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+}
+
+impl InterfaceRegistry {
+    pub fn build(resolution: &ResolutionResult, rodeo: &Rc<RefCell<lasso::Rodeo>>) -> Self {
+        let by_name = resolution
+            .defs
+            .iter()
+            .filter(|(_, info)| matches!(info.kind, DefKind::Interface))
+            .map(|(def_id, info)| (rodeo.borrow().resolve(&info.name).to_string(), *def_id))
+            .collect();
+
+        Self { by_name }
+    }
+
+    pub fn get(&self, name: &str) -> Option<DefId> {
+        self.by_name.get(name).copied()
     }
 }

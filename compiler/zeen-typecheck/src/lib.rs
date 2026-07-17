@@ -13,7 +13,7 @@ use zeen_ast::Source;
 
 use crate::{
     coerce::{CoerceResult, try_coerce},
-    context::{FnCtx, TypeCheckCtx},
+    context::{FnCtx, TypeCheckCtx, InterfaceRegistry},
     format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
     types::{
@@ -56,6 +56,7 @@ pub struct TypeChecker<'res> {
 
     fn_sigs: HashMap<DefId, FnSignature>,
     struct_generics: HashMap<DefId, Vec<DefId>>,
+    interface_registry: InterfaceRegistry,
     interface_methods: HashMap<DefId, Vec<DefId>>,
     interface_generics: HashMap<DefId, Vec<DefId>>,
     struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
@@ -76,6 +77,8 @@ impl<'res> TypeChecker<'res> {
         resolution: &'res mut ResolutionResult,
         interner: Rc<RefCell<lasso::Rodeo>>,
     ) -> Self {
+        let interface_registry = InterfaceRegistry::build(resolution, &interner);
+
         Self {
             resolution,
             result: TypeCheckResult::default(),
@@ -84,6 +87,7 @@ impl<'res> TypeChecker<'res> {
             fn_sigs: HashMap::new(),
             struct_generics: HashMap::new(),
             expect_assign_interface: false,
+            interface_registry,
             interface_methods: HashMap::new(),
             interface_generics: HashMap::new(),
             struct_methods: HashMap::new(),
@@ -598,76 +602,21 @@ impl<'res> TypeChecker<'res> {
     // > Pass 2
 
     fn compute_structs_capabilities(&mut self, decl: &HirDecl) {
-        if let HirDeclKind::Struct(_) = &decl.kind {
-            let mut visiting = Vec::new();
-            self.compute_capabilities(decl.def_id, &mut visiting);
+        let HirDeclKind::Struct(_) = &decl.kind else { return };
+
+        let is_copy = self.struct_implements_by_name(decl.def_id, "Copy");
+        let has_explicit_drop = self.struct_implements_by_name(decl.def_id, "Drop");
+
+        if let Some(info) = self.result.struct_info.get_mut(&decl.def_id) {
+            info.capabalities = Capabilities { is_copy, has_explicit_drop };
         }
     }
 
-    fn compute_capabilities(&mut self, def_id: DefId, visiting: &mut Vec<DefId>) -> Capabilities {
-        if visiting.contains(&def_id) {
-            return Capabilities::MOVE_ONLY;
-        }
-        visiting.push(def_id);
-
-        let field_types: Vec<TypeId> = self
-            .result
-            .struct_info
-            .get(&def_id)
-            .map(|info| {
-                info.fields
-                    .iter()
-                    .map(|field_info| field_info.field_ty)
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let mut is_copy = true;
-        let mut needs_drop = false;
-
-        for field_ty in field_types {
-            let caps = self.capabilities_of_type(field_ty, visiting);
-
-            is_copy &= caps.is_copy;
-            needs_drop |= caps.needs_drop;
-        }
-
-        visiting.pop();
-
-        let caps = Capabilities {
-            is_copy,
-            needs_drop,
+    fn struct_implements_by_name(&self, struct_def: DefId, iface_name: &str) -> bool {
+        let Some(iface_def) = self.interface_registry.get(iface_name) else {
+            return false;
         };
-
-        if let Some(info) = self.result.struct_info.get_mut(&def_id) {
-            info.capabalities = caps;
-        }
-
-        caps
-    }
-
-    fn capabilities_of_type(&mut self, ty: TypeId, visiting: &mut Vec<DefId>) -> Capabilities {
-        match self.result.interner.get(ty) {
-            Type::Builtin(_)
-            | Type::IntLiteral
-            | Type::FloatLiteral
-            | Type::Interface { .. }
-            | Type::Enum { .. }
-            | Type::Pointer { .. }
-            | Type::Fn { .. }
-            | Type::GenericParam { .. }
-            | Type::Void
-            | Type::Never
-            | Type::Error => Capabilities::COPY,
-
-            Type::Struct { def_id, .. } => self.compute_capabilities(*def_id, visiting),
-
-            Type::Array { element, .. } | Type::Slice { element, .. } => {
-                self.capabilities_of_type(*element, visiting)
-            }
-
-            Type::InterfaceSelfPlaceholder(def_id) => self.compute_capabilities(*def_id, visiting),
-        }
+        self.resolution.impls.contains_key(&(struct_def, iface_def))
     }
 
     // > Pass 3
