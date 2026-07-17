@@ -2638,7 +2638,9 @@ impl<'res> TypeChecker<'res> {
             self.def_name(def_id).as_deref() == Some(method_name)
         })?;
 
-        let sig_params = self.fn_sigs[&method_def_id].params.clone();
+        let has_self = self.fn_sigs[&method_def_id].self_mode.is_some();
+
+        let sig_params = if has_self { self.fn_sigs[&method_def_id].params[1..].to_vec() } else { self.fn_sigs[&method_def_id].params.clone() };
         let sig_ret = self.fn_sigs[&method_def_id].ret;
 
         if explicit_args.len() != sig_params.len() {
