@@ -290,3 +290,36 @@ pub fn self_mode_of(ty: &HirTypeKind) -> Option<SelfMode> {
         _ => None,
     }
 }
+
+// Below is maps for interface operators.
+
+fn binary_op_interface(
+    op: zeen_ast::expressions::BinaryOp,
+) -> Option<(&'static str, &'static str)> {
+    use zeen_ast::expressions::BinaryOp::*;
+    match op {
+        Add => Some(("Add", "add")),
+        Sub => Some(("Sub", "sub")),
+        Mul => Some(("Mul", "mul")),
+        Div => Some(("Div", "div")),
+        Mod => Some(("Mod", "mod")),
+        BitAnd => Some(("BitAnd", "bit_and")),
+        BitOr => Some(("BitOr", "bit_or")),
+        BitXor => Some(("BitXor", "bit_xor")),
+        Shl => Some(("BitShl", "bit_shl")),
+        Shr => Some(("BitShr", "bit_shr")),
+        Eq | Ne => Some(("Eq", "eq")),
+        Lt | Gt | Le | Ge | LogicalAnd | LogicalOr => None,
+    }
+}
+
+fn unary_op_interface(op: zeen_ast::expressions::UnaryOp) -> Option<(&'static str, &'static str)> {
+    use zeen_ast::expressions::UnaryOp::*;
+    match op {
+        Neg => Some(("Neg", "neg")),
+        Not => Some(("Not", "not")),
+        BitNot => Some(("BitNot", "bit_not")),
+        Deref => Some(("Deref", "deref")),
+        AddrOf => None,
+    }
+}
