@@ -13,12 +13,11 @@ use zeen_ast::Source;
 
 use crate::{
     coerce::{CoerceResult, try_coerce},
-    context::{FnCtx, TypeCheckCtx, InterfaceRegistry},
+    context::{FnCtx, InterfaceRegistry, TypeCheckCtx},
     format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
     types::{
-        Capabilities, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId, TypeInterner,
-        self_mode_of,
+        Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId, TypeInterner, self_mode_of
     },
 };
 use crate::{error::TypeError, format_str::FormatParseError};
@@ -2613,6 +2612,7 @@ impl<'res> TypeChecker<'res> {
         iface_name: &str,
         method_name: &str,
         explicit_args: &[TypeId],
+        receiver_access: ReceiverAccess,
         source: &Source,
     ) -> Option<TypeId> {
         let Some(iface_def) = self.interface_registry.get(iface_name) else {
@@ -2638,10 +2638,29 @@ impl<'res> TypeChecker<'res> {
             self.def_name(def_id).as_deref() == Some(method_name)
         })?;
 
-        let has_self = self.fn_sigs[&method_def_id].self_mode.is_some();
 
-        let sig_params = if has_self { self.fn_sigs[&method_def_id].params[1..].to_vec() } else { self.fn_sigs[&method_def_id].params.clone() };
-        let sig_ret = self.fn_sigs[&method_def_id].ret;
+        let sig = &self.fn_sigs[&method_def_id];
+        let self_mode = sig.self_mode;
+        let has_self = self_mode.is_some();
+
+        match (self_mode, receiver_access) {
+            (Some(SelfMode::Value) | Some(SelfMode::ValueConst), ReceiverAccess::RefMut | ReceiverAccess::RefConst) => {
+                self.result.errors.push(TypeError::CannotMoveThroughPointer {
+                    src: source.src(),
+                    span: source.span,
+                });
+            }
+            (Some(SelfMode::RefMut), ReceiverAccess::RefConst) => {
+                self.result.errors.push(TypeError::AssignToConst { src: source.src(), span: source.span });
+            }
+            (Some(SelfMode::RefMut) | Some(SelfMode::RefConst), ReceiverAccess::Value) => {
+
+            }
+            _ => {}
+        }
+
+        let sig_params = if has_self { sig.params[1..].to_vec() } else { sig.params.clone() };
+        let sig_ret = sig.ret;
 
         if explicit_args.len() != sig_params.len() {
             self.report(TypeError::ArgCountMismatch {
@@ -2814,6 +2833,16 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn receiver_access_of(&self, ty: TypeId) -> ReceiverAccess {
+        match self.result.interner.get(ty).clone() {
+            Type::Pointer { is_const: true, .. } => ReceiverAccess::RefConst,
+            Type::Pointer {
+                is_const: false, ..
+            } => ReceiverAccess::RefMut,
+            _ => ReceiverAccess::Value,
+        }
+    }
+
     fn check_binary_op(
         &mut self,
         op: BinaryOp,
@@ -2848,7 +2877,7 @@ impl<'res> TypeChecker<'res> {
                     return self.result.interner.error();
                 };
 
-                match self.call_interface_method(def_id, &generic_args, iface_name, method_name, &[rhs], &source) {
+                match self.call_interface_method(def_id, &generic_args, iface_name, method_name, &[rhs], ReceiverAccess::Value, &source) {
                     Some(ret_ty) => ret_ty,
                     None => self.result.interner.error(),
                 }
@@ -2992,32 +3021,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_binary_op_on_struct(
-        &mut self,
-        op: BinaryOp,
-        def_id: DefId,
-        generic_args: &[TypeId],
-        lhs: TypeId,
-        rhs: TypeId,
-        source: &Source,
-    ) -> TypeId {
-        let Some((iface_name, method_name)) = types::binary_op_interface(op) else {
-            self.report(TypeError::BinaryNotSupported {
-                op,
-                lhs_type: self.display_type(lhs).into(),
-                rhs_type: self.display_type(rhs).into(),
-                src: source.src(),
-                span: source.span,
-            });
-            return self.result.interner.error();
-        };
-
-        match self.call_interface_method(def_id, generic_args, iface_name, method_name, &[rhs], source) {
-            Some(ret_ty) => ret_ty,
-            None => self.result.interner.error(),
-        }
-    }
-
     fn check_unary_op(&mut self, op: UnaryOp, operand: TypeId, source: Source) -> TypeId {
         if matches!(self.result.interner.get(operand), Type::Error) {
             return self.result.interner.error();
@@ -3025,30 +3028,6 @@ impl<'res> TypeChecker<'res> {
 
         if let UnaryOp::AddrOf = op {
             return self.result.interner.intern(Type::Pointer { inner: operand, is_const: false });
-        }
-
-        if let UnaryOp::Deref = op
-        && let Type::Struct { def_id, generic_args } = self.result.interner.get(operand).clone() {
-            return if self.expect_assign_interface {
-                match self.call_interface_method(
-                    def_id, &generic_args, "DerefPtr", "deref_ptr", &[], &source
-                ) {
-                    Some(ptr_ty) => {
-                        match self.result.interner.get(ptr_ty).clone() {
-                            Type::Pointer { inner, .. } => inner,
-                            _ => ptr_ty,
-                        }
-                    },
-                    None => self.result.interner.error(),
-                }
-            } else {
-                match self.call_interface_method(
-                    def_id, &generic_args, "Deref", "deref", &[], &source
-                ) {
-                    Some(t) => t,
-                    None => self.result.interner.error(),
-                }
-            };
         }
 
         match self.result.interner.get(operand).clone() {
@@ -3063,13 +3042,11 @@ impl<'res> TypeChecker<'res> {
                     return self.result.interner.error();
                 };
 
-                let (iface_name, method_name) = if matches!(op, UnaryOp::Deref) && self.expect_assign_interface {
-                    ("DerefAssign", "deref_assign")
-                } else {
-                    (iface_name, method_name)
-                };
+                if matches!(op, UnaryOp::Deref) {
+                    return self.check_deref_on_struct(def_id, &generic_args, &source);
+                }
 
-                match self.call_interface_method(def_id, &generic_args, iface_name, method_name, &[], &source) {
+                match self.call_interface_method(def_id, &generic_args, iface_name, method_name, &[], ReceiverAccess::Value, &source) {
                     Some(ret_ty) => ret_ty,
                     None => self.result.interner.error(),
                 }
@@ -3166,6 +3143,30 @@ impl<'res> TypeChecker<'res> {
                 });
                 self.result.interner.error()
             }
+        }
+    }
+
+    fn check_deref_on_struct(&mut self, def_id: DefId, generic_args: &[TypeId], source: &Source) -> TypeId {
+        let (iface_name, method_name) = if self.expect_assign_interface {
+            ("DerefPtr", "deref_ptr")
+        } else {
+            ("Deref", "deref")
+        };
+
+        let result = self.call_interface_method(
+            def_id, generic_args, iface_name, method_name, &[],
+            ReceiverAccess::Value, source,
+        );
+
+        match result {
+            Some(ret_ty) if self.expect_assign_interface => {
+                match self.result.interner.get(ret_ty).clone() {
+                    Type::Pointer { inner, .. } => inner,
+                    _ => ret_ty,
+                }
+            }
+            Some(ret_ty) => ret_ty,
+            None => self.result.interner.error(),
         }
     }
 

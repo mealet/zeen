@@ -291,6 +291,14 @@ pub fn self_mode_of(ty: &HirTypeKind) -> Option<SelfMode> {
     }
 }
 
+/// Representation how the caller is accessing a struct instance when invoking interface method on it
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiverAccess {
+    Value,
+    RefMut,
+    RefConst,
+}
+
 // Below is maps for interface operators.
 
 pub fn binary_op_interface(
