@@ -2823,6 +2823,40 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         }
 
+        use BinaryOp::*;
+
+        if matches!(op, Lt | Gt | Le | Ge) {
+            return self.check_ordering_op(lhs, rhs, &source);
+        }
+
+        if matches!(op, LogicalAnd | LogicalOr) {
+            return self.check_logical_op(lhs, rhs, &source);
+        }
+
+        match self.result.interner.get(lhs).clone() {
+            Type::Struct { def_id, generic_args } => {
+                let Some((iface_name, method_name)) = types::binary_op_interface(op) else {
+                    self.report(TypeError::BinaryNotSupported {
+                        op,
+                        lhs_type: self.display_type(lhs).into(),
+                        rhs_type: self.display_type(rhs).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                };
+
+                match self.call_interface_method(def_id, &generic_args, iface_name, method_name, &[rhs], &source) {
+                    Some(ret_ty) => ret_ty,
+                    None => self.result.interner.error(),
+                }
+            },
+
+            _ => self.check_binary_op_builtin(op, lhs, rhs, &source)
+        }
+    }
+
+    fn check_binary_op_builtin(&mut self, op: BinaryOp, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
         let unified = if lhs == rhs {
             Some(lhs)
         } else if let Type::Pointer { .. } = self.result.interner.get(lhs)
@@ -2851,99 +2885,10 @@ impl<'res> TypeChecker<'res> {
         use BinaryOp::*;
 
         match op {
-            Add | Sub | Mul | Div | Mod | BitAnd | BitOr | BitXor | Shl | Shr => {
+            Add | Sub| Mul | Div | Mod | BitAnd | BitOr | BitXor | Shl | Shr => {
                 if self.is_numeric_or_literal(operand_ty) {
-                    return operand_ty;
-                }
-
-                match self.result.interner.get(operand_ty) {
-                    Type::Struct { def_id, .. } => {
-                        // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
-
-                        let iface_name = format!("{:?}", op);
-
-                        // if let Some(iface_def) = self.well_known_or_report(
-                        //     &iface_name,
-                        //     self.well_known.get(&iface_name),
-                        //     source.clone(),
-                        // ) {
-                        //     if self.check_implements_interface(operand_ty, &iface_name, iface_def) {
-                        //         return operand_ty;
-                        //     }
-                        //
-                        //     self.report(TypeError::InterfaceNotImplemented {
-                        //         name: iface_name.into(),
-                        //         ty_name: self.display_type(operand_ty).into(),
-                        //         src: source.src(),
-                        //         span: source.span,
-                        //     });
-                        //
-                        //     return self.result.interner.error();
-                        // }
-
-                        self.result.interner.error()
-                    }
-
-                    Type::Pointer { .. } if matches!(op, Add | Sub) => operand_ty,
-
-                    _ => {
-                        self.report(TypeError::BinaryNotSupported {
-                            op,
-                            lhs_type: self.display_type(lhs).into(),
-                            rhs_type: self.display_type(rhs).into(),
-                            src: source.src(),
-                            span: source.span,
-                        });
-                        self.result.interner.error()
-                    }
-                }
-            }
-
-            Eq | Ne | Lt | Gt | Le | Ge => {
-                match self.result.interner.get(operand_ty) {
-                    Type::Builtin(_) => {}
-                    Type::Pointer { .. } => {}
-                    Type::Enum { .. } => {}
-                    Type::IntLiteral | Type::FloatLiteral => {}
-                    Type::Struct { .. } => {
-                        // FIXME: Fix this (WellKnownInterfacesMap is deprecated)
-
-                        // if let Some(iface_def) = self.well_known_or_report(
-                        //     IFACE_NAME,
-                        //     self.well_known.get(IFACE_NAME),
-                        //     source.clone(),
-                        // ) {
-                        //     if self.check_implements_interface(operand_ty, IFACE_NAME, iface_def) {
-                        //         return operand_ty;
-                        //     }
-                        //
-                        //     self.report(TypeError::InterfaceNotImplemented {
-                        //         name: IFACE_NAME.into(),
-                        //         ty_name: self.display_type(operand_ty).into(),
-                        //         src: source.src(),
-                        //         span: source.span,
-                        //     });
-                        // }
-                    }
-
-                    _ => {
-                        self.report(TypeError::BinaryNotSupported {
-                            op,
-                            lhs_type: self.display_type(lhs).into(),
-                            rhs_type: self.display_type(rhs).into(),
-                            src: source.src(),
-                            span: source.span,
-                        });
-                    }
-                }
-
-                self.result.interner.builtin(BuiltinType::bool)
-            }
-
-            LogicalAnd | LogicalOr => {
-                let bool_ty = self.result.interner.builtin(BuiltinType::bool);
-
-                if operand_ty != bool_ty {
+                    operand_ty
+                } else {
                     self.report(TypeError::BinaryNotSupported {
                         op,
                         lhs_type: self.display_type(lhs).into(),
@@ -2951,10 +2896,123 @@ impl<'res> TypeChecker<'res> {
                         src: source.src(),
                         span: source.span,
                     });
+                    self.result.interner.error()
                 }
-
-                bool_ty
             }
+
+            Eq | Ne => self.result.interner.builtin(BuiltinType::bool),
+
+            _ => unreachable!("others must be handled before this fn")
+        }
+    }
+
+
+    fn check_ordering_op(&mut self, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
+        let comparable = lhs == rhs
+            || try_coerce(&self.result.interner, lhs, rhs).is_ok()
+            || try_coerce(&self.result.interner, rhs, lhs).is_ok();
+
+        if comparable && (self.is_numeric_or_literal(lhs) || self.is_numeric_or_literal(rhs)) {
+            self.result.interner.builtin(BuiltinType::bool)
+        } else {
+            self.report(TypeError::BinaryNotSupported {
+                op: BinaryOp::Lt,
+                lhs_type: self.display_type(lhs).into(),
+                rhs_type: self.display_type(rhs).into(),
+                src: source.src(),
+                span: source.span,
+            });
+            self.result.interner.error()
+        }
+    }
+
+    fn check_logical_op(&mut self, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
+        let bool_ty = self.result.interner.builtin(BuiltinType::bool);
+        if lhs == bool_ty && rhs == bool_ty {
+            bool_ty
+        } else {
+            self.report(TypeError::BinaryNotSupported {
+                op: BinaryOp::Lt,
+                lhs_type: self.display_type(lhs).into(),
+                rhs_type: self.display_type(rhs).into(),
+                src: source.src(),
+                span: source.span,
+            });
+            self.result.interner.error()
+        }
+    }
+
+    fn check_binary_op_on_generic(&mut self, op: BinaryOp, g: DefId, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
+        let Some((iface_name, _method_name)) = types::binary_op_interface(op) else {
+            self.report(TypeError::BinaryNotSupported {
+                op: BinaryOp::Lt,
+                lhs_type: self.display_type(lhs).into(),
+                rhs_type: self.display_type(rhs).into(),
+                src: source.src(),
+                span: source.span,
+            });
+            return self.result.interner.error()
+        };
+
+        let Some(iface_def) = self.interface_registry.get(iface_name) else {
+            self.report(TypeError::InterfaceNotAvailable {
+                name: iface_name.into(),
+                src: source.src(),
+                span: source.span,
+            });
+            return self.result.interner.error();
+        };
+
+        let bounds = self.ctx.generic_bounds(g);
+        if !bounds.contains(&iface_def) {
+            self.result.errors.push(TypeError::GenericMissingBound {
+                generic: self.def_name(g).unwrap_or_default().into(),
+                bound: iface_name.into(),
+                src: source.src(),
+                span: source.span,
+            });
+            return self.result.interner.error();
+        }
+
+        if rhs != lhs && !try_coerce(&self.result.interner, rhs, lhs).is_ok() {
+            self.report(TypeError::Mismatch {
+                expected: self.display_type(lhs).into(),
+                found: self.display_type(rhs).into(),
+                src: source.src(),
+                span: source.span,
+            });
+        }
+
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+            self.result.interner.builtin(BuiltinType::bool)
+        } else {
+            lhs
+        }
+    }
+
+    fn check_binary_op_on_struct(
+        &mut self,
+        op: BinaryOp,
+        def_id: DefId,
+        generic_args: &[TypeId],
+        lhs: TypeId,
+        rhs: TypeId,
+        source: &Source,
+    ) -> TypeId {
+        let Some((iface_name, method_name)) = types::binary_op_interface(op) else {
+            self.report(TypeError::BinaryNotSupported {
+                op,
+                lhs_type: self.display_type(lhs).into(),
+                rhs_type: self.display_type(rhs).into(),
+                src: source.src(),
+                span: source.span,
+            });
+            return self.result.interner.error();
+        };
+
+        match self.call_interface_method(def_id, generic_args, iface_name, method_name, &[rhs], source) {
+            Some(ret_ty) => ret_ty,
+            None => self.result.interner.error(),
         }
     }
 

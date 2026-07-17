@@ -293,7 +293,7 @@ pub fn self_mode_of(ty: &HirTypeKind) -> Option<SelfMode> {
 
 // Below is maps for interface operators.
 
-fn binary_op_interface(
+pub fn binary_op_interface(
     op: zeen_ast::expressions::BinaryOp,
 ) -> Option<(&'static str, &'static str)> {
     use zeen_ast::expressions::BinaryOp::*;
@@ -313,7 +313,9 @@ fn binary_op_interface(
     }
 }
 
-fn unary_op_interface(op: zeen_ast::expressions::UnaryOp) -> Option<(&'static str, &'static str)> {
+pub fn unary_op_interface(
+    op: zeen_ast::expressions::UnaryOp,
+) -> Option<(&'static str, &'static str)> {
     use zeen_ast::expressions::UnaryOp::*;
     match op {
         Neg => Some(("Neg", "neg")),
