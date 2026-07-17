@@ -11,9 +11,14 @@ pub interface Debug {
 /// Empty marker to tell compiler that structure can be copied (simple load instructions).
 pub interface Copy {}
 
+/// Automatic function to free struct resources after it goes out of scope
+pub interface Drop {
+  fn drop(self) void;
+}
+
 /// Interface for `==` operator between structures.
 pub interface Eq {
-  fn eq(*const self, other: *const Self) bool
+  fn eq(*const self, other: *const Self) bool;
 }
 
 /// `+` operator
