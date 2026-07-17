@@ -177,7 +177,7 @@ pub enum TypeError {
         code(zeen::typechecker::interface_not_avaible),
         help("try to import 'ops' module from standard library: `use std.ops`")
     )]
-    InterfaceNotAvaible {
+    InterfaceNotAvailable {
         name: SmolStr,
 
         #[source_code]

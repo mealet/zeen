@@ -1265,23 +1265,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn well_known_or_report(
-        &mut self,
-        name: &str,
-        val: Option<DefId>,
-        source: Source,
-    ) -> Option<DefId> {
-        if val.is_none() {
-            self.report(TypeError::InterfaceNotAvaible {
-                name: name.into(),
-                src: source.src(),
-                span: source.span,
-            });
-        }
-
-        val
-    }
-
     // << Macros
 
     fn check_field_access(
@@ -2621,6 +2604,73 @@ impl<'res> TypeChecker<'res> {
 
             _ => ty,
         }
+    }
+
+    fn call_interface_method(
+        &mut self,
+        struct_def: DefId,
+        struct_generic_args: &[TypeId],
+        iface_name: &str,
+        method_name: &str,
+        explicit_args: &[TypeId],
+        source: &Source,
+    ) -> Option<TypeId> {
+        let Some(iface_def) = self.interface_registry.get(iface_name) else {
+            self.report(TypeError::InterfaceNotAvailable {
+                name: iface_name.into(),
+                src: source.src(),
+                span: source.span,
+            });
+            return None;
+        };
+
+        let Some(method_defs) = self.resolution.impls.get(&(struct_def, iface_def)) else {
+            self.report(TypeError::InterfaceMethodMissing {
+                interface: iface_name.into(),
+                method: method_name.into(),
+                src: source.src(),
+                span: source.span,
+            });
+            return None;
+        };
+
+        let method_def_id = *method_defs.iter().find(|&&def_id| {
+            self.def_name(def_id).as_deref() == Some(method_name)
+        })?;
+
+        let sig_params = self.fn_sigs[&method_def_id].params.clone();
+        let sig_ret = self.fn_sigs[&method_def_id].ret;
+
+        if explicit_args.len() != sig_params.len() {
+            self.report(TypeError::ArgCountMismatch {
+                expected: sig_params.len(),
+                found: explicit_args.len(),
+                src: source.src(),
+                span: source.span,
+            });
+        }
+
+        let struct_generics = self.struct_generics.get(&struct_def).cloned().unwrap_or_default();
+        let bindings: HashMap<DefId, TypeId> = struct_generics
+            .iter()
+            .copied()
+            .zip(struct_generic_args.iter().copied())
+            .collect();
+
+        for (param_ty, &arg_ty) in sig_params.iter().zip(explicit_args.iter()) {
+            let expected = self.substitute_generics(*param_ty, &bindings);
+
+            if !try_coerce(&self.result.interner, arg_ty, expected).is_ok() {
+                self.report(TypeError::Mismatch {
+                    expected: self.display_type(expected).into(),
+                    found: self.display_type(arg_ty).into(),
+                    src: source.src(),
+                    span: source.span
+                });
+            }
+        }
+
+        Some(self.substitute_generics(sig_ret, &bindings))
     }
 
     fn def_name(&self, def_id: DefId) -> Option<String> {
