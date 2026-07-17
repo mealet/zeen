@@ -2605,6 +2605,8 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    // i'm really sorry 😭
+    #[allow(clippy::too_many_arguments)]
     fn call_interface_method(
         &mut self,
         struct_def: DefId,
