@@ -93,7 +93,7 @@ pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceRe
                 inner: to_inner,
                 is_const: false,
             },
-        ) if from_inner == to_inner => CoerceResult::AddConst,
+        ) if from_inner == to_inner => CoerceResult::RemoveConst,
 
         (
             Type::Array {
@@ -125,6 +125,17 @@ pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceRe
                 is_const: true,
             },
         ) if fe == te => CoerceResult::AddConst,
+
+        (
+            Type::Slice {
+                element: fe,
+                is_const: true,
+            },
+            Type::Slice {
+                element: te,
+                is_const: false,
+            },
+        ) if fe == te => CoerceResult::RemoveConst,
 
         (
             Type::Array { element: fe, .. },

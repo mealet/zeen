@@ -937,11 +937,15 @@ impl<'res> TypeChecker<'res> {
                 Literal::Char(_) => self.result.interner.builtin(BuiltinType::char),
                 Literal::ByteChar(_) => self.result.interner.builtin(BuiltinType::u8),
                 Literal::Bool(_) => self.result.interner.builtin(BuiltinType::bool),
-                Literal::String(_) => {
+                Literal::String(str_lit) => {
+                    let interner = self.interner.borrow();
+                    let str_resolved = interner.resolve(str_lit).to_string();
+                    drop(interner);
+
                     let char_ty = self.result.interner.builtin(BuiltinType::char);
-                    self.result.interner.intern(Type::Pointer {
-                        inner: char_ty,
-                        is_const: true,
+                    self.result.interner.intern(Type::Array {
+                        element: char_ty,
+                        len: Some(str_resolved.len() as u64 + 1), // + 1 for null-terminator
                     })
                 }
                 Literal::Null => {
