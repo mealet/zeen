@@ -1443,6 +1443,24 @@ impl<'res> TypeChecker<'res> {
 
         let obj_ty = self.synth_expr(object);
 
+        // -----------| Hard coded piece of shit section |-----------
+        // > What is this for?
+        // Answer: for arrays and slices builtin `.len` field
+
+        {
+            let mut interner = self.interner.borrow_mut();
+            if field_name == interner.get_or_intern("len")
+                && matches!(
+                    self.result.interner.get(obj_ty),
+                    Type::Array { .. } | Type::Slice { .. }
+                )
+            {
+                return self.result.interner.builtin(BuiltinType::usize);
+            }
+        }
+
+        // ----------------------------------------------------------
+
         let (struct_def, struct_generic_args) = match self.result.interner.get(obj_ty).clone() {
             Type::Struct {
                 def_id,
