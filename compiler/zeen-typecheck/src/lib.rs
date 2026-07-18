@@ -640,7 +640,7 @@ impl<'res> TypeChecker<'res> {
 
     fn check_decl_body(&mut self, decl: &HirDecl) {
         match &decl.kind {
-            HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None),
+            HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None, None),
 
             HirDeclKind::Struct(s) => {
                 let self_ty = self.result.interner.intern(Type::Struct {
@@ -649,14 +649,14 @@ impl<'res> TypeChecker<'res> {
                 });
 
                 for method in &s.methods {
-                    self.check_decl_body_as_method(method, decl.def_id);
+                    self.check_decl_body_as_method(method, decl.def_id, None);
                 }
             }
 
             HirDeclKind::Interface(i) => {
                 for method in &i.methods {
                     if let HirDeclKind::Fn(f) = &method.kind {
-                        self.check_fn_body(method.def_id, f, None);
+                        self.check_fn_body(method.def_id, f, None, None);
                     }
                 }
             }
@@ -669,12 +669,12 @@ impl<'res> TypeChecker<'res> {
                     });
 
                     for method in &imp.methods {
-                        self.check_decl_body_as_method(method, object_def);
+                        self.check_decl_body_as_method(method, object_def, imp.interface);
                     }
                 } else {
                     for method in &imp.methods {
                         if let HirDeclKind::Fn(f) = &method.kind {
-                            self.check_fn_body(method.def_id, f, None);
+                            self.check_fn_body(method.def_id, f, None, None);
                         }
                     }
                 }
@@ -687,13 +687,13 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_decl_body_as_method(&mut self, method: &HirDecl, struct_def: DefId) {
+    fn check_decl_body_as_method(&mut self, method: &HirDecl, struct_def: DefId, iface_def: Option<DefId>) {
         if let HirDeclKind::Fn(f) = &method.kind {
-            self.check_fn_body(method.def_id, f, Some(struct_def));
+            self.check_fn_body(method.def_id, f, Some(struct_def), iface_def);
         }
     }
 
-    fn check_fn_body(&mut self, def_id: DefId, hir_fn: &HirFn, struct_def: Option<DefId>) {
+    fn check_fn_body(&mut self, def_id: DefId, hir_fn: &HirFn, struct_def: Option<DefId>, iface_def: Option<DefId>) {
         let Some(body) = &hir_fn.body else {
             return;
         };
@@ -704,9 +704,29 @@ impl<'res> TypeChecker<'res> {
             .expect("unregistered signature, wtf");
 
         let self_type = struct_def.map(|sd| {
+            let struct_generics = self.struct_generics.get(&sd).cloned().unwrap_or_default();
+
+            let generic_args: Vec<TypeId> = if let Some(iface) = iface_def
+                && let Some(mapping) = self.impl_generic_to_struct_generic.get(&(sd, iface)) {
+                let reverse: HashMap<DefId, DefId> = mapping.iter().map(|(&k, &v)| (v, k)).collect();
+
+                struct_generics
+                    .iter()
+                    .map(|g| {
+                        let target = reverse.get(g).copied().unwrap_or(*g);
+                        self.result.interner.intern(Type::GenericParam(target))
+                    })
+                    .collect()
+            } else {
+                struct_generics
+                    .iter()
+                    .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
+                    .collect()
+            };
+
             let base_struct_ty = self.result.interner.intern(Type::Struct {
                 def_id: sd,
-                generic_args: Vec::new(),
+                generic_args,
             });
 
             match sig.self_mode {
@@ -894,10 +914,7 @@ impl<'res> TypeChecker<'res> {
                 .generic_binding(*def_id)
                 .unwrap_or(self.result.interner.intern(Type::GenericParam(*def_id))),
 
-            HirExprKind::SelfValue(def_id) => self
-                .ctx
-                .generic_binding(*def_id)
-                .unwrap_or(self.lookup_def_type(*def_id, expr.source.clone())),
+            HirExprKind::SelfValue(def_id) => self.ctx.current().self_type.unwrap_or_else(|| self.lookup_def_type(*def_id, expr.source.clone())),
 
             HirExprKind::MacroCall { kind, args } => {
                 self.check_macro_call(expr.id, *kind, args, expr.source.clone())
