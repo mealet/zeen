@@ -64,6 +64,7 @@ pub struct TypeChecker<'res> {
     enum_variants: HashMap<DefId, Vec<DefId>>,
 
     impl_generic_to_struct_generic: HashMap<(DefId, DefId), HashMap<DefId, DefId>>,
+    method_owning_interface: HashMap<DefId, DefId>,
 }
 
 struct FnSignature {
@@ -96,6 +97,7 @@ impl<'res> TypeChecker<'res> {
             struct_methods: HashMap::new(),
             enum_variants: HashMap::new(),
             impl_generic_to_struct_generic: HashMap::new(),
+            method_owning_interface: HashMap::new(),
         }
     }
 
@@ -335,6 +337,10 @@ impl<'res> TypeChecker<'res> {
                     .entry(object_def)
                     .or_default()
                     .insert(f.name.0, method.def_id);
+
+                if let Some(iface_def) = imp.interface {
+                    self.method_owning_interface.insert(method.def_id, iface_def);
+                }
             }
         }
 
@@ -2111,6 +2117,15 @@ impl<'res> TypeChecker<'res> {
             .copied()
             .zip(struct_generic_args.iter().copied())
             .collect();
+
+        if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
+            && let Some(impl_to_struct) = self.impl_generic_to_struct_generic.get(&(struct_def, owning_iface)) {
+            for (&impl_g, &struct_g) in impl_to_struct {
+                if let Some(&concrete) = bindings.get(&struct_g) {
+                    bindings.insert(impl_g, concrete);
+                }
+            }
+        }
 
         for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
             let ty = self.lower_hir_type(explicit);
