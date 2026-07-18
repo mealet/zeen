@@ -17,7 +17,8 @@ use crate::{
     format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
     types::{
-        Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId, TypeInterner, self_mode_of
+        Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId,
+        TypeInterner, self_mode_of,
     },
 };
 use crate::{error::TypeError, format_str::FormatParseError};
@@ -339,7 +340,8 @@ impl<'res> TypeChecker<'res> {
                     .insert(f.name.0, method.def_id);
 
                 if let Some(iface_def) = imp.interface {
-                    self.method_owning_interface.insert(method.def_id, iface_def);
+                    self.method_owning_interface
+                        .insert(method.def_id, iface_def);
                 }
             }
         }
@@ -389,7 +391,8 @@ impl<'res> TypeChecker<'res> {
                     .zip(struct_generics.iter().copied())
                     .collect();
 
-                self.impl_generic_to_struct_generic.insert((object_def, iface_def), mapping);
+                self.impl_generic_to_struct_generic
+                    .insert((object_def, iface_def), mapping);
             }
         }
 
@@ -508,7 +511,7 @@ impl<'res> TypeChecker<'res> {
 
             HirTypeKind::Const(inner) => self.lower_hir_type(inner),
 
-            HirTypeKind::Pointer(inner) => {
+            HirTypeKind::SinglePointer(inner) => {
                 let is_const = matches!(inner.kind, HirTypeKind::Const(_));
                 let inner_ty = self.lower_hir_type(inner);
                 self.result.interner.intern(Type::Pointer {
@@ -517,13 +520,32 @@ impl<'res> TypeChecker<'res> {
                 })
             }
 
+            HirTypeKind::ManyPointer(inner) => {
+                let is_const = matches!(inner.kind, HirTypeKind::Const(_));
+                let inner_ty = self.lower_hir_type(inner);
+                self.result.interner.intern(Type::ManyPointer {
+                    inner: inner_ty,
+                    is_const,
+                })
+            }
+
             HirTypeKind::Array { element, len } => {
                 let elem_ty = self.lower_hir_type(element);
+                let is_const = matches!(element.kind, HirTypeKind::Const(_));
+
                 let len_val = len.as_ref().and_then(|expr| self.eval_const_u64(expr));
-                self.result.interner.intern(Type::Array {
-                    element: elem_ty,
-                    len: len_val,
-                })
+
+                if len_val.is_some() {
+                    self.result.interner.intern(Type::Array {
+                        element: elem_ty,
+                        len: len_val,
+                    })
+                } else {
+                    self.result.interner.intern(Type::Slice {
+                        element: elem_ty,
+                        is_const,
+                    })
+                }
             }
 
             HirTypeKind::Fn { params, ret, .. } => {
@@ -623,13 +645,18 @@ impl<'res> TypeChecker<'res> {
     // > Pass 2
 
     fn compute_structs_capabilities(&mut self, decl: &HirDecl) {
-        let HirDeclKind::Struct(_) = &decl.kind else { return };
+        let HirDeclKind::Struct(_) = &decl.kind else {
+            return;
+        };
 
         let is_copy = self.struct_implements_by_name(decl.def_id, "Copy");
         let has_explicit_drop = self.struct_implements_by_name(decl.def_id, "Drop");
 
         if let Some(info) = self.result.struct_info.get_mut(&decl.def_id) {
-            info.capabalities = Capabilities { is_copy, has_explicit_drop };
+            info.capabalities = Capabilities {
+                is_copy,
+                has_explicit_drop,
+            };
         }
     }
 
@@ -693,13 +720,24 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_decl_body_as_method(&mut self, method: &HirDecl, struct_def: DefId, iface_def: Option<DefId>) {
+    fn check_decl_body_as_method(
+        &mut self,
+        method: &HirDecl,
+        struct_def: DefId,
+        iface_def: Option<DefId>,
+    ) {
         if let HirDeclKind::Fn(f) = &method.kind {
             self.check_fn_body(method.def_id, f, Some(struct_def), iface_def);
         }
     }
 
-    fn check_fn_body(&mut self, def_id: DefId, hir_fn: &HirFn, struct_def: Option<DefId>, iface_def: Option<DefId>) {
+    fn check_fn_body(
+        &mut self,
+        def_id: DefId,
+        hir_fn: &HirFn,
+        struct_def: Option<DefId>,
+        iface_def: Option<DefId>,
+    ) {
         let Some(body) = &hir_fn.body else {
             return;
         };
@@ -713,8 +751,10 @@ impl<'res> TypeChecker<'res> {
             let struct_generics = self.struct_generics.get(&sd).cloned().unwrap_or_default();
 
             let generic_args: Vec<TypeId> = if let Some(iface) = iface_def
-                && let Some(mapping) = self.impl_generic_to_struct_generic.get(&(sd, iface)) {
-                let reverse: HashMap<DefId, DefId> = mapping.iter().map(|(&k, &v)| (v, k)).collect();
+                && let Some(mapping) = self.impl_generic_to_struct_generic.get(&(sd, iface))
+            {
+                let reverse: HashMap<DefId, DefId> =
+                    mapping.iter().map(|(&k, &v)| (v, k)).collect();
 
                 struct_generics
                     .iter()
@@ -920,7 +960,11 @@ impl<'res> TypeChecker<'res> {
                 .generic_binding(*def_id)
                 .unwrap_or(self.result.interner.intern(Type::GenericParam(*def_id))),
 
-            HirExprKind::SelfValue(def_id) => self.ctx.current().self_type.unwrap_or_else(|| self.lookup_def_type(*def_id, expr.source.clone())),
+            HirExprKind::SelfValue(def_id) => self
+                .ctx
+                .current()
+                .self_type
+                .unwrap_or_else(|| self.lookup_def_type(*def_id, expr.source.clone())),
 
             HirExprKind::MacroCall { kind, args } => {
                 self.check_macro_call(expr.id, *kind, args, expr.source.clone())
@@ -1078,14 +1122,12 @@ impl<'res> TypeChecker<'res> {
                 })
             }
 
-            HirMacroKind::Panic  => {
+            HirMacroKind::Panic => {
                 self.check_format_macro(call_id, args, source);
                 self.result.interner.never()
             }
 
-            HirMacroKind::Unreachable | HirMacroKind::Todo => {
-                self.result.interner.never()
-            }
+            HirMacroKind::Unreachable | HirMacroKind::Todo => self.result.interner.never(),
 
             HirMacroKind::Unreachable => {
                 if !args.is_empty() {
@@ -1192,15 +1234,19 @@ impl<'res> TypeChecker<'res> {
             Type::Never | Type::Error => true,
             Type::Enum { .. } => true,
 
-            Type::Array { element, .. } | Type::Slice { element } => {
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.type_implements_display(element)
             }
-            
+
             Type::GenericParam(g) => {
                 let cur = self.ctx.current();
 
-                let Some(bounds) = cur.generic_bounds.get(&g) else { return false };
-                let Some(iface) = self.interface_registry.get("Display") else { return false };
+                let Some(bounds) = cur.generic_bounds.get(&g) else {
+                    return false;
+                };
+                let Some(iface) = self.interface_registry.get("Display") else {
+                    return false;
+                };
 
                 bounds.contains(&iface)
             }
@@ -1218,15 +1264,19 @@ impl<'res> TypeChecker<'res> {
             Type::Never | Type::Error => true,
             Type::Enum { .. } => true,
 
-            Type::Array { element, .. } | Type::Slice { element } => {
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.type_implements_debug(element)
             }
-            
+
             Type::GenericParam(g) => {
                 let cur = self.ctx.current();
 
-                let Some(bounds) = cur.generic_bounds.get(&g) else { return false };
-                let Some(iface) = self.interface_registry.get("Debug") else { return false };
+                let Some(bounds) = cur.generic_bounds.get(&g) else {
+                    return false;
+                };
+                let Some(iface) = self.interface_registry.get("Debug") else {
+                    return false;
+                };
 
                 bounds.contains(&iface)
             }
@@ -1348,27 +1398,24 @@ impl<'res> TypeChecker<'res> {
                         });
                     }
                 }
-
             }
 
-            FormatSpec::Float { .. } => {
-                match self.result.interner.get(arg_ty) {
-                    Type::Builtin(b) if coerce::builtin_is_float(*b) => {}
-                    Type::FloatLiteral => {}
-                    Type::Error => {}
-                    _ => {
-                        self.report(TypeError::FormatRequiresFloat {
-                            found: self
-                                .result
-                                .interner
-                                .display_type(arg_ty, Rc::clone(&self.interner), self.resolution)
-                                .into(),
-                            src: source.src(),
-                            span: source.span,
-                        });
-                    }
+            FormatSpec::Float { .. } => match self.result.interner.get(arg_ty) {
+                Type::Builtin(b) if coerce::builtin_is_float(*b) => {}
+                Type::FloatLiteral => {}
+                Type::Error => {}
+                _ => {
+                    self.report(TypeError::FormatRequiresFloat {
+                        found: self
+                            .result
+                            .interner
+                            .display_type(arg_ty, Rc::clone(&self.interner), self.resolution)
+                            .into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
                 }
-            }
+            },
         }
     }
 
@@ -1694,6 +1741,7 @@ impl<'res> TypeChecker<'res> {
             CoerceResult::PinLiteral
             | CoerceResult::AddConst
             | CoerceResult::ArrayToSlice
+            | CoerceResult::ArrayToManyPointer
             | CoerceResult::NeverCoercion => {
                 self.result.record_expr_type(id, expected);
                 expected
@@ -1993,10 +2041,7 @@ impl<'res> TypeChecker<'res> {
         let current_struct = self.ctx.current().struct_def;
 
         if Some(owner_struct) != current_struct {
-            let name = self
-                .def_name(method_def_id)
-                .unwrap_or_default()
-                .into();
+            let name = self.def_name(method_def_id).unwrap_or_default().into();
 
             self.report(TypeError::PrivateItemNotAccessible {
                 name,
@@ -2119,7 +2164,10 @@ impl<'res> TypeChecker<'res> {
             .collect();
 
         if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
-            && let Some(impl_to_struct) = self.impl_generic_to_struct_generic.get(&(struct_def, owning_iface)) {
+            && let Some(impl_to_struct) = self
+                .impl_generic_to_struct_generic
+                .get(&(struct_def, owning_iface))
+        {
             for (&impl_g, &struct_g) in impl_to_struct {
                 if let Some(&concrete) = bindings.get(&struct_g) {
                     bindings.insert(impl_g, concrete);
@@ -2414,7 +2462,7 @@ impl<'res> TypeChecker<'res> {
         match self.result.interner.get(ty) {
             Type::GenericParam(_) => true,
             Type::Pointer { inner, .. } => self.type_contains_generic(*inner),
-            Type::Array { element, .. } | Type::Slice { element } => {
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.type_contains_generic(*element)
             }
             Type::Struct { generic_args, .. } => {
@@ -2465,9 +2513,9 @@ impl<'res> TypeChecker<'res> {
             }
 
             (Type::Array { element: pelem, .. }, Type::Array { element: aelem, .. })
-            | (Type::Slice { element: pelem }, Type::Slice { element: aelem })
-            | (Type::Array { element: pelem, .. }, Type::Slice { element: aelem })
-            | (Type::Slice { element: pelem }, Type::Array { element: aelem, .. }) => {
+            | (Type::Slice { element: pelem, .. }, Type::Slice { element: aelem, .. })
+            | (Type::Array { element: pelem, .. }, Type::Slice { element: aelem, .. })
+            | (Type::Slice { element: pelem, .. }, Type::Array { element: aelem, .. }) => {
                 self.unify_for_inference(pelem, aelem, bindings, source);
             }
 
@@ -2596,14 +2644,15 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            Type::Slice { element } => {
+            Type::Slice { element, is_const } => {
                 let new_elem = self.substitute_generics(element, bindings);
                 if new_elem == element {
                     ty
                 } else {
-                    self.result
-                        .interner
-                        .intern(Type::Slice { element: new_elem })
+                    self.result.interner.intern(Type::Slice {
+                        element: new_elem,
+                        is_const,
+                    })
                 }
             }
 
@@ -2673,14 +2722,15 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            Type::Slice { element } => {
+            Type::Slice { element, is_const } => {
                 let new_elem = self.substitute_self(element, self_ty);
                 if new_elem == element {
                     ty
                 } else {
-                    self.result
-                        .interner
-                        .intern(Type::Slice { element: new_elem })
+                    self.result.interner.intern(Type::Slice {
+                        element: new_elem,
+                        is_const,
+                    })
                 }
             }
 
@@ -2753,32 +2803,41 @@ impl<'res> TypeChecker<'res> {
             return None;
         };
 
-        let method_def_id = *method_defs.iter().find(|&&def_id| {
-            self.def_name(def_id).as_deref() == Some(method_name)
-        })?;
-
+        let method_def_id = *method_defs
+            .iter()
+            .find(|&&def_id| self.def_name(def_id).as_deref() == Some(method_name))?;
 
         let sig = &self.fn_sigs[&method_def_id];
         let self_mode = sig.self_mode;
         let has_self = self_mode.is_some();
 
         match (self_mode, receiver_access) {
-            (Some(SelfMode::Value) | Some(SelfMode::ValueConst), ReceiverAccess::RefMut | ReceiverAccess::RefConst) => {
-                self.result.errors.push(TypeError::CannotMoveThroughPointer {
+            (
+                Some(SelfMode::Value) | Some(SelfMode::ValueConst),
+                ReceiverAccess::RefMut | ReceiverAccess::RefConst,
+            ) => {
+                self.result
+                    .errors
+                    .push(TypeError::CannotMoveThroughPointer {
+                        src: source.src(),
+                        span: source.span,
+                    });
+            }
+            (Some(SelfMode::RefMut), ReceiverAccess::RefConst) => {
+                self.result.errors.push(TypeError::AssignToConst {
                     src: source.src(),
                     span: source.span,
                 });
             }
-            (Some(SelfMode::RefMut), ReceiverAccess::RefConst) => {
-                self.result.errors.push(TypeError::AssignToConst { src: source.src(), span: source.span });
-            }
-            (Some(SelfMode::RefMut) | Some(SelfMode::RefConst), ReceiverAccess::Value) => {
-
-            }
+            (Some(SelfMode::RefMut) | Some(SelfMode::RefConst), ReceiverAccess::Value) => {}
             _ => {}
         }
 
-        let sig_params = if has_self { sig.params[1..].to_vec() } else { sig.params.clone() };
+        let sig_params = if has_self {
+            sig.params[1..].to_vec()
+        } else {
+            sig.params.clone()
+        };
         let sig_ret = sig.ret;
 
         if explicit_args.len() != sig_params.len() {
@@ -2790,14 +2849,21 @@ impl<'res> TypeChecker<'res> {
             });
         }
 
-        let struct_generics = self.struct_generics.get(&struct_def).cloned().unwrap_or_default();
+        let struct_generics = self
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
         let mut bindings: HashMap<DefId, TypeId> = struct_generics
             .iter()
             .copied()
             .zip(struct_generic_args.iter().copied())
             .collect();
 
-        if let Some(impl_to_struct) = self.impl_generic_to_struct_generic.get(&(struct_def, iface_def)) {
+        if let Some(impl_to_struct) = self
+            .impl_generic_to_struct_generic
+            .get(&(struct_def, iface_def))
+        {
             for (&impl_g, &struct_g) in impl_to_struct {
                 if let Some(&concrete) = bindings.get(&struct_g) {
                     bindings.insert(impl_g, concrete);
@@ -2813,7 +2879,7 @@ impl<'res> TypeChecker<'res> {
                     expected: self.display_type(expected).into(),
                     found: self.display_type(arg_ty).into(),
                     src: source.src(),
-                    span: source.span
+                    span: source.span,
                 });
             }
         }
@@ -2992,7 +3058,10 @@ impl<'res> TypeChecker<'res> {
         }
 
         match self.result.interner.get(lhs).clone() {
-            Type::Struct { def_id, generic_args } => {
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
                 let Some((iface_name, method_name)) = types::binary_op_interface(op) else {
                     self.report(TypeError::BinaryNotSupported {
                         op,
@@ -3004,17 +3073,31 @@ impl<'res> TypeChecker<'res> {
                     return self.result.interner.error();
                 };
 
-                match self.call_interface_method(def_id, &generic_args, iface_name, method_name, &[rhs], ReceiverAccess::Value, &source) {
+                match self.call_interface_method(
+                    def_id,
+                    &generic_args,
+                    iface_name,
+                    method_name,
+                    &[rhs],
+                    ReceiverAccess::Value,
+                    &source,
+                ) {
                     Some(ret_ty) => ret_ty,
                     None => self.result.interner.error(),
                 }
-            },
+            }
 
-            _ => self.check_binary_op_builtin(op, lhs, rhs, &source)
+            _ => self.check_binary_op_builtin(op, lhs, rhs, &source),
         }
     }
 
-    fn check_binary_op_builtin(&mut self, op: BinaryOp, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
+    fn check_binary_op_builtin(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypeId,
+        rhs: TypeId,
+        source: &Source,
+    ) -> TypeId {
         let unified = if lhs == rhs {
             Some(lhs)
         } else if let Type::Pointer { .. } = self.result.interner.get(lhs)
@@ -3043,7 +3126,7 @@ impl<'res> TypeChecker<'res> {
         use BinaryOp::*;
 
         match op {
-            Add | Sub| Mul | Div | Mod | BitAnd | BitOr | BitXor | Shl | Shr => {
+            Add | Sub | Mul | Div | Mod | BitAnd | BitOr | BitXor | Shl | Shr => {
                 if self.is_numeric_or_literal(operand_ty) {
                     operand_ty
                 } else {
@@ -3060,10 +3143,9 @@ impl<'res> TypeChecker<'res> {
 
             Eq | Ne => self.result.interner.builtin(BuiltinType::bool),
 
-            _ => unreachable!("others must be handled before this fn")
+            _ => unreachable!("others must be handled before this fn"),
         }
     }
-
 
     fn check_ordering_op(&mut self, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
         let comparable = lhs == rhs
@@ -3100,7 +3182,14 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_binary_op_on_generic(&mut self, op: BinaryOp, g: DefId, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
+    fn check_binary_op_on_generic(
+        &mut self,
+        op: BinaryOp,
+        g: DefId,
+        lhs: TypeId,
+        rhs: TypeId,
+        source: &Source,
+    ) -> TypeId {
         let Some((iface_name, _method_name)) = types::binary_op_interface(op) else {
             self.report(TypeError::BinaryNotSupported {
                 op: BinaryOp::Lt,
@@ -3109,7 +3198,7 @@ impl<'res> TypeChecker<'res> {
                 src: source.src(),
                 span: source.span,
             });
-            return self.result.interner.error()
+            return self.result.interner.error();
         };
 
         let Some(iface_def) = self.interface_registry.get(iface_name) else {
@@ -3154,11 +3243,17 @@ impl<'res> TypeChecker<'res> {
         }
 
         if let UnaryOp::AddrOf = op {
-            return self.result.interner.intern(Type::Pointer { inner: operand, is_const: false });
+            return self.result.interner.intern(Type::Pointer {
+                inner: operand,
+                is_const: false,
+            });
         }
 
         match self.result.interner.get(operand).clone() {
-            Type::Struct { def_id, generic_args } => {
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
                 let Some((iface_name, method_name)) = types::unary_op_interface(op) else {
                     self.report(TypeError::UnaryNotSupported {
                         op,
@@ -3173,7 +3268,15 @@ impl<'res> TypeChecker<'res> {
                     return self.check_deref_on_struct(def_id, &generic_args, &source);
                 }
 
-                match self.call_interface_method(def_id, &generic_args, iface_name, method_name, &[], ReceiverAccess::Value, &source) {
+                match self.call_interface_method(
+                    def_id,
+                    &generic_args,
+                    iface_name,
+                    method_name,
+                    &[],
+                    ReceiverAccess::Value,
+                    &source,
+                ) {
                     Some(ret_ty) => ret_ty,
                     None => self.result.interner.error(),
                 }
@@ -3190,11 +3293,12 @@ impl<'res> TypeChecker<'res> {
                     return self.result.interner.error();
                 };
 
-                let (iface_name, _) = if matches!(op, UnaryOp::Deref) && self.expect_assign_interface {
-                    ("DerefAssign", "deref_assign")
-                } else {
-                    (iface_name, method_name)
-                };
+                let (iface_name, _) =
+                    if matches!(op, UnaryOp::Deref) && self.expect_assign_interface {
+                        ("DerefAssign", "deref_assign")
+                    } else {
+                        (iface_name, method_name)
+                    };
 
                 let Some(iface_def) = self.interface_registry.get(iface_name) else {
                     self.report(TypeError::InterfaceNotAvailable {
@@ -3273,7 +3377,12 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_deref_on_struct(&mut self, def_id: DefId, generic_args: &[TypeId], source: &Source) -> TypeId {
+    fn check_deref_on_struct(
+        &mut self,
+        def_id: DefId,
+        generic_args: &[TypeId],
+        source: &Source,
+    ) -> TypeId {
         let (iface_name, method_name) = if self.expect_assign_interface {
             ("DerefPtr", "deref_ptr")
         } else {
@@ -3281,8 +3390,13 @@ impl<'res> TypeChecker<'res> {
         };
 
         let result = self.call_interface_method(
-            def_id, generic_args, iface_name, method_name, &[],
-            ReceiverAccess::Value, source,
+            def_id,
+            generic_args,
+            iface_name,
+            method_name,
+            &[],
+            ReceiverAccess::Value,
+            source,
         );
 
         match result {

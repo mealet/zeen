@@ -159,7 +159,7 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
         let mut child = self.parse()?;
 
         let expr = arena.alloc(TypeExpr {
-            kind: TypeKind::Pointer(child),
+            kind: TypeKind::SinglePointer(child),
             span: star.merge_span(child.span),
         });
 
@@ -172,7 +172,13 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
 
         let arena = self.p.arena;
 
+        let mut is_unknown_len = false;
+
         let len: Option<&'ctx zeen_ast::Expression> = if self.p.at(TokenKind::CloseBracket) {
+            None
+        } else if self.p.at(TokenKind::Star) {
+            is_unknown_len = true;
+            let _ = self.p.advance();
             None
         } else {
             let mut expr_parser = crate::expressions::ExprParser::new(self.p);
@@ -193,8 +199,14 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
 
         let element = self.parse()?;
 
+        let kind = if is_unknown_len {
+            TypeKind::ManyPointer(element)
+        } else {
+            TypeKind::Array { element, len }
+        };
+
         let expr = arena.alloc(TypeExpr {
-            kind: TypeKind::Array { element, len },
+            kind,
             span: open.merge_span(element.span),
         });
 
@@ -568,7 +580,7 @@ mod tests {
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
-                kind: TypeKind::Pointer(&TypeExpr {
+                kind: TypeKind::SinglePointer(&TypeExpr {
                     kind: TypeKind::Builtin(types::BuiltinType::i32),
                     span: (1, 3).into()
                 }),
@@ -589,9 +601,9 @@ mod tests {
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
-                kind: TypeKind::Pointer(&TypeExpr {
-                    kind: TypeKind::Pointer(&TypeExpr {
-                        kind: TypeKind::Pointer(&TypeExpr {
+                kind: TypeKind::SinglePointer(&TypeExpr {
+                    kind: TypeKind::SinglePointer(&TypeExpr {
+                        kind: TypeKind::SinglePointer(&TypeExpr {
                             kind: TypeKind::Builtin(types::BuiltinType::i32),
                             span: (3, 3).into()
                         }),

@@ -33,6 +33,8 @@ pub enum CoerceResult {
     RemoveConst,
     // Fixed array to slice: [N]T -> []T
     ArrayToSlice,
+    // Fixed array to many ptr: [N]T -> [*]T
+    ArrayToManyPointer,
     // `never` -> any (for example: @panic(format, ...) macro)
     NeverCoercion,
     /// One side was `Error`, avoiding extra diagnostics
@@ -97,8 +99,44 @@ pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceRe
             Type::Array {
                 element: from_elem, ..
             },
-            Type::Slice { element: to_elem },
+            Type::Slice {
+                element: to_elem, ..
+            },
         ) if from_elem == to_elem => CoerceResult::ArrayToSlice,
+
+        (
+            Type::ManyPointer {
+                inner: fi,
+                is_const: false,
+            },
+            Type::ManyPointer {
+                inner: ti,
+                is_const: true,
+            },
+        ) if fi == ti => CoerceResult::AddConst,
+
+        (
+            Type::Slice {
+                element: fe,
+                is_const: false,
+            },
+            Type::Slice {
+                element: te,
+                is_const: true,
+            },
+        ) if fe == te => CoerceResult::AddConst,
+
+        (
+            Type::Array { element: fe, .. },
+            Type::Slice {
+                element: te,
+                is_const: _,
+            },
+        ) if fe == te => CoerceResult::ArrayToSlice,
+
+        (Type::Array { element: fe, .. }, Type::ManyPointer { inner: te, .. }) if fe == te => {
+            CoerceResult::ArrayToManyPointer
+        }
 
         _ => CoerceResult::Fail,
     }

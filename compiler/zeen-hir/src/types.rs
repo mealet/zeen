@@ -28,7 +28,9 @@ pub enum HirTypeKind {
     },
 
     Const(Rc<HirTypeExpr>),
-    Pointer(Rc<HirTypeExpr>),
+
+    SinglePointer(Rc<HirTypeExpr>),
+    ManyPointer(Rc<HirTypeExpr>),
 
     Array {
         element: Rc<HirTypeExpr>,

@@ -43,7 +43,7 @@ fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
         match ty {
             TypeKind::SelfType => true,
             TypeKind::Const(inner) => is_self_inner(&inner.kind),
-            TypeKind::Pointer(inner) => is_self_inner(&inner.kind),
+            TypeKind::SinglePointer(inner) => is_self_inner(&inner.kind),
             _ => false,
         }
     }
@@ -1008,7 +1008,9 @@ impl<'ctx> NameResolver<'ctx> {
                 }
             }
 
-            TypeKind::Const(inner) | TypeKind::Pointer(inner) => {
+            TypeKind::Const(inner)
+            | TypeKind::SinglePointer(inner)
+            | TypeKind::ManyPointer(inner) => {
                 self.resolve_type(inner);
             }
 

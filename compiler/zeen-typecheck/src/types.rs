@@ -35,6 +35,11 @@ pub enum Type {
         is_const: bool,
     },
 
+    ManyPointer {
+        inner: TypeId,
+        is_const: bool,
+    },
+
     Array {
         element: TypeId,
         len: Option<u64>,
@@ -42,6 +47,7 @@ pub enum Type {
 
     Slice {
         element: TypeId,
+        is_const: bool,
     },
 
     Fn {
@@ -111,14 +117,21 @@ impl Type {
                 type_interner.display_type(*inner, interner, resolution_result)
             ),
 
+            Type::ManyPointer { inner, is_const } => format!(
+                "[*]{}{}",
+                if *is_const { "const " } else { "" },
+                type_interner.display_type(*inner, interner, resolution_result)
+            ),
+
             Type::Array { element, len } => format!(
                 "[{}]{}",
                 len.map(|val| val.to_string()).unwrap_or_default(),
                 type_interner.display_type(*element, interner, resolution_result)
             ),
 
-            Type::Slice { element } => format!(
-                "[]{}",
+            Type::Slice { element, is_const } => format!(
+                "[]{}{}",
+                if *is_const { "const " } else { "" },
                 type_interner.display_type(*element, interner, resolution_result)
             ),
 
@@ -276,7 +289,7 @@ pub fn self_mode_of(ty: &HirTypeKind) -> Option<SelfMode> {
             _ => None,
         },
 
-        HirTypeKind::Pointer(inner) => match &inner.kind {
+        HirTypeKind::SinglePointer(inner) => match &inner.kind {
             HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_) => Some(SelfMode::RefMut),
             HirTypeKind::Const(c)
                 if matches!(c.kind, HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_)) =>

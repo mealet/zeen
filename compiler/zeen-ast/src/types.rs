@@ -30,7 +30,11 @@ pub enum TypeKind<'arena> {
     },
 
     Const(&'arena TypeExpr<'arena>),
-    Pointer(&'arena TypeExpr<'arena>),
+
+    /// `*T` - single element pointer
+    SinglePointer(&'arena TypeExpr<'arena>),
+    /// `[*]T` - C-style pointer to unknown number of elements.
+    ManyPointer(&'arena TypeExpr<'arena>),
 
     Array {
         element: &'arena TypeExpr<'arena>,

@@ -713,7 +713,14 @@ impl<'res> HirLowering<'res> {
             }
 
             TypeKind::Const(inner) => HirTypeKind::Const(Rc::new(self.lower_type(inner))),
-            TypeKind::Pointer(inner) => HirTypeKind::Pointer(Rc::new(self.lower_type(inner))),
+
+            TypeKind::SinglePointer(inner) => {
+                HirTypeKind::SinglePointer(Rc::new(self.lower_type(inner)))
+            }
+
+            TypeKind::ManyPointer(inner) => {
+                HirTypeKind::ManyPointer(Rc::new(self.lower_type(inner)))
+            }
 
             TypeKind::Array { element, len } => HirTypeKind::Array {
                 element: Rc::new(self.lower_type(element)),
