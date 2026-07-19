@@ -403,7 +403,7 @@ impl<'res> TypeChecker<'res> {
             iface_def,
             object_def,
             &imp_generics,
-            &((imp.object_bindings_span, source.src()).into()),
+            &((source.span, source.src()).into()),
         );
     }
 
