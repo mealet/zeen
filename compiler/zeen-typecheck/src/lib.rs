@@ -2535,6 +2535,8 @@ impl<'res> TypeChecker<'res> {
         match self.result.interner.get(ty) {
             Type::GenericParam(_) => true,
             Type::Pointer { inner, .. } => self.type_contains_generic(*inner),
+            Type::ManyPointer { inner, .. } => self.type_contains_generic(*inner),
+            Type::Slice { element, .. } => self.type_contains_generic(*element),
             Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.type_contains_generic(*element)
             }
