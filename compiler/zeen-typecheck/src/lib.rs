@@ -1,9 +1,6 @@
-#![allow(unused)]
-
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    ops::Deref,
     rc::Rc,
 };
 
@@ -18,7 +15,7 @@ use crate::{
     result::{CallResolution, TypeCheckResult},
     types::{
         Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId,
-        TypeInterner, self_mode_of,
+        self_mode_of,
     },
 };
 use crate::{error::TypeError, format_str::FormatParseError};
@@ -680,7 +677,7 @@ impl<'res> TypeChecker<'res> {
             HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None, None),
 
             HirDeclKind::Struct(s) => {
-                let self_ty = self.result.interner.intern(Type::Struct {
+                let _self_ty = self.result.interner.intern(Type::Struct {
                     def_id: decl.def_id,
                     generic_args: Vec::new(),
                 });
@@ -700,7 +697,7 @@ impl<'res> TypeChecker<'res> {
 
             HirDeclKind::Implement(imp) => {
                 if let Some(object_def) = imp.object {
-                    let self_ty = self.result.interner.intern(Type::Struct {
+                    let _self_ty = self.result.interner.intern(Type::Struct {
                         def_id: object_def,
                         generic_args: Vec::new(),
                     });
@@ -835,7 +832,7 @@ impl<'res> TypeChecker<'res> {
         match &stmt.kind {
             HirStmtKind::Let {
                 def_id,
-                name,
+                name: _,
                 explicit_type,
                 value,
                 is_const,
@@ -845,7 +842,7 @@ impl<'res> TypeChecker<'res> {
                     .map(|t| self.lower_hir_type_with_const(t));
 
                 let declared_ty = declared.map(|(ty, _)| ty);
-                let declared_const = declared.map(|(_, c)| c).unwrap_or(false);
+                let _declared_const = declared.map(|(_, c)| c).unwrap_or(false);
 
                 let value_ty = value.as_ref().map(|val| match declared_ty {
                     Some(expected) => self.check_expr(val, expected, true),
@@ -897,7 +894,7 @@ impl<'res> TypeChecker<'res> {
 
             HirStmtKind::For {
                 def_id,
-                varname,
+                varname: _,
                 iterator,
                 block,
             } => {
@@ -1255,19 +1252,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirMacroKind::Unreachable | HirMacroKind::Todo => self.result.interner.never(),
-
-            HirMacroKind::Unreachable => {
-                if !args.is_empty() {
-                    self.report(TypeError::ArgCountMismatch {
-                        expected: 0,
-                        found: args.len(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-                }
-
-                self.result.interner.never()
-            }
 
             HirMacroKind::Dbg => {
                 if args.len() != 1 {
@@ -2041,21 +2025,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn synth_block_value(&mut self, stmt: &HirStmt) -> TypeId {
-        self.check_stmt(stmt);
-
-        match &stmt.kind {
-            HirStmtKind::Expr(expr) => self
-                .result
-                .expr_types
-                .get(&expr.id)
-                .copied()
-                .unwrap_or(self.result.interner.void()),
-
-            _ => self.result.interner.void(),
-        }
-    }
-
     fn check_call(
         &mut self,
         call_id: HirId,
@@ -2183,6 +2152,8 @@ impl<'res> TypeChecker<'res> {
         caller_expr: &HirExpr,
         source: &Source,
     ) {
+        let _ = caller_expr;
+
         let Some(sig) = self.fn_sigs.get(&method_def_id) else {
             return;
         };
@@ -2190,7 +2161,7 @@ impl<'res> TypeChecker<'res> {
             return;
         }
 
-        let Some(method_info) = self.resolution.defs.get(&method_def_id) else {
+        let Some(_method_info) = self.resolution.defs.get(&method_def_id) else {
             return;
         };
 
@@ -2619,7 +2590,6 @@ impl<'res> TypeChecker<'res> {
             Type::GenericParam(_) => true,
             Type::Pointer { inner, .. } => self.type_contains_generic(*inner),
             Type::ManyPointer { inner, .. } => self.type_contains_generic(*inner),
-            Type::Slice { element, .. } => self.type_contains_generic(*element),
             Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.type_contains_generic(*element)
             }
@@ -2822,18 +2792,6 @@ impl<'res> TypeChecker<'res> {
                     self.result.interner.intern(Type::Array {
                         element: new_elem,
                         len,
-                    })
-                }
-            }
-
-            Type::Slice { element, is_const } => {
-                let new_elem = self.substitute_generics(element, bindings);
-                if new_elem == element {
-                    ty
-                } else {
-                    self.result.interner.intern(Type::Slice {
-                        element: new_elem,
-                        is_const,
                     })
                 }
             }
@@ -3208,16 +3166,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn receiver_access_of(&self, ty: TypeId) -> ReceiverAccess {
-        match self.result.interner.get(ty).clone() {
-            Type::Pointer { is_const: true, .. } => ReceiverAccess::RefConst,
-            Type::Pointer {
-                is_const: false, ..
-            } => ReceiverAccess::RefMut,
-            _ => ReceiverAccess::Value,
-        }
-    }
-
     fn check_binary_op(
         &mut self,
         op: BinaryOp,
@@ -3268,6 +3216,8 @@ impl<'res> TypeChecker<'res> {
                     None => self.result.interner.error(),
                 }
             }
+
+            Type::GenericParam(g) => self.check_binary_op_on_generic(op, g, lhs, rhs, &source),
 
             _ => self.check_binary_op_builtin(op, lhs, rhs, &source),
         }

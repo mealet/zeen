@@ -1,5 +1,4 @@
 use lasso::Spur;
-use miette::SourceSpan;
 use std::collections::HashMap;
 
 use zeen_ast::{

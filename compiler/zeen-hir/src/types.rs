@@ -1,8 +1,6 @@
 use zeen_ast::Source;
 use zeen_resolve::DefId;
 
-use lasso::Spur;
-use miette::SourceSpan;
 use std::rc::Rc;
 
 use crate::{HirId, decl::HirGenericParam, expr::HirExpr};

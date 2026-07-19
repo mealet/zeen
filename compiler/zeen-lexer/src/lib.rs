@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use std::str::Chars;
 
 pub use token::{Token, TokenKind};
@@ -96,10 +94,10 @@ impl<'inp> Tokenizer<'inp> {
     }
 
     fn skip_whitespace(&mut self) {
-        while (!self.is_eof()) {
+        while !self.is_eof() {
             let chr = self.first();
 
-            if (chr.is_whitespace()) {
+            if chr.is_whitespace() {
                 if self.bump().is_none() {
                     break;
                 }
@@ -152,7 +150,7 @@ impl<'inp> Tokenizer<'inp> {
             'r' => self.raw_str_literal(),
 
             chr if is_ident_start(chr) => {
-                let mut kind = self.ident();
+                let kind = self.ident();
 
                 self.tokenize_ident(kind)
             }
@@ -453,7 +451,7 @@ impl<'inp> Tokenizer<'inp> {
     fn str_literal(&mut self) -> TokenKind {
         let mut terminated = false;
 
-        while (self.first() != '\0') {
+        while self.first() != '\0' {
             if self.first() == '"' {
                 terminated = true;
                 let _ = self.bump();
@@ -489,7 +487,7 @@ impl<'inp> Tokenizer<'inp> {
 
                 let mut terminated = false;
 
-                while (self.first() != '\0') {
+                while self.first() != '\0' {
                     if self.first() == '"' && self.second() == '#' {
                         let _ = self.bump();
                         let _ = self.bump();

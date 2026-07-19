@@ -5,13 +5,11 @@ use crate::{
     type_parser::TypeParser,
 };
 
-use smallvec::SmallVec;
-
 use zeen_ast::{
     Expression, TypeExpr,
-    statements::{self, Statement, StatementKind},
+    statements::{Statement, StatementKind},
 };
-use zeen_lexer::{Token, TokenKind, token::CompilerKeyword};
+use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
 pub struct StmtParser<'tok, 'ctx, 'pr> {
     p: &'pr mut Parser<'tok, 'ctx>,

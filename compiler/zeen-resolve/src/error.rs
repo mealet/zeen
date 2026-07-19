@@ -1,5 +1,5 @@
 use smol_str::SmolStr;
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;

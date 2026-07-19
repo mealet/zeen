@@ -1,13 +1,10 @@
 use smol_str::SmolStr;
-use std::{path::PathBuf, sync::Arc};
-use zeen_resolve::DefId;
+use std::sync::Arc;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use zeen_ast::expressions::{BinaryOp, UnaryOp};
-
-// TODO: Remove `#![allow(unused)]` and delete unused code blocks from codebase when finished TypeChecker
 
 #[derive(Debug, Error, Diagnostic, Clone)]
 pub enum TypeError {

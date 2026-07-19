@@ -69,25 +69,6 @@ impl SymbolTable {
         &mut self.scopes.last_mut().expect("something wrong wtf").content
     }
 
-    pub fn current_kind(&self) -> ScopeKind {
-        self.scopes.last().expect("something wrong wtf").kind
-    }
-
-    // SelfDefs = (self / Self) defs
-    pub fn enclosing_method(&self) -> Option<SelfDefs> {
-        for scope in self.scopes.iter().rev() {
-            if let ScopeKind::Method {
-                self_def,
-                self_param,
-            } = scope.kind
-            {
-                return Some((self_def, self_param));
-            }
-        }
-
-        None
-    }
-
     pub fn enclosing_method_or_interface(&self) -> Option<SelfDefs> {
         for scope in self.scopes.iter().rev() {
             match scope.kind {

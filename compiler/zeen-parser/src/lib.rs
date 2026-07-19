@@ -1,16 +1,10 @@
-#![allow(unused)]
-
 use declarations::DeclParser;
 
 use bumpalo::Bump;
 use lasso::Rodeo;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use error::ParserError;
 use zeen_lexer::{Token, TokenKind};

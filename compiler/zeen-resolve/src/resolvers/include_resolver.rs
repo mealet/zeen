@@ -4,7 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc},
 };
 
 use bumpalo::Bump;
@@ -54,11 +54,6 @@ impl<'ctx> IncludeResolver<'ctx> {
             modules: HashMap::new(),
             errors: Vec::new(),
         }
-    }
-
-    fn interner_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
-        let mut interner = self.interner.borrow_mut();
-        interner.get_or_intern(value)
     }
 
     fn interner_resolve(&self, key: &Spur) -> SmolStr {
@@ -316,7 +311,7 @@ impl<'ctx> IncludeResolver<'ctx> {
     fn merge_module(
         &mut self,
         canonical: &Path,
-        is_root: bool,
+        _is_root: bool,
         out: &mut Vec<&'ctx Declaration<'ctx>>,
         visited: &mut HashSet<PathBuf>,
     ) {
@@ -359,7 +354,7 @@ impl<'ctx> IncludeResolver<'ctx> {
         enum NamespaceTag {
             Value,
             Type,
-        };
+        }
 
         let mut seen: HashMap<(NamespaceTag, Spur), (SourceSpan, &'ctx Declaration<'ctx>)> =
             HashMap::new();
@@ -384,12 +379,9 @@ impl<'ctx> IncludeResolver<'ctx> {
                 _ => continue,
             };
 
-            let (ns, name, span, is_pub) = entry;
+            let (ns, name, span, _) = entry;
 
             if let Some((first_span, first_decl)) = seen.get(&(ns, name)) {
-                let first_is_pub = decl_is_pub(first_decl);
-                let same_file = self.module_path_of(first_decl) == self.module_path_of(decl);
-
                 let name = self.interner_resolve(&entry.1);
 
                 let first_definition = {
@@ -514,22 +506,6 @@ fn resolve_use_path(
     path.set_extension("zn");
 
     Ok(path)
-}
-
-fn decl_is_pub(decl: &Declaration) -> bool {
-    match &decl.kind {
-        DeclarationKind::FnDecl { is_pub, .. } => *is_pub,
-        DeclarationKind::StructDecl { is_pub, .. } => *is_pub,
-        DeclarationKind::InterfaceDecl { is_pub, .. } => *is_pub,
-        DeclarationKind::EnumDecl { is_pub, .. } => *is_pub,
-
-        DeclarationKind::ExternVar { .. }
-        | DeclarationKind::ExternLink { .. }
-        | DeclarationKind::ExternInclude { .. } => true,
-
-        DeclarationKind::ImplementDecl { .. } => true,
-        DeclarationKind::Use { .. } => false,
-    }
 }
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {

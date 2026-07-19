@@ -1,15 +1,8 @@
-#![allow(unused)]
-
 use bumpalo::Bump;
 use lasso::Rodeo;
 use miette::NamedSource;
 
-use std::{
-    cell::RefCell,
-    path::Path,
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc};
 
 use error::ResolveError;
 use resolvers::{include_resolver, name_resolver};
@@ -60,7 +53,7 @@ pub fn resolve<'ctx>(
         miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
     )?;
 
-    let mut name_resolver = name_resolver::NameResolver::new(filename, src, arena, interner);
+    let mut name_resolver = name_resolver::NameResolver::new(filename, src, interner);
     name_resolver.resolve_module(resolved_program);
 
     let resolution_result = name_resolver.finish()?;

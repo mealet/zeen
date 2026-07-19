@@ -4,7 +4,7 @@ use zeen_ast::{
     declarations::GenericType,
     types::{self, TypeExpr, TypeKind},
 };
-use zeen_lexer::{Token, TokenKind, token};
+use zeen_lexer::{TokenKind, token};
 
 use smallvec::SmallVec;
 
@@ -19,7 +19,7 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
 
     pub fn parse(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
         match self.p.current().kind {
-            TokenKind::Type(ref comp_type) => self.parse_builtin(),
+            TokenKind::Type(_) => self.parse_builtin(),
 
             // ptr type: *T
             TokenKind::Star => self.parse_ptr(),
@@ -156,7 +156,7 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
 
         let arena = self.p.arena;
 
-        let mut child = self.parse()?;
+        let child = self.parse()?;
 
         let expr = arena.alloc(TypeExpr {
             kind: TypeKind::SinglePointer(child),
@@ -217,7 +217,7 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
         let kw_fn = self.p.current_clone();
         let _ = self.p.advance_not_eof()?;
 
-        let mut generic_args = self.parse_generics_declarations();
+        let generic_args = self.parse_generics_declarations();
 
         if !self.p.eat(TokenKind::OpenParen) {
             self.p.report(ParserError::UnknownType {
@@ -348,7 +348,7 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
 
         let arena = self.p.arena;
 
-        let mut child = self.parse()?;
+        let child = self.parse()?;
 
         let expr = arena.alloc(TypeExpr {
             kind: TypeKind::Const(child),

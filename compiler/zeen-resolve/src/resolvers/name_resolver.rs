@@ -1,13 +1,8 @@
-use bumpalo::Bump;
 use lasso::{Rodeo, Spur};
 use miette::{NamedSource, SourceSpan};
 use smol_str::SmolStr;
 
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use zeen_ast::{
     declarations::{Declaration, DeclarationKind, GenericType},
@@ -23,19 +18,15 @@ use crate::{
     symbol_table::{ScopeKind, SymbolTable},
 };
 
-pub struct NameResolver<'ctx> {
-    arena: &'ctx Bump,
+pub struct NameResolver {
     interner: Rc<RefCell<Rodeo>>,
+    errors: Vec<ResolveError>,
 
     table: SymbolTable,
     result: ResolutionResult,
 
     next_def_id: u32,
     current_src: NamedSource<Arc<String>>,
-
-    src: Arc<String>,
-    filename: Rc<String>,
-    errors: Vec<ResolveError>,
 }
 
 fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
@@ -51,27 +42,17 @@ fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
     is_self_inner(&param.ty.kind)
 }
 
-impl<'ctx> NameResolver<'ctx> {
-    pub fn new(
-        filename: Rc<String>,
-        src: Arc<String>,
-
-        arena: &'ctx Bump,
-        interner: Rc<RefCell<Rodeo>>,
-    ) -> Self {
+impl<'ctx> NameResolver {
+    pub fn new(filename: Rc<String>, src: Arc<String>, interner: Rc<RefCell<Rodeo>>) -> Self {
         Self {
-            arena,
             interner,
+            errors: Vec::new(),
 
             table: SymbolTable::new(),
             result: ResolutionResult::default(),
 
             next_def_id: 0,
             current_src: NamedSource::new(filename.as_str(), src.clone()),
-
-            src,
-            filename,
-            errors: Vec::new(),
         }
     }
 
@@ -194,7 +175,7 @@ impl<'ctx> NameResolver<'ctx> {
             }
 
             DeclarationKind::InterfaceDecl { name, is_pub, .. } => {
-                let name_resolved = self.interner_resolve(&name.0);
+                let _name_resolved = self.interner_resolve(&name.0);
 
                 let def_id = self.define_at(
                     NodeKey::from_decl(decl),

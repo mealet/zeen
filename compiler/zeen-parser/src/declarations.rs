@@ -1,12 +1,9 @@
-use crate::{
-    Parser, error::ParserError, expressions::ExprParser, statements::StmtParser,
-    type_parser::TypeParser,
-};
+use crate::{Parser, error::ParserError, statements::StmtParser, type_parser::TypeParser};
 
 use smallvec::SmallVec;
 
-use zeen_ast::{Declaration, DeclarationKind, Expression, Statement, TypeExpr, declarations};
-use zeen_lexer::{Token, TokenKind, token::CompilerKeyword};
+use zeen_ast::{Declaration, DeclarationKind, declarations};
+use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
 pub struct DeclParser<'tok, 'ctx, 'pr> {
     p: &'pr mut Parser<'tok, 'ctx>,
@@ -94,7 +91,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
     fn parse_fn(
         &mut self,
-        start_span: miette::SourceSpan,
+        _start_span: miette::SourceSpan,
         is_pub: IsPub,
         is_extern: IsExtern,
     ) -> Option<&'ctx Declaration<'ctx>> {
@@ -203,9 +200,9 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             Any,
             Methods,
             Reported,
-        };
+        }
 
-        let struct_kw = self
+        let _struct_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Struct), "struct")?;
 
@@ -317,7 +314,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         start_span: miette::SourceSpan,
         is_pub: IsPub,
     ) -> Option<&'ctx Declaration<'ctx>> {
-        let enum_kw = self
+        let _enum_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Enum), "enum")?;
 
@@ -413,7 +410,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let module_id = self.p.get_or_intern(module_name);
         let module = (module_id, ident_token.merge_span(current.span));
 
-        let mut end = current.span;
+        let end = current.span;
 
         let _ = self.p.expect(TokenKind::Semicolon, ";")?;
 
@@ -426,7 +423,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
     }
 
     fn parse_link(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
-        let link_kw = self
+        let _link_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Link), "link")?;
 
@@ -454,7 +451,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
     }
 
     fn parse_include(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
-        let include_kw = self
+        let _include_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Include), "include")?;
 
@@ -486,7 +483,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         start_span: miette::SourceSpan,
         is_pub: IsPub,
     ) -> Option<&'ctx Declaration<'ctx>> {
-        let interface_kw = self
+        let _interface_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Interface), "interface")?;
 
@@ -541,7 +538,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         &mut self,
         start_span: miette::SourceSpan,
     ) -> Option<&'ctx Declaration<'ctx>> {
-        let implement_kw = self
+        let _implement_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Implement), "implement")?;
 
@@ -625,7 +622,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
     }
 
     fn parse_let(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
-        let let_kw = self
+        let _let_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Let), "let")?;
 
@@ -657,10 +654,9 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
 
-    use std::sync::Arc;
     use std::{cell::RefCell, rc::Rc};
 
-    use zeen_ast::{Expression, ExpressionKind, Statement, StatementKind, TypeExpr, TypeKind};
+    use zeen_ast::{TypeExpr, TypeKind};
 
     macro_rules! make_parser {
         ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident) => {

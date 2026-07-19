@@ -344,8 +344,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             LiteralKind::ByteChar { terminated, empty } => {
                 self.parse_literal_char(true, terminated, empty)
             }
-            LiteralKind::Str { terminated } => self.parse_literal_string(),
-            LiteralKind::RawStr { terminated } => self.parse_literal_raw_string(),
+            LiteralKind::Str { .. } => self.parse_literal_string(),
+            LiteralKind::RawStr { .. } => self.parse_literal_raw_string(),
             LiteralKind::InvalidRawStr => {
                 self.p.report(ParserError::InvalidLiteral {
                     message: "invalid raw string literal found".into(),
@@ -406,7 +406,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         let token = self.p.current();
         let span = token.span;
 
-        let mut str_value =
+        let str_value =
             self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_owned();
 
         let value = str_value.parse::<f64>().unwrap_or_else(|err| {
@@ -461,8 +461,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         let span = token.span;
 
         let byte_literal_offset = if is_byte { 1 } else { 0 };
-        let str_value = (&self.p.src
-            [token.span.offset() + byte_literal_offset..token.span.offset() + token.span.len()]);
+        let str_value = &self.p.src
+            [token.span.offset() + byte_literal_offset..token.span.offset() + token.span.len()];
 
         debug_assert_eq!(str_value.chars().nth(0), Some('\''));
         debug_assert_eq!(str_value.chars().last(), Some('\''));
@@ -792,7 +792,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             self.p.src[ident_span.offset() + 1..ident_span.offset() + ident_span.len()].to_owned();
         let ident_id = self.p.get_or_intern(&ident_slice);
 
-        let open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
+        let _open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
         let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
 
         if matches!(ident_slice.as_str(), "as" | "sizeof" | "alignof") {
@@ -847,7 +847,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         let field_id = self.p.get_or_intern(field_slice);
 
         let mut generic_args: Option<&'_ [&'_ zeen_ast::TypeExpr<'_>]> = None;
-        let mut span = field_token.span;
+        let mut _span = field_token.span;
 
         if self.p.eat(TokenKind::Hashtag) {
             let _ = self.p.expect(TokenKind::OpenBracket, "[")?;
@@ -858,7 +858,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 let current = self.p.current_clone();
 
                 if self.p.eat(TokenKind::CloseBracket) {
-                    span = field_token.merge_span(current.span);
+                    _span = field_token.merge_span(current.span);
                     break;
                 }
 
@@ -1533,8 +1533,6 @@ mod tests {
 
     #[test]
     fn struct_init_empty() {
-        use zeen_ast::types::*;
-
         const SRC: &str = "foo {}";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);

@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use lasso::Spur;
 use zeen_ast::types::BuiltinType;
 use zeen_hir::HirTypeKind;
-use zeen_resolve::{DefId, DefInfo};
+use zeen_resolve::DefId;
 
 use crate::{DEFAULT_FLOAT_LITERAL, DEFAULT_INT_LITERAL};
 
@@ -269,6 +269,7 @@ pub enum SelfMode {
     RefConst,
 }
 
+#[allow(unused)]
 impl SelfMode {
     pub fn takes_ownership(self) -> bool {
         matches!(self, SelfMode::Value | SelfMode::ValueConst)
@@ -306,6 +307,7 @@ pub fn self_mode_of(ty: &HirTypeKind) -> Option<SelfMode> {
 
 /// Representation how the caller is accessing a struct instance when invoking interface method on it
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(unused)]
 pub enum ReceiverAccess {
     Value,
     RefMut,

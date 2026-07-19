@@ -1,17 +1,6 @@
-#![allow(unused)]
-
 use zeen_driver::{CompilationContext, MietteDriver, PathsConfig};
 
-use miette::{Diagnostic, NamedSource, SourceSpan};
-use thiserror::Error;
-
-use std::{
-    cell::RefCell,
-    collections::HashSet,
-    path::Path,
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use std::{cell::RefCell, collections::HashSet, path::Path, rc::Rc, sync::Arc};
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
 

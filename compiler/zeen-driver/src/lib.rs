@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 mod span;
 
 pub use span::LineOffsets;

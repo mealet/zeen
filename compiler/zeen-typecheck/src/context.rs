@@ -62,10 +62,6 @@ impl TypeCheckCtx {
         self.stack.last()?.generic_bindings.get(&def_id).copied()
     }
 
-    pub fn bind_generic(&mut self, def_id: DefId, ty: TypeId) {
-        self.current_mut().generic_bindings.insert(def_id, ty);
-    }
-
     pub fn generic_bounds(&self, def_id: DefId) -> &[DefId] {
         self.stack
             .last()

@@ -47,10 +47,6 @@ impl CoerceResult {
     pub fn is_ok(self) -> bool {
         !matches!(self, CoerceResult::Fail)
     }
-
-    pub fn is_err(self) -> bool {
-        matches!(self, CoerceResult::Fail)
-    }
 }
 
 pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceResult {

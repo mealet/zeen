@@ -1,13 +1,6 @@
-#![allow(unused)]
-
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use lasso::{Rodeo, Spur};
-use miette::SourceSpan;
 use smol_str::SmolStr;
 
 use zeen_ast::{
@@ -71,12 +64,6 @@ impl<'res> HirLowering<'res> {
         let id = HirId(self.next_id);
         self.next_id += 1;
         id
-    }
-
-    fn interner_intern(&mut self, value: impl AsRef<str>) -> lasso::Spur {
-        // compiler is not async/threaded (at least for now), so we're unwrapping lock
-        let mut interner = self.interner.borrow_mut();
-        interner.get_or_intern(value)
     }
 
     fn interner_resolve(&self, key: &Spur) -> SmolStr {
@@ -223,7 +210,7 @@ impl<'res> HirLowering<'res> {
             }
 
             DeclarationKind::ImplementDecl {
-                interface,
+                interface: _,
                 object,
                 methods,
                 generics,

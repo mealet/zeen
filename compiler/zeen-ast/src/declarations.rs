@@ -1,7 +1,7 @@
 use lasso::Spur;
 use miette::SourceSpan;
 
-use crate::{Source, expressions::Expression, statements::Statement, types::TypeExpr};
+use crate::{Source, statements::Statement, types::TypeExpr};
 
 #[derive(Debug, Clone)]
 pub struct Declaration<'arena> {
