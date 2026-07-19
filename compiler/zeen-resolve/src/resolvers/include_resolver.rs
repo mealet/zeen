@@ -366,11 +366,21 @@ impl<'ctx> IncludeResolver<'ctx> {
 
         for decl in merged {
             let entry: (NamespaceTag, Spur, SourceSpan, bool) = match decl.kind {
-                DeclarationKind::FnDecl { name, is_pub, .. } => (NamespaceTag::Value, name.0, name.1, is_pub),
-                DeclarationKind::StructDecl { name, is_pub, .. } => (NamespaceTag::Type, name.0, name.1, is_pub),
-                DeclarationKind::InterfaceDecl { name, is_pub, .. } => (NamespaceTag::Type, name.0, name.1, is_pub),
-                DeclarationKind::EnumDecl { name, is_pub, .. } => (NamespaceTag::Value, name.0, name.1, is_pub),
-                DeclarationKind::ExternVar { name, .. } => (NamespaceTag::Value, name.0, name.1, false),
+                DeclarationKind::FnDecl { name, is_pub, .. } => {
+                    (NamespaceTag::Value, name.0, name.1, is_pub)
+                }
+                DeclarationKind::StructDecl { name, is_pub, .. } => {
+                    (NamespaceTag::Type, name.0, name.1, is_pub)
+                }
+                DeclarationKind::InterfaceDecl { name, is_pub, .. } => {
+                    (NamespaceTag::Type, name.0, name.1, is_pub)
+                }
+                DeclarationKind::EnumDecl { name, is_pub, .. } => {
+                    (NamespaceTag::Value, name.0, name.1, is_pub)
+                }
+                DeclarationKind::ExternVar { name, .. } => {
+                    (NamespaceTag::Value, name.0, name.1, false)
+                }
                 _ => continue,
             };
 
