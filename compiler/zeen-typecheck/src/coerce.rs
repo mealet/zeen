@@ -156,3 +156,47 @@ pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceRe
 pub fn is_coercible(interner: &TypeInterner, from: TypeId, to: TypeId) -> bool {
     try_coerce(interner, from, to).is_ok()
 }
+
+pub fn verify_cast(interner: &TypeInterner, from: TypeId, to: TypeId) -> bool {
+    if is_coercible(interner, from, to) {
+        return true;
+    }
+
+    let from_ty = interner.get(from);
+    let to_ty = interner.get(to);
+
+    let is_numeric = |t: &Type| {
+        matches!(t, Type::IntLiteral | Type::FloatLiteral)
+            || matches!(t, Type::Builtin(b) if builtin_is_integer(*b) || builtin_is_float(*b))
+    };
+
+    let is_bool = |t: &Type| matches!(t, Type::Builtin(BuiltinType::bool));
+    let is_char = |t: &Type| matches!(t, Type::Builtin(BuiltinType::char));
+    let is_int_only = |t: &Type| {
+        matches!(t, Type::IntLiteral) || matches!(t, Type::Builtin(b) if builtin_is_integer(*b))
+    };
+    let is_pointer = |t: &Type| matches!(t, Type::Pointer { .. } | Type::ManyPointer { .. });
+
+    match (from_ty, to_ty) {
+        // numeric <-> numeric
+        (a, b) if is_numeric(a) && is_numeric(b) => true,
+
+        // bool <-> integer
+        (a, b) if (is_bool(a) && is_int_only(b)) || (is_int_only(a) && is_bool(b)) => true,
+
+        // char <-> integer
+        (a, b) if (is_char(a) && is_int_only(b)) || (is_int_only(a) && is_char(b)) => true,
+
+        // enum <-> integer
+        (Type::Enum { .. }, b) if is_int_only(b) => true,
+        (a, Type::Enum { .. }) if is_int_only(a) => true,
+
+        // ptr <-> ptr
+        (a, b) if is_pointer(a) && is_pointer(b) => true,
+
+        // [N]T -> [*]T
+        (Type::Array { .. }, Type::ManyPointer { .. }) => true,
+
+        _ => false,
+    }
+}

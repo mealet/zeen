@@ -81,6 +81,18 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("invalid type cast: `{from}` -> `{to}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::arg_count_mismatch))]
+    InvalidCast {
+        from: SmolStr,
+        to: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("unable to infer `{generic_name}` generic type")]
     #[diagnostic(severity(Error), code(zeen::typechecker::cannot_infer_generic))]
     CannotInferGeneric {

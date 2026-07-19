@@ -1212,7 +1212,18 @@ impl<'res> TypeChecker<'res> {
                         self.result.interner.error()
                     }
                 };
-                self.synth_expr(&args[1]);
+
+                let value_ty = self.synth_expr(&args[1]);
+                let value_ty = self.default_literal(value_ty);
+
+                if !coerce::verify_cast(&self.result.interner, value_ty, target_ty) {
+                    self.report(TypeError::InvalidCast {
+                        from: self.display_type(value_ty).into(),
+                        to: self.display_type(target_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
 
                 target_ty
             }
