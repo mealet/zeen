@@ -874,19 +874,74 @@ impl<'res> TypeChecker<'res> {
                 self.check_not_const_target(object);
             }
 
-            HirStmtKind::CompoundAssign { object, value, op } => todo!(),
+            HirStmtKind::CompoundAssign { object, value, op } => {
+                let prev_expect = self.expect_assign_interface;
+                self.expect_assign_interface = true;
 
-            HirStmtKind::While { condition, block } => todo!(),
+                let obj_ty = self.synth_expr(object);
+                self.expect_assign_interface = prev_expect;
+
+                let value_ty = self.synth_expr(value);
+                self.check_binary_op(*op, obj_ty, value_ty, stmt.source.clone());
+                self.check_not_const_target(object);
+            }
+
+            HirStmtKind::While { condition, block } => {
+                let bool_ty = self.result.interner.builtin(BuiltinType::bool);
+                self.check_expr(condition, bool_ty, false);
+
+                self.ctx.enter_loop();
+                self.check_stmt(block);
+                self.ctx.exit_loop();
+            }
 
             HirStmtKind::For {
                 def_id,
                 varname,
                 iterator,
                 block,
-            } => todo!(),
+            } => {
+                let iter_ty = self.synth_expr(iterator);
+                let elem_ty = match self.result.interner.get(iter_ty).clone() {
+                    Type::IntLiteral => self.result.interner.builtin(BuiltinType::usize),
+                    Type::Builtin(b) if coerce::builtin_is_integer(b) => iter_ty,
+                    Type::Array { element, .. } => element,
+                    Type::Slice { element, .. } => element,
+                    Type::ManyPointer { inner, .. } => inner,
+                    Type::Error => self.result.interner.error(),
+                    _ => {
+                        self.report(TypeError::NotIterable {
+                            child_type: self.display_type(iter_ty).into(),
+                            src: iterator.source.src(),
+                            span: iterator.source.span,
+                        });
+                        self.result.interner.error()
+                    }
+                };
 
-            HirStmtKind::Break => todo!(),
-            HirStmtKind::Continue => todo!(),
+                self.result.def_types.insert(*def_id, elem_ty);
+
+                self.ctx.enter_loop();
+                self.check_stmt(block);
+                self.ctx.exit_loop();
+            }
+
+            HirStmtKind::Break => {
+                if !self.ctx.in_loop() {
+                    self.report(TypeError::BreakOutsideLoop {
+                        src: stmt.source.src(),
+                        span: stmt.source.span,
+                    });
+                }
+            }
+            HirStmtKind::Continue => {
+                if !self.ctx.in_loop() {
+                    self.report(TypeError::ContinueOutsideLoop {
+                        src: stmt.source.src(),
+                        span: stmt.source.span,
+                    });
+                }
+            }
 
             HirStmtKind::Return { value } => {
                 let expected = self.ctx.current().return_type;

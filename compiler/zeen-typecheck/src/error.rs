@@ -130,9 +130,18 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("usage of break outside loop")]
+    #[error("usage of `break` outside loop")]
     #[diagnostic(severity(Error), code(zeen::typechecker::break_outside_loop))]
     BreakOutsideLoop {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("usage of `continue` outside loop")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::continue_outside_loop))]
+    ContinueOutsideLoop {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label]
@@ -142,6 +151,17 @@ pub enum TypeError {
     #[error("type `{child_type}` is not indexable")]
     #[diagnostic(severity(Error), code(zeen::typechecker::not_indexable))]
     NotIndexable {
+        child_type: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("type `{child_type}` is not iterable")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::not_indexable))]
+    NotIterable {
         child_type: SmolStr,
 
         #[source_code]
