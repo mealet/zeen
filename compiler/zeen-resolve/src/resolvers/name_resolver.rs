@@ -775,6 +775,11 @@ impl<'ctx> NameResolver<'ctx> {
                     decl: None,
                     is_pub: false,
                 });
+
+                self.result
+                    .expr_bindings
+                    .insert(NodeKey::from_stmt(stmt), Resolution::Def(def_id));
+
                 self.table.declare_value(varname.0, def_id);
 
                 self.resolve_stmt(block);

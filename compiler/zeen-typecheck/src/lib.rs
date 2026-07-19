@@ -903,7 +903,7 @@ impl<'res> TypeChecker<'res> {
             } => {
                 let iter_ty = self.synth_expr(iterator);
                 let elem_ty = match self.result.interner.get(iter_ty).clone() {
-                    Type::IntLiteral => self.result.interner.builtin(BuiltinType::usize),
+                    Type::IntLiteral => self.result.interner.builtin(DEFAULT_INT_LITERAL),
                     Type::Builtin(b) if coerce::builtin_is_integer(b) => iter_ty,
                     Type::Array { element, .. } => element,
                     Type::Slice { element, .. } => element,
