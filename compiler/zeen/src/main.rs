@@ -1,105 +1,187 @@
+use clap::{CommandFactory, Parser};
+use std::{cell::RefCell, collections::HashSet, path::Path, process::exit, rc::Rc, sync::Arc};
 use zeen_driver::{CompilationContext, MietteDriver, PathsConfig};
-
-use std::{cell::RefCell, collections::HashSet, path::Path, rc::Rc, sync::Arc};
 
 mod cli;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("No path to file found");
+    let args = cli::Args::try_parse().unwrap_or_else(|err| {
+        let mut command = cli::Args::command();
 
-        std::process::exit(1);
-    });
+        let authors_env = env!("CARGO_PKG_AUTHORS");
+        let authors_fmt = if authors_env.contains(":") {
+            format!("\n| {}", authors_env.replace(":", "\n| "))
+        } else {
+            authors_env.to_owned()
+        };
 
-    match std::fs::read_to_string(&path) {
-        Ok(content) => {
-            let mut context = CompilationContext {
-                paths: PathsConfig {
-                    project_root: Path::new("compiler").into(),
-                    std_root: Some(Path::new("compiler").into()),
-                    linked: HashSet::new(),
-                },
-                core_files: CORE_FILES.iter().map(|file| file.to_basic()).collect(),
-                mode: Default::default(),
-                output: Default::default(),
-            };
+        cli::println_primary("💤 Zeen Programming Language");
+        cli::println_basic(format!("| - version: {}", env!("CARGO_PKG_VERSION")));
+        cli::println_basic(format!("| - authors: {}", authors_fmt));
 
-            let content = Arc::new(content);
-            let rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
-            let bump = bumpalo::Bump::default();
+        match err.kind() {
+            clap::error::ErrorKind::DisplayVersion => {
+                exit(0);
+            }
 
-            let driver = MietteDriver::new();
-            let mut tokens = zeen_lexer::tokenize(&content);
+            _ => {
+                cli::println_basic("");
+                cli::println_primary("🍀 Options:");
 
-            let filename = Rc::new(
-                Path::new(&path)
-                    .file_name()
-                    .unwrap_or(std::ffi::OsStr::new(&path))
-                    .to_string_lossy()
-                    .to_string(),
-            );
+                command.print_help().unwrap();
 
-            let mut parser = zeen_parser::Parser::new(
-                Rc::clone(&filename),
-                Arc::clone(&content),
-                &mut tokens,
-                &bump,
-                Rc::clone(&rodeo),
-            );
+                cli::println_basic("");
+                cli::println_primary("🎓 Examples of usage:");
+                cli::println_basic("  zeen example.zn output");
+                cli::println_basic("  zeen example.zn output -m Release");
+                cli::println_basic("  zeen example.zn output --emit IR");
 
-            let program = parser.parse_program().unwrap_or_else(|errors| {
-                for err in errors {
-                    let report_string = driver.report(err).unwrap();
-                    eprintln!("{}", report_string);
+                if err.kind() == clap::error::ErrorKind::DisplayHelp {
+                    exit(0);
                 }
 
-                std::process::exit(1);
-            });
-
-            let (resolved_program, mut resolution_result) = zeen_resolve::resolve(
-                Rc::clone(&filename),
-                Arc::clone(&content),
-                Path::new(&path),
-                program,
-                &bump,
-                Rc::clone(&rodeo),
-                &mut context,
-            )
-            .unwrap_or_else(|errors| {
-                for err in errors {
-                    let report_string = driver.report(&err).unwrap();
-                    eprintln!("{}", report_string);
-                }
-
-                std::process::exit(1);
-            });
-
-            let mut hir_lowering =
-                zeen_hir::HirLowering::new(&resolution_result, Rc::clone(&rodeo));
-            let hir_module = hir_lowering.lower_module(resolved_program);
-
-            drop(bump);
-
-            let mut typechecker =
-                zeen_typecheck::TypeChecker::new(&mut resolution_result, Rc::clone(&rodeo));
-            typechecker.check_module(&hir_module);
-
-            let typechecker_result = typechecker.finish();
-
-            if !typechecker_result.errors.is_empty() {
-                for err in typechecker_result.errors {
-                    let report_string = driver.report(&err).unwrap();
-                    eprintln!("{}", report_string);
-                }
-
-                std::process::exit(1);
+                exit(1);
             }
         }
-        Err(err) => {
-            eprintln!("Unable to open file: {}", err);
-            std::process::exit(1);
+    });
+
+    let filename = args
+        .path
+        .file_name()
+        .unwrap_or_else(|| {
+            cli::println_error("Unable to get source filename");
+            exit(1);
+        })
+        .to_str()
+        .unwrap_or_else(|| {
+            cli::println_error("Unable to get source filename");
+            exit(1);
+        });
+
+    cli::println_info(
+        "Reading",
+        format!(
+            "`{}` ({})",
+            filename,
+            std::fs::canonicalize(&args.path)
+                .unwrap_or_else(|_| {
+                    cli::println_error(format!("File `{}` doesn't exist", filename));
+                    exit(1);
+                })
+                .display()
+        ),
+    );
+
+
+    let rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
+    let bump = bumpalo::Bump::default();
+    let driver = MietteDriver::new();
+
+    let content = {
+        let src = std::fs::read_to_string(&args.path).unwrap_or_else(|err| {
+            cli::println_error(format!(
+                "Unable to read source ({}) file: {}",
+                args.path.display(),
+                err
+            ));
+            exit(1);
+        });
+
+        Arc::new(src)
+    };
+
+    let filename = Rc::new(filename.to_string());
+    let project_root =  std::fs::canonicalize(&args.path).expect("already verified earlier").parent().expect("must work").into();
+
+    let mut context = CompilationContext {
+        paths: PathsConfig {
+            project_root,
+            std_root: None,
+            linked: HashSet::new(),
+        },
+        core_files: CORE_FILES.iter().map(|file| file.to_basic()).collect(),
+        mode: args.mode,
+        output: args.emit,
+    };
+
+    cli::println_info(
+        "Setting",
+        format!(
+            "up project (root dir: \"{}\")",
+            context.paths.project_root.display()
+        ),
+    );
+
+    let mut tokens = zeen_lexer::tokenize(&content);
+    let mut parser = zeen_parser::Parser::new(
+        Rc::clone(&filename),
+        Arc::clone(&content),
+        &mut tokens,
+        &bump,
+        Rc::clone(&rodeo),
+    );
+
+    cli::println_info("Parsing", "abstract syntax tree");
+
+    let program = parser.parse_program().unwrap_or_else(|errors| {
+        for err in errors {
+            let report_string = driver.report(err).unwrap();
+            eprintln!("{}", report_string);
         }
+
+        cli::println_error(format!("Compiler returned {} errors", errors.len()));
+
+        exit(1);
+    });
+
+    cli::println_info("Resolving", format!("program ({} declarations)", program.len()));
+
+    let (resolved_program, mut resolution_result) = zeen_resolve::resolve(
+        Rc::clone(&filename),
+        Arc::clone(&content),
+        Path::new(&args.path),
+        program,
+        &bump,
+        Rc::clone(&rodeo),
+        &mut context,
+    )
+    .unwrap_or_else(|errors| {
+        for err in &errors {
+            let report_string = driver.report(err).unwrap();
+            eprintln!("{}", report_string);
+        }
+
+        cli::println_error(format!("Compiler returned {} errors", errors.len()));
+
+        exit(1);
+    });
+
+    let mut hir_lowering = zeen_hir::HirLowering::new(&resolution_result, Rc::clone(&rodeo));
+    let hir_module = hir_lowering.lower_module(resolved_program);
+
+    drop(bump);
+
+    cli::println_info("Checking", format!("resolved program ({} definitions)", resolution_result.defs.len()));
+
+    let mut typechecker =
+        zeen_typecheck::TypeChecker::new(&mut resolution_result, Rc::clone(&rodeo));
+    typechecker.check_module(&hir_module);
+
+    let typechecker_result = typechecker.finish();
+
+    if !typechecker_result.errors.is_empty() {
+        for err in &typechecker_result.errors {
+            let report_string = driver.report(err).unwrap();
+            eprintln!("{}", report_string);
+        }
+
+        cli::println_error(format!(
+            "Compiler returned {} errors",
+            typechecker_result.errors.len()
+        ));
+
+        exit(1);
     }
 }

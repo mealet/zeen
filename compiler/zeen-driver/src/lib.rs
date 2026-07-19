@@ -41,18 +41,24 @@ pub struct CompilationContext {
     pub output: CompilationOutput,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum CompilationMode {
+    #[value(name = "Debug")]
     #[default]
     Debug,
+
+    #[value(name = "Release")]
     Release,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum CompilationOutput {
+    #[value(name = "BIN")]
     #[default]
     Binary,
+    #[value(name = "OBJ")]
     Object,
+    #[value(name = "IR")]
     EmitIR,
 }
 

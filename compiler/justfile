@@ -13,12 +13,12 @@ default:
 # Run the compiler on `test.zn` file
 run:
   touch test.zn
-  cargo run -- test.zn
+  cargo run -- test.zn output
 
 # Run the compiler on `test.zn` (release mode)
 run-release:
   touch test.zn
-  cargo run --release -- test.zn
+  cargo run --release -- test.zn output
 
 nvim:
   touch test.zn

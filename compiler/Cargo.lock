@@ -603,6 +603,7 @@ dependencies = [
 name = "zeen-driver"
 version = "0.0.0"
 dependencies = [
+ "clap",
  "miette",
 ]
 
