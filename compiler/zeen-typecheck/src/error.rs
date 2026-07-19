@@ -159,6 +159,15 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("empty arrays are not allowed")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::empty_array))]
+    EmptyArrayError {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("attempt to assign to const")]
     #[diagnostic(severity(Error), code(zeen::typechecker::assign_to_const))]
     AssignToConst {

@@ -531,6 +531,14 @@ impl<'res> TypeChecker<'res> {
 
                 let len_val = len.as_ref().and_then(|expr| self.eval_const_u64(expr));
 
+                if let Some(0) = len_val {
+                    self.report(TypeError::EmptyArrayError {
+                        src: ty.source.src(),
+                        span: ty.source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
                 if len_val.is_some() {
                     self.result.interner.intern(Type::Array {
                         element: elem_ty,
@@ -1067,7 +1075,27 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            HirExprKind::ArrayInit { elements } => todo!(),
+            HirExprKind::ArrayInit { elements } => {
+                if elements.is_empty() {
+                    self.report(TypeError::EmptyArrayError {
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
+                let first_ty = self.synth_expr(&elements[0]);
+                let first_ty = self.default_literal(first_ty);
+
+                for el in &elements[1..] {
+                    self.check_expr(el, first_ty, false);
+                }
+
+                self.result.interner.intern(Type::Array {
+                    element: first_ty,
+                    len: Some(elements.len() as u64),
+                })
+            }
 
             HirExprKind::Type(_) => self.result.interner.error(),
             HirExprKind::Error => self.result.interner.error(),
