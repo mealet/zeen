@@ -39,10 +39,6 @@ pub enum HirStmtKind {
         value: Option<Rc<HirExpr>>,
     },
 
-    Defer {
-        body: Rc<HirStmt>,
-    },
-
     Break,
     Continue,
 

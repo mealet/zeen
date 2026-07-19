@@ -134,10 +134,6 @@ impl<'res> TypeChecker<'res> {
         )
     }
 
-    fn inject_well_known_interfaces_methods(&mut self) {
-        todo!()
-    }
-
     // --> Entry Point
 
     pub fn check_module(&mut self, module: &HirModule) {
@@ -870,6 +866,20 @@ impl<'res> TypeChecker<'res> {
                 self.check_not_const_target(object);
             }
 
+            HirStmtKind::CompoundAssign { object, value, op } => todo!(),
+
+            HirStmtKind::While { condition, block } => todo!(),
+
+            HirStmtKind::For {
+                def_id,
+                varname,
+                iterator,
+                block,
+            } => todo!(),
+
+            HirStmtKind::Break => todo!(),
+            HirStmtKind::Continue => todo!(),
+
             HirStmtKind::Return { value } => {
                 let expected = self.ctx.current().return_type;
 
@@ -897,8 +907,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirStmtKind::Error => {}
-
-            stmt => todo!("{:#?}", stmt),
         }
     }
 
@@ -1027,10 +1035,42 @@ impl<'res> TypeChecker<'res> {
                 self.check_block(stmts, trailing, None, &expr.source)
             }
 
+            HirExprKind::Switch => unreachable!(),
+
+            HirExprKind::SliceAccess { object, index } => {
+                let obj_ty = self.synth_expr(object);
+                let usize_ty = self.result.interner.builtin(BuiltinType::usize);
+                let index_ty = self.check_expr(index, usize_ty, false);
+
+                match self.result.interner.get(obj_ty).clone() {
+                    Type::Array { element, .. } => element,
+                    Type::Slice { element, .. } => element,
+                    Type::ManyPointer { inner, .. } => inner,
+                    Type::Struct {
+                        def_id,
+                        generic_args,
+                    } => self.check_slice_access_on_struct(
+                        def_id,
+                        &generic_args,
+                        index_ty,
+                        &expr.source,
+                    ),
+                    Type::Error => self.result.interner.error(),
+                    _ => {
+                        self.report(TypeError::NotIndexable {
+                            child_type: self.display_type(obj_ty).into(),
+                            src: object.source.src(),
+                            span: object.source.span,
+                        });
+                        self.result.interner.error()
+                    }
+                }
+            }
+
+            HirExprKind::ArrayInit { elements } => todo!(),
+
             HirExprKind::Type(_) => self.result.interner.error(),
             HirExprKind::Error => self.result.interner.error(),
-
-            _ => todo!(),
         }
     }
 
@@ -2665,6 +2705,30 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
+            Type::ManyPointer { inner, is_const } => {
+                let new_inner = self.substitute_generics(inner, bindings);
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::ManyPointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Slice { element, is_const } => {
+                let new_element = self.substitute_generics(element, bindings);
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Slice {
+                        element: new_element,
+                        is_const,
+                    })
+                }
+            }
+
             Type::Array { element, len } => {
                 let new_elem = self.substitute_generics(element, bindings);
                 if new_elem == element {
@@ -3428,6 +3492,41 @@ impl<'res> TypeChecker<'res> {
             iface_name,
             method_name,
             &[],
+            ReceiverAccess::Value,
+            source,
+        );
+
+        match result {
+            Some(ret_ty) if self.expect_assign_interface => {
+                match self.result.interner.get(ret_ty).clone() {
+                    Type::Pointer { inner, .. } => inner,
+                    _ => ret_ty,
+                }
+            }
+            Some(ret_ty) => ret_ty,
+            None => self.result.interner.error(),
+        }
+    }
+
+    fn check_slice_access_on_struct(
+        &mut self,
+        def_id: DefId,
+        generic_args: &[TypeId],
+        index_ty: TypeId,
+        source: &Source,
+    ) -> TypeId {
+        let (iface_name, method_name) = if self.expect_assign_interface {
+            ("SlicePtr", "slice_ptr")
+        } else {
+            ("Slice", "slice")
+        };
+
+        let result = self.call_interface_method(
+            def_id,
+            generic_args,
+            iface_name,
+            method_name,
+            &[index_ty],
             ReceiverAccess::Value,
             source,
         );
