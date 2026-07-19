@@ -19,3 +19,5 @@ zeen-parser = {path = "../zeen-parser"}
 zeen-resolve = {path = "../zeen-resolve"}
 zeen-hir = { path = "../zeen-hir" }
 zeen-typecheck = { path = "../zeen-typecheck" }
+clap = { version = "4.6.2", features = ["derive"] }
+colored = "3.1.1"

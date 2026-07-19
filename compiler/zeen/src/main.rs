@@ -2,6 +2,8 @@ use zeen_driver::{CompilationContext, MietteDriver, PathsConfig};
 
 use std::{cell::RefCell, collections::HashSet, path::Path, rc::Rc, sync::Arc};
 
+mod cli;
+
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
 
 fn main() {
