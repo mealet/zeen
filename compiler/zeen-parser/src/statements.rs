@@ -206,7 +206,9 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         let mut expr_parser = ExprParser::new(self.p);
 
         let condition = expr_parser.parse_grouped()?;
-        let block = self.parse()?;
+
+        let mut stmt_parser = StmtParser::new(self.p).with_optional_semicolon(false);
+        let block = stmt_parser.parse()?;
 
         let _ = self.p.eat(TokenKind::Semicolon);
 
@@ -240,7 +242,8 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
         let _ = self.p.expect(TokenKind::CloseParen, ")")?;
 
-        let block = self.parse()?;
+        let mut stmt_parser = StmtParser::new(self.p).with_optional_semicolon(false);
+        let block = stmt_parser.parse()?;
 
         let _ = self.p.eat(TokenKind::Semicolon);
 
