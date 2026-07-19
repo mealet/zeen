@@ -2636,7 +2636,8 @@ impl<'res> TypeChecker<'res> {
                 }
             },
 
-            (Type::Pointer { inner: pinner, .. }, Type::Pointer { inner: ainner, .. }) => {
+            (Type::Pointer { inner: pinner, .. }, Type::Pointer { inner: ainner, .. })
+            | (Type::ManyPointer { inner: pinner, .. }, Type::ManyPointer { inner: ainner, .. }) => {
                 self.unify_for_inference(pinner, ainner, bindings, source);
             }
 
