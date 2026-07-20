@@ -390,6 +390,21 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("recursive type `{ty}` is infinite")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::infinite_recursive_type),
+        help("consider using wrapping, like pointers: `*{ty}`")
+    )]
+    InfiniteRecursiveType {
+        ty: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]

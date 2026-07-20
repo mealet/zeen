@@ -182,6 +182,18 @@ impl<'res> TypeChecker<'res> {
                     self.result.def_types.insert(field.def_id, ty);
                     self.result.const_bindings.insert(field.def_id, is_const);
 
+                    // inifinite recursive type checker
+
+                    if let Type::Struct { def_id, .. } = self.result.interner.get(ty)
+                        && def_id == &decl.def_id
+                    {
+                        self.report(TypeError::InfiniteRecursiveType {
+                            ty: self.display_type(ty).into(),
+                            src: decl.source.src(),
+                            span: field.ty.source.span,
+                        });
+                    }
+
                     fields.push(StructFieldInfo {
                         name: field.name,
                         field_def: field.def_id,
