@@ -74,7 +74,6 @@ fn main() {
         ),
     );
 
-
     let rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
     let bump = bumpalo::Bump::default();
     let driver = MietteDriver::new();
@@ -93,7 +92,11 @@ fn main() {
     };
 
     let filename = Rc::new(filename.to_string());
-    let project_root =  std::fs::canonicalize(&args.path).expect("already verified earlier").parent().expect("must work").into();
+    let project_root = std::fs::canonicalize(&args.path)
+        .expect("already verified earlier")
+        .parent()
+        .expect("must work")
+        .into();
 
     let mut context = CompilationContext {
         paths: PathsConfig {
@@ -136,7 +139,10 @@ fn main() {
         exit(1);
     });
 
-    cli::println_info("Resolving", format!("program ({} declarations)", program.len()));
+    cli::println_info(
+        "Resolving",
+        format!("program ({} declarations)", program.len()),
+    );
 
     let (resolved_program, mut resolution_result) = zeen_resolve::resolve(
         Rc::clone(&filename),
@@ -163,10 +169,16 @@ fn main() {
 
     drop(bump);
 
-    cli::println_info("Checking", format!("resolved program ({} definitions)", resolution_result.defs.len()));
+    cli::println_info(
+        "Checking",
+        format!(
+            "resolved program ({} definitions)",
+            resolution_result.defs.len()
+        ),
+    );
 
     let mut typechecker =
-        zeen_typecheck::TypeChecker::new(&mut resolution_result, Rc::clone(&rodeo));
+        zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&rodeo));
     typechecker.check_module(&hir_module);
 
     let typechecker_result = typechecker.finish();

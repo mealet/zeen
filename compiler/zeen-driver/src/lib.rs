@@ -51,7 +51,7 @@ pub enum CompilationMode {
     Release,
 }
 
-#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum CompilationOutput {
     #[value(name = "BIN")]
     #[default]

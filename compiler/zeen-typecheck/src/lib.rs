@@ -24,6 +24,7 @@ use zeen_ast::{
     expressions::{BinaryOp, Literal, UnaryOp},
     types::BuiltinType,
 };
+use zeen_driver::{CompilationContext, CompilationOutput};
 use zeen_hir::{
     HirId, HirModule,
     decl::{HirDecl, HirDeclKind, HirFn},
@@ -45,7 +46,9 @@ pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
 pub struct TypeChecker<'res> {
     resolution: &'res mut ResolutionResult,
+    compilation_context: &'res CompilationContext,
     expect_assign_interface: bool,
+    found_main_fn: bool,
 
     result: TypeCheckResult,
     ctx: TypeCheckCtx,
@@ -77,15 +80,18 @@ struct FnSignature {
 impl<'res> TypeChecker<'res> {
     pub fn new(
         resolution: &'res mut ResolutionResult,
+        compilation_context: &'res CompilationContext,
         interner: Rc<RefCell<lasso::Rodeo>>,
     ) -> Self {
         let interface_registry = InterfaceRegistry::build(resolution, &interner);
 
         Self {
             resolution,
+            compilation_context,
             result: TypeCheckResult::default(),
             ctx: TypeCheckCtx::new(),
             expect_assign_interface: false,
+            found_main_fn: false,
             interner,
             fn_sigs: HashMap::new(),
             interface_registry,
@@ -139,6 +145,7 @@ impl<'res> TypeChecker<'res> {
         // 1. Declare signatures
         // 2. Check and infer if structs have Copy and Drop capabilities
         // 3. Check declarations bodies
+        // 4. Verify that we have main function if required
 
         for decl in &module.decls {
             if let HirDeclKind::Struct(s) = &decl.kind {
@@ -158,6 +165,12 @@ impl<'res> TypeChecker<'res> {
         for decl in &module.decls {
             self.check_decl_body(decl);
         }
+
+        if self.compilation_context.output == CompilationOutput::Binary && !self.found_main_fn {
+            self.report(TypeError::MainNotFound {
+                src: module.decls[0].source.src(),
+            });
+        }
     }
 
     // > Pass 1
@@ -165,6 +178,20 @@ impl<'res> TypeChecker<'res> {
     fn declare_signature(&mut self, decl: &HirDecl) {
         match &decl.kind {
             HirDeclKind::Fn(hir_fn) => {
+                if hir_fn.name.0 == self.interner.borrow_mut().get_or_intern("main") {
+                    self.found_main_fn = true;
+
+                    let signature_matches =
+                        hir_fn.params.is_empty() && !hir_fn.is_extern && hir_fn.generics.is_empty();
+
+                    if !signature_matches {
+                        self.report(TypeError::MainSignatureMismatch {
+                            src: decl.source.src(),
+                            span: hir_fn.name.1,
+                        });
+                    }
+                }
+
                 self.declare_fn_signature(decl.def_id, hir_fn);
             }
 

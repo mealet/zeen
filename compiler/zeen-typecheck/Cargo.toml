@@ -13,6 +13,8 @@ lasso = "0.7.3"
 miette = "7.6.0"
 thiserror = "2.0.18"
 smol_str = "0.3.6"
+
 zeen-ast = {path = "../zeen-ast"}
 zeen-resolve = {path = "../zeen-resolve"}
 zeen-hir = {path = "../zeen-hir"}
+zeen-driver = {path = "../zeen-driver"}

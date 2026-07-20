@@ -20,6 +20,30 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("entry point `fn main() {{ ... }}` not found")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::main_not_found),
+        help("add function declaration with signature: `fn main() any {{ ... }}`")
+    )]
+    MainNotFound {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+    },
+
+    #[error("main function signature mismatch")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::main_signature_mismatch),
+        help("consider using right signature: `fn main() any {{ ... }}`")
+    )]
+    MainSignatureMismatch {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("unknown field in '{struct_name}': `{field}`")]
     #[diagnostic(severity(Error), code(zeen::typechecker::unknown_field))]
     UnknownField {
