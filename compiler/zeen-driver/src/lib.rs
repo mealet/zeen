@@ -1,8 +1,3 @@
-mod span;
-
-pub use span::LineOffsets;
-pub use span::LocationSpan;
-
 use std::{collections::HashSet, path::PathBuf};
 
 pub struct MietteDriver {
