@@ -630,6 +630,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeen-mir"
+version = "0.0.0"
+dependencies = [
+ "lasso",
+ "zeen-ast",
+ "zeen-resolve",
+ "zeen-types",
+]
+
+[[package]]
 name = "zeen-parser"
 version = "0.0.0"
 dependencies = [
@@ -665,7 +675,6 @@ dependencies = [
 name = "zeen-typecheck"
 version = "0.0.0"
 dependencies = [
- "bumpalo",
  "lasso",
  "miette",
  "smol_str",
@@ -681,7 +690,6 @@ dependencies = [
 name = "zeen-types"
 version = "0.0.0"
 dependencies = [
- "bumpalo",
  "lasso",
  "zeen-ast",
  "zeen-hir",
