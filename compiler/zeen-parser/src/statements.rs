@@ -91,7 +91,11 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
                 .expect(TokenKind::Keyword(CompilerKeyword::Let), "let")?;
         }
 
-        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_token = if !self.p.at(TokenKind::Underscore) {
+            self.p.expect(TokenKind::Ident, "identifier")?
+        } else {
+            self.p.advance()?
+        };
         let name_span = name_token.span;
         let name_slice =
             self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
