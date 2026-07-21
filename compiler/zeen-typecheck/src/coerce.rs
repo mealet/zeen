@@ -1,5 +1,5 @@
-use crate::types::{Type, TypeId, TypeInterner};
 use zeen_ast::types::BuiltinType;
+use zeen_types::{Type, TypeId, TypeInterner};
 
 pub fn builtin_is_integer(b: BuiltinType) -> bool {
     matches!(

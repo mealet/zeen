@@ -2,12 +2,9 @@ use std::collections::HashMap;
 
 use zeen_hir::HirId;
 use zeen_resolve::DefId;
+use zeen_types::{StructTypeInfo, TypeId, TypeInterner};
 
-use crate::{
-    error::TypeError,
-    format_str::FormatChunk,
-    types::{StructTypeInfo, TypeId, TypeInterner},
-};
+use crate::{error::TypeError, format_str::FormatChunk};
 
 #[derive(Debug, Default)]
 pub struct TypeCheckResult {

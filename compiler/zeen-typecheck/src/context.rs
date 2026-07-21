@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use crate::types::TypeId;
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
+use zeen_types::TypeId;
 
 #[derive(Debug)]
 pub struct FnCtx {

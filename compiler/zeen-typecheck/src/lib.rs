@@ -13,10 +13,6 @@ use crate::{
     context::{FnCtx, InterfaceRegistry, TypeCheckCtx},
     format_str::FormatSpec,
     result::{CallResolution, TypeCheckResult},
-    types::{
-        Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId,
-        self_mode_of,
-    },
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -33,13 +29,13 @@ use zeen_hir::{
     types::{HirTypeExpr, HirTypeKind},
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
+use zeen_types::{Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface, self_mode_of, unary_op_interface};
 
 mod coerce;
 mod context;
 mod error;
 mod format_str;
 mod result;
-mod types;
 
 pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
@@ -2785,93 +2781,7 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn substitute_generics(&mut self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> TypeId {
-        match self.result.interner.get(ty).clone() {
-            Type::GenericParam(g) => bindings.get(&g).copied().unwrap_or(ty),
-
-            Type::Pointer { inner, is_const } => {
-                let new_inner = self.substitute_generics(inner, bindings);
-                if new_inner == inner {
-                    ty
-                } else {
-                    self.result.interner.intern(Type::Pointer {
-                        inner: new_inner,
-                        is_const,
-                    })
-                }
-            }
-
-            Type::ManyPointer { inner, is_const } => {
-                let new_inner = self.substitute_generics(inner, bindings);
-                if new_inner == inner {
-                    ty
-                } else {
-                    self.result.interner.intern(Type::ManyPointer {
-                        inner: new_inner,
-                        is_const,
-                    })
-                }
-            }
-
-            Type::Slice { element, is_const } => {
-                let new_element = self.substitute_generics(element, bindings);
-                if new_element == element {
-                    ty
-                } else {
-                    self.result.interner.intern(Type::Slice {
-                        element: new_element,
-                        is_const,
-                    })
-                }
-            }
-
-            Type::Array { element, len } => {
-                let new_elem = self.substitute_generics(element, bindings);
-                if new_elem == element {
-                    ty
-                } else {
-                    self.result.interner.intern(Type::Array {
-                        element: new_elem,
-                        len,
-                    })
-                }
-            }
-
-            Type::Struct {
-                def_id,
-                generic_args,
-            } => {
-                let new_args: Vec<TypeId> = generic_args
-                    .iter()
-                    .map(|a| self.substitute_generics(*a, bindings))
-                    .collect();
-                if new_args == generic_args {
-                    ty
-                } else {
-                    self.result.interner.intern(Type::Struct {
-                        def_id,
-                        generic_args: new_args,
-                    })
-                }
-            }
-
-            Type::Fn { params, ret } => {
-                let new_params: Vec<TypeId> = params
-                    .iter()
-                    .map(|p| self.substitute_generics(*p, bindings))
-                    .collect();
-                let new_ret = self.substitute_generics(ret, bindings);
-                if new_params == params && new_ret == ret {
-                    ty
-                } else {
-                    self.result.interner.intern(Type::Fn {
-                        params: new_params,
-                        ret: new_ret,
-                    })
-                }
-            }
-
-            _ => ty,
-        }
+        zeen_types::substitute_generics(&mut self.result.interner, ty, bindings)
     }
 
     fn substitute_self(&mut self, ty: TypeId, self_ty: TypeId) -> TypeId {
@@ -3232,7 +3142,7 @@ impl<'res> TypeChecker<'res> {
                 def_id,
                 generic_args,
             } => {
-                let Some((iface_name, method_name)) = types::binary_op_interface(op) else {
+                let Some((iface_name, method_name)) = binary_op_interface(op) else {
                     self.report(TypeError::BinaryNotSupported {
                         op,
                         lhs_type: self.display_type(lhs).into(),
@@ -3362,7 +3272,7 @@ impl<'res> TypeChecker<'res> {
         rhs: TypeId,
         source: &Source,
     ) -> TypeId {
-        let Some((iface_name, _method_name)) = types::binary_op_interface(op) else {
+        let Some((iface_name, _method_name)) = binary_op_interface(op) else {
             self.report(TypeError::BinaryNotSupported {
                 op: BinaryOp::Lt,
                 lhs_type: self.display_type(lhs).into(),
@@ -3426,7 +3336,7 @@ impl<'res> TypeChecker<'res> {
                 def_id,
                 generic_args,
             } => {
-                let Some((iface_name, method_name)) = types::unary_op_interface(op) else {
+                let Some((iface_name, method_name)) = unary_op_interface(op) else {
                     self.report(TypeError::UnaryNotSupported {
                         op,
                         child_type: self.display_type(operand).into(),
@@ -3455,7 +3365,7 @@ impl<'res> TypeChecker<'res> {
             }
 
             Type::GenericParam(g) => {
-                let Some((iface_name, method_name)) = types::unary_op_interface(op) else {
+                let Some((iface_name, method_name)) = unary_op_interface(op) else {
                     self.report(TypeError::UnaryNotSupported {
                         op,
                         child_type: self.display_type(operand).into(),
@@ -3498,7 +3408,7 @@ impl<'res> TypeChecker<'res> {
             Type::Pointer { inner, .. } if matches!(op, UnaryOp::Deref) => inner,
 
             Type::Builtin(b) => {
-                let Some((iface_name, _)) = types::unary_op_interface(op) else {
+                let Some((iface_name, _)) = unary_op_interface(op) else {
                     self.report(TypeError::UnaryNotSupported {
                         op,
                         child_type: self.display_type(operand).into(),

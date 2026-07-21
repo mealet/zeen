@@ -674,6 +674,18 @@ dependencies = [
  "zeen-driver",
  "zeen-hir",
  "zeen-resolve",
+ "zeen-types",
+]
+
+[[package]]
+name = "zeen-types"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "zeen-ast",
+ "zeen-hir",
+ "zeen-resolve",
 ]
 
 [[package]]

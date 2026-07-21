@@ -1,11 +1,13 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use lasso::Spur;
+
 use zeen_ast::types::BuiltinType;
 use zeen_hir::HirTypeKind;
 use zeen_resolve::DefId;
 
-use crate::{DEFAULT_FLOAT_LITERAL, DEFAULT_INT_LITERAL};
+pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
+pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub u32);
@@ -346,5 +348,99 @@ pub fn unary_op_interface(
         BitNot => Some(("BitNot", "bit_not")),
         Deref => Some(("Deref", "deref")),
         AddrOf => None,
+    }
+}
+
+pub fn substitute_generics(
+    interner: &mut TypeInterner,
+    ty: TypeId,
+    bindings: &HashMap<DefId, TypeId>,
+) -> TypeId {
+    match interner.get(ty).clone() {
+        Type::GenericParam(g) => bindings.get(&g).copied().unwrap_or(ty),
+
+        Type::Pointer { inner, is_const } => {
+            let new_inner = substitute_generics(interner, inner, bindings);
+            if new_inner == inner {
+                ty
+            } else {
+                interner.intern(Type::Pointer {
+                    inner: new_inner,
+                    is_const,
+                })
+            }
+        }
+
+        Type::ManyPointer { inner, is_const } => {
+            let new_inner = substitute_generics(interner, inner, bindings);
+            if new_inner == inner {
+                ty
+            } else {
+                interner.intern(Type::ManyPointer {
+                    inner: new_inner,
+                    is_const,
+                })
+            }
+        }
+
+        Type::Slice { element, is_const } => {
+            let new_element = substitute_generics(interner, element, bindings);
+            if new_element == element {
+                ty
+            } else {
+                interner.intern(Type::Slice {
+                    element: new_element,
+                    is_const,
+                })
+            }
+        }
+
+        Type::Array { element, len } => {
+            let new_elem = substitute_generics(interner, element, bindings);
+            if new_elem == element {
+                ty
+            } else {
+                interner.intern(Type::Array {
+                    element: new_elem,
+                    len,
+                })
+            }
+        }
+
+        Type::Struct {
+            def_id,
+            generic_args,
+        } => {
+            let new_args: Vec<TypeId> = generic_args
+                .iter()
+                .map(|a| substitute_generics(interner, *a, bindings))
+                .collect();
+            if new_args == generic_args {
+                ty
+            } else {
+                interner.intern(Type::Struct {
+                    def_id,
+                    generic_args: new_args,
+                })
+            }
+        }
+
+        Type::Fn { params, ret } => {
+            let new_params: Vec<TypeId> = params
+                .iter()
+                .map(|p| substitute_generics(interner, *p, bindings))
+                .collect();
+            let new_ret = substitute_generics(interner, ret, bindings);
+            if new_params == params && new_ret == ret {
+                ty
+            } else {
+                interner.intern(Type::Fn {
+                    params: new_params,
+                    ret: new_ret,
+                })
+            }
+        }
+
+        _ => ty,
     }
 }
