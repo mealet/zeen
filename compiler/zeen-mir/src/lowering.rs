@@ -48,9 +48,15 @@ impl MonoCache {
     }
 }
 
+struct LoopTargets {
+    break_target: BlockId,
+    continue_target: BlockId,
+}
+
 pub struct FnBuilder {
     func: MirFunction,
     locals_by_def: HashMap<DefId, LocalId>,
+    loop_stack: Vec<LoopTargets>,
 }
 
 impl FnBuilder {
@@ -65,6 +71,7 @@ impl FnBuilder {
                 entry_block: entry,
             },
             locals_by_def: HashMap::new(),
+            loop_stack: Vec::new(),
         }
     }
 
@@ -211,6 +218,65 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, Operand::Move(Place::from_local(temp)))
             }
 
+            HirExprKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let (block, cond_operand) = self.lower_expr_to_operand(fb, condition, block);
+
+                let then_bb = fb.new_block();
+                let else_bb = fb.new_block();
+
+                fb.set_terminator(
+                    block,
+                    Terminator::SwitchInt {
+                        discrimant: cond_operand,
+                        targets: vec![(1, then_bb)],
+                        otherwise: else_bb,
+                    },
+                );
+
+                let (then_end, then_operand) =
+                    self.lower_stmt_as_block_value(fb, then_block, then_bb);
+
+                let result_ty = self.expr_type(expr);
+                let has_else = else_block.is_some();
+
+                if !has_else {
+                    let join = fb.new_block();
+                    fb.set_terminator(then_end, Terminator::Goto(join));
+                    fb.set_terminator(else_bb, Terminator::Goto(join));
+                    return (join, Operand::Constant(ConstValue::Void));
+                }
+
+                let (else_end, else_operand) =
+                    self.lower_stmt_as_block_value(fb, else_block.as_ref().unwrap(), else_bb);
+                let join = fb.new_block();
+
+                let result_local = fb.new_temp(result_ty);
+
+                fb.push_stmt(
+                    then_end,
+                    MirStatement::Assign {
+                        place: Place::from_local(result_local),
+                        rvalue: Rvalue::Use(then_operand),
+                    },
+                );
+                fb.set_terminator(then_end, Terminator::Goto(join));
+
+                fb.push_stmt(
+                    else_end,
+                    MirStatement::Assign {
+                        place: Place::from_local(result_local),
+                        rvalue: Rvalue::Use(else_operand),
+                    },
+                );
+                fb.set_terminator(else_end, Terminator::Goto(join));
+
+                (join, Operand::Move(Place::from_local(result_local)))
+            }
+
             HirExprKind::Block { stmts, trailing } => {
                 let mut cur = block;
 
@@ -254,6 +320,21 @@ impl<'ctx> MirLowering<'ctx> {
 }
 
 impl<'ctx> MirLowering<'ctx> {
+    fn lower_stmt_as_block_value(
+        &mut self,
+        fb: &mut FnBuilder,
+        stmt: &HirStmt,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        match &stmt.kind {
+            HirStmtKind::Expr(block_expr) => self.lower_expr_to_operand(fb, block_expr, block),
+            _ => {
+                let block = self.lower_stmt(fb, stmt, block);
+                (block, Operand::Constant(ConstValue::Void))
+            }
+        }
+    }
+
     fn lower_stmt(&mut self, fb: &mut FnBuilder, stmt: &HirStmt, block: BlockId) -> BlockId {
         match &stmt.kind {
             HirStmtKind::Let {
