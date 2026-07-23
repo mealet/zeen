@@ -374,6 +374,39 @@ impl<'ctx> MirLowering<'ctx> {
                 }
             }
 
+            HirStmtKind::While {
+                condition,
+                block: body,
+            } => {
+                let header = fb.new_block();
+                fb.set_terminator(block, Terminator::Goto(header));
+
+                let (cond_end, cond_operand) = self.lower_expr_to_operand(fb, condition, header);
+
+                let body_bb = fb.new_block();
+                let exit_bb = fb.new_block();
+
+                fb.set_terminator(
+                    cond_end,
+                    Terminator::SwitchInt {
+                        discrimant: cond_operand,
+                        targets: vec![(1, body_bb)],
+                        otherwise: exit_bb,
+                    },
+                );
+
+                fb.loop_stack.push(LoopTargets {
+                    break_target: exit_bb,
+                    continue_target: header,
+                });
+                let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
+                fb.loop_stack.pop();
+
+                fb.set_terminator(body_end, Terminator::Goto(header));
+
+                exit_bb
+            }
+
             HirStmtKind::Expr(expr) => {
                 let (block, _operand) = self.lower_expr_to_operand(fb, expr, block);
                 block
