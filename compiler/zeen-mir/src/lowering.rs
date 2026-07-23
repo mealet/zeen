@@ -407,6 +407,20 @@ impl<'ctx> MirLowering<'ctx> {
                 exit_bb
             }
 
+            HirStmtKind::Return { value } => {
+                let operand = match value {
+                    Some(v) => {
+                        let (b, op) = self.lower_expr_to_operand(fb, v, block);
+                        let block = b;
+                        fb.set_terminator(block, Terminator::Return(op));
+                        return block;
+                    }
+                    None => Operand::Constant(ConstValue::Void),
+                };
+                fb.set_terminator(block, Terminator::Return(operand));
+                block
+            }
+
             HirStmtKind::Expr(expr) => {
                 let (block, _operand) = self.lower_expr_to_operand(fb, expr, block);
                 block
