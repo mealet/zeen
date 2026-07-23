@@ -185,7 +185,7 @@ pub enum Terminator {
         target: Option<BlockId>,
     },
 
-    Return,
+    Return(Operand),
 
     Unreachable,
 }
