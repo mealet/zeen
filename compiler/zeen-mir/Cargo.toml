@@ -12,5 +12,6 @@ lasso = "0.7.3"
 
 zeen-ast = {path = "../zeen-ast"}
 zeen-resolve = {path = "../zeen-resolve"}
+zeen-typecheck = {path = "../zeen-typecheck"}
 zeen-types = {path = "../zeen-types"}
 zeen-hir = {path = "../zeen-hir"}

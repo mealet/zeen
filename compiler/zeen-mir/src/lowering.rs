@@ -6,12 +6,10 @@ use zeen_ast::{
     expressions::{BinaryOp, Literal, UnaryOp},
 };
 use zeen_hir::{
-    HirId,
-    decl::HirFn,
-    expr::{HirExpr, HirExprKind},
-    stmt::{HirStmt, HirStmtKind},
+    HirId, HirTypeExpr, decl::HirFn, expr::{HirExpr, HirExprKind}, stmt::{HirStmt, HirStmtKind}
 };
 use zeen_resolve::DefId;
+use zeen_typecheck::result::CallResolution;
 use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
 
 use crate::{
@@ -23,6 +21,9 @@ use crate::{
 pub struct MirLowering<'ctx> {
     interner: &'ctx mut TypeInterner,
     expr_types: &'ctx HashMap<HirId, TypeId>,
+    call_resolutions: &'ctx HashMap<HirId, CallResolution>,
+    struct_info: &'ctx HashMap<DefId, StructTypeInfo>,
+    hir_fns_by_def: HashMap<DefId, Rc<HirFn>>,
 
     program: MirProgram,
     mono_cache: MonoCache,
@@ -110,12 +111,15 @@ impl FnBuilder {
 }
 
 impl<'ctx> MirLowering<'ctx> {
-    pub fn new(interner: &'ctx mut TypeInterner, expr_types: &'ctx HashMap<HirId, TypeId>) -> Self {
+    pub fn new(interner: &'ctx mut TypeInterner, expr_types: &'ctx HashMap<HirId, TypeId>, call_resolutions: &'ctx HashMap<HirId, CallResolution>, struct_info: &'ctx HashMap<DefId, StructTypeInfo>) -> Self {
         Self {
             interner,
             expr_types,
             program: MirProgram::default(),
             mono_cache: MonoCache::new(),
+            call_resolutions,
+            struct_info,
+            hir_fns_by_def: HashMap::new(),
         }
     }
 
@@ -515,5 +519,105 @@ impl<'ctx> MirLowering<'ctx> {
 
             _ => todo!(),
         }
+    }
+}
+
+impl<'ctx> MirLowering<'ctx> {
+    fn monomorphize_fn(&mut self, def_id: DefId, generic_args: Vec<TypeId>, hir_fn: &HirFn) -> MirFunctionId {
+        let key = (def_id, generic_args.clone());
+
+        if let Some(&existing) = self.mono_cache.cache.get(&key) {
+            return existing;
+        }
+
+        let id = self.mono_cache.fresh_id();
+        self.mono_cache.cache.insert(key, id);
+
+        let mir_func = self.lower_fn_body(def_id, hir_fn, &generic_args);
+        self.program.functions.insert(id, mir_func);
+
+        id
+    }
+
+    fn lower_fn_body(&mut self, def_id: DefId, hir_fn: &HirFn, generic_args: &[TypeId]) -> MirFunction {
+        let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
+        let bindings: HashMap<DefId, TypeId> = generic_defs
+            .iter()
+            .copied()
+            .zip(generic_args.iter().copied())
+            .collect();
+
+        let entry = BlockId(0);
+        let mut fb = FnBuilder::new(def_id, generic_args.to_vec(), entry);
+        fb.new_block();
+
+        for param in &hir_fn.params {
+            let raw_ty = self.hir_type_to_type_id(&param.ty);
+            let concrete_ty = zeen_types::substitute_generics(self.interner, raw_ty, &bindings);
+
+            let local = fb.new_local(concrete_ty, LocalKind::Param, Mutability::Mut, param.name, Some(param.ty.source.clone()));
+            fb.func.params.push(local);
+            
+            if let Some(param_def) = param.def_id {
+                fb.locals_by_def.insert(param_def, local);
+            }
+        }
+
+        let Some(body) = &hir_fn.body else {
+            fb.set_terminator(entry, Terminator::Unreachable);
+            return fb.func;
+        };
+
+        let final_block = match &body.kind {
+            HirStmtKind::Expr(block_expr) => {
+                if let HirExprKind::Block { stmts, trailing } = &block_expr.kind {
+                    let mut cur = entry;
+
+                    for stmt in stmts.iter() {
+                        cur = self.lower_stmt(&mut fb, stmt, cur);
+                    }
+
+                    match trailing {
+                        Some(t) => {
+                            let (block, operand) = self.lower_expr_to_operand(&mut fb, t, cur);
+
+                            if matches!(fb.func.block(block).terminator, Terminator::Unreachable) {
+                                fb.set_terminator(block, Terminator::Return(operand));
+                            };
+                            block
+                        }
+
+                        None => {
+                            if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
+                                fb.set_terminator(cur, Terminator::Return(Operand::Constant(ConstValue::Void)));
+                            }
+                            cur
+                        }
+                    }
+                } else {
+                    let cur = self.lower_stmt(&mut fb, body, entry);
+                    if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
+                        fb.set_terminator(cur, Terminator::Return(Operand::Constant(ConstValue::Void)));
+                    }
+                    cur
+                }
+            }
+
+            _ => {
+                let cur = self.lower_stmt(&mut fb, body, entry);
+                if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
+                    fb.set_terminator(cur, Terminator::Return(Operand::Constant(ConstValue::Void)));
+                }
+                cur
+            }
+        };
+
+        let _ = final_block;
+
+        fb.func
+    }
+
+    fn hir_type_to_type_id(&mut self, ty: &HirTypeExpr) -> TypeId {
+        todo!()
     }
 }

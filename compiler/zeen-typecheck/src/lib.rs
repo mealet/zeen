@@ -29,13 +29,16 @@ use zeen_hir::{
     types::{HirTypeExpr, HirTypeKind},
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
-use zeen_types::{Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface, self_mode_of, unary_op_interface};
+use zeen_types::{
+    Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId,
+    binary_op_interface, self_mode_of, unary_op_interface,
+};
 
 mod coerce;
 mod context;
 mod error;
-mod format_str;
-mod result;
+pub mod format_str;
+pub mod result;
 
 pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;

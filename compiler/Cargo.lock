@@ -637,6 +637,7 @@ dependencies = [
  "zeen-ast",
  "zeen-hir",
  "zeen-resolve",
+ "zeen-typecheck",
  "zeen-types",
 ]
 
