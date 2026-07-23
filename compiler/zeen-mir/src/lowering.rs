@@ -255,6 +255,50 @@ impl<'ctx> MirLowering<'ctx> {
 
 impl<'ctx> MirLowering<'ctx> {
     fn lower_stmt(&mut self, fb: &mut FnBuilder, stmt: &HirStmt, block: BlockId) -> BlockId {
-        todo!()
+        match &stmt.kind {
+            HirStmtKind::Let {
+                name,
+                def_id,
+                value,
+                ..
+            } => {
+                let ty = self
+                    .expr_types
+                    .get(&stmt.id)
+                    .copied()
+                    .unwrap_or_else(|| panic!("let statement missing recorded type"));
+
+                let local = fb.new_local(
+                    ty,
+                    LocalKind::UserVariable,
+                    Mutability::Mut,
+                    Some(*name),
+                    Some(stmt.source.clone()),
+                );
+                fb.locals_by_def.insert(*def_id, local);
+
+                if let Some(v) = value {
+                    let (block, operand) = self.lower_expr_to_operand(fb, v, block);
+
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(local),
+                            rvalue: Rvalue::Use(operand),
+                        },
+                    );
+                    block
+                } else {
+                    block
+                }
+            }
+
+            HirStmtKind::Expr(expr) => {
+                let (block, _operand) = self.lower_expr_to_operand(fb, expr, block);
+                block
+            }
+
+            _ => todo!(),
+        }
     }
 }
