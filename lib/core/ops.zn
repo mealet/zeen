@@ -1,11 +1,11 @@
 /// `Display` interface is used to display structure in format macros (print, println, format, etc.).
 pub interface Display {
-  fn display(*const self) *char;
+  fn display(*const self) []const u8;
 }
 
 /// `Debug` interface is used to display structure in debug macros (dbg, print/println with "{:?}" specifier).
 pub interface Debug {
-  fn debug(*const self) *char;
+  fn debug(*const self) []const u8;
 }
 
 /// Empty marker to tell compiler that structure can be copied (simple load instructions).
