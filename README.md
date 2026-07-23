@@ -16,6 +16,8 @@
 
 <b>⚠️ Project is currently under active development and not ready to use.</b>
 
+<br/>
+
 ## Todo List
 List to-do before release first stable ready-to-use version:
 - [ ] Get language to working basic codegen (fn calls, macros, non-generic structs and functions definitions, includes).
