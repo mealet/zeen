@@ -153,7 +153,79 @@ impl<'ctx> MirLowering<'ctx> {
         expr: &HirExpr,
         block: BlockId,
     ) -> (BlockId, Operand) {
-        todo!()
+        match &expr.kind {
+            HirExprKind::Literal(lit) => {
+                let ty = self.expr_type(expr);
+                (block, Operand::Constant(self.lower_literal(lit, ty)))
+            }
+
+            HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
+                let local = *fb.locals_by_def.get(def_id).unwrap_or_else(|| {
+                    panic!("HIR DefId {:?} has no MIR local", def_id);
+                });
+                let place = Place::from_local(local);
+                let ty = fb.func.local(local).ty;
+                let operand = self.place_to_operand(place, ty, &HashMap::new());
+                (block, operand)
+            }
+
+            HirExprKind::Binary { lhs, rhs, op } => {
+                let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
+                let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
+
+                let result_ty = self.expr_type(expr);
+                let temp = fb.new_temp(result_ty);
+
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::BinaryOp {
+                            op: *op,
+                            lhs: lhs_op,
+                            rhs: rhs_op,
+                        },
+                    },
+                );
+
+                (block, Operand::Move(Place::from_local(temp)))
+            }
+
+            HirExprKind::Unary { expr: inner, op } => {
+                let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
+
+                let result_ty = self.expr_type(expr);
+                let temp = fb.new_temp(result_ty);
+
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::UnaryOp {
+                            op: *op,
+                            operand: inner_op,
+                        },
+                    },
+                );
+
+                (block, Operand::Move(Place::from_local(temp)))
+            }
+
+            HirExprKind::Block { stmts, trailing } => {
+                let mut cur = block;
+
+                for stmt in stmts.iter() {
+                    cur = self.lower_stmt(fb, stmt, cur);
+                }
+
+                match trailing {
+                    Some(t) => self.lower_expr_to_operand(fb, t, cur),
+                    None => (cur, Operand::Constant(ConstValue::Void)),
+                }
+            }
+
+            _ => todo!(),
+        }
     }
 
     fn lower_literal(&mut self, lit: &Literal, ty: TypeId) -> ConstValue {
@@ -178,5 +250,11 @@ impl<'ctx> MirLowering<'ctx> {
         } else {
             Operand::Move(place)
         }
+    }
+}
+
+impl<'ctx> MirLowering<'ctx> {
+    fn lower_stmt(&mut self, fb: &mut FnBuilder, stmt: &HirStmt, block: BlockId) -> BlockId {
+        todo!()
     }
 }
