@@ -421,6 +421,26 @@ impl<'ctx> MirLowering<'ctx> {
                 block
             }
 
+            HirStmtKind::Break => {
+                let target = fb
+                    .loop_stack
+                    .last()
+                    .expect("break outside loop not covered")
+                    .break_target;
+                fb.set_terminator(block, Terminator::Goto(target));
+                block
+            }
+
+            HirStmtKind::Continue => {
+                let target = fb
+                    .loop_stack
+                    .last()
+                    .expect("continue outside loop not covered")
+                    .continue_target;
+                fb.set_terminator(block, Terminator::Goto(target));
+                block
+            }
+
             HirStmtKind::Expr(expr) => {
                 let (block, _operand) = self.lower_expr_to_operand(fb, expr, block);
                 block
