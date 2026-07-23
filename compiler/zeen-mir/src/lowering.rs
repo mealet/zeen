@@ -333,6 +333,10 @@ impl<'ctx> MirLowering<'ctx> {
             Operand::Move(place)
         }
     }
+
+    fn place_type(&self, fb: &FnBuilder, place: &Place) -> TypeId {
+        fb.func.local(place.local).ty
+    }
 }
 
 impl<'ctx> MirLowering<'ctx> {
@@ -388,6 +392,53 @@ impl<'ctx> MirLowering<'ctx> {
                 } else {
                     block
                 }
+            }
+
+            HirStmtKind::Assign { object, value } => {
+                let (block, place) = self.lower_expr_to_place(fb, object, block);
+                let (block, operand) = self.lower_expr_to_operand(fb, value, block);
+
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place,
+                        rvalue: Rvalue::Use(operand),
+                    },
+                );
+                block
+            }
+
+            HirStmtKind::CompoundAssign { object, value, op } => {
+                let (block, place) = self.lower_expr_to_place(fb, object, block);
+
+                let place_ty = self.place_type(fb, &place);
+                let lhs_operand = self.place_to_operand(place.clone(), place_ty, &HashMap::new());
+
+                let (block, rhs_operand) = self.lower_expr_to_operand(fb, value, block);
+
+                let result_ty = place_ty;
+                let temp = fb.new_temp(result_ty);
+
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::BinaryOp {
+                            op: *op,
+                            lhs: lhs_operand,
+                            rhs: rhs_operand,
+                        },
+                    },
+                );
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place,
+                        rvalue: Rvalue::Use(Operand::Move(Place::from_local(temp))),
+                    },
+                );
+
+                block
             }
 
             HirStmtKind::While {
