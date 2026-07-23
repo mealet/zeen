@@ -147,12 +147,36 @@ impl<'ctx> MirLowering<'ctx> {
 }
 
 impl<'ctx> MirLowering<'ctx> {
-    pub fn lower_expr_to_operand(
+    fn lower_expr_to_operand(
         &mut self,
         fb: &mut FnBuilder,
         expr: &HirExpr,
         block: BlockId,
     ) -> (BlockId, Operand) {
         todo!()
+    }
+
+    fn lower_literal(&mut self, lit: &Literal, ty: TypeId) -> ConstValue {
+        match lit {
+            Literal::Int(n) => ConstValue::Int(*n as i128),
+            Literal::Float(f) => ConstValue::Float(*f),
+            Literal::Bool(b) => ConstValue::Bool(*b),
+            Literal::Char(c) | Literal::ByteChar(c) => ConstValue::Char(*c),
+            Literal::String(s) => ConstValue::Str(*s),
+            Literal::Null => ConstValue::NullPtr,
+        }
+    }
+
+    fn place_to_operand(
+        &self,
+        place: Place,
+        ty: TypeId,
+        struct_info: &HashMap<DefId, StructTypeInfo>,
+    ) -> Operand {
+        if self.mir_type_is_copy(ty, struct_info) {
+            Operand::Copy(place)
+        } else {
+            Operand::Move(place)
+        }
     }
 }
