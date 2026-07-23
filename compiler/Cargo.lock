@@ -635,6 +635,7 @@ version = "0.0.0"
 dependencies = [
  "lasso",
  "zeen-ast",
+ "zeen-hir",
  "zeen-resolve",
  "zeen-types",
 ]

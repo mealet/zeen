@@ -11,6 +11,8 @@ use zeen_ast::{
 use zeen_resolve::DefId;
 use zeen_types::{Type, TypeId};
 
+mod lowering;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MirFunctionId(pub u32);
 
@@ -32,6 +34,43 @@ pub struct MirFunction {
     pub mono_args: Vec<TypeId>,
 
     pub locals: Vec<LocalDecl>,
+    pub blocks: Vec<BasicBlock>,
+    pub params: Vec<LocalId>,
+
+    pub entry_block: BlockId,
+}
+
+impl MirFunction {
+    pub fn local(&self, id: LocalId) -> &LocalDecl {
+        &self.locals[id.0 as usize]
+    }
+
+    pub fn local_mut(&mut self, id: LocalId) -> &mut LocalDecl {
+        &mut self.locals[id.0 as usize]
+    }
+
+    pub fn block(&self, id: BlockId) -> &BasicBlock {
+        &self.blocks[id.0 as usize]
+    }
+
+    pub fn block_mut(&mut self, id: BlockId) -> &mut BasicBlock {
+        &mut self.blocks[id.0 as usize]
+    }
+
+    pub fn new_block(&mut self) -> BlockId {
+        let id = BlockId(self.blocks.len() as u32);
+        self.blocks.push(BasicBlock {
+            statements: Vec::new(),
+            terminator: Terminator::Unreachable, // placeholder
+        });
+        id
+    }
+
+    pub fn new_local(&mut self, decl: LocalDecl) -> LocalId {
+        let id = LocalId(self.locals.len() as u32);
+        self.locals.push(decl);
+        id
+    }
 }
 
 #[derive(Debug, Clone)]
