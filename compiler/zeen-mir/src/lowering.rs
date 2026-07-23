@@ -294,6 +294,22 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    fn lower_expr_to_place(
+        &mut self,
+        fb: &mut FnBuilder,
+        expr: &HirExpr,
+        block: BlockId,
+    ) -> (BlockId, Place) {
+        match &expr.kind {
+            HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
+                let local = *fb.locals_by_def.get(def_id).expect("undeclared local");
+                (block, Place::from_local(local))
+            }
+
+            _ => todo!(),
+        }
+    }
+
     fn lower_literal(&mut self, lit: &Literal, ty: TypeId) -> ConstValue {
         match lit {
             Literal::Int(n) => ConstValue::Int(*n as i128),
