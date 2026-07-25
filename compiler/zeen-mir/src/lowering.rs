@@ -150,7 +150,7 @@ impl<'ctx> MirLowering<'ctx> {
         self.typecheck.call_resolutions.get(&expr_id)
     }
 
-    fn mir_type_is_copy(&self, ty: TypeId, struct_info: &HashMap<DefId, StructTypeInfo>) -> bool {
+    fn mir_type_is_copy(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(_)
             | Type::Enum { .. }
@@ -161,7 +161,9 @@ impl<'ctx> MirLowering<'ctx> {
             | Type::Never
             | Type::Error => true,
 
-            Type::Struct { def_id, .. } => struct_info
+            Type::Struct { def_id, .. } => self
+                .typecheck
+                .struct_info
                 .get(&def_id)
                 .map(|info| info.capabalities.is_copy)
                 .unwrap_or(false),
@@ -192,7 +194,7 @@ impl<'ctx> MirLowering<'ctx> {
                 });
                 let place = Place::from_local(local);
                 let ty = fb.func.local(local).ty;
-                let operand = self.place_to_operand(place, ty, &HashMap::new());
+                let operand = self.place_to_operand(place, ty);
                 (block, operand)
             }
 
@@ -297,6 +299,55 @@ impl<'ctx> MirLowering<'ctx> {
                 (join, Operand::Move(Place::from_local(result_local)))
             }
 
+            HirExprKind::Call { callee, args, .. } => {
+                let call_id = expr.id;
+
+                let Some(resolution) = self.call_resolution(call_id) else {
+                    return self.lower_indirect_call(fb, callee, args, block, self.expr_type(expr));
+                };
+
+                let fn_def = resolution.fn_def;
+                let generic_args = resolution.generic_args.clone();
+
+                let Some(hir_fn) = self.hir_fns_by_def.get(&fn_def).cloned() else {
+                    panic!("No HIR Body found for DefId {:?}", fn_def);
+                };
+
+                let mir_fn_id = self.monomorphize_fn(fn_def, generic_args, &hir_fn);
+
+                let mut arg_operands = Vec::with_capacity(args.len() + 1);
+
+                if let HirExprKind::FieldAccess { object, .. } = &callee.kind {
+                    let (b, self_operand) = self.lower_reciever_operand(fb, object, block);
+                    block = b;
+                    arg_operands.push(self_operand);
+                }
+
+                let ret_ty = self.expr_type(expr);
+                let dest_local = fb.new_temp(ret_ty);
+                let dest_place = Place::from_local(dest_local);
+
+                let next_block = fb.new_block();
+                let is_diverging = matches!(self.typecheck.interner.get(ret_ty), Type::Never);
+
+                fb.set_terminator(
+                    block,
+                    Terminator::Call {
+                        func: CallTarget::Direct(mir_fn_id),
+                        args: arg_operands,
+                        destination: dest_place.clone(),
+                        target: if is_diverging { None } else { Some(next_block) },
+                    },
+                );
+
+                if is_diverging {
+                    fb.set_terminator(next_block, Terminator::Unreachable);
+                    (next_block, Operand::Constant(ConstValue::Void))
+                } else {
+                    (next_block, self.place_to_operand(dest_place, ret_ty))
+                }
+            }
+
             HirExprKind::Block { stmts, trailing } => {
                 let mut cur = block;
 
@@ -341,13 +392,8 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    fn place_to_operand(
-        &self,
-        place: Place,
-        ty: TypeId,
-        struct_info: &HashMap<DefId, StructTypeInfo>,
-    ) -> Operand {
-        if self.mir_type_is_copy(ty, struct_info) {
+    fn place_to_operand(&self, place: Place, ty: TypeId) -> Operand {
+        if self.mir_type_is_copy(ty) {
             Operand::Copy(place)
         } else {
             Operand::Move(place)
@@ -356,6 +402,35 @@ impl<'ctx> MirLowering<'ctx> {
 
     fn place_type(&self, fb: &FnBuilder, place: &Place) -> TypeId {
         fb.func.local(place.local).ty
+    }
+
+    fn lower_receiver_operand(
+        &mut self,
+        fb: &mut FnBuilder,
+        object: &HirExpr,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        let obj_ty = self.expr_type(object);
+        let (block, place) = self.lower_expr_to_place(fb, object, block);
+
+        match self.typecheck.interner.get(obj_ty).clone() {
+            Type::Pointer { .. } => (block, self.place_to_operand(place, obj_ty)),
+            _ => {
+                let ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                    inner: obj_ty,
+                    is_const: false,
+                });
+                let temp = fb.new_temp(ptr_ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::Ref { place },
+                    },
+                );
+                (block, Operand::Move(Place::from_local(temp)))
+            }
+        }
     }
 }
 
@@ -384,6 +459,7 @@ impl<'ctx> MirLowering<'ctx> {
                 ..
             } => {
                 let ty = self
+                    .typecheck
                     .expr_types
                     .get(&stmt.id)
                     .copied()
@@ -432,7 +508,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, place) = self.lower_expr_to_place(fb, object, block);
 
                 let place_ty = self.place_type(fb, &place);
-                let lhs_operand = self.place_to_operand(place.clone(), place_ty, &HashMap::new());
+                let lhs_operand = self.place_to_operand(place.clone(), place_ty);
 
                 let (block, rhs_operand) = self.lower_expr_to_operand(fb, value, block);
 
@@ -661,5 +737,16 @@ impl<'ctx> MirLowering<'ctx> {
         let _ = final_block;
 
         fb.func
+    }
+
+    fn lower_indirect_call(
+        &mut self,
+        fb: &mut FnBuilder,
+        callee: &HirExpr,
+        args: &[Rc<HirExpr>],
+        block: BlockId,
+        expr_type: TypeId,
+    ) -> (BlockId, Operand) {
+        todo!()
     }
 }
