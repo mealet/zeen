@@ -883,8 +883,38 @@ impl<'ctx> MirLowering<'ctx> {
         callee: &HirExpr,
         args: &[Rc<HirExpr>],
         block: BlockId,
-        expr_type: TypeId,
+        ret_ty: TypeId,
     ) -> (BlockId, Operand) {
-        todo!()
+        let (mut block, callee_operand) = self.lower_expr_to_operand(fb, callee, block);
+
+        let mut arg_operands = Vec::with_capacity(args.len());
+        for arg in args.iter() {
+            let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+            block = b;
+            arg_operands.push(op);
+        }
+
+        let dest_local = fb.new_temp(ret_ty);
+        let dest_place = Place::from_local(dest_local);
+        let next_block = fb.new_block();
+
+        let is_diverging = matches!(self.typecheck.interner.get(ret_ty), Type::Never);
+
+        fb.set_terminator(
+            block,
+            Terminator::Call {
+                func: CallTarget::Indirect(callee_operand),
+                args: arg_operands,
+                destination: dest_place.clone(),
+                target: if is_diverging { None } else { Some(next_block) },
+            },
+        );
+
+        if is_diverging {
+            fb.set_terminator(next_block, Terminator::Unreachable);
+            (next_block, Operand::Constant(ConstValue::Void))
+        } else {
+            (next_block, self.place_to_operand(dest_place, ret_ty))
+        }
     }
 }
