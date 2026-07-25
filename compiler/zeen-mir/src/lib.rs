@@ -185,6 +185,7 @@ pub enum Rvalue {
 
     Ref {
         place: Place,
+        is_const: bool,
     },
 
     Cast {
@@ -236,4 +237,3 @@ pub enum CallTarget {
     /// Call through a function-pointer value
     Indirect(Operand),
 }
-

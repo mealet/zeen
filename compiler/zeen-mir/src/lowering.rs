@@ -386,7 +386,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let mut arg_operands = Vec::with_capacity(args.len() + 1);
 
                 if let HirExprKind::FieldAccess { object, .. } = &callee.kind {
-                    let (b, self_operand) = self.lower_receiver_operand(fb, object, block);
+                    let (b, self_operand) = self.lower_receiver_operand(fb, object, fn_def, block);
                     block = b;
                     arg_operands.push(self_operand);
                 }
@@ -523,28 +523,51 @@ impl<'ctx> MirLowering<'ctx> {
         &mut self,
         fb: &mut FnBuilder,
         object: &HirExpr,
+        method_def_id: DefId,
         block: BlockId,
     ) -> (BlockId, Operand) {
+        let method_ty = self
+            .typecheck
+            .def_types
+            .get(&method_def_id)
+            .copied()
+            .expect("method must have a recorded Fn type");
+
+        let expected_self_ty = match self.typecheck.interner.get(method_ty).clone() {
+            Type::Fn { params, .. } if !params.is_empty() => Some(params[0]),
+            _ => None,
+        };
+
         let obj_ty = self.expr_type(object);
         let (block, place) = self.lower_expr_to_place(fb, object, block);
 
-        match self.typecheck.interner.get(obj_ty).clone() {
-            Type::Pointer { .. } => (block, self.place_to_operand(place, obj_ty)),
-            _ => {
-                let ptr_ty = self.typecheck.interner.intern(Type::Pointer {
-                    inner: obj_ty,
-                    is_const: false,
-                });
-                let temp = fb.new_temp(ptr_ty);
-                fb.push_stmt(
-                    block,
-                    MirStatement::Assign {
-                        place: Place::from_local(temp),
-                        rvalue: Rvalue::Ref { place },
-                    },
-                );
-                (block, Operand::Move(Place::from_local(temp)))
+        match expected_self_ty.map(|t| self.typecheck.interner.get(t).clone()) {
+            Some(Type::Struct { .. }) | None => (block, self.place_to_operand(place, obj_ty)),
+
+            Some(Type::Pointer { is_const, .. }) => {
+                match self.typecheck.interner.get(obj_ty).clone() {
+                    Type::Pointer { .. } => (block, self.place_to_operand(place, obj_ty)),
+                    _ => {
+                        let ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                            inner: obj_ty,
+                            is_const,
+                        });
+
+                        let temp = fb.new_temp(ptr_ty);
+
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::Ref { place, is_const },
+                            },
+                        );
+                        (block, Operand::Move(Place::from_local(temp)))
+                    }
+                }
             }
+
+            _ => (block, self.place_to_operand(place, obj_ty)),
         }
     }
 }
