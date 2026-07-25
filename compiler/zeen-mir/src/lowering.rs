@@ -282,6 +282,32 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, self.place_to_operand(Place::from_local(temp), ty))
             }
 
+            HirExprKind::ArrayInit { elements } => {
+                let ty = self.expr_type(expr);
+                let mut block = block;
+                let mut operands = Vec::with_capacity(elements.len());
+
+                for el in elements.iter() {
+                    let (b, op) = self.lower_expr_to_operand(fb, el, block);
+                    block = b;
+                    operands.push(op);
+                }
+
+                let temp = fb.new_temp(ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::Aggregate {
+                            kind: AggregateKind::Array,
+                            operands,
+                        },
+                    },
+                );
+
+                (block, self.place_to_operand(Place::from_local(temp), ty))
+            }
+
             HirExprKind::If {
                 condition,
                 then_block,
