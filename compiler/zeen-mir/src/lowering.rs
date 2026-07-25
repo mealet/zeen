@@ -377,6 +377,53 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, Place::from_local(local))
             }
 
+            HirExprKind::FieldAccess { object, .. } => {
+                let field_def = *self
+                    .typecheck
+                    .field_resolutions
+                    .get(&expr.id)
+                    .expect("unresolved shit");
+                let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
+                (block, obj_place.field(field_def))
+            }
+
+            HirExprKind::SliceAccess { object, index } => {
+                let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
+                let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
+
+                let index_local = match index_operand {
+                    Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
+                    other => {
+                        let usize_ty = self
+                            .typecheck
+                            .interner
+                            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+
+                        let temp = fb.new_temp(usize_ty);
+
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::Use(other),
+                            },
+                        );
+
+                        temp
+                    }
+                };
+
+                (block, obj_place.index(index_local))
+            }
+
+            HirExprKind::Unary {
+                expr: inner,
+                op: UnaryOp::Deref,
+            } => {
+                let (block, inner_place) = self.lower_expr_to_place(fb, inner, block);
+                (block, inner_place.deref())
+            }
+
             _ => todo!(),
         }
     }
