@@ -6,10 +6,13 @@ use zeen_ast::{
     expressions::{BinaryOp, Literal, UnaryOp},
 };
 use zeen_hir::{
-    HirId, HirTypeExpr, decl::HirFn, expr::{HirExpr, HirExprKind}, stmt::{HirStmt, HirStmtKind}
+    HirId, HirTypeExpr,
+    decl::HirFn,
+    expr::{HirExpr, HirExprKind},
+    stmt::{HirStmt, HirStmtKind},
 };
-use zeen_resolve::DefId;
-use zeen_typecheck::result::CallResolution;
+use zeen_resolve::{DefId, ResolutionResult};
+use zeen_typecheck::result::{CallResolution, TypeCheckResult};
 use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
 
 use crate::{
@@ -19,10 +22,8 @@ use crate::{
 };
 
 pub struct MirLowering<'ctx> {
-    interner: &'ctx mut TypeInterner,
-    expr_types: &'ctx HashMap<HirId, TypeId>,
-    call_resolutions: &'ctx HashMap<HirId, CallResolution>,
-    struct_info: &'ctx HashMap<DefId, StructTypeInfo>,
+    typecheck: &'ctx mut TypeCheckResult,
+    resolution: &'ctx ResolutionResult,
     hir_fns_by_def: HashMap<DefId, Rc<HirFn>>,
 
     program: MirProgram,
@@ -111,14 +112,16 @@ impl FnBuilder {
 }
 
 impl<'ctx> MirLowering<'ctx> {
-    pub fn new(interner: &'ctx mut TypeInterner, expr_types: &'ctx HashMap<HirId, TypeId>, call_resolutions: &'ctx HashMap<HirId, CallResolution>, struct_info: &'ctx HashMap<DefId, StructTypeInfo>) -> Self {
+    pub fn new(
+        typecheck: &'ctx mut TypeCheckResult,
+        resolution: &'ctx ResolutionResult,
+        hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
+    ) -> Self {
         Self {
-            interner,
-            expr_types,
+            typecheck,
+            resolution,
             program: MirProgram::default(),
             mono_cache: MonoCache::new(),
-            call_resolutions,
-            struct_info,
             hir_fns_by_def: HashMap::new(),
         }
     }
@@ -128,14 +131,27 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn expr_type(&self, expr: &HirExpr) -> TypeId {
-        self.expr_types
+        self.typecheck
+            .expr_types
             .get(&expr.id)
             .copied()
             .expect("unrecorded HIR expr after Typechecker")
     }
 
+    fn struct_info(&self, def_id: DefId) -> Option<&zeen_types::StructTypeInfo> {
+        self.typecheck.struct_info.get(&def_id)
+    }
+
+    fn field_resolution(&self, expr_id: HirId) -> Option<DefId> {
+        self.typecheck.field_resolutions.get(&expr_id).copied()
+    }
+
+    fn call_resolution(&self, expr_id: HirId) -> Option<&CallResolution> {
+        self.typecheck.call_resolutions.get(&expr_id)
+    }
+
     fn mir_type_is_copy(&self, ty: TypeId, struct_info: &HashMap<DefId, StructTypeInfo>) -> bool {
-        match self.interner.get(ty).clone() {
+        match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(_)
             | Type::Enum { .. }
             | Type::Pointer { .. }
@@ -523,7 +539,12 @@ impl<'ctx> MirLowering<'ctx> {
 }
 
 impl<'ctx> MirLowering<'ctx> {
-    fn monomorphize_fn(&mut self, def_id: DefId, generic_args: Vec<TypeId>, hir_fn: &HirFn) -> MirFunctionId {
+    fn monomorphize_fn(
+        &mut self,
+        def_id: DefId,
+        generic_args: Vec<TypeId>,
+        hir_fn: &HirFn,
+    ) -> MirFunctionId {
         let key = (def_id, generic_args.clone());
 
         if let Some(&existing) = self.mono_cache.cache.get(&key) {
@@ -539,7 +560,12 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    fn lower_fn_body(&mut self, def_id: DefId, hir_fn: &HirFn, generic_args: &[TypeId]) -> MirFunction {
+    fn lower_fn_body(
+        &mut self,
+        def_id: DefId,
+        hir_fn: &HirFn,
+        generic_args: &[TypeId],
+    ) -> MirFunction {
         let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
         let bindings: HashMap<DefId, TypeId> = generic_defs
             .iter()
@@ -552,15 +578,29 @@ impl<'ctx> MirLowering<'ctx> {
         fb.new_block();
 
         for param in &hir_fn.params {
-            let raw_ty = self.hir_type_to_type_id(&param.ty);
-            let concrete_ty = zeen_types::substitute_generics(self.interner, raw_ty, &bindings);
+            let Some(param_def) = param.def_id else {
+                continue;
+            };
 
-            let local = fb.new_local(concrete_ty, LocalKind::Param, Mutability::Mut, param.name, Some(param.ty.source.clone()));
+            let raw_ty = self
+                .typecheck
+                .def_types
+                .get(&param_def)
+                .copied()
+                .expect("param must have a type after Typecheck");
+            let concrete_ty =
+                zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ty, &bindings);
+
+            let local = fb.new_local(
+                concrete_ty,
+                LocalKind::Param,
+                Mutability::Mut,
+                param.name,
+                Some(param.ty.source.clone()),
+            );
+
             fb.func.params.push(local);
-            
-            if let Some(param_def) = param.def_id {
-                fb.locals_by_def.insert(param_def, local);
-            }
+            fb.locals_by_def.insert(param_def, local);
         }
 
         let Some(body) = &hir_fn.body else {
@@ -589,7 +629,10 @@ impl<'ctx> MirLowering<'ctx> {
 
                         None => {
                             if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
-                                fb.set_terminator(cur, Terminator::Return(Operand::Constant(ConstValue::Void)));
+                                fb.set_terminator(
+                                    cur,
+                                    Terminator::Return(Operand::Constant(ConstValue::Void)),
+                                );
                             }
                             cur
                         }
@@ -597,7 +640,10 @@ impl<'ctx> MirLowering<'ctx> {
                 } else {
                     let cur = self.lower_stmt(&mut fb, body, entry);
                     if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
-                        fb.set_terminator(cur, Terminator::Return(Operand::Constant(ConstValue::Void)));
+                        fb.set_terminator(
+                            cur,
+                            Terminator::Return(Operand::Constant(ConstValue::Void)),
+                        );
                     }
                     cur
                 }
@@ -615,9 +661,5 @@ impl<'ctx> MirLowering<'ctx> {
         let _ = final_block;
 
         fb.func
-    }
-
-    fn hir_type_to_type_id(&mut self, ty: &HirTypeExpr) -> TypeId {
-        todo!()
     }
 }
