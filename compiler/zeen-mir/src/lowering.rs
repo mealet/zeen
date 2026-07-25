@@ -180,7 +180,7 @@ impl<'ctx> MirLowering<'ctx> {
         &mut self,
         fb: &mut FnBuilder,
         expr: &HirExpr,
-        block: BlockId,
+        mut block: BlockId,
     ) -> (BlockId, Operand) {
         match &expr.kind {
             HirExprKind::Literal(lit) => {
@@ -238,6 +238,48 @@ impl<'ctx> MirLowering<'ctx> {
                 );
 
                 (block, Operand::Move(Place::from_local(temp)))
+            }
+
+            HirExprKind::StructInit { fields, .. } => {
+                let ty = self.expr_type(expr);
+                let struct_def = match self.typecheck.interner.get(ty).clone() {
+                    Type::Struct { def_id, .. } => def_id,
+                    _ => panic!("non-struct type in StructInit lowering"),
+                };
+
+                let info = self
+                    .struct_info(struct_def)
+                    .expect("struct info is missing")
+                    .clone();
+
+                let mut block = block;
+                let mut ordered_operands = Vec::with_capacity(info.fields.len());
+
+                for field_info in &info.fields {
+                    let matching = fields
+                        .iter()
+                        .find(|f| f.name == field_info.name)
+                        .expect("typechecker should have caught missing field");
+
+                    let (bl, operand) = self.lower_expr_to_operand(fb, &matching.value, block);
+                    block = bl;
+                    ordered_operands.push(operand);
+                }
+
+                let temp = fb.new_temp(ty);
+
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::Aggregate {
+                            kind: AggregateKind::Struct(struct_def),
+                            operands: ordered_operands,
+                        },
+                    },
+                );
+
+                (block, self.place_to_operand(Place::from_local(temp), ty))
             }
 
             HirExprKind::If {
@@ -318,7 +360,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let mut arg_operands = Vec::with_capacity(args.len() + 1);
 
                 if let HirExprKind::FieldAccess { object, .. } = &callee.kind {
-                    let (b, self_operand) = self.lower_reciever_operand(fb, object, block);
+                    let (b, self_operand) = self.lower_receiver_operand(fb, object, block);
                     block = b;
                     arg_operands.push(self_operand);
                 }
