@@ -24,7 +24,7 @@ use crate::{
 pub struct MirLowering<'ctx> {
     typecheck: &'ctx mut TypeCheckResult,
     resolution: &'ctx ResolutionResult,
-    hir_fns_by_def: HashMap<DefId, Rc<HirFn>>,
+    hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
 
     program: MirProgram,
     mono_cache: MonoCache,
@@ -122,7 +122,7 @@ impl<'ctx> MirLowering<'ctx> {
             resolution,
             program: MirProgram::default(),
             mono_cache: MonoCache::new(),
-            hir_fns_by_def: HashMap::new(),
+            hir_fns_by_def,
         }
     }
 
@@ -377,11 +377,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let fn_def = resolution.fn_def;
                 let generic_args = resolution.generic_args.clone();
 
-                let Some(hir_fn) = self.hir_fns_by_def.get(&fn_def).cloned() else {
-                    panic!("No HIR Body found for DefId {:?}", fn_def);
-                };
-
-                let mir_fn_id = self.monomorphize_fn(fn_def, generic_args, &hir_fn);
+                let mir_fn_id = self.monomorphize_fn(fn_def, generic_args);
 
                 let mut arg_operands = Vec::with_capacity(args.len() + 1);
 
@@ -753,12 +749,8 @@ impl<'ctx> MirLowering<'ctx> {
 }
 
 impl<'ctx> MirLowering<'ctx> {
-    fn monomorphize_fn(
-        &mut self,
-        def_id: DefId,
-        generic_args: Vec<TypeId>,
-        hir_fn: &HirFn,
-    ) -> MirFunctionId {
+    fn monomorphize_fn(&mut self, def_id: DefId, generic_args: Vec<TypeId>) -> MirFunctionId {
+        let hir_fn = self.hir_fns_by_def[&def_id].as_ref();
         let key = (def_id, generic_args.clone());
 
         if let Some(&existing) = self.mono_cache.cache.get(&key) {
