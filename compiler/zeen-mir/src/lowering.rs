@@ -30,6 +30,7 @@ pub struct MirLowering<'ctx> {
     mono_cache: MonoCache,
 }
 
+#[derive(Default)]
 pub struct MonoCache {
     cache: HashMap<(DefId, Vec<TypeId>), MirFunctionId>,
     next_id: u32,
@@ -37,10 +38,7 @@ pub struct MonoCache {
 
 impl MonoCache {
     pub fn new() -> Self {
-        Self {
-            cache: HashMap::new(),
-            next_id: 0,
-        }
+        Self::default()
     }
 
     fn fresh_id(&mut self) -> MirFunctionId {
