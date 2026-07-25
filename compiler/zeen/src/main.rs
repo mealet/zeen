@@ -181,7 +181,7 @@ fn main() {
         zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&rodeo));
     typechecker.check_module(&hir_module);
 
-    let typechecker_result = typechecker.finish();
+    let mut typechecker_result = typechecker.finish();
 
     if !typechecker_result.errors.is_empty() {
         for err in &typechecker_result.errors {
@@ -196,4 +196,14 @@ fn main() {
 
         exit(1);
     }
+
+    let hir_fns_by_def = zeen_mir::collecter::collect_hir_fns(&hir_module);
+
+    let mir_lowering = zeen_mir::lowering::MirLowering::new(
+        &mut typechecker_result,
+        &resolution_result,
+        &hir_fns_by_def,
+    );
+
+    let _ = mir_lowering; // soon
 }

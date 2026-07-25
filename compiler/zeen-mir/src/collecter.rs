@@ -7,7 +7,7 @@ use zeen_hir::{
 };
 use zeen_resolve::DefId;
 
-fn collect_hir_fns(module: &HirModule) -> HashMap<DefId, Rc<HirFn>> {
+pub fn collect_hir_fns(module: &HirModule) -> HashMap<DefId, Rc<HirFn>> {
     let mut map = HashMap::new();
 
     for decl in &module.decls {

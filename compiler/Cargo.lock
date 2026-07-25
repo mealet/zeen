@@ -584,6 +584,7 @@ dependencies = [
  "zeen-driver",
  "zeen-hir",
  "zeen-lexer",
+ "zeen-mir",
  "zeen-parser",
  "zeen-resolve",
  "zeen-typecheck",
