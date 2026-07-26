@@ -34,9 +34,9 @@ use zeen_types::{
     binary_op_interface, self_mode_of, unary_op_interface,
 };
 
-mod coerce;
-mod context;
-mod error;
+pub mod coerce;
+pub mod context;
+pub mod error;
 pub mod format_str;
 pub mod result;
 

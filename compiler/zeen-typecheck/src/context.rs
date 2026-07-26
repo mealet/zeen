@@ -13,6 +13,7 @@ pub struct FnCtx {
     pub loop_depth: u32,
 }
 
+#[derive(Default)]
 pub struct TypeCheckCtx {
     stack: Vec<FnCtx>,
 }
@@ -23,7 +24,7 @@ pub struct InterfaceRegistry {
 
 impl TypeCheckCtx {
     pub fn new() -> Self {
-        Self { stack: Vec::new() }
+        Self::default()
     }
 
     pub fn push_fn(&mut self, ctx: FnCtx) {
