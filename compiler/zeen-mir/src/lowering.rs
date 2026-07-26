@@ -689,7 +689,23 @@ impl<'ctx> MirLowering<'ctx> {
         kind: HirMacroKind,
         block: BlockId,
     ) -> (BlockId, Operand) {
-        todo!()
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let dest = fb.new_temp(void_ty);
+        let next = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::MacroCall {
+                kind,
+                format_chunks: None,
+                args: Vec::new(),
+                destination: Place::from_local(dest),
+                target: None,
+            },
+        );
+
+        fb.set_terminator(next, Terminator::Unreachable);
+        (next, Operand::Constant(ConstValue::Void))
     }
 }
 
