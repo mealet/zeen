@@ -1121,7 +1121,7 @@ impl<'ctx> MirLowering<'ctx> {
 
         fb.locals_by_def.insert(*def_id, loop_var);
 
-        let elem_place = match self.interner.get(iter_ty).clone() {
+        let elem_place = match self.typecheck.interner.get(iter_ty).clone() {
             Type::Array { .. } => iter_place.clone().index(counter),
             Type::Slice { .. } => {
                 let mut ptr_place = iter_place.clone();
