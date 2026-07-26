@@ -204,7 +204,7 @@ pub enum Rvalue {
         operands: Vec<Operand>,
     },
 
-    Discrimant(Place),
+    Discriminant(Place),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,7 +219,7 @@ pub enum Terminator {
     Goto(BlockId),
 
     SwitchInt {
-        discrimant: Operand,
+        discriminant: Operand,
         targets: Vec<(u128, BlockId)>,
         otherwise: BlockId,
     },

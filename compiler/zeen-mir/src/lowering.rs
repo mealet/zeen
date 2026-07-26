@@ -12,7 +12,10 @@ use zeen_hir::{
     stmt::{HirStmt, HirStmtKind},
 };
 use zeen_resolve::{DefId, ResolutionResult};
-use zeen_typecheck::result::{CallResolution, TypeCheckResult};
+use zeen_typecheck::{
+    coerce::builtin_is_integer,
+    result::{CallResolution, TypeCheckResult},
+};
 use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
 
 use crate::{
@@ -319,7 +322,7 @@ impl<'ctx> MirLowering<'ctx> {
                 fb.set_terminator(
                     block,
                     Terminator::SwitchInt {
-                        discrimant: cond_operand,
+                        discriminant: cond_operand,
                         targets: vec![(1, then_bb)],
                         otherwise: else_bb,
                     },
@@ -827,7 +830,7 @@ impl<'ctx> MirLowering<'ctx> {
                 fb.set_terminator(
                     cond_end,
                     Terminator::SwitchInt {
-                        discrimant: cond_operand,
+                        discriminant: cond_operand,
                         targets: vec![(1, body_bb)],
                         otherwise: exit_bb,
                     },
@@ -843,6 +846,30 @@ impl<'ctx> MirLowering<'ctx> {
                 fb.set_terminator(body_end, Terminator::Goto(header));
 
                 exit_bb
+            }
+
+            HirStmtKind::For {
+                def_id,
+                iterator,
+                block: body,
+                ..
+            } => {
+                let (block, iter_ty) = {
+                    let ty = self.expr_type(iterator);
+                    (block, ty)
+                };
+
+                match self.typecheck.interner.get(iter_ty).clone() {
+                    Type::Builtin(b) if builtin_is_integer(b) => {
+                        self.lower_for_range(fb, def_id, iterator, body, block)
+                    }
+
+                    Type::Array { .. } | Type::Slice { .. } => {
+                        self.lower_for_iterable(fb, def_id, iterator, iter_ty, body, block)
+                    }
+
+                    _ => panic!("non-iterable type passed Typechecker: {:?}", iter_ty),
+                }
             }
 
             HirStmtKind::Return { value } => {
@@ -886,6 +913,127 @@ impl<'ctx> MirLowering<'ctx> {
 
             _ => todo!(),
         }
+    }
+
+    fn lower_for_range(
+        &mut self,
+        fb: &mut FnBuilder,
+        def_id: &DefId,
+        iterator: &HirExpr,
+        body: &HirStmt,
+        block: BlockId,
+    ) -> BlockId {
+        let (block, count_operand) = self.lower_expr_to_operand(fb, iterator, block);
+
+        let usize_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+        let counter = fb.new_local(usize_ty, LocalKind::Temporary, Mutability::Mut, None, None);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0))),
+            },
+        );
+
+        let header = fb.new_block();
+        fb.set_terminator(block, Terminator::Goto(header));
+
+        let loop_var_ty = self
+            .typecheck
+            .def_types
+            .get(def_id)
+            .copied()
+            .unwrap_or(usize_ty);
+        let loop_var = fb.new_local(
+            loop_var_ty,
+            LocalKind::UserVariable,
+            Mutability::Const,
+            None,
+            None,
+        );
+        fb.locals_by_def.insert(*def_id, loop_var);
+
+        fb.push_stmt(
+            header,
+            MirStatement::Assign {
+                place: Place::from_local(loop_var),
+                rvalue: Rvalue::Use(Operand::Copy(Place::from_local(counter))),
+            },
+        );
+
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+        let cmp_result = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            header,
+            MirStatement::Assign {
+                place: Place::from_local(cmp_result),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Lt,
+                    lhs: Operand::Copy(Place::from_local(counter)),
+                    rhs: count_operand,
+                },
+            },
+        );
+
+        let body_bb = fb.new_block();
+        let exit_bb = fb.new_block();
+
+        fb.set_terminator(
+            header,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(cmp_result)),
+                targets: vec![(1, body_bb)],
+                otherwise: exit_bb,
+            },
+        );
+
+        fb.loop_stack.push(LoopTargets {
+            break_target: exit_bb,
+            continue_target: header,
+        });
+        let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
+        fb.loop_stack.pop();
+
+        let incremented = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            body_end,
+            MirStatement::Assign {
+                place: Place::from_local(incremented),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Add,
+                    lhs: Operand::Copy(Place::from_local(counter)),
+                    rhs: Operand::Constant(ConstValue::Int(1)),
+                },
+            },
+        );
+        fb.push_stmt(
+            body_end,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented))),
+            },
+        );
+        fb.set_terminator(body_end, Terminator::Goto(header));
+
+        exit_bb
+    }
+
+    fn lower_for_iterable(
+        &mut self,
+        fb: &mut FnBuilder,
+        def_id: &DefId,
+        iterator: &HirExpr,
+        iter_ty: TypeId,
+        body: &HirStmt,
+        block: BlockId,
+    ) -> BlockId {
+        todo!()
     }
 }
 
