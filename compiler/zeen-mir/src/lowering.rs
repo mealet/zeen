@@ -6,7 +6,7 @@ use zeen_ast::{
     expressions::{BinaryOp, Literal, UnaryOp},
 };
 use zeen_hir::{
-    HirId, HirTypeExpr,
+    HirId, HirMacroKind, HirTypeExpr,
     decl::HirFn,
     expr::{HirExpr, HirExprKind},
     stmt::{HirStmt, HirStmtKind},
@@ -410,6 +410,66 @@ impl<'ctx> MirLowering<'ctx> {
                 }
             }
 
+            HirExprKind::MacroCall { kind, args } => match kind.0 {
+                HirMacroKind::SizeOf | HirMacroKind::AlignOf => {
+                    let target_ty = match &args[0].kind {
+                        HirExprKind::Type(_) => self.expr_type(&args[0]),
+                        _ => panic!("@sizeof / @alignof arg must be a type expression"),
+                    };
+
+                    let result_ty = self.expr_type(expr);
+                    let temp = fb.new_temp(result_ty);
+                    let rvalue = if matches!(kind.0, HirMacroKind::SizeOf) {
+                        Rvalue::SizeOf(target_ty)
+                    } else {
+                        Rvalue::AlignOf(target_ty)
+                    };
+
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue,
+                        },
+                    );
+                    (block, Operand::Move(Place::from_local(temp)))
+                }
+
+                HirMacroKind::As => {
+                    let target_ty = match &args[0].kind {
+                        HirExprKind::Type(_) => self.expr_type(&args[0]),
+                        _ => panic!("@as first arg must be a type expression"),
+                    };
+
+                    let (block, value_operand) = self.lower_expr_to_operand(fb, &args[1], block);
+
+                    let temp = fb.new_temp(target_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Cast {
+                                operand: value_operand,
+                                target: target_ty,
+                            },
+                        },
+                    );
+                    (block, Operand::Move(Place::from_local(temp)))
+                }
+
+                HirMacroKind::Print
+                | HirMacroKind::Println
+                | HirMacroKind::Format
+                | HirMacroKind::Dbg
+                | HirMacroKind::Panic => self.lower_macro_call(fb, kind.0, args, expr.id, block),
+
+                HirMacroKind::Unreachable | HirMacroKind::Todo => {
+                    self.lower_diverging_macro(fb, kind.0, block)
+                }
+
+                HirMacroKind::Unknown => panic!("unknown macro reached MIR lowering"),
+            },
+
             HirExprKind::Block { stmts, trailing } => {
                 let mut cur = block;
 
@@ -563,6 +623,73 @@ impl<'ctx> MirLowering<'ctx> {
 
             _ => (block, self.place_to_operand(place, obj_ty)),
         }
+    }
+
+    fn lower_macro_call(
+        &mut self,
+        fb: &mut FnBuilder,
+        kind: HirMacroKind,
+        args: &[Rc<HirExpr>],
+        hir_id: HirId,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        let format_chunks = self.typecheck.format_specs.get(&hir_id).cloned();
+
+        let value_exprs: &[Rc<HirExpr>] = if format_chunks.is_some() {
+            &args[1..]
+        } else {
+            args
+        };
+
+        let mut block = block;
+        let mut operands = Vec::with_capacity(value_exprs.len());
+        for arg in value_exprs {
+            let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+            block = b;
+            operands.push(op);
+        }
+
+        let result_ty = self
+            .typecheck
+            .expr_types
+            .get(&hir_id)
+            .copied()
+            .unwrap_or_else(|| self.typecheck.interner.intern(Type::Void));
+
+        let dest = fb.new_temp(result_ty);
+        let next = fb.new_block();
+
+        let is_diverging = matches!(kind, HirMacroKind::Panic);
+
+        fb.set_terminator(
+            block,
+            Terminator::MacroCall {
+                kind,
+                format_chunks,
+                args: operands,
+                destination: Place::from_local(dest),
+                target: if is_diverging { None } else { Some(next) },
+            },
+        );
+
+        if is_diverging {
+            fb.set_terminator(next, Terminator::Unreachable);
+            (next, Operand::Constant(ConstValue::Void))
+        } else {
+            (
+                next,
+                self.place_to_operand(Place::from_local(dest), result_ty),
+            )
+        }
+    }
+
+    fn lower_diverging_macro(
+        &mut self,
+        fb: &mut FnBuilder,
+        kind: HirMacroKind,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        todo!()
     }
 }
 

@@ -8,7 +8,9 @@ use zeen_ast::{
     Source,
     expressions::{BinaryOp, UnaryOp},
 };
+use zeen_hir::HirMacroKind;
 use zeen_resolve::DefId;
+use zeen_typecheck::format_str::FormatChunk;
 use zeen_types::{Type, TypeId};
 
 pub mod collecter;
@@ -194,6 +196,9 @@ pub enum Rvalue {
         target: TypeId,
     },
 
+    SizeOf(TypeId),
+    AlignOf(TypeId),
+
     Aggregate {
         kind: AggregateKind,
         operands: Vec<Operand>,
@@ -221,6 +226,14 @@ pub enum Terminator {
 
     Call {
         func: CallTarget,
+        args: Vec<Operand>,
+        destination: Place,
+        target: Option<BlockId>,
+    },
+
+    MacroCall {
+        kind: HirMacroKind,
+        format_chunks: Option<Vec<FormatChunk>>,
         args: Vec<Operand>,
         destination: Place,
         target: Option<BlockId>,
