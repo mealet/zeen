@@ -942,7 +942,6 @@ impl<'res> TypeChecker<'res> {
                     Type::Builtin(b) if coerce::builtin_is_integer(b) => iter_ty,
                     Type::Array { element, .. } => element,
                     Type::Slice { element, .. } => element,
-                    Type::ManyPointer { inner, .. } => inner,
                     Type::Error => self.result.interner.error(),
                     _ => {
                         self.report(TypeError::NotIterable {
