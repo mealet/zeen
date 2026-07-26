@@ -11,7 +11,7 @@ use zeen_ast::{
 use zeen_hir::HirMacroKind;
 use zeen_resolve::DefId;
 use zeen_typecheck::format_str::FormatChunk;
-use zeen_types::{Type, TypeId};
+use zeen_types::TypeId;
 
 pub mod collecter;
 pub mod lowering;
