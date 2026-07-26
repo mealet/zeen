@@ -486,6 +486,8 @@ impl<'ctx> MirLowering<'ctx> {
                 }
             }
 
+            HirExprKind::Switch => unreachable!("not implemented in previous stages"),
+
             _ => todo!(),
         }
     }
@@ -549,7 +551,7 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, inner_place.deref())
             }
 
-            _ => todo!(),
+            _ => panic!("passed `expr-to-place` is not lvalue"),
         }
     }
 
@@ -911,7 +913,7 @@ impl<'ctx> MirLowering<'ctx> {
                 block
             }
 
-            _ => todo!(),
+            HirStmtKind::Error => panic!("Error Statement kind passed in MIR lowering stage"),
         }
     }
 
