@@ -151,6 +151,10 @@ pub enum PlaceElem {
     Field(DefId),
     Index(LocalId),
     Deref,
+
+    // builtin slice's fields
+    SliceLen,
+    SlicePtr,
 }
 
 #[derive(Debug, Clone)]

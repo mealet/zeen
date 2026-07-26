@@ -1033,7 +1033,137 @@ impl<'ctx> MirLowering<'ctx> {
         body: &HirStmt,
         block: BlockId,
     ) -> BlockId {
-        todo!()
+        let (block, iter_place) = self.lower_expr_to_place(fb, iterator, block);
+
+        let usize_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+
+        let (len_operand, elem_ty) = match self.typecheck.interner.get(iter_ty).clone() {
+            Type::Array { element, len } => {
+                let len_val = len.expect("unknown array length (must be comptime known)");
+
+                (Operand::Constant(ConstValue::Int(len_val as i128)), element)
+            }
+            Type::Slice { element, .. } => {
+                let mut len_place = iter_place.clone();
+                len_place.projection.push(PlaceElem::SliceLen);
+
+                let len_local = fb.new_temp(usize_ty);
+
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(len_local),
+                        rvalue: Rvalue::Use(Operand::Copy(len_place)),
+                    },
+                );
+
+                (Operand::Move(Place::from_local(len_local)), element)
+            }
+
+            _err_type => panic!("non-iterable type: {:?}", _err_type),
+        };
+
+        let counter = fb.new_local(usize_ty, LocalKind::Temporary, Mutability::Mut, None, None);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0))),
+            },
+        );
+
+        let header = fb.new_block();
+        fb.set_terminator(block, Terminator::Goto(header));
+
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let cmp_result = fb.new_temp(bool_ty);
+
+        fb.push_stmt(
+            header,
+            MirStatement::Assign {
+                place: Place::from_local(cmp_result),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Lt,
+                    lhs: Operand::Copy(Place::from_local(counter)),
+                    rhs: len_operand,
+                },
+            },
+        );
+
+        let body_bb = fb.new_block();
+        let exit_bb = fb.new_block();
+
+        fb.set_terminator(
+            header,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(cmp_result)),
+                targets: vec![(1, body_bb)],
+                otherwise: exit_bb,
+            },
+        );
+
+        let loop_var = fb.new_local(
+            elem_ty,
+            LocalKind::UserVariable,
+            Mutability::Const,
+            None,
+            None,
+        );
+
+        fb.locals_by_def.insert(*def_id, loop_var);
+
+        let elem_place = iter_place.clone().index(counter);
+        let elem_operand = self.place_to_operand(elem_place, elem_ty);
+
+        fb.push_stmt(
+            body_bb,
+            MirStatement::Assign {
+                place: Place::from_local(loop_var),
+                rvalue: Rvalue::Use(elem_operand),
+            },
+        );
+
+        fb.loop_stack.push(LoopTargets {
+            break_target: exit_bb,
+            continue_target: header,
+        });
+
+        let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
+
+        fb.loop_stack.pop();
+
+        let incremented = fb.new_temp(usize_ty);
+
+        fb.push_stmt(
+            body_end,
+            MirStatement::Assign {
+                place: Place::from_local(incremented),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Add,
+                    lhs: Operand::Copy(Place::from_local(counter)),
+                    rhs: Operand::Constant(ConstValue::Int(1)),
+                },
+            },
+        );
+
+        fb.push_stmt(
+            body_end,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented))),
+            },
+        );
+
+        fb.set_terminator(body_end, Terminator::Goto(header));
+
+        exit_bb
     }
 }
 
