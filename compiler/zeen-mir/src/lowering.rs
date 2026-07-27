@@ -1125,11 +1125,13 @@ impl<'ctx> MirLowering<'ctx> {
             Type::Array { .. } => iter_place.clone().index(counter),
             Type::Slice { .. } => {
                 let mut ptr_place = iter_place.clone();
-        ptr_place.projection.push(PlaceElem::SlicePtr);
+
+                ptr_place.projection.push(PlaceElem::SlicePtr);
                 ptr_place.index(counter)
             }
             _ => unreachable!(),
         };
+
         let elem_operand = self.place_to_operand(elem_place, elem_ty);
 
         fb.push_stmt(
