@@ -52,6 +52,7 @@ pub struct TypeChecker<'res> {
     result: TypeCheckResult,
     ctx: TypeCheckCtx,
     interner: Rc<RefCell<lasso::Rodeo>>,
+    errors: Vec<TypeError>,
 
     fn_sigs: HashMap<DefId, FnSignature>,
 
@@ -89,6 +90,7 @@ impl<'res> TypeChecker<'res> {
             compilation_context,
             result: TypeCheckResult::default(),
             ctx: TypeCheckCtx::new(),
+            errors: Vec::new(),
             expect_assign_interface: false,
             found_main_fn: false,
             interner,
@@ -104,8 +106,11 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    pub fn finish(self) -> TypeCheckResult {
-        self.result
+    pub fn finish(self) -> Result<TypeCheckResult, Vec<TypeError>> {
+        if self.errors.is_empty() {
+            return Ok(self.result);
+        }
+        Err(self.errors)
     }
 
     // --> Helpers
@@ -115,7 +120,7 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn report(&mut self, err: TypeError) {
-        self.result.errors.push(err);
+        self.errors.push(err);
     }
 
     fn display_type(&self, id: TypeId) -> String {
@@ -1633,7 +1638,7 @@ impl<'res> TypeChecker<'res> {
                 } => (def_id, generic_args),
                 Type::Error => return self.result.interner.error(),
                 _ => {
-                    self.result.errors.push(TypeError::NotAStruct {
+                    self.report(TypeError::NotAStruct {
                         provided: self.display_type(obj_ty).into(),
                         src: object.source.src(),
                         span: field_span,
@@ -1645,7 +1650,7 @@ impl<'res> TypeChecker<'res> {
             Type::Error => return self.result.interner.error(),
 
             _ => {
-                self.result.errors.push(TypeError::NotAStruct {
+                self.report(TypeError::NotAStruct {
                     provided: self.display_type(obj_ty).into(),
                     src: object.source.src(),
                     span: field_span,
@@ -1706,7 +1711,7 @@ impl<'res> TypeChecker<'res> {
 
                 drop(interner);
 
-                self.result.errors.push(TypeError::UnknownField {
+                self.report(TypeError::UnknownField {
                     struct_name,
                     field: field_name,
                     src: object.source.src(),
@@ -1952,7 +1957,7 @@ impl<'res> TypeChecker<'res> {
 
     fn check_not_const_target(&mut self, target: &HirExpr) {
         if self.find_const_violation(target) {
-            self.result.errors.push(TypeError::AssignToConst {
+            self.report(TypeError::AssignToConst {
                 src: target.source.src(),
                 span: target.source.span,
             })
@@ -1978,7 +1983,7 @@ impl<'res> TypeChecker<'res> {
             return b;
         }
 
-        self.result.errors.push(TypeError::Mismatch {
+        self.report(TypeError::Mismatch {
             expected: self.display_type(a).into(),
             found: self.display_type(b).into(),
             src: source.src(),
@@ -2658,7 +2663,7 @@ impl<'res> TypeChecker<'res> {
                     if existing != arg_ty
                         && !try_coerce(&self.result.interner, arg_ty, existing).is_ok() =>
                 {
-                    self.result.errors.push(TypeError::GenericConflict {
+                    self.report(TypeError::GenericConflict {
                         param: self.display_type(param_ty).into(),
                         first: self.display_type(existing).into(),
                         second: self.display_type(arg_ty).into(),
@@ -2908,15 +2913,13 @@ impl<'res> TypeChecker<'res> {
                 Some(SelfMode::Value) | Some(SelfMode::ValueConst),
                 ReceiverAccess::RefMut | ReceiverAccess::RefConst,
             ) => {
-                self.result
-                    .errors
-                    .push(TypeError::CannotMoveThroughPointer {
-                        src: source.src(),
-                        span: source.span,
-                    });
+                self.errors.push(TypeError::CannotMoveThroughPointer {
+                    src: source.src(),
+                    span: source.span,
+                });
             }
             (Some(SelfMode::RefMut), ReceiverAccess::RefConst) => {
-                self.result.errors.push(TypeError::AssignToConst {
+                self.errors.push(TypeError::AssignToConst {
                     src: source.src(),
                     span: source.span,
                 });
@@ -3296,7 +3299,7 @@ impl<'res> TypeChecker<'res> {
 
         let bounds = self.ctx.generic_bounds(g);
         if !bounds.contains(&iface_def) {
-            self.result.errors.push(TypeError::GenericMissingBound {
+            self.report(TypeError::GenericMissingBound {
                 generic: self.def_name(g).unwrap_or_default().into(),
                 bound: iface_name.into(),
                 src: source.src(),
@@ -3395,7 +3398,7 @@ impl<'res> TypeChecker<'res> {
 
                 let bounds = self.ctx.generic_bounds(g);
                 if !bounds.contains(&iface_def) {
-                    self.result.errors.push(TypeError::GenericMissingBound {
+                    self.report(TypeError::GenericMissingBound {
                         generic: self.def_name(g).unwrap_or_default().into(),
                         bound: iface_name.into(),
                         src: source.src(),

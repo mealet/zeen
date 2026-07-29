@@ -4,7 +4,7 @@ use zeen_hir::HirId;
 use zeen_resolve::DefId;
 use zeen_types::{StructTypeInfo, TypeId, TypeInterner};
 
-use crate::{error::TypeError, format_str::FormatChunk};
+use crate::format_str::FormatChunk;
 
 #[derive(Debug, Default)]
 pub struct TypeCheckResult {
@@ -16,7 +16,6 @@ pub struct TypeCheckResult {
     pub struct_info: HashMap<DefId, StructTypeInfo>,
     pub const_bindings: HashMap<DefId, bool>,
     pub format_specs: HashMap<HirId, Vec<FormatChunk>>,
-    pub errors: Vec<TypeError>,
 }
 
 impl TypeCheckResult {

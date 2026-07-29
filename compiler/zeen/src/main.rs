@@ -181,28 +181,21 @@ fn main() {
         zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&rodeo));
     typechecker.check_module(&hir_module);
 
-    let mut typechecker_result = typechecker.finish();
-
-    if !typechecker_result.errors.is_empty() {
-        for err in &typechecker_result.errors {
+    let mut typechecker_result = typechecker.finish().unwrap_or_else(|errors| {
+        for err in &errors {
             let report_string = driver.report(err).unwrap();
             eprintln!("{}", report_string);
         }
 
-        cli::println_error(format!(
-            "Compiler returned {} errors",
-            typechecker_result.errors.len()
-        ));
+        cli::println_error(format!("Compiler returned {} errors", errors.len()));
 
         exit(1);
-    }
-
-    let hir_fns_by_def = zeen_mir::collecter::collect_hir_fns(&hir_module);
+    });
 
     let mir_lowering = zeen_mir::lowering::MirLowering::new(
         &mut typechecker_result,
         &resolution_result,
-        &hir_fns_by_def,
+        &hir_module,
     );
 
     let _ = mir_lowering; // soon

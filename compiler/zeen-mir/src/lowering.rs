@@ -6,7 +6,7 @@ use zeen_ast::{
     expressions::{BinaryOp, Literal, UnaryOp},
 };
 use zeen_hir::{
-    HirId, HirMacroKind, HirTypeExpr,
+    HirId, HirMacroKind, HirModule, HirTypeExpr,
     decl::HirFn,
     expr::{HirExpr, HirExprKind},
     stmt::{HirStmt, HirStmtKind},
@@ -27,7 +27,7 @@ use crate::{
 pub struct MirLowering<'ctx> {
     typecheck: &'ctx mut TypeCheckResult,
     resolution: &'ctx ResolutionResult,
-    hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
+    hir_fns_by_def: HashMap<DefId, Rc<HirFn>>,
 
     program: MirProgram,
     mono_cache: MonoCache,
@@ -116,8 +116,10 @@ impl<'ctx> MirLowering<'ctx> {
     pub fn new(
         typecheck: &'ctx mut TypeCheckResult,
         resolution: &'ctx ResolutionResult,
-        hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
+        module: &HirModule,
     ) -> Self {
+        let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
+
         Self {
             typecheck,
             resolution,
@@ -1181,7 +1183,7 @@ impl<'ctx> MirLowering<'ctx> {
 
 impl<'ctx> MirLowering<'ctx> {
     fn monomorphize_fn(&mut self, def_id: DefId, generic_args: Vec<TypeId>) -> MirFunctionId {
-        let hir_fn = self.hir_fns_by_def[&def_id].as_ref();
+        let hir_fn = self.hir_fns_by_def[&def_id].clone();
         let key = (def_id, generic_args.clone());
 
         if let Some(&existing) = self.mono_cache.cache.get(&key) {
@@ -1191,7 +1193,7 @@ impl<'ctx> MirLowering<'ctx> {
         let id = self.mono_cache.fresh_id();
         self.mono_cache.cache.insert(key, id);
 
-        let mir_func = self.lower_fn_body(def_id, hir_fn, &generic_args);
+        let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args);
         self.program.functions.insert(id, mir_func);
 
         id
