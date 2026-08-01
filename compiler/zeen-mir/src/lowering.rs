@@ -253,6 +253,43 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, Operand::Move(Place::from_local(temp)))
             }
 
+            HirExprKind::SliceAccess { object, index } => {
+                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
+                    let result_ty = self.expr_type(expr);
+
+                    return self.lower_operator_method_call_with_extra_args(
+                        fb,
+                        object,
+                        &[index_operand],
+                        &op_res,
+                        block,
+                        result_ty,
+                    );
+                }
+
+                let obj_ty = self.expr_type(object);
+                let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
+                let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
+
+                let index_local =
+                    self.operand_to_local(fb, index_operand, self.expr_type(index), block);
+
+                let elem_place = match self.typecheck.interner.get(obj_ty).clone() {
+                    Type::Array { .. } | Type::ManyPointer { .. } => obj_place.index(index_local),
+                    Type::Slice { .. } => {
+                        let mut ptr_place = obj_place;
+                        ptr_place.projection.push(PlaceElem::SlicePtr);
+                        ptr_place.index(index_local)
+                    }
+                    _ => unreachable!(),
+                };
+
+                let ty = self.expr_type(expr);
+
+                (block, self.place_to_operand(elem_place, ty))
+            }
+
             HirExprKind::StructInit { fields, .. } => {
                 let ty = self.expr_type(expr);
                 let struct_def = match self.typecheck.interner.get(ty).clone() {
@@ -499,7 +536,6 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::Switch => unreachable!("not implemented in previous stages"),
-
             _ => todo!(),
         }
     }
@@ -639,6 +675,31 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             _ => (block, self.place_to_operand(place, obj_ty)),
+        }
+    }
+
+    fn operand_to_local(
+        &mut self,
+        fb: &mut FnBuilder,
+        operand: Operand,
+        ty: TypeId,
+        block: BlockId,
+    ) -> LocalId {
+        match &operand {
+            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+                place.local
+            }
+            _ => {
+                let temp = fb.new_temp(ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::Use(operand),
+                    },
+                );
+                temp
+            }
         }
     }
 
