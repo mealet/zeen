@@ -8,6 +8,7 @@ use crate::format_str::FormatChunk;
 
 #[derive(Debug, Default)]
 pub struct TypeCheckResult {
+    pub main_fn_def: Option<DefId>,
     pub interner: TypeInterner,
     pub expr_types: HashMap<HirId, TypeId>,
     pub def_types: HashMap<DefId, TypeId>,

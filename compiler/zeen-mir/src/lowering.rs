@@ -24,12 +24,47 @@ use crate::{
     Rvalue, Terminator,
 };
 
+pub struct MirLoweringResult {
+    pub program: MirProgram,
+    pub main_fn: Option<MirFunctionId>,
+}
+
+pub fn lower_program<'ctx>(
+    rodeo: Rc<RefCell<Rodeo>>,
+    typecheck: &'ctx mut TypeCheckResult,
+    resolution: &'ctx ResolutionResult,
+    module: &HirModule,
+) -> MirLoweringResult {
+    let main_def = typecheck.main_fn_def;
+
+    let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
+    let mut lowering = MirLowering::new(rodeo, typecheck, resolution, module, &hir_fns_by_def);
+
+    let mut main_fn: Option<MirFunctionId> = None;
+
+    if let Some(main_def) = main_def {
+        let main_fn_monomorphized = lowering.monomorphize_fn(main_def, Vec::new());
+        lowering.set_function_name(main_fn_monomorphized, "main");
+
+        main_fn = Some(main_fn_monomorphized);
+    } else {
+        hir_fns_by_def.keys().for_each(|&def_id| {
+            lowering.monomorphize_fn(def_id, Vec::new());
+        });
+    }
+
+    MirLoweringResult {
+        program: lowering.finish(),
+        main_fn,
+    }
+}
+
 pub struct MirLowering<'ctx> {
     rodeo: Rc<RefCell<Rodeo>>,
 
     typecheck: &'ctx mut TypeCheckResult,
     resolution: &'ctx ResolutionResult,
-    hir_fns_by_def: HashMap<DefId, Rc<HirFn>>,
+    hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
 
     program: MirProgram,
     mono_cache: MonoCache,
@@ -120,9 +155,8 @@ impl<'ctx> MirLowering<'ctx> {
         typecheck: &'ctx mut TypeCheckResult,
         resolution: &'ctx ResolutionResult,
         module: &HirModule,
+        hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
     ) -> Self {
-        let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
-
         Self {
             rodeo,
             typecheck,

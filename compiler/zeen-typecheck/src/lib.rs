@@ -189,6 +189,7 @@ impl<'res> TypeChecker<'res> {
             HirDeclKind::Fn(hir_fn) => {
                 if hir_fn.name.0 == self.interner.borrow_mut().get_or_intern("main") {
                     self.found_main_fn = true;
+                    self.result.main_fn_def = Some(decl.def_id);
 
                     let signature_matches =
                         hir_fn.params.is_empty() && !hir_fn.is_extern && hir_fn.generics.is_empty();
@@ -3178,13 +3179,16 @@ impl<'res> TypeChecker<'res> {
                     &source,
                 ) {
                     Some(r) => {
-                        self.result.operator_resolutions.insert(expr_id, OperatorResolution {
-                            method_def: r.method_def,
-                            generic_args: generic_args.to_vec(),
-                        });
+                        self.result.operator_resolutions.insert(
+                            expr_id,
+                            OperatorResolution {
+                                method_def: r.method_def,
+                                generic_args: generic_args.to_vec(),
+                            },
+                        );
 
                         r.ret_ty
-                    },
+                    }
                     None => self.result.interner.error(),
                 }
             }
@@ -3341,7 +3345,13 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_unary_op(&mut self, op: UnaryOp, operand: TypeId, expr_id: HirId, source: Source) -> TypeId {
+    fn check_unary_op(
+        &mut self,
+        op: UnaryOp,
+        operand: TypeId,
+        expr_id: HirId,
+        source: Source,
+    ) -> TypeId {
         if matches!(self.result.interner.get(operand), Type::Error) {
             return self.result.interner.error();
         }
@@ -3382,13 +3392,16 @@ impl<'res> TypeChecker<'res> {
                     &source,
                 ) {
                     Some(r) => {
-                        self.result.operator_resolutions.insert(expr_id, OperatorResolution {
-                            method_def: r.method_def,
-                            generic_args: generic_args.clone(),
-                        });
+                        self.result.operator_resolutions.insert(
+                            expr_id,
+                            OperatorResolution {
+                                method_def: r.method_def,
+                                generic_args: generic_args.clone(),
+                            },
+                        );
 
                         r.ret_ty
-                    },
+                    }
                     None => self.result.interner.error(),
                 }
             }
@@ -3560,10 +3573,13 @@ impl<'res> TypeChecker<'res> {
 
         match result {
             Some(r) => {
-                self.result.operator_resolutions.insert(expr_id, OperatorResolution {
-                    method_def: r.method_def,
-                    generic_args: generic_args.to_vec(),
-                });
+                self.result.operator_resolutions.insert(
+                    expr_id,
+                    OperatorResolution {
+                        method_def: r.method_def,
+                        generic_args: generic_args.to_vec(),
+                    },
+                );
 
                 if self.expect_assign_interface {
                     match self.result.interner.get(r.ret_ty).clone() {
