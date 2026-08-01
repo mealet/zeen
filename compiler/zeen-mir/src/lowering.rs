@@ -14,7 +14,7 @@ use zeen_hir::{
 use zeen_resolve::{DefId, ResolutionResult};
 use zeen_typecheck::{
     coerce::builtin_is_integer,
-    result::{CallResolution, TypeCheckResult},
+    result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
 
@@ -224,6 +224,16 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::Unary { expr: inner, op } => {
+                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    return self.lower_operator_method_call(
+                        fb,
+                        inner,
+                        &op_res,
+                        block,
+                        self.expr_type(expr),
+                    );
+                }
+
                 let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
 
                 let result_ty = self.expr_type(expr);
@@ -713,6 +723,64 @@ impl<'ctx> MirLowering<'ctx> {
 
         fb.set_terminator(next, Terminator::Unreachable);
         (next, Operand::Constant(ConstValue::Void))
+    }
+
+    fn lower_operator_method_call(
+        &mut self,
+        fb: &mut FnBuilder,
+        reciever_expr: &HirExpr,
+        op_res: &OperatorResolution,
+        block: BlockId,
+        result_ty: TypeId,
+    ) -> (BlockId, Operand) {
+        self.lower_operator_method_call_with_extra_args(
+            fb,
+            reciever_expr,
+            &[],
+            op_res,
+            block,
+            result_ty,
+        )
+    }
+
+    fn lower_operator_method_call_with_extra_args(
+        &mut self,
+        fb: &mut FnBuilder,
+        reciever_expr: &HirExpr,
+        extra_args: &[Operand],
+        op_res: &OperatorResolution,
+        block: BlockId,
+        result_ty: TypeId,
+    ) -> (BlockId, Operand) {
+        let Some(hir_fn) = self.hir_fns_by_def.get(&op_res.method_def).cloned() else {
+            panic!("operator method {:?} has no HIR body", op_res.method_def);
+        };
+
+        let mir_fn_id = self.monomorphize_fn(op_res.method_def, op_res.generic_args.clone());
+
+        let (block, self_operand) =
+            self.lower_receiver_operand(fb, reciever_expr, op_res.method_def, block);
+
+        let mut args = vec![self_operand];
+        args.extend_from_slice(extra_args);
+
+        let dest = fb.new_temp(result_ty);
+        let next = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::Call {
+                func: CallTarget::Direct(mir_fn_id),
+                args,
+                destination: Place::from_local(dest),
+                target: Some(next),
+            },
+        );
+
+        (
+            next,
+            self.place_to_operand(Place::from_local(dest), result_ty),
+        )
     }
 }
 

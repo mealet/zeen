@@ -31,7 +31,7 @@ pub struct CallResolution {
     pub generic_args: Vec<TypeId>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OperatorResolution {
     pub method_def: DefId,
     pub generic_args: Vec<TypeId>,
