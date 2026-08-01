@@ -236,6 +236,33 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, Operand::Move(Place::from_local(temp)))
             }
 
+            HirExprKind::Unary {
+                expr: inner,
+                op: UnaryOp::AddrOf,
+            } => {
+                let (block, inner_place) = self.lower_expr_to_place(fb, inner, block);
+                let result_ty = self.expr_type(expr);
+
+                let is_const = match self.typecheck.interner.get(result_ty).clone() {
+                    Type::Pointer { is_const, .. } => is_const,
+                    _ => false,
+                };
+
+                let temp = fb.new_temp(result_ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::Ref {
+                            place: inner_place,
+                            is_const,
+                        },
+                    },
+                );
+
+                (block, Operand::Move(Place::from_local(temp)))
+            }
+
             HirExprKind::Unary { expr: inner, op } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     return self.lower_operator_method_call(
