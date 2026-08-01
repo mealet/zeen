@@ -1,6 +1,6 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use lasso::Spur;
+use lasso::{Rodeo, Spur};
 use zeen_ast::{
     Source,
     expressions::{BinaryOp, Literal, UnaryOp},
@@ -25,6 +25,8 @@ use crate::{
 };
 
 pub struct MirLowering<'ctx> {
+    rodeo: Rc<RefCell<Rodeo>>,
+
     typecheck: &'ctx mut TypeCheckResult,
     resolution: &'ctx ResolutionResult,
     hir_fns_by_def: HashMap<DefId, Rc<HirFn>>,
@@ -114,6 +116,7 @@ impl FnBuilder {
 
 impl<'ctx> MirLowering<'ctx> {
     pub fn new(
+        rodeo: Rc<RefCell<Rodeo>>,
         typecheck: &'ctx mut TypeCheckResult,
         resolution: &'ctx ResolutionResult,
         module: &HirModule,
@@ -121,6 +124,7 @@ impl<'ctx> MirLowering<'ctx> {
         let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
 
         Self {
+            rodeo,
             typecheck,
             resolution,
             program: MirProgram::default(),
@@ -153,6 +157,10 @@ impl<'ctx> MirLowering<'ctx> {
         self.typecheck.call_resolutions.get(&expr_id)
     }
 
+    fn set_function_name(&mut self, id: MirFunctionId, name: impl AsRef<str>) {
+        self.program.function_names.insert(id, name.as_ref().into());
+    }
+
     fn mir_type_is_copy(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(_)
@@ -175,6 +183,14 @@ impl<'ctx> MirLowering<'ctx> {
 
             _ => false,
         }
+    }
+
+    fn display_type_name(&self, ty: TypeId) -> String {
+        self.typecheck.interner.get(ty).to_display(
+            Rc::clone(&self.rodeo),
+            &self.typecheck.interner,
+            self.resolution,
+        )
     }
 }
 
@@ -1372,6 +1388,20 @@ impl<'ctx> MirLowering<'ctx> {
 
         let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args);
         self.program.functions.insert(id, mir_func);
+
+        let interner = self.rodeo.borrow();
+        let base_name = interner.resolve(&hir_fn.name.0).to_string();
+        drop(interner);
+
+        let display_name = if generic_args.is_empty() {
+            base_name
+        } else {
+            let arg_names: Vec<String> = generic_args
+                .iter()
+                .map(|&t| self.display_type_name(t))
+                .collect();
+            format!("{}${}", base_name, arg_names.join("_"))
+        };
 
         id
     }

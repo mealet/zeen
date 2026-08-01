@@ -193,6 +193,7 @@ fn main() {
     });
 
     let mir_lowering = zeen_mir::lowering::MirLowering::new(
+        Rc::clone(&rodeo),
         &mut typechecker_result,
         &resolution_result,
         &hir_module,
