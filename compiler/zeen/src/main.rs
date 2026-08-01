@@ -192,12 +192,22 @@ fn main() {
         exit(1);
     });
 
-    let mir_lowering = zeen_mir::lowering::MirLowering::new(
+    let lowered_mir = zeen_mir::lowering::lower_program(
         Rc::clone(&rodeo),
         &mut typechecker_result,
         &resolution_result,
         &hir_module,
     );
 
-    let _ = mir_lowering; // soon
+    println!("\n----| Debugging MIR |----\n");
+
+    println!(
+        "Main Function DefId: `{}`",
+        lowered_mir
+            .main_fn
+            .map(|x| x.0.to_string())
+            .unwrap_or("None".to_string())
+    );
+
+    println!("\n{:#?}", lowered_mir.program);
 }
