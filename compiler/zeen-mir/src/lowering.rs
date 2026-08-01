@@ -582,7 +582,9 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::Switch => unreachable!("not implemented in previous stages"),
-            _ => todo!(),
+            HirExprKind::GenericParamRef(_) => unreachable!(),
+            HirExprKind::Type(_) => unreachable!(),
+            HirExprKind::Error => unreachable!(),
         }
     }
 
