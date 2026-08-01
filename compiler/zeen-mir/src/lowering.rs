@@ -202,6 +202,19 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::Binary { lhs, rhs, op } => {
+                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
+                    let result_ty = self.expr_type(expr);
+                    return self.lower_operator_method_call_with_extra_args(
+                        fb,
+                        lhs,
+                        &[rhs_op],
+                        &op_res,
+                        block,
+                        result_ty,
+                    );
+                }
+
                 let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
                 let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
 
