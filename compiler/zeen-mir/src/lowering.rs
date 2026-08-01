@@ -1437,6 +1437,8 @@ impl<'ctx> MirLowering<'ctx> {
             format!("{}${}", base_name, arg_names.join("_"))
         };
 
+        self.set_function_name(id, display_name);
+
         id
     }
 
