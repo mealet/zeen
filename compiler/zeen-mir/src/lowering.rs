@@ -330,6 +330,12 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, self.place_to_operand(elem_place, ty))
             }
 
+            HirExprKind::FieldAccess { .. } => {
+                let (block, place) = self.lower_expr_to_place(fb, expr, block);
+                let ty = self.expr_type(expr);
+                (block, self.place_to_operand(place, ty))
+            }
+
             HirExprKind::StructInit { fields, .. } => {
                 let ty = self.expr_type(expr);
                 let struct_def = match self.typecheck.interner.get(ty).clone() {
