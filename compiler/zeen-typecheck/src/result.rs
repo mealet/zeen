@@ -13,6 +13,7 @@ pub struct TypeCheckResult {
     pub def_types: HashMap<DefId, TypeId>,
     pub call_resolutions: HashMap<HirId, CallResolution>,
     pub field_resolutions: HashMap<HirId, DefId>,
+    pub operator_resolutions: HashMap<HirId, OperatorResolution>,
     pub struct_info: HashMap<DefId, StructTypeInfo>,
     pub const_bindings: HashMap<DefId, bool>,
     pub format_specs: HashMap<HirId, Vec<FormatChunk>>,
@@ -27,5 +28,11 @@ impl TypeCheckResult {
 #[derive(Debug)]
 pub struct CallResolution {
     pub fn_def: DefId,
+    pub generic_args: Vec<TypeId>,
+}
+
+#[derive(Debug)]
+pub struct OperatorResolution {
+    pub method_def: DefId,
     pub generic_args: Vec<TypeId>,
 }

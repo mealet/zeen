@@ -12,7 +12,7 @@ use crate::{
     coerce::{CoerceResult, try_coerce},
     context::{FnCtx, InterfaceRegistry, TypeCheckCtx},
     format_str::FormatSpec,
-    result::{CallResolution, TypeCheckResult},
+    result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -75,6 +75,11 @@ struct FnSignature {
     generic_bounds: HashMap<DefId, Vec<DefId>>,
     self_mode: Option<SelfMode>,
     is_pub: bool,
+}
+
+struct InterfaceCallResult {
+    pub ret_ty: TypeId,
+    pub method_def: DefId,
 }
 
 impl<'res> TypeChecker<'res> {
@@ -922,7 +927,7 @@ impl<'res> TypeChecker<'res> {
                 self.expect_assign_interface = prev_expect;
 
                 let value_ty = self.synth_expr(value);
-                self.check_binary_op(*op, obj_ty, value_ty, stmt.source.clone());
+                self.check_binary_op(*op, obj_ty, value_ty, object.id, stmt.source.clone());
                 self.check_not_const_target(object);
             }
 
@@ -1101,12 +1106,12 @@ impl<'res> TypeChecker<'res> {
                 let lhs_ty = self.synth_expr(lhs);
                 let rhs_ty = self.synth_expr(rhs);
 
-                self.check_binary_op(*op, lhs_ty, rhs_ty, expr.source.clone())
+                self.check_binary_op(*op, lhs_ty, rhs_ty, expr.id, expr.source.clone())
             }
 
             HirExprKind::Unary { expr, op } => {
                 let inner_ty = self.synth_expr(expr);
-                self.check_unary_op(*op, inner_ty, expr.source.clone())
+                self.check_unary_op(*op, inner_ty, expr.id, expr.source.clone())
             }
 
             HirExprKind::Call {
@@ -1155,6 +1160,7 @@ impl<'res> TypeChecker<'res> {
                         def_id,
                         &generic_args,
                         index_ty,
+                        expr.id,
                         &expr.source,
                     ),
                     Type::Error => self.result.interner.error(),
@@ -2880,7 +2886,7 @@ impl<'res> TypeChecker<'res> {
         explicit_args: &[TypeId],
         receiver_access: ReceiverAccess,
         source: &Source,
-    ) -> Option<TypeId> {
+    ) -> Option<InterfaceCallResult> {
         let Some(iface_def) = self.interface_registry.get(iface_name) else {
             self.report(TypeError::InterfaceNotAvailable {
                 name: iface_name.into(),
@@ -2979,7 +2985,10 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        Some(self.substitute_generics(sig_ret, &bindings))
+        Some(InterfaceCallResult {
+            ret_ty: self.substitute_generics(sig_ret, &bindings),
+            method_def: method_def_id,
+        })
     }
 
     fn def_name(&self, def_id: DefId) -> Option<String> {
@@ -3126,6 +3135,7 @@ impl<'res> TypeChecker<'res> {
         op: BinaryOp,
         lhs: TypeId,
         rhs: TypeId,
+        expr_id: HirId,
         source: Source,
     ) -> TypeId {
         if lhs == self.result.interner.error() || rhs == self.result.interner.error() {
@@ -3167,7 +3177,14 @@ impl<'res> TypeChecker<'res> {
                     ReceiverAccess::Value,
                     &source,
                 ) {
-                    Some(ret_ty) => ret_ty,
+                    Some(r) => {
+                        self.result.operator_resolutions.insert(expr_id, OperatorResolution {
+                            method_def: r.method_def,
+                            generic_args: generic_args.to_vec(),
+                        });
+
+                        r.ret_ty
+                    },
                     None => self.result.interner.error(),
                 }
             }
@@ -3324,7 +3341,7 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_unary_op(&mut self, op: UnaryOp, operand: TypeId, source: Source) -> TypeId {
+    fn check_unary_op(&mut self, op: UnaryOp, operand: TypeId, expr_id: HirId, source: Source) -> TypeId {
         if matches!(self.result.interner.get(operand), Type::Error) {
             return self.result.interner.error();
         }
@@ -3352,7 +3369,7 @@ impl<'res> TypeChecker<'res> {
                 };
 
                 if matches!(op, UnaryOp::Deref) {
-                    return self.check_deref_on_struct(def_id, &generic_args, &source);
+                    return self.check_deref_on_struct(def_id, &generic_args, expr_id, &source);
                 }
 
                 match self.call_interface_method(
@@ -3364,7 +3381,14 @@ impl<'res> TypeChecker<'res> {
                     ReceiverAccess::Value,
                     &source,
                 ) {
-                    Some(ret_ty) => ret_ty,
+                    Some(r) => {
+                        self.result.operator_resolutions.insert(expr_id, OperatorResolution {
+                            method_def: r.method_def,
+                            generic_args: generic_args.clone(),
+                        });
+
+                        r.ret_ty
+                    },
                     None => self.result.interner.error(),
                 }
             }
@@ -3468,6 +3492,7 @@ impl<'res> TypeChecker<'res> {
         &mut self,
         def_id: DefId,
         generic_args: &[TypeId],
+        expr_id: HirId,
         source: &Source,
     ) -> TypeId {
         let (iface_name, method_name) = if self.expect_assign_interface {
@@ -3487,13 +3512,24 @@ impl<'res> TypeChecker<'res> {
         );
 
         match result {
-            Some(ret_ty) if self.expect_assign_interface => {
-                match self.result.interner.get(ret_ty).clone() {
-                    Type::Pointer { inner, .. } => inner,
-                    _ => ret_ty,
+            Some(res) => {
+                self.result.operator_resolutions.insert(
+                    expr_id,
+                    OperatorResolution {
+                        method_def: res.method_def,
+                        generic_args: generic_args.to_vec(),
+                    },
+                );
+
+                if self.expect_assign_interface {
+                    match self.result.interner.get(res.ret_ty).clone() {
+                        Type::Pointer { inner, .. } => inner,
+                        _ => res.ret_ty,
+                    }
+                } else {
+                    res.ret_ty
                 }
             }
-            Some(ret_ty) => ret_ty,
             None => self.result.interner.error(),
         }
     }
@@ -3503,6 +3539,7 @@ impl<'res> TypeChecker<'res> {
         def_id: DefId,
         generic_args: &[TypeId],
         index_ty: TypeId,
+        expr_id: HirId,
         source: &Source,
     ) -> TypeId {
         let (iface_name, method_name) = if self.expect_assign_interface {
@@ -3522,13 +3559,21 @@ impl<'res> TypeChecker<'res> {
         );
 
         match result {
-            Some(ret_ty) if self.expect_assign_interface => {
-                match self.result.interner.get(ret_ty).clone() {
-                    Type::Pointer { inner, .. } => inner,
-                    _ => ret_ty,
+            Some(r) => {
+                self.result.operator_resolutions.insert(expr_id, OperatorResolution {
+                    method_def: r.method_def,
+                    generic_args: generic_args.to_vec(),
+                });
+
+                if self.expect_assign_interface {
+                    match self.result.interner.get(r.ret_ty).clone() {
+                        Type::Pointer { inner, .. } => inner,
+                        _ => r.ret_ty,
+                    }
+                } else {
+                    r.ret_ty
                 }
             }
-            Some(ret_ty) => ret_ty,
             None => self.result.interner.error(),
         }
     }
