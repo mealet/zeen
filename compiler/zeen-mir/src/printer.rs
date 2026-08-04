@@ -413,7 +413,7 @@ impl<'a> MirPrinter<'a> {
     }
 
     fn local_ref(&self, local: LocalId) -> String {
-        format!("_{}", local.0)
+        format!("%{}", local.0)
     }
 
     fn display_type(&self, ty: TypeId) -> String {
