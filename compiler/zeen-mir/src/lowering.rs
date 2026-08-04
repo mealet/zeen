@@ -546,6 +546,12 @@ impl<'ctx> MirLowering<'ctx> {
                     arg_operands.push(self_operand);
                 }
 
+                for arg in args.iter() {
+                    let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                    block = b;
+                    arg_operands.push(op);
+                }
+
                 let ret_ty = self.expr_type(expr);
                 let dest_local = fb.new_temp(ret_ty);
                 let dest_place = Place::from_local(dest_local);
