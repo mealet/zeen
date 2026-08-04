@@ -16,6 +16,7 @@ pub struct TypeCheckResult {
     pub field_resolutions: HashMap<HirId, DefId>,
     pub operator_resolutions: HashMap<HirId, OperatorResolution>,
     pub struct_info: HashMap<DefId, StructTypeInfo>,
+    pub struct_generics: HashMap<DefId, Vec<DefId>>,
     pub const_bindings: HashMap<DefId, bool>,
     pub format_specs: HashMap<HirId, Vec<FormatChunk>>,
 }

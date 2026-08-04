@@ -21,7 +21,7 @@ use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
     LocalKind, MirFunction, MirFunctionId, MirProgram, MirStatement, Mutability, Operand, Place,
-    PlaceElem, Rvalue, Terminator,
+    PlaceElem, Rvalue, StructFieldLayout, StructLayout, Terminator,
 };
 
 pub struct MirLoweringResult {
@@ -235,6 +235,55 @@ impl<'ctx> MirLowering<'ctx> {
             self.resolution,
         )
     }
+
+    fn register_struct_layout(&mut self, ty: TypeId, struct_def: DefId) {
+        if self.program.struct_layouts.contains_key(&ty) {
+            return;
+        }
+
+        let generic_args = match self.typecheck.interner.get(ty).clone() {
+            Type::Struct { generic_args, .. } => generic_args,
+            _ => return,
+        };
+
+        let struct_generics = self
+            .typecheck
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
+        let bindings: HashMap<DefId, TypeId> = struct_generics
+            .iter()
+            .copied()
+            .zip(generic_args.iter().copied())
+            .collect();
+
+        let Some(info) = self.typecheck.struct_info.get(&struct_def).cloned() else {
+            return;
+        };
+
+        let fields: Vec<StructFieldLayout> = info
+            .fields
+            .iter()
+            .map(|f| StructFieldLayout {
+                def_id: f.field_def,
+                ty: zeen_types::substitute_generics(
+                    &mut self.typecheck.interner,
+                    f.field_ty,
+                    &bindings,
+                ),
+            })
+            .collect();
+
+        self.program.struct_layouts.insert(
+            ty,
+            StructLayout {
+                def_id: struct_def,
+                generic_args,
+                fields,
+            },
+        );
+    }
 }
 
 impl<'ctx> MirLowering<'ctx> {
@@ -401,6 +450,8 @@ impl<'ctx> MirLowering<'ctx> {
                     Type::Struct { def_id, .. } => def_id,
                     wildcard => panic!("non-struct type in StructInit lowering: {:?}", wildcard),
                 };
+
+                self.register_struct_layout(ty, struct_def);
 
                 let info = self
                     .struct_info(struct_def)

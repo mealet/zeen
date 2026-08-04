@@ -112,7 +112,9 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    pub fn finish(self) -> Result<TypeCheckResult, Vec<TypeError>> {
+    pub fn finish(mut self) -> Result<TypeCheckResult, Vec<TypeError>> {
+        self.result.struct_generics = self.struct_generics;
+
         if self.errors.is_empty() {
             return Ok(self.result);
         }
