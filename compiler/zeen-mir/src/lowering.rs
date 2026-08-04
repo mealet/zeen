@@ -399,7 +399,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let ty = self.expr_type(expr);
                 let struct_def = match self.typecheck.interner.get(ty).clone() {
                     Type::Struct { def_id, .. } => def_id,
-                    _ => panic!("non-struct type in StructInit lowering"),
+                    wildcard => panic!("non-struct type in StructInit lowering: {:?}", wildcard),
                 };
 
                 let info = self
@@ -540,10 +540,20 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let mut arg_operands = Vec::with_capacity(args.len() + 1);
 
+                let method_ty = self.typecheck.def_types.get(&fn_def).copied().expect("...");
+                let param_count = match self.typecheck.interner.get(method_ty).clone() {
+                    Type::Fn { params, .. } => params.len(),
+                    _ => 0,
+                };
+                let has_self_param = param_count == args.len() + 1;
+
                 if let HirExprKind::FieldAccess { object, .. } = &callee.kind {
-                    let (b, self_operand) = self.lower_receiver_operand(fb, object, fn_def, block);
-                    block = b;
-                    arg_operands.push(self_operand);
+                    if has_self_param {
+                        let (b, self_operand) =
+                            self.lower_receiver_operand(fb, object, fn_def, block);
+                        block = b;
+                        arg_operands.push(self_operand);
+                    }
                 }
 
                 for arg in args.iter() {

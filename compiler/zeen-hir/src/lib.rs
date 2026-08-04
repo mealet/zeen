@@ -109,6 +109,7 @@ impl<'res> HirLowering<'res> {
 
         match self.resolution.resolution_of_expr(target) {
             Some(Resolution::Def(id)) => Some(id),
+            Some(Resolution::SelfType(id)) => Some(id),
             _ => None,
         }
     }
