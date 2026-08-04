@@ -1108,6 +1108,8 @@ impl<'ctx> MirLowering<'ctx> {
                         self.lower_for_range(fb, def_id, iterator, body, block)
                     }
 
+                    Type::IntLiteral => self.lower_for_range(fb, def_id, iterator, body, block),
+
                     Type::Array { .. } | Type::Slice { .. } => {
                         self.lower_for_iterable(fb, def_id, iterator, iter_ty, body, block)
                     }

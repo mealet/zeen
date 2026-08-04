@@ -928,6 +928,7 @@ impl<'res> TypeChecker<'res> {
                 };
 
                 self.result.def_types.insert(*def_id, final_ty);
+                self.result.expr_types.insert(stmt.id, final_ty);
 
                 self.result.const_bindings.insert(*def_id, *is_const);
             }
@@ -987,6 +988,7 @@ impl<'res> TypeChecker<'res> {
                     }
                 };
 
+                self.result.expr_types.insert(stmt.id, elem_ty);
                 self.result.def_types.insert(*def_id, elem_ty);
 
                 self.ctx.enter_loop();

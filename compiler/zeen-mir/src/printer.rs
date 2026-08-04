@@ -138,7 +138,7 @@ impl<'a> MirPrinter<'a> {
             self.print_local_decl(out, local, decl);
         }
 
-        out.push('\n');
+        // out.push('\n');
 
         for (idx, block) in func.blocks.iter().enumerate() {
             let block_id = BlockId(idx as u32);
