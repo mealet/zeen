@@ -1374,9 +1374,14 @@ impl<'res> TypeChecker<'res> {
                     return self.result.interner.error();
                 };
 
-                if let Some(arg) = args.first() {
-                    self.synth_expr(arg);
+                if let Some(arg) = args.first()
+                && let HirExprKind::Type(ty_expr) = &arg.kind {
+                    let ty = self.lower_hir_type(ty_expr);
+                    self.result.record_expr_type(arg.id, ty);
+                } else {
+                    unreachable!("parser missed non-type-expr in macro");
                 }
+
                 self.result.interner.builtin(BuiltinType::usize)
             }
 
