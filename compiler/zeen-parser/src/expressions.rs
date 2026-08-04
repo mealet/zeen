@@ -1651,7 +1651,7 @@ mod tests {
                     },
                     args: &[],
                 },
-                span: (3, 2).into()
+                span: (0, 5).into()
             }
         );
     }
@@ -1680,7 +1680,7 @@ mod tests {
                     },
                     args: &[],
                 },
-                span: (9, 2).into()
+                span: (0, 11).into()
             }
         );
     }
@@ -1713,7 +1713,7 @@ mod tests {
                         },
                     ],
                 },
-                span: (3, 10).into()
+                span: (0, 13).into()
             }
         );
     }
