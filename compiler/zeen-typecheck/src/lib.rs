@@ -1023,7 +1023,7 @@ impl<'res> TypeChecker<'res> {
 
                     None => {
                         let void = self.result.interner.void();
-                        if !try_coerce(&self.result.interner, void, expected).is_ok() {
+                        if !try_coerce(&mut self.result.interner, void, expected).is_ok() {
                             self.report(TypeError::Mismatch {
                                 expected: self.display_type(expected).into(),
                                 found: self.display_type(void).into(),
@@ -1253,7 +1253,7 @@ impl<'res> TypeChecker<'res> {
                 };
 
                 match expected {
-                    Some(exp) => match try_coerce(&self.result.interner, actual, exp) {
+                    Some(exp) => match try_coerce(&mut self.result.interner, actual, exp) {
                         CoerceResult::Fail => {
                             self.report(TypeError::Mismatch {
                                 expected: self.display_type(exp).into(),
@@ -1397,7 +1397,7 @@ impl<'res> TypeChecker<'res> {
                 let value_ty = self.synth_expr(&args[1]);
                 let value_ty = self.default_literal(value_ty);
 
-                if !coerce::verify_cast(&self.result.interner, value_ty, target_ty) {
+                if !coerce::verify_cast(&mut self.result.interner, value_ty, target_ty) {
                     self.report(TypeError::InvalidCast {
                         from: self.display_type(value_ty).into(),
                         to: self.display_type(target_ty).into(),
@@ -1948,7 +1948,7 @@ impl<'res> TypeChecker<'res> {
 
         allow_const_remove: bool,
     ) -> TypeId {
-        match try_coerce(&self.result.interner, actual, expected) {
+        match try_coerce(&mut self.result.interner, actual, expected) {
             CoerceResult::Identity => actual,
             CoerceResult::ErrorRecovery => expected,
 
@@ -1956,7 +1956,8 @@ impl<'res> TypeChecker<'res> {
             | CoerceResult::AddConst
             | CoerceResult::ArrayToSlice
             | CoerceResult::ArrayToManyPointer
-            | CoerceResult::NeverCoercion => {
+            | CoerceResult::NeverCoercion
+            | CoerceResult::VoidPtrCoercion => {
                 self.result.record_expr_type(id, expected);
                 expected
             }
@@ -2008,10 +2009,10 @@ impl<'res> TypeChecker<'res> {
             return a;
         }
 
-        if try_coerce(&self.result.interner, b, a).is_ok() {
+        if try_coerce(&mut self.result.interner, b, a).is_ok() {
             return a;
         }
-        if try_coerce(&self.result.interner, a, b).is_ok() {
+        if try_coerce(&mut self.result.interner, a, b).is_ok() {
             return b;
         }
 
@@ -2711,7 +2712,7 @@ impl<'res> TypeChecker<'res> {
             (Type::GenericParam(g), _) => match bindings.get(&g) {
                 Some(&existing)
                     if existing != arg_ty
-                        && !try_coerce(&self.result.interner, arg_ty, existing).is_ok() =>
+                        && !try_coerce(&mut self.result.interner, arg_ty, existing).is_ok() =>
                 {
                     self.report(TypeError::GenericConflict {
                         param: self.display_type(param_ty).into(),
@@ -3019,7 +3020,7 @@ impl<'res> TypeChecker<'res> {
         for (param_ty, &arg_ty) in sig_params.iter().zip(explicit_args.iter()) {
             let expected = self.substitute_generics(*param_ty, &bindings);
 
-            if !try_coerce(&self.result.interner, arg_ty, expected).is_ok() {
+            if !try_coerce(&mut self.result.interner, arg_ty, expected).is_ok() {
                 self.report(TypeError::Mismatch {
                     expected: self.display_type(expected).into(),
                     found: self.display_type(arg_ty).into(),
@@ -3255,9 +3256,9 @@ impl<'res> TypeChecker<'res> {
             && let Type::Builtin(BuiltinType::usize) = self.result.interner.get(rhs)
         {
             Some(lhs)
-        } else if try_coerce(&self.result.interner, lhs, rhs).is_ok() {
+        } else if try_coerce(&mut self.result.interner, lhs, rhs).is_ok() {
             Some(rhs)
-        } else if try_coerce(&self.result.interner, rhs, lhs).is_ok() {
+        } else if try_coerce(&mut self.result.interner, rhs, lhs).is_ok() {
             Some(lhs)
         } else {
             None
@@ -3300,8 +3301,8 @@ impl<'res> TypeChecker<'res> {
 
     fn check_ordering_op(&mut self, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
         let comparable = lhs == rhs
-            || try_coerce(&self.result.interner, lhs, rhs).is_ok()
-            || try_coerce(&self.result.interner, rhs, lhs).is_ok();
+            || try_coerce(&mut self.result.interner, lhs, rhs).is_ok()
+            || try_coerce(&mut self.result.interner, rhs, lhs).is_ok();
 
         if comparable && (self.is_numeric_or_literal(lhs) || self.is_numeric_or_literal(rhs)) {
             self.result.interner.builtin(BuiltinType::bool)
@@ -3372,7 +3373,7 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         }
 
-        if rhs != lhs && !try_coerce(&self.result.interner, rhs, lhs).is_ok() {
+        if rhs != lhs && !try_coerce(&mut self.result.interner, rhs, lhs).is_ok() {
             self.report(TypeError::Mismatch {
                 expected: self.display_type(lhs).into(),
                 found: self.display_type(rhs).into(),

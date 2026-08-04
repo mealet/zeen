@@ -33,6 +33,8 @@ pub enum CoerceResult {
     RemoveConst,
     // Fixed array to slice: [N]T -> []T
     ArrayToSlice,
+    // Void pointer is a universal pointer
+    VoidPtrCoercion,
     // Fixed array to many ptr: [N]T -> [*]T
     ArrayToManyPointer,
     // `never` -> any (for example: @panic(format, ...) macro)
@@ -49,13 +51,13 @@ impl CoerceResult {
     }
 }
 
-pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceResult {
+pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> CoerceResult {
     if from == to {
         return CoerceResult::Identity;
     }
 
-    let from_ty = interner.get(from);
-    let to_ty = interner.get(to);
+    let from_ty = interner.get(from).clone();
+    let to_ty = interner.get(to).clone();
 
     if matches!(from_ty, Type::Error) || matches!(to_ty, Type::Error) {
         return CoerceResult::ErrorRecovery;
@@ -66,8 +68,8 @@ pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceRe
     }
 
     match (from_ty, to_ty) {
-        (Type::IntLiteral, Type::Builtin(b)) if builtin_is_integer(*b) => CoerceResult::PinLiteral,
-        (Type::FloatLiteral, Type::Builtin(b)) if builtin_is_float(*b) => CoerceResult::PinLiteral,
+        (Type::IntLiteral, Type::Builtin(b)) if builtin_is_integer(b) => CoerceResult::PinLiteral,
+        (Type::FloatLiteral, Type::Builtin(b)) if builtin_is_float(b) => CoerceResult::PinLiteral,
 
         (
             Type::Pointer {
@@ -90,6 +92,17 @@ pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceRe
                 is_const: false,
             },
         ) if from_inner == to_inner => CoerceResult::RemoveConst,
+
+        (
+            Type::Pointer {
+                inner: from_inner, ..
+            },
+            Type::Pointer {
+                inner: to_inner, ..
+            },
+        ) if from_inner == interner.void() || to_inner == interner.void() => {
+            CoerceResult::VoidPtrCoercion
+        }
 
         (
             Type::Array {
@@ -149,11 +162,11 @@ pub fn try_coerce(interner: &TypeInterner, from: TypeId, to: TypeId) -> CoerceRe
     }
 }
 
-pub fn is_coercible(interner: &TypeInterner, from: TypeId, to: TypeId) -> bool {
+pub fn is_coercible(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> bool {
     try_coerce(interner, from, to).is_ok()
 }
 
-pub fn verify_cast(interner: &TypeInterner, from: TypeId, to: TypeId) -> bool {
+pub fn verify_cast(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> bool {
     if is_coercible(interner, from, to) {
         return true;
     }
