@@ -30,6 +30,7 @@ pub struct BlockId(pub u32);
 pub struct MirProgram {
     pub functions: HashMap<MirFunctionId, MirFunction>,
     pub function_names: HashMap<MirFunctionId, String>,
+    pub struct_layouts: HashMap<TypeId, StructLayout>,
 
     pub extern_fns: Vec<ExternFnDecl>,
     pub extern_exports: HashMap<MirFunctionId, String>,
@@ -47,6 +48,19 @@ pub struct ExternFnDecl {
 #[derive(Debug, Clone)]
 pub struct ExternVarDecl {
     pub symbol_name: String,
+    pub ty: TypeId,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructLayout {
+    pub def_id: DefId,
+    pub generic_args: Vec<TypeId>,
+    pub fields: Vec<StructFieldLayout>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructFieldLayout {
+    pub def_id: DefId,
     pub ty: TypeId,
 }
 

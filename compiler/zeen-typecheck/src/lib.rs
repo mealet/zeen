@@ -112,7 +112,9 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    pub fn finish(self) -> Result<TypeCheckResult, Vec<TypeError>> {
+    pub fn finish(mut self) -> Result<TypeCheckResult, Vec<TypeError>> {
+        self.result.struct_generics = self.struct_generics;
+
         if self.errors.is_empty() {
             return Ok(self.result);
         }
@@ -1125,7 +1127,11 @@ impl<'res> TypeChecker<'res> {
                 generic_args,
             } => {
                 let (ty_def, ty_span) = *ty;
-                self.check_struct_init(ty_def, generic_args, fields, ty_span, &expr.source)
+                let struct_ty =
+                    self.check_struct_init(ty_def, generic_args, fields, ty_span, &expr.source);
+
+                self.result.expr_types.insert(expr.id, struct_ty);
+                struct_ty
             }
 
             HirExprKind::Binary { lhs, rhs, op } => {
