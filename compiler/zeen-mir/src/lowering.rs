@@ -19,9 +19,9 @@ use zeen_typecheck::{
 use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
 
 use crate::{
-    AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, LocalDecl, LocalId, LocalKind,
-    MirFunction, MirFunctionId, MirProgram, MirStatement, Mutability, Operand, Place, PlaceElem,
-    Rvalue, Terminator,
+    AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
+    LocalKind, MirFunction, MirFunctionId, MirProgram, MirStatement, Mutability, Operand, Place,
+    PlaceElem, Rvalue, Terminator,
 };
 
 pub struct MirLoweringResult {
@@ -524,7 +524,11 @@ impl<'ctx> MirLowering<'ctx> {
                 let fn_def = resolution.fn_def;
                 let generic_args = resolution.generic_args.clone();
 
-                let mir_fn_id = self.monomorphize_fn(fn_def, generic_args);
+                let Some(hir_fn) = self.hir_fns_by_def.get(&fn_def).cloned() else {
+                    unreachable!("must been recorded this table");
+                };
+
+                let call_target = self.resolve_call_target(fn_def, generic_args, &hir_fn);
 
                 let mut arg_operands = Vec::with_capacity(args.len() + 1);
 
@@ -544,7 +548,7 @@ impl<'ctx> MirLowering<'ctx> {
                 fb.set_terminator(
                     block,
                     Terminator::Call {
-                        func: CallTarget::Direct(mir_fn_id),
+                        func: call_target,
                         args: arg_operands,
                         destination: dest_place.clone(),
                         target: if is_diverging { None } else { Some(next_block) },
@@ -1600,5 +1604,66 @@ impl<'ctx> MirLowering<'ctx> {
         } else {
             (next_block, self.place_to_operand(dest_place, ret_ty))
         }
+    }
+
+    fn resolve_call_target(
+        &mut self,
+        fn_def: DefId,
+        generic_args: Vec<TypeId>,
+        hir_fn: &Rc<HirFn>,
+    ) -> CallTarget {
+        if hir_fn.is_extern && hir_fn.body.is_none() {
+            let idx = self.register_extern_fn(fn_def, hir_fn);
+            CallTarget::Extern(idx)
+        } else {
+            let mir_id = self.monomorphize_fn(fn_def, generic_args);
+            CallTarget::Direct(mir_id)
+        }
+    }
+
+    fn register_extern_fn(&mut self, fn_def: DefId, hir_fn: &HirFn) -> usize {
+        let symbol_name = self.rodeo.borrow().resolve(&hir_fn.name.0).to_string();
+
+        if let Some(idx) = self
+            .program
+            .extern_fns
+            .iter()
+            .position(|f| f.symbol_name == symbol_name)
+        {
+            return idx;
+        }
+
+        let fn_ty = self
+            .typecheck
+            .def_types
+            .get(&fn_def)
+            .copied()
+            .expect("no recorded fn type found");
+
+        let (param_types, ret_ty) = match self.typecheck.interner.get(fn_ty).clone() {
+            Type::Fn { params, ret } => (params, ret),
+            _ => panic!("recorded extern fn type is not `Fn`"),
+        };
+
+        let is_variadic = hir_fn
+            .params
+            .last()
+            .map(|p| matches!(p.ty.kind, zeen_hir::types::HirTypeKind::VaArgs))
+            .unwrap_or(false);
+
+        let param_types = if is_variadic {
+            param_types[..param_types.len().saturating_sub(1)].to_vec()
+        } else {
+            param_types
+        };
+
+        self.program.extern_fns.push(ExternFnDecl {
+            symbol_name,
+            param_types,
+            ret_ty,
+            is_variadic,
+        });
+
+        self.program.extern_fns.len() - 1
     }
 }
