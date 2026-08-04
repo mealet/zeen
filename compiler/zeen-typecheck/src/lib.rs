@@ -1400,10 +1400,18 @@ impl<'res> TypeChecker<'res> {
                 };
 
                 let target_ty = match &args[0].kind {
-                    HirExprKind::Type(ty_expr) => self.lower_hir_type(ty_expr),
+                    HirExprKind::Type(ty_expr) => {
+                        let ty = self.lower_hir_type(ty_expr);
+                        self.result.record_expr_type(args[0].id, ty);
+                        ty
+                    }
                     _ => {
                         self.synth_expr(&args[0]);
-                        self.result.interner.error()
+
+                        let err = self.result.interner.error();
+                        self.result.record_expr_type(args[0].id, err);
+
+                        err
                     }
                 };
 
