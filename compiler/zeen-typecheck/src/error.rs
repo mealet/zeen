@@ -44,6 +44,28 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("invalid variadic arguments in function")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::invalid_va_args),
+        help("variadic args must be last argument: `fn foo(arg: type, ...)`")
+    )]
+    InvalidVaArgs {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("variadic args usage on non-extern functions")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::non_extern_va_args))]
+    NonExternVaArgs {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("unknown field in '{struct_name}': `{field}`")]
     #[diagnostic(severity(Error), code(zeen::typechecker::unknown_field))]
     UnknownField {

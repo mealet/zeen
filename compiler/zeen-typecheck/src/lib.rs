@@ -319,11 +319,29 @@ impl<'res> TypeChecker<'res> {
 
         let self_mode = hir_fn.params.first().and_then(|p| self_mode_of(&p.ty.kind));
 
+        let params_len = hir_fn.params.len();
+
         let params: Vec<TypeId> = hir_fn
             .params
             .iter()
             .enumerate()
             .map(|(idx, param)| {
+                if matches!(param.ty.kind, HirTypeKind::VaArgs) {
+                    if idx != params_len - 1 {
+                        self.report(TypeError::InvalidVaArgs {
+                            src: param.ty.source.src(),
+                            span: param.span,
+                        });
+                    }
+
+                    if !hir_fn.is_extern {
+                        self.report(TypeError::NonExternVaArgs {
+                            src: param.ty.source.src(),
+                            span: param.span,
+                        });
+                    }
+                }
+
                 let (ty, is_const) = self.lower_hir_type_with_const(&param.ty);
 
                 let effective_const = if idx == 0 {
