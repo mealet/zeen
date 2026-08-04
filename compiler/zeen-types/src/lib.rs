@@ -196,6 +196,10 @@ impl TypeInterner {
     }
 
     pub fn builtin(&mut self, b: BuiltinType) -> TypeId {
+        if b == BuiltinType::void {
+            return self.void();
+        }
+
         self.intern(Type::Builtin(b))
     }
 
