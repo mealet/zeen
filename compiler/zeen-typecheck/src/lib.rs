@@ -75,6 +75,7 @@ struct FnSignature {
     generic_bounds: HashMap<DefId, Vec<DefId>>,
     self_mode: Option<SelfMode>,
     is_pub: bool,
+    is_variadic: bool,
 }
 
 struct InterfaceCallResult {
@@ -318,15 +319,18 @@ impl<'res> TypeChecker<'res> {
             .collect();
 
         let self_mode = hir_fn.params.first().and_then(|p| self_mode_of(&p.ty.kind));
-
         let params_len = hir_fn.params.len();
+
+        let mut is_variadic = false;
 
         let params: Vec<TypeId> = hir_fn
             .params
             .iter()
             .enumerate()
             .map(|(idx, param)| {
-                if matches!(param.ty.kind, HirTypeKind::VaArgs) {
+                if matches!(param.ty.kind, HirTypeKind::VaArgs) && !is_variadic {
+                    is_variadic = true;
+
                     if idx != params_len - 1 {
                         self.report(TypeError::InvalidVaArgs {
                             src: param.ty.source.src(),
@@ -385,6 +389,7 @@ impl<'res> TypeChecker<'res> {
                 generic_bounds,
                 self_mode,
                 is_pub: hir_fn.is_pub,
+                is_variadic,
             },
         );
     }
@@ -2128,11 +2133,24 @@ impl<'res> TypeChecker<'res> {
         let sig_params = sig.params.clone();
         let sig_ret = sig.ret;
         let sig_generics = sig.generics.clone();
+        let sig_is_va = sig.is_variadic;
+
+        let sig_params = if sig_is_va {
+            sig_params[..sig_params.len().saturating_sub(1)].to_vec()
+        } else {
+            sig_params
+        };
 
         self.result
             .record_expr_type(callee.id, self.result.def_types[&def_id]);
 
-        if args.len() != sig_params.len() {
+        let count_condition = if sig_is_va {
+            args.len() >= sig_params.len()
+        } else {
+            args.len() == sig_params.len()
+        };
+
+        if !count_condition {
             self.report(TypeError::ArgCountMismatch {
                 expected: sig_params.len(),
                 found: args.len(),
@@ -2148,7 +2166,12 @@ impl<'res> TypeChecker<'res> {
             bindings.insert(*g, ty);
         }
 
-        for (param_ty, arg) in sig_params.iter().zip(args.iter()) {
+        for (idx, (param_ty, arg)) in sig_params.iter().zip(args.iter()).enumerate() {
+            if idx > sig_params.len() - 1 {
+                // variadic args
+                continue;
+            }
+
             self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
         }
 
