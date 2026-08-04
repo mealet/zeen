@@ -1,6 +1,8 @@
 use clap::{CommandFactory, Parser};
-use std::{cell::RefCell, collections::HashSet, path::Path, process::exit, rc::Rc, sync::Arc};
-use zeen_driver::{CompilationContext, MietteDriver, PathsConfig};
+use std::{
+    cell::RefCell, collections::HashSet, io::Write, path::Path, process::exit, rc::Rc, sync::Arc,
+};
+use zeen_driver::{CompilationContext, CompilationOutput, MietteDriver, PathsConfig};
 
 mod cli;
 
@@ -199,12 +201,38 @@ fn main() {
         &hir_module,
     );
 
-    let printed_mir = zeen_mir::printer::print_mir_program(
-        &lowered_mir.program,
-        &typechecker_result,
-        &resolution_result,
-        &rodeo,
-    );
+    if args.emit == CompilationOutput::EmitMIR {
+        let printed_mir = zeen_mir::printer::print_mir_program(
+            &lowered_mir.program,
+            &typechecker_result,
+            &resolution_result,
+            &rodeo,
+        );
 
-    println!("\n{}", printed_mir);
+        let mut output_path = args.path.clone();
+        output_path.add_extension("mir");
+
+        let mut output_file = std::fs::File::create(&output_path).unwrap_or_else(|_| {
+            cli::println_warn("Unable to write MIR to file, printing to stdout...");
+            println!("\n{}", printed_mir);
+
+            exit(0);
+        });
+
+        output_file
+            .write_all(printed_mir.as_bytes())
+            .unwrap_or_else(|_| {
+                cli::println_warn("Unable to write MIR to file, printing to stdout...");
+                println!("\n{}", printed_mir);
+
+                exit(0);
+            });
+
+        cli::println_info(
+            "Wrote",
+            format!("MIR representation to file ({})", output_path.display()),
+        );
+
+        exit(0);
+    }
 }

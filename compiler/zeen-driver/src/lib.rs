@@ -55,6 +55,8 @@ pub enum CompilationOutput {
     Object,
     #[value(name = "IR")]
     EmitIR,
+    #[value(name = "MIR")]
+    EmitMIR,
 }
 
 pub struct PathsConfig {

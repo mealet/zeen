@@ -15,6 +15,11 @@ run:
   touch test.zn
   cargo run -- test.zn output
 
+mir:
+  touch test.zn
+  cargo run -- test.zn output --emit MIR
+  printf "\n" && cat test.zn.mir
+
 # Run the compiler on `test.zn` (release mode)
 run-release:
   touch test.zn
