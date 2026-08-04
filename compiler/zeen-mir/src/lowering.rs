@@ -38,6 +38,17 @@ pub fn lower_program<'ctx>(
     let main_def = typecheck.main_fn_def;
 
     let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
+    let fns_with_owners: Vec<(DefId, Rc<HirFn>, Option<DefId>)> = hir_fns_by_def
+        .iter()
+        .map(|f| {
+            (
+                *f.0,
+                Rc::clone(f.1),
+                typecheck.method_owner.get(f.0).copied(),
+            )
+        })
+        .collect();
+
     let mut lowering = MirLowering::new(
         Rc::clone(&rodeo),
         typecheck,
@@ -49,13 +60,13 @@ pub fn lower_program<'ctx>(
     let mut main_fn: Option<MirFunctionId> = None;
 
     if let Some(main_def) = main_def {
-        let main_fn_monomorphized = lowering.monomorphize_fn(main_def, Vec::new());
+        let main_fn_monomorphized = lowering.monomorphize_fn(main_def, Vec::new(), None);
         lowering.set_function_name(main_fn_monomorphized, "main");
 
         main_fn = Some(main_fn_monomorphized);
     } else {
-        hir_fns_by_def.keys().for_each(|&def_id| {
-            lowering.monomorphize_fn(def_id, Vec::new());
+        fns_with_owners.iter().for_each(|(def_id, _, owner)| {
+            lowering.monomorphize_fn(*def_id, Vec::new(), *owner);
         });
     }
 
@@ -994,7 +1005,7 @@ impl<'ctx> MirLowering<'ctx> {
             panic!("operator method {:?} has no HIR body", op_res.method_def);
         };
 
-        let mir_fn_id = self.monomorphize_fn(op_res.method_def, op_res.generic_args.clone());
+        let mir_fn_id = self.monomorphize_fn(op_res.method_def, op_res.generic_args.clone(), None);
 
         let (block, self_operand) =
             self.lower_receiver_operand(fb, reciever_expr, op_res.method_def, block);
@@ -1490,7 +1501,12 @@ impl<'ctx> MirLowering<'ctx> {
 }
 
 impl<'ctx> MirLowering<'ctx> {
-    fn monomorphize_fn(&mut self, def_id: DefId, generic_args: Vec<TypeId>) -> MirFunctionId {
+    fn monomorphize_fn(
+        &mut self,
+        def_id: DefId,
+        generic_args: Vec<TypeId>,
+        owner_struct: Option<DefId>,
+    ) -> MirFunctionId {
         let hir_fn = self.hir_fns_by_def[&def_id].clone();
         let key = (def_id, generic_args.clone());
 
@@ -1501,7 +1517,7 @@ impl<'ctx> MirLowering<'ctx> {
         let id = self.mono_cache.fresh_id();
         self.mono_cache.cache.insert(key, id);
 
-        let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args);
+        let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args, owner_struct);
         self.program.functions.insert(id, mir_func);
 
         let interner = self.rodeo.borrow();
@@ -1512,14 +1528,45 @@ impl<'ctx> MirLowering<'ctx> {
             self.set_function_name(id, base_name.clone());
             self.program.extern_exports.insert(id, base_name);
         } else {
-            let display_name = if generic_args.is_empty() {
-                base_name
-            } else {
-                let arg_names: Vec<String> = generic_args
-                    .iter()
-                    .map(|&t| self.display_type_name(t))
-                    .collect();
-                format!("{}${}", base_name, arg_names.join("_"))
+            let display_name = match owner_struct {
+                Some(struct_def) => {
+                    let struct_name = self
+                        .rodeo
+                        .borrow()
+                        .resolve(&self.resolution.defs[&struct_def].name)
+                        .to_string();
+
+                    let struct_generics = self
+                        .typecheck
+                        .struct_generics
+                        .get(&struct_def)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    let struct_part = if struct_generics.is_empty() {
+                        struct_name
+                    } else {
+                        let arg_names: Vec<String> = generic_args
+                            .iter()
+                            .map(|&t| self.display_type_name(t))
+                            .collect();
+                        format!("{}[{}]", struct_name, arg_names.join(", "))
+                    };
+
+                    format!("{}.{}", struct_part, base_name)
+                }
+
+                None => {
+                    if generic_args.is_empty() {
+                        base_name
+                    } else {
+                        let arg_names: Vec<String> = generic_args
+                            .iter()
+                            .map(|&t| self.display_type_name(t))
+                            .collect();
+                        format!("{}${}", base_name, arg_names.join("_"))
+                    }
+                }
             };
 
             self.set_function_name(id, display_name);
@@ -1533,13 +1580,30 @@ impl<'ctx> MirLowering<'ctx> {
         def_id: DefId,
         hir_fn: &HirFn,
         generic_args: &[TypeId],
+        owner_struct: Option<DefId>,
     ) -> MirFunction {
         let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
-        let bindings: HashMap<DefId, TypeId> = generic_defs
-            .iter()
-            .copied()
-            .zip(generic_args.iter().copied())
-            .collect();
+        let bindings: HashMap<DefId, TypeId> = if !generic_defs.is_empty() {
+            generic_defs
+                .iter()
+                .copied()
+                .zip(generic_args.iter().copied())
+                .collect()
+        } else if let Some(owner) = owner_struct {
+            let struct_generics = self
+                .typecheck
+                .struct_generics
+                .get(&owner)
+                .cloned()
+                .unwrap_or_default();
+            struct_generics
+                .iter()
+                .copied()
+                .zip(generic_args.iter().copied())
+                .collect()
+        } else {
+            HashMap::new()
+        };
 
         let fn_ty = self
             .typecheck
@@ -1697,7 +1761,11 @@ impl<'ctx> MirLowering<'ctx> {
             let idx = self.register_extern_fn(fn_def, hir_fn);
             CallTarget::Extern(idx)
         } else {
-            let mir_id = self.monomorphize_fn(fn_def, generic_args);
+            let mir_id = self.monomorphize_fn(
+                fn_def,
+                generic_args,
+                self.typecheck.method_owner.get(&fn_def).copied(),
+            );
             CallTarget::Direct(mir_id)
         }
     }

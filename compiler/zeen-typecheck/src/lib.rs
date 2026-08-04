@@ -258,6 +258,7 @@ impl<'res> TypeChecker<'res> {
                 );
 
                 for method in &s.methods {
+                    self.result.method_owner.insert(method.def_id, decl.def_id);
                     self.declare_signature(method);
 
                     if let HirDeclKind::Fn(f) = &method.kind {
@@ -1375,7 +1376,8 @@ impl<'res> TypeChecker<'res> {
                 };
 
                 if let Some(arg) = args.first()
-                && let HirExprKind::Type(ty_expr) = &arg.kind {
+                    && let HirExprKind::Type(ty_expr) = &arg.kind
+                {
                     let ty = self.lower_hir_type(ty_expr);
                     self.result.record_expr_type(arg.id, ty);
                 } else {
