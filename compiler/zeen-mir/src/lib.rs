@@ -273,4 +273,6 @@ pub enum CallTarget {
     Direct(MirFunctionId),
     /// Call through a function-pointer value
     Indirect(Operand),
+    /// Call to declared extern function. Index into `MirProgram.extern_fns`
+    Extern(usize),
 }
