@@ -100,7 +100,7 @@ pub struct FnBuilder {
 }
 
 impl FnBuilder {
-    pub fn new(source_def: DefId, mono_args: Vec<TypeId>, entry: BlockId) -> Self {
+    pub fn new(source_def: DefId, mono_args: Vec<TypeId>, entry: BlockId, ret_ty: TypeId) -> Self {
         Self {
             func: MirFunction {
                 source_def,
@@ -109,6 +109,7 @@ impl FnBuilder {
                 blocks: Vec::new(),
                 params: Vec::new(),
                 entry_block: entry,
+                ret_ty,
             },
             locals_by_def: HashMap::new(),
             loop_stack: Vec::new(),
@@ -1455,8 +1456,23 @@ impl<'ctx> MirLowering<'ctx> {
             .zip(generic_args.iter().copied())
             .collect();
 
+        let fn_ty = self
+            .typecheck
+            .def_types
+            .get(&def_id)
+            .copied()
+            .expect("function must have recorded fn type");
+
+        let raw_ret_ty = match self.typecheck.interner.get(fn_ty) {
+            Type::Fn { ret, .. } => *ret,
+            _ => unreachable!(),
+        };
+
+        let ret_ty =
+            zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ret_ty, &bindings);
+
         let entry = BlockId(0);
-        let mut fb = FnBuilder::new(def_id, generic_args.to_vec(), entry);
+        let mut fb = FnBuilder::new(def_id, generic_args.to_vec(), entry, ret_ty);
         fb.new_block();
 
         for param in &hir_fn.params {

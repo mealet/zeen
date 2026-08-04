@@ -41,6 +41,7 @@ pub struct MirFunction {
     pub params: Vec<LocalId>,
 
     pub entry_block: BlockId,
+    pub ret_ty: TypeId,
 }
 
 impl MirFunction {
