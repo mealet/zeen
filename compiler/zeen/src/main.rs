@@ -199,15 +199,12 @@ fn main() {
         &hir_module,
     );
 
-    println!("\n----| Debugging MIR |----\n");
-
-    println!(
-        "Main Function DefId: `{}`",
-        lowered_mir
-            .main_fn
-            .map(|x| x.0.to_string())
-            .unwrap_or("None".to_string())
+    let printed_mir = zeen_mir::printer::print_mir_program(
+        &lowered_mir.program,
+        &typechecker_result,
+        &resolution_result,
+        &rodeo,
     );
 
-    println!("\n{:#?}", lowered_mir.program);
+    println!("\n{}", printed_mir);
 }

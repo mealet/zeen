@@ -15,6 +15,7 @@ use zeen_types::TypeId;
 
 pub mod collecter;
 pub mod lowering;
+pub mod printer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MirFunctionId(pub u32);
