@@ -1432,17 +1432,22 @@ impl<'ctx> MirLowering<'ctx> {
         let base_name = interner.resolve(&hir_fn.name.0).to_string();
         drop(interner);
 
-        let display_name = if generic_args.is_empty() {
-            base_name
+        if hir_fn.is_extern {
+            self.set_function_name(id, base_name.clone());
+            self.program.extern_exports.insert(id, base_name);
         } else {
-            let arg_names: Vec<String> = generic_args
-                .iter()
-                .map(|&t| self.display_type_name(t))
-                .collect();
-            format!("{}${}", base_name, arg_names.join("_"))
-        };
+            let display_name = if generic_args.is_empty() {
+                base_name
+            } else {
+                let arg_names: Vec<String> = generic_args
+                    .iter()
+                    .map(|&t| self.display_type_name(t))
+                    .collect();
+                format!("{}${}", base_name, arg_names.join("_"))
+            };
 
-        self.set_function_name(id, display_name);
+            self.set_function_name(id, display_name);
+        }
 
         id
     }
