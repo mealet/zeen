@@ -229,8 +229,8 @@ fn main() {
             });
 
         cli::println_info(
-            "Wrote",
-            format!("MIR representation to file ({})", output_path.display()),
+            "Emitted",
+            format!("MIR representation to the file ({})", output_path.display()),
         );
 
         exit(0);
