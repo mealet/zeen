@@ -308,7 +308,9 @@ impl<'a> MirPrinter<'a> {
                 let _ = operand;
                 "<indirect>".to_string()
             }
-            CallTarget::Extern(name) => format!("extern \"{}\"", name),
+            CallTarget::Extern(idx) => {
+                format!("extern \"{}\"", self.program.extern_fns[*idx].symbol_name)
+            }
         }
     }
 
@@ -342,8 +344,8 @@ impl<'a> MirPrinter<'a> {
                 )
             }
 
-            Rvalue::SizeOf(ty) => format!("sizeof({})", self.display_type(*ty)),
-            Rvalue::AlignOf(ty) => format!("alignof({})", self.display_type(*ty)),
+            Rvalue::SizeOf(ty) => format!("@sizeof({})", self.display_type(*ty)),
+            Rvalue::AlignOf(ty) => format!("@alignof({})", self.display_type(*ty)),
 
             Rvalue::Aggregate { kind, operands } => {
                 let operand_strs: Vec<String> =
