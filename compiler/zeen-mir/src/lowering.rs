@@ -598,13 +598,12 @@ impl<'ctx> MirLowering<'ctx> {
                 };
                 let has_self_param = param_count == args.len() + 1;
 
-                if let HirExprKind::FieldAccess { object, .. } = &callee.kind {
-                    if has_self_param {
-                        let (b, self_operand) =
-                            self.lower_receiver_operand(fb, object, fn_def, block);
-                        block = b;
-                        arg_operands.push(self_operand);
-                    }
+                if let HirExprKind::FieldAccess { object, .. } = &callee.kind
+                    && has_self_param
+                {
+                    let (b, self_operand) = self.lower_receiver_operand(fb, object, fn_def, block);
+                    block = b;
+                    arg_operands.push(self_operand);
                 }
 
                 for arg in args.iter() {
