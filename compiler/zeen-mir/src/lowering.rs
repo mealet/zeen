@@ -38,7 +38,13 @@ pub fn lower_program<'ctx>(
     let main_def = typecheck.main_fn_def;
 
     let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
-    let mut lowering = MirLowering::new(rodeo, typecheck, resolution, module, &hir_fns_by_def);
+    let mut lowering = MirLowering::new(
+        Rc::clone(&rodeo),
+        typecheck,
+        resolution,
+        module,
+        &hir_fns_by_def,
+    );
 
     let mut main_fn: Option<MirFunctionId> = None;
 
@@ -53,10 +59,12 @@ pub fn lower_program<'ctx>(
         });
     }
 
-    MirLoweringResult {
-        program: lowering.finish(),
-        main_fn,
-    }
+    let mut program = lowering.finish();
+    let extern_vars = crate::collecter::collect_extern_vars(module, typecheck, &rodeo);
+
+    program.extern_vars = extern_vars;
+
+    MirLoweringResult { program, main_fn }
 }
 
 pub struct MirLowering<'ctx> {

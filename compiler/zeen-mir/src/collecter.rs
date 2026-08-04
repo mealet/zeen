@@ -1,11 +1,15 @@
-use std::collections::HashMap;
 use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap};
 
+use lasso::Rodeo;
 use zeen_hir::{
     HirModule,
     decl::{HirDecl, HirDeclKind, HirFn},
 };
 use zeen_resolve::DefId;
+use zeen_typecheck::result::TypeCheckResult;
+
+use crate::ExternVarDecl;
 
 pub fn collect_hir_fns(module: &HirModule) -> HashMap<DefId, Rc<HirFn>> {
     let mut map = HashMap::new();
@@ -42,4 +46,28 @@ fn collect_from_decl(decl: &HirDecl, map: &mut HashMap<DefId, Rc<HirFn>>) {
         | HirDeclKind::ExternLink
         | HirDeclKind::ExternInclude => {}
     }
+}
+
+pub fn collect_extern_vars(
+    module: &HirModule,
+    typecheck: &TypeCheckResult,
+    rodeo: &Rc<RefCell<Rodeo>>,
+) -> Vec<ExternVarDecl> {
+    let mut out = Vec::new();
+
+    for decl in &module.decls {
+        if let HirDeclKind::ExternVar { name, .. } = &decl.kind {
+            let symbol_name = rodeo.borrow().resolve(&name.0).to_string();
+
+            let ty = typecheck
+                .def_types
+                .get(&decl.def_id)
+                .copied()
+                .expect("extern var must have a recorded type");
+
+            out.push(ExternVarDecl { symbol_name, ty });
+        }
+    }
+
+    out
 }
