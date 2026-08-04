@@ -277,9 +277,9 @@ impl<'a> MirPrinter<'a> {
                 };
                 let _ = writeln!(
                     out,
-                    "        {} = @{:?}{}({}){};",
+                    "        {} = @{}{}({}){};",
                     self.place_ref(destination, func),
-                    kind,
+                    format!("{:?}", kind).to_lowercase(),
                     fmt_note,
                     arg_strs.join(", "),
                     target_str
