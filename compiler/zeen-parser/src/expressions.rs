@@ -756,7 +756,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     }
 
     fn parse_call(&mut self, callee: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
-        let open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
+        let _ = self.p.expect(TokenKind::OpenParen, "(")?;
         let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
 
         while !matches!(
@@ -778,7 +778,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
         let expr = self.p.arena.alloc(Expression {
             kind: ExpressionKind::Call { callee, args },
-            span: open_paren.merge_span(close_paren.span),
+            span: callee.merge_span(close_paren.span),
         });
 
         Some(expr)
