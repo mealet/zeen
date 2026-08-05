@@ -116,10 +116,17 @@ pub struct FnBuilder {
     func: MirFunction,
     locals_by_def: HashMap<DefId, LocalId>,
     loop_stack: Vec<LoopTargets>,
+    bindings: HashMap<DefId, TypeId>,
 }
 
 impl FnBuilder {
-    pub fn new(source_def: DefId, mono_args: Vec<TypeId>, entry: BlockId, ret_ty: TypeId) -> Self {
+    pub fn new(
+        source_def: DefId,
+        mono_args: Vec<TypeId>,
+        entry: BlockId,
+        ret_ty: TypeId,
+        bindings: HashMap<DefId, TypeId>,
+    ) -> Self {
         Self {
             func: MirFunction {
                 source_def,
@@ -132,6 +139,7 @@ impl FnBuilder {
             },
             locals_by_def: HashMap::new(),
             loop_stack: Vec::new(),
+            bindings,
         }
     }
 
@@ -191,12 +199,24 @@ impl<'ctx> MirLowering<'ctx> {
         self.program
     }
 
-    fn expr_type(&self, expr: &HirExpr) -> TypeId {
-        self.typecheck
+    fn expr_type(&mut self, fb: &FnBuilder, expr: &HirExpr) -> TypeId {
+        let raw = self
+            .typecheck
             .expr_types
             .get(&expr.id)
             .copied()
-            .expect("unrecorded HIR expr after Typechecker")
+            .expect("unrecorded HIR expr after Typechecker");
+        self.substitute_fn_type(fb, raw)
+    }
+
+    /// Substitute a recorded type against the currently-lowered function's
+    /// generic bindings, so no abstract `GenericParam` survives into the MIR.
+    fn substitute_fn_type(&mut self, fb: &FnBuilder, ty: TypeId) -> TypeId {
+        if fb.bindings.is_empty() {
+            ty
+        } else {
+            zeen_types::substitute_generics(&mut self.typecheck.interner, ty, &fb.bindings)
+        }
     }
 
     fn struct_info(&self, def_id: DefId) -> Option<&zeen_types::StructTypeInfo> {
@@ -306,7 +326,7 @@ impl<'ctx> MirLowering<'ctx> {
     ) -> (BlockId, Operand) {
         match &expr.kind {
             HirExprKind::Literal(lit) => {
-                let ty = self.expr_type(expr);
+                let ty = self.expr_type(fb, expr);
                 (block, Operand::Constant(self.lower_literal(lit, ty)))
             }
 
@@ -323,7 +343,7 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Binary { lhs, rhs, op } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
-                    let result_ty = self.expr_type(expr);
+                    let result_ty = self.expr_type(fb, expr);
                     return self.lower_operator_method_call_with_extra_args(
                         fb,
                         lhs,
@@ -337,7 +357,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
                 let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
 
-                let result_ty = self.expr_type(expr);
+                let result_ty = self.expr_type(fb, expr);
                 let temp = fb.new_temp(result_ty);
 
                 fb.push_stmt(
@@ -360,7 +380,7 @@ impl<'ctx> MirLowering<'ctx> {
                 op: UnaryOp::AddrOf,
             } => {
                 let (block, inner_place) = self.lower_expr_to_place(fb, inner, block);
-                let result_ty = self.expr_type(expr);
+                let result_ty = self.expr_type(fb, expr);
 
                 let is_const = match self.typecheck.interner.get(result_ty).clone() {
                     Type::Pointer { is_const, .. } => is_const,
@@ -384,18 +404,13 @@ impl<'ctx> MirLowering<'ctx> {
 
             HirExprKind::Unary { expr: inner, op } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
-                    return self.lower_operator_method_call(
-                        fb,
-                        inner,
-                        &op_res,
-                        block,
-                        self.expr_type(expr),
-                    );
+                    let result_ty = self.expr_type(fb, expr);
+                    return self.lower_operator_method_call(fb, inner, &op_res, block, result_ty);
                 }
 
                 let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
 
-                let result_ty = self.expr_type(expr);
+                let result_ty = self.expr_type(fb, expr);
                 let temp = fb.new_temp(result_ty);
 
                 fb.push_stmt(
@@ -415,7 +430,7 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::SliceAccess { object, index } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
-                    let result_ty = self.expr_type(expr);
+                    let result_ty = self.expr_type(fb, expr);
 
                     return self.lower_operator_method_call_with_extra_args(
                         fb,
@@ -427,12 +442,14 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
-                let obj_ty = self.expr_type(object);
+                let obj_ty = self.expr_type(fb, object);
                 let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
 
-                let index_local =
-                    self.operand_to_local(fb, index_operand, self.expr_type(index), block);
+                let index_local = {
+                    let idx_ty = self.expr_type(fb, index);
+                    self.operand_to_local(fb, index_operand, idx_ty, block)
+                };
 
                 let elem_place = match self.typecheck.interner.get(obj_ty).clone() {
                     Type::Array { .. } | Type::ManyPointer { .. } => obj_place.index(index_local),
@@ -444,19 +461,19 @@ impl<'ctx> MirLowering<'ctx> {
                     _ => unreachable!(),
                 };
 
-                let ty = self.expr_type(expr);
+                let ty = self.expr_type(fb, expr);
 
                 (block, self.place_to_operand(elem_place, ty))
             }
 
             HirExprKind::FieldAccess { .. } => {
                 let (block, place) = self.lower_expr_to_place(fb, expr, block);
-                let ty = self.expr_type(expr);
+                let ty = self.expr_type(fb, expr);
                 (block, self.place_to_operand(place, ty))
             }
 
             HirExprKind::StructInit { fields, .. } => {
-                let ty = self.expr_type(expr);
+                let ty = self.expr_type(fb, expr);
                 let struct_def = match self.typecheck.interner.get(ty).clone() {
                     Type::Struct { def_id, .. } => def_id,
                     wildcard => panic!("non-struct type in StructInit lowering: {:?}", wildcard),
@@ -500,7 +517,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::ArrayInit { elements } => {
-                let ty = self.expr_type(expr);
+                let ty = self.expr_type(fb, expr);
                 let mut block = block;
                 let mut operands = Vec::with_capacity(elements.len());
 
@@ -547,7 +564,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let (then_end, then_operand) =
                     self.lower_stmt_as_block_value(fb, then_block, then_bb);
 
-                let result_ty = self.expr_type(expr);
+                let result_ty = self.expr_type(fb, expr);
                 let has_else = else_block.is_some();
 
                 if !has_else {
@@ -588,7 +605,8 @@ impl<'ctx> MirLowering<'ctx> {
                 let call_id = expr.id;
 
                 let Some(resolution) = self.call_resolution(call_id) else {
-                    return self.lower_indirect_call(fb, callee, args, block, self.expr_type(expr));
+                    let result_ty = self.expr_type(fb, expr);
+                    return self.lower_indirect_call(fb, callee, args, block, result_ty);
                 };
 
                 let fn_def = resolution.fn_def;
@@ -623,7 +641,7 @@ impl<'ctx> MirLowering<'ctx> {
                     arg_operands.push(op);
                 }
 
-                let ret_ty = self.expr_type(expr);
+                let ret_ty = self.expr_type(fb, expr);
                 let dest_local = fb.new_temp(ret_ty);
                 let dest_place = Place::from_local(dest_local);
 
@@ -651,11 +669,11 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::MacroCall { kind, args } => match kind.0 {
                 HirMacroKind::SizeOf | HirMacroKind::AlignOf => {
                     let target_ty = match &args[0].kind {
-                        HirExprKind::Type(_) => self.expr_type(&args[0]),
+                        HirExprKind::Type(_) => self.expr_type(fb, &args[0]),
                         _ => panic!("@sizeof / @alignof arg must be a type expression"),
                     };
 
-                    let result_ty = self.expr_type(expr);
+                    let result_ty = self.expr_type(fb, expr);
                     let temp = fb.new_temp(result_ty);
                     let rvalue = if matches!(kind.0, HirMacroKind::SizeOf) {
                         Rvalue::SizeOf(target_ty)
@@ -675,7 +693,7 @@ impl<'ctx> MirLowering<'ctx> {
 
                 HirMacroKind::As => {
                     let target_ty = match &args[0].kind {
-                        HirExprKind::Type(_) => self.expr_type(&args[0]),
+                        HirExprKind::Type(_) => self.expr_type(fb, &args[0]),
                         _ => panic!("@as first arg must be a type expression"),
                     };
 
@@ -833,7 +851,7 @@ impl<'ctx> MirLowering<'ctx> {
             _ => None,
         };
 
-        let obj_ty = self.expr_type(object);
+        let obj_ty = self.expr_type(fb, object);
         let (block, place) = self.lower_expr_to_place(fb, object, block);
 
         match expected_self_ty.map(|t| self.typecheck.interner.get(t).clone()) {
@@ -1176,7 +1194,7 @@ impl<'ctx> MirLowering<'ctx> {
                 ..
             } => {
                 let (block, iter_ty) = {
-                    let ty = self.expr_type(iterator);
+                    let ty = self.expr_type(fb, iterator);
                     (block, ty)
                 };
 
@@ -1621,7 +1639,7 @@ impl<'ctx> MirLowering<'ctx> {
             zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ret_ty, &bindings);
 
         let entry = BlockId(0);
-        let mut fb = FnBuilder::new(def_id, generic_args.to_vec(), entry, ret_ty);
+        let mut fb = FnBuilder::new(def_id, generic_args.to_vec(), entry, ret_ty, HashMap::new());
         fb.new_block();
 
         for param in &hir_fn.params {
@@ -1649,6 +1667,8 @@ impl<'ctx> MirLowering<'ctx> {
             fb.func.params.push(local);
             fb.locals_by_def.insert(param_def, local);
         }
+
+        fb.bindings = bindings;
 
         let Some(body) = &hir_fn.body else {
             fb.set_terminator(entry, Terminator::Unreachable);
