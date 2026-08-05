@@ -85,3 +85,6 @@ Ideas for the future language ecosystem:
 > [deps]
 > json = "https://github.com/mealet/json-zn@0.13.0"
 > ```
+
+## License
+Project is licensed under the Apache 2.0 license. See LICENSE file for more information.
