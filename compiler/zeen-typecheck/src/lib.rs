@@ -402,6 +402,7 @@ impl<'res> TypeChecker<'res> {
             self.declare_signature(method);
 
             if let (HirDeclKind::Fn(f), Some(object_def)) = (&method.kind, imp.object) {
+                self.result.method_owner.insert(method.def_id, object_def);
                 self.struct_methods
                     .entry(object_def)
                     .or_default()
@@ -2474,11 +2475,14 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
+        let mut monomorphized_args: Vec<TypeId> = struct_generic_args;
+        monomorphized_args.extend(resolved_generic_args);
+
         self.result.call_resolutions.insert(
             call_id,
             CallResolution {
                 fn_def: method_def_id,
-                generic_args: resolved_generic_args,
+                generic_args: monomorphized_args,
             },
         );
 
@@ -2633,11 +2637,29 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
+        let struct_generics = self
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
+        let resolved_struct_args: Vec<TypeId> = struct_generics
+            .iter()
+            .map(|g| {
+                bindings
+                    .get(g)
+                    .copied()
+                    .unwrap_or_else(|| self.result.interner.error())
+            })
+            .collect();
+
+        let mut monomorphized_args = resolved_struct_args;
+        monomorphized_args.extend(resolved_generic_args);
+
         self.result.call_resolutions.insert(
             call_id,
             CallResolution {
                 fn_def: method_def_id,
-                generic_args: resolved_generic_args,
+                generic_args: monomorphized_args,
             },
         );
 

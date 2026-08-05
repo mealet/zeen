@@ -75,6 +75,16 @@ impl<'a> MirPrinter<'a> {
             out.push('\n');
         }
 
+        let mut struct_tys: Vec<&TypeId> = self.program.struct_layouts.keys().collect();
+        struct_tys.sort_by_key(|ty| **ty);
+
+        for &ty in &struct_tys {
+            self.print_struct_layout(&mut out, *ty);
+        }
+        if !self.program.struct_layouts.is_empty() {
+            out.push('\n');
+        }
+
         let mut ids: Vec<&MirFunctionId> = self.program.functions.keys().collect();
         ids.sort_by_key(|id| id.0);
 
@@ -87,6 +97,18 @@ impl<'a> MirPrinter<'a> {
         }
 
         out
+    }
+
+    fn print_struct_layout(&self, out: &mut String, ty: TypeId) {
+        let Some(layout) = self.program.struct_layouts.get(&ty) else {
+            return;
+        };
+
+        let name = self.display_type(ty);
+
+        let field_strs: Vec<String> = layout.fields.iter().map(|f| self.display_type(f.ty)).collect();
+
+        let _ = writeln!(out, "struct {} {{ {} }};", name, field_strs.join(", "));
     }
 
     fn print_function(&self, out: &mut String, id: MirFunctionId, func: &MirFunction) {
