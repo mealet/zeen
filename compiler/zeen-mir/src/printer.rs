@@ -78,10 +78,7 @@ impl<'a> MirPrinter<'a> {
         let mut struct_tys: Vec<&TypeId> = self.program.struct_layouts.keys().collect();
         struct_tys.sort_by_key(|ty| **ty);
 
-        for (i, &ty) in struct_tys.iter().enumerate() {
-            if i > 0 {
-                out.push('\n');
-            }
+        for &ty in &struct_tys {
             self.print_struct_layout(&mut out, *ty);
         }
         if !self.program.struct_layouts.is_empty() {
