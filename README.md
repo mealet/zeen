@@ -29,6 +29,7 @@ List to-do before release first stable ready-to-use version:
 - [ ] Add basic raw standard library elements (`Option[T]`, `List[T]`, `String` and etc, only basics).
 - [ ] Add `Iterator` interface in `core` library for iterator loop _`for`_.
 - [ ] Add `Write` interface in core with receiving `[]const T` as an argument, and add @write(dest, value) macro to it.
+- [ ] Add support for global "let" and "const" cars (explicit type and initialized rules)
 
 ## Ideas
 Ideas for the future language ecosystem:
