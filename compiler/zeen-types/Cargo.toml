@@ -13,3 +13,6 @@ lasso = "0.7.3"
 zeen-ast = {path = "../zeen-ast"}
 zeen-hir = {path = "../zeen-hir"}
 zeen-resolve = {path = "../zeen-resolve"}
+
+[dev-dependencies]
+miette = { version = "7.6.0", features = ["fancy"] }

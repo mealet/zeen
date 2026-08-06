@@ -448,3 +448,613 @@ pub fn substitute_generics(
         _ => ty,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+
+    use lasso::Rodeo;
+    use miette::NamedSource;
+    use zeen_ast::Source;
+    use zeen_ast::expressions::{BinaryOp, UnaryOp};
+    use zeen_ast::types::BuiltinType;
+    use zeen_hir::{HirId, types::HirTypeExpr};
+    use zeen_resolve::{DefId, DefInfo, DefKind, ResolutionResult};
+
+    fn src(span: miette::SourceSpan) -> Source {
+        Source {
+            span,
+            src: NamedSource::new("test.zn", Arc::new(String::new())),
+        }
+    }
+
+    fn type_expr(kind: HirTypeKind) -> Rc<HirTypeExpr> {
+        Rc::new(HirTypeExpr {
+            id: HirId(0),
+            kind,
+            source: src(0.into()),
+        })
+    }
+
+    fn insert_def(
+        resolution: &mut ResolutionResult,
+        interner: &mut Rodeo,
+        id: DefId,
+        name: &str,
+        kind: DefKind,
+    ) {
+        resolution.defs.insert(
+            id,
+            DefInfo {
+                name: interner.get_or_intern(name),
+                kind,
+                span: src(0.into()),
+                decl: None,
+                is_pub: false,
+            },
+        );
+    }
+
+    #[test]
+    fn intern_deduplicates_equal_types() {
+        let mut interner = TypeInterner::new();
+
+        let a = interner.intern(Type::Builtin(BuiltinType::i32));
+        let b = interner.intern(Type::Builtin(BuiltinType::i32));
+
+        assert_eq!(a, b);
+        assert_eq!(interner.get(a), &Type::Builtin(BuiltinType::i32));
+    }
+
+    #[test]
+    fn intern_distinct_types_get_distinct_ids() {
+        let mut interner = TypeInterner::new();
+
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let f64 = interner.intern(Type::Builtin(BuiltinType::f64));
+
+        assert_ne!(i32, f64);
+    }
+
+    #[test]
+    fn intern_records_pointer_and_structural_types() {
+        let mut interner = TypeInterner::new();
+        let inner = interner.intern(Type::Builtin(BuiltinType::char));
+
+        let ptr = interner.intern(Type::Pointer {
+            inner,
+            is_const: false,
+        });
+        let ptr_const = interner.intern(Type::Pointer {
+            inner,
+            is_const: true,
+        });
+
+        assert_ne!(ptr, ptr_const);
+        assert_eq!(
+            interner.get(ptr),
+            &Type::Pointer {
+                inner,
+                is_const: false
+            }
+        );
+        assert_eq!(
+            interner.get(ptr_const),
+            &Type::Pointer {
+                inner,
+                is_const: true
+            }
+        );
+    }
+
+    #[test]
+    fn builtin_void_forwards_to_void() {
+        let mut interner = TypeInterner::new();
+
+        let builtin_void = interner.builtin(BuiltinType::void);
+        let plain_void = interner.void();
+
+        assert_eq!(builtin_void, plain_void);
+        assert_eq!(interner.get(builtin_void), &Type::Void);
+    }
+
+    #[test]
+    fn literal_helpers_mark_types() {
+        let mut interner = TypeInterner::new();
+
+        assert_eq!(interner.int_literal(), interner.intern(Type::IntLiteral));
+        assert_eq!(
+            interner.float_literal(),
+            interner.intern(Type::FloatLiteral)
+        );
+        assert_eq!(interner.never(), interner.intern(Type::Never));
+        assert_eq!(interner.error(), interner.intern(Type::Error));
+    }
+
+    #[test]
+    fn builtin_defaults_sane() {
+        assert_eq!(DEFAULT_INT_LITERAL, BuiltinType::i32);
+        assert_eq!(DEFAULT_FLOAT_LITERAL, BuiltinType::f64);
+    }
+
+    #[test]
+    fn display_builtin_and_literals() {
+        let mut interner = TypeInterner::new();
+        let resolution = ResolutionResult::default();
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let f64 = interner.intern(Type::Builtin(BuiltinType::f64));
+        let int_lit = interner.int_literal();
+        let float_lit = interner.float_literal();
+        assert_eq!(
+            interner.display_type(i32, Rc::clone(&rodeo), &resolution),
+            "i32"
+        );
+        assert_eq!(
+            interner.display_type(f64, Rc::clone(&rodeo), &resolution),
+            "f64"
+        );
+        assert_eq!(
+            interner.display_type(int_lit, Rc::clone(&rodeo), &resolution),
+            "i32"
+        );
+        assert_eq!(
+            interner.display_type(float_lit, Rc::clone(&rodeo), &resolution),
+            "f64"
+        );
+    }
+
+    #[test]
+    fn display_pointers_arrays_and_slices() {
+        let mut interner = TypeInterner::new();
+        let resolution = ResolutionResult::default();
+        let inner = interner.intern(Type::Builtin(BuiltinType::i32));
+
+        let ptr = interner.intern(Type::Pointer {
+            inner,
+            is_const: false,
+        });
+        let ptr_const = interner.intern(Type::Pointer {
+            inner,
+            is_const: true,
+        });
+        let many = interner.intern(Type::ManyPointer {
+            inner,
+            is_const: false,
+        });
+        let many_const = interner.intern(Type::ManyPointer {
+            inner,
+            is_const: true,
+        });
+        let array = interner.intern(Type::Array {
+            element: inner,
+            len: Some(4),
+        });
+        let array_unknown = interner.intern(Type::Array {
+            element: inner,
+            len: None,
+        });
+        let slice = interner.intern(Type::Slice {
+            element: inner,
+            is_const: false,
+        });
+        let slice_const = interner.intern(Type::Slice {
+            element: inner,
+            is_const: true,
+        });
+
+        assert_eq!(
+            interner.display_type(ptr, Rc::new(RefCell::new(Rodeo::default())), &resolution),
+            "*i32"
+        );
+        assert_eq!(
+            interner.display_type(
+                ptr_const,
+                Rc::new(RefCell::new(Rodeo::default())),
+                &resolution
+            ),
+            "*const i32"
+        );
+        assert_eq!(
+            interner.display_type(many, Rc::new(RefCell::new(Rodeo::default())), &resolution),
+            "[*]i32"
+        );
+        assert_eq!(
+            interner.display_type(
+                many_const,
+                Rc::new(RefCell::new(Rodeo::default())),
+                &resolution
+            ),
+            "[*]const i32"
+        );
+        assert_eq!(
+            interner.display_type(array, Rc::new(RefCell::new(Rodeo::default())), &resolution),
+            "[4]i32"
+        );
+        assert_eq!(
+            interner.display_type(
+                array_unknown,
+                Rc::new(RefCell::new(Rodeo::default())),
+                &resolution
+            ),
+            "[]i32"
+        );
+        assert_eq!(
+            interner.display_type(slice, Rc::new(RefCell::new(Rodeo::default())), &resolution),
+            "[]i32"
+        );
+        assert_eq!(
+            interner.display_type(
+                slice_const,
+                Rc::new(RefCell::new(Rodeo::default())),
+                &resolution
+            ),
+            "[]const i32"
+        );
+    }
+
+    #[test]
+    fn display_struct_type_with_generic_args() {
+        let mut interner = TypeInterner::new();
+        let mut resolution = ResolutionResult::default();
+        let mut rodeo = Rodeo::default();
+
+        let struct_def = DefId(1);
+        insert_def(
+            &mut resolution,
+            &mut rodeo,
+            struct_def,
+            "Foo",
+            DefKind::Struct,
+        );
+
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let f64 = interner.intern(Type::Builtin(BuiltinType::f64));
+        let ty = interner.intern(Type::Struct {
+            def_id: struct_def,
+            generic_args: vec![i32, f64],
+        });
+
+        let result = interner.display_type(ty, Rc::new(RefCell::new(rodeo)), &resolution);
+        assert_eq!(result, "Foo[i32, f64]");
+    }
+
+    #[test]
+    fn display_named_types_by_name() {
+        let mut interner = TypeInterner::new();
+        let mut resolution = ResolutionResult::default();
+        let mut rodeo = Rodeo::default();
+
+        let iface = DefId(0);
+        let en = DefId(1);
+        let generic = DefId(2);
+        insert_def(
+            &mut resolution,
+            &mut rodeo,
+            iface,
+            "Movable",
+            DefKind::Interface,
+        );
+        insert_def(&mut resolution, &mut rodeo, en, "Color", DefKind::Enum);
+        insert_def(
+            &mut resolution,
+            &mut rodeo,
+            generic,
+            "T",
+            DefKind::GenericParam,
+        );
+
+        let iface_ty = interner.intern(Type::Interface { def_id: iface });
+        let enum_ty = interner.intern(Type::Enum { def_id: en });
+        let generic_ty = interner.intern(Type::GenericParam(generic));
+
+        assert_eq!(
+            interner.display_type(iface_ty, Rc::new(RefCell::new(rodeo.clone())), &resolution),
+            "Movable"
+        );
+        assert_eq!(
+            interner.display_type(enum_ty, Rc::new(RefCell::new(rodeo.clone())), &resolution),
+            "Color"
+        );
+        assert_eq!(
+            interner.display_type(generic_ty, Rc::new(RefCell::new(rodeo)), &resolution),
+            "T"
+        );
+    }
+
+    #[test]
+    fn function_interface_self_placeholder_display() {
+        let mut interner = TypeInterner::new();
+        let resolution = ResolutionResult::default();
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let f64 = interner.intern(Type::Builtin(BuiltinType::f64));
+        let void = interner.void();
+
+        let fn_ty = interner.intern(Type::Fn {
+            params: vec![i32, f64],
+            ret: void,
+        });
+        assert_eq!(
+            interner.display_type(fn_ty, Rc::clone(&rodeo), &resolution),
+            "fn(i32, f64) void"
+        );
+
+        let placeholder = interner.intern(Type::InterfaceSelfPlaceholder(DefId(3)));
+        assert_eq!(
+            interner.display_type(placeholder, Rc::clone(&rodeo), &resolution),
+            "Self"
+        );
+
+        assert_eq!(
+            interner.display_type(void, Rc::clone(&rodeo), &resolution),
+            "void"
+        );
+        let never = interner.never();
+        let error = interner.error();
+        assert_eq!(
+            interner.display_type(never, Rc::clone(&rodeo), &resolution),
+            "never"
+        );
+        assert_eq!(
+            interner.display_type(error, Rc::clone(&rodeo), &resolution),
+            "error"
+        );
+    }
+
+    #[test]
+    fn display_unresolved_def_is_undefined() {
+        let mut interner = TypeInterner::new();
+        let resolution = ResolutionResult::default();
+
+        let unknown = interner.intern(Type::Struct {
+            def_id: DefId(99),
+            generic_args: Vec::new(),
+        });
+        assert_eq!(
+            interner.display_type(
+                unknown,
+                Rc::new(RefCell::new(Rodeo::default())),
+                &resolution
+            ),
+            "undefined"
+        );
+    }
+
+    #[test]
+    fn substitute_generics_noop_without_bindings() {
+        let mut interner = TypeInterner::new();
+        let generic = DefId(1);
+        let ty = interner.intern(Type::GenericParam(generic));
+        let bindings = HashMap::new();
+
+        assert_eq!(substitute_generics(&mut interner, ty, &bindings), ty);
+    }
+
+    #[test]
+    fn substitute_generics_replaces_param() {
+        let mut interner = TypeInterner::new();
+        let generic = DefId(1);
+        let ty = interner.intern(Type::GenericParam(generic));
+        let replacement = interner.intern(Type::Builtin(BuiltinType::i32));
+        let mut bindings = HashMap::new();
+        bindings.insert(generic, replacement);
+
+        assert_eq!(
+            substitute_generics(&mut interner, ty, &bindings),
+            replacement
+        );
+    }
+
+    #[test]
+    fn substitute_generics_preserves_identity_when_unchanged() {
+        let mut interner = TypeInterner::new();
+        let generic = DefId(1);
+        let inner = interner.intern(Type::Builtin(BuiltinType::i32));
+        let ptr = interner.intern(Type::Pointer {
+            inner,
+            is_const: false,
+        });
+        let mut bindings = HashMap::new();
+        bindings.insert(generic, inner);
+
+        assert_eq!(substitute_generics(&mut interner, ptr, &bindings), ptr);
+    }
+
+    #[test]
+    fn substitute_generics_rewrites_nested_types() {
+        let mut interner = TypeInterner::new();
+        let generic = DefId(1);
+        let inner = interner.intern(Type::GenericParam(generic));
+        let ptr = interner.intern(Type::Pointer {
+            inner,
+            is_const: false,
+        });
+        let replacement = interner.intern(Type::Builtin(BuiltinType::u8));
+        let mut bindings = HashMap::new();
+        bindings.insert(generic, replacement);
+
+        let rewritten = substitute_generics(&mut interner, ptr, &bindings);
+        assert_eq!(
+            interner.get(rewritten),
+            &Type::Pointer {
+                inner: replacement,
+                is_const: false
+            }
+        );
+        assert_ne!(rewritten, ptr);
+    }
+
+    #[test]
+    fn substitute_generics_descends_into_struct_and_fn() {
+        let mut interner = TypeInterner::new();
+        let generic = DefId(1);
+        let struct_def = DefId(2);
+        let generic_arg = interner.intern(Type::GenericParam(generic));
+        let struct_ty = interner.intern(Type::Struct {
+            def_id: struct_def,
+            generic_args: vec![generic_arg],
+        });
+        let void = interner.void();
+        let fn_ty = interner.intern(Type::Fn {
+            params: vec![generic_arg],
+            ret: void,
+        });
+        let replacement = interner.intern(Type::Builtin(BuiltinType::i64));
+        let mut bindings = HashMap::new();
+        bindings.insert(generic, replacement);
+
+        let new_struct = substitute_generics(&mut interner, struct_ty, &bindings);
+        assert_eq!(
+            interner.get(new_struct),
+            &Type::Struct {
+                def_id: struct_def,
+                generic_args: vec![replacement]
+            }
+        );
+
+        let new_fn = substitute_generics(&mut interner, fn_ty, &bindings);
+        let expected_fn = Type::Fn {
+            params: vec![replacement],
+            ret: void,
+        };
+        assert_eq!(interner.get(new_fn), &expected_fn);
+    }
+
+    #[test]
+    fn self_mode_of_plain_self() {
+        let def_id = DefId(1);
+        assert_eq!(
+            self_mode_of(&HirTypeKind::SelfType(def_id)),
+            Some(SelfMode::Value)
+        );
+        assert_eq!(
+            self_mode_of(&HirTypeKind::SelfAlias(def_id)),
+            Some(SelfMode::Value)
+        );
+    }
+
+    #[test]
+    fn self_mode_of_const_self() {
+        let def_id = DefId(1);
+        let const_self = HirTypeKind::Const(type_expr(HirTypeKind::SelfType(def_id)));
+        let const_alias = HirTypeKind::Const(type_expr(HirTypeKind::SelfAlias(def_id)));
+        assert_eq!(self_mode_of(&const_self), Some(SelfMode::ValueConst));
+        assert_eq!(self_mode_of(&const_alias), Some(SelfMode::ValueConst));
+    }
+
+    #[test]
+    fn self_mode_of_pointer_self() {
+        let def_id = DefId(1);
+        assert_eq!(
+            self_mode_of(&HirTypeKind::SinglePointer(type_expr(
+                HirTypeKind::SelfType(def_id)
+            ))),
+            Some(SelfMode::RefMut)
+        );
+        assert_eq!(
+            self_mode_of(&HirTypeKind::SinglePointer(type_expr(
+                HirTypeKind::SelfAlias(def_id)
+            ))),
+            Some(SelfMode::RefMut)
+        );
+    }
+
+    #[test]
+    fn self_mode_of_const_pointer_self() {
+        let def_id = DefId(1);
+        let const_self = HirTypeKind::Const(type_expr(HirTypeKind::SelfType(def_id)));
+        let const_alias = HirTypeKind::Const(type_expr(HirTypeKind::SelfAlias(def_id)));
+        assert_eq!(
+            self_mode_of(&HirTypeKind::SinglePointer(type_expr(const_self))),
+            Some(SelfMode::RefConst)
+        );
+        assert_eq!(
+            self_mode_of(&HirTypeKind::SinglePointer(type_expr(const_alias))),
+            Some(SelfMode::RefConst)
+        );
+    }
+
+    #[test]
+    fn self_mode_of_ignores_other_types() {
+        assert_eq!(self_mode_of(&HirTypeKind::Builtin(BuiltinType::i32)), None);
+        assert_eq!(self_mode_of(&HirTypeKind::Error), None);
+        assert_eq!(
+            self_mode_of(&HirTypeKind::Const(type_expr(HirTypeKind::Builtin(
+                BuiltinType::i32
+            )))),
+            None
+        );
+        assert_eq!(
+            self_mode_of(&HirTypeKind::SinglePointer(type_expr(
+                HirTypeKind::Builtin(BuiltinType::i32)
+            ))),
+            None
+        );
+    }
+
+    #[test]
+    fn binary_op_interface_maps_overloadable() {
+        use BinaryOp::*;
+        assert_eq!(binary_op_interface(Add), Some(("Add", "add")));
+        assert_eq!(binary_op_interface(Sub), Some(("Sub", "sub")));
+        assert_eq!(binary_op_interface(Mul), Some(("Mul", "mul")));
+        assert_eq!(binary_op_interface(Div), Some(("Div", "div")));
+        assert_eq!(binary_op_interface(Mod), Some(("Mod", "mod")));
+        assert_eq!(binary_op_interface(BitAnd), Some(("BitAnd", "bit_and")));
+        assert_eq!(binary_op_interface(BitOr), Some(("BitOr", "bit_or")));
+        assert_eq!(binary_op_interface(BitXor), Some(("BitXor", "bit_xor")));
+        assert_eq!(binary_op_interface(Shl), Some(("BitShl", "bit_shl")));
+        assert_eq!(binary_op_interface(Shr), Some(("BitShr", "bit_shr")));
+        assert_eq!(binary_op_interface(Eq), Some(("Eq", "eq")));
+        assert_eq!(binary_op_interface(Ne), Some(("Eq", "eq")));
+    }
+
+    #[test]
+    fn binary_op_interface_skips_non_overloadable() {
+        use BinaryOp::*;
+        assert_eq!(binary_op_interface(Lt), None);
+        assert_eq!(binary_op_interface(Gt), None);
+        assert_eq!(binary_op_interface(Le), None);
+        assert_eq!(binary_op_interface(Ge), None);
+        assert_eq!(binary_op_interface(LogicalAnd), None);
+        assert_eq!(binary_op_interface(LogicalOr), None);
+    }
+
+    #[test]
+    fn unary_op_interface_maps_overloadable() {
+        use UnaryOp::*;
+        assert_eq!(unary_op_interface(Neg), Some(("Neg", "neg")));
+        assert_eq!(unary_op_interface(Not), Some(("Not", "not")));
+        assert_eq!(unary_op_interface(BitNot), Some(("BitNot", "bit_not")));
+        assert_eq!(unary_op_interface(Deref), Some(("Deref", "deref")));
+        assert_eq!(unary_op_interface(AddrOf), None);
+    }
+
+    #[test]
+    fn capabilities_constants() {
+        let copy = Capabilities::COPY;
+        let move_only = Capabilities::MOVE_ONLY;
+
+        assert!(copy.is_copy);
+        assert!(!copy.has_explicit_drop);
+        assert!(!move_only.is_copy);
+        assert!(!move_only.has_explicit_drop);
+    }
+
+    #[test]
+    fn self_mode_ownership_and_constness() {
+        assert!(SelfMode::Value.takes_ownership());
+        assert!(SelfMode::ValueConst.takes_ownership());
+        assert!(!SelfMode::RefMut.takes_ownership());
+        assert!(!SelfMode::RefConst.takes_ownership());
+
+        assert!(!SelfMode::Value.is_const());
+        assert!(SelfMode::ValueConst.is_const());
+        assert!(!SelfMode::RefMut.is_const());
+        assert!(SelfMode::RefConst.is_const());
+    }
+}
