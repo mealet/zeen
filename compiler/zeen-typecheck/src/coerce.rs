@@ -484,4 +484,46 @@ mod tests {
             CoerceResult::RemoveConst
         );
     }
+
+    #[test]
+    fn coerce_fails_on_unrelated_types() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let bool_id = it.intern(builtin(BuiltinType::bool));
+
+        assert_eq!(try_coerce(&mut it, i32, bool_id), CoerceResult::Fail);
+
+        let elem_a = it.intern(builtin(BuiltinType::i32));
+        let elem_b = it.intern(builtin(BuiltinType::i64));
+        let arr = it.intern(Type::Array {
+            element: elem_a,
+            len: Some(2),
+        });
+        let slice = it.intern(Type::Slice {
+            element: elem_b,
+            is_const: false,
+        });
+        assert_eq!(try_coerce(&mut it, arr, slice), CoerceResult::Fail);
+
+        let p1 = it.intern(Type::Pointer {
+            inner: elem_a,
+            is_const: false,
+        });
+        let p2 = it.intern(Type::Pointer {
+            inner: elem_b,
+            is_const: false,
+        });
+        assert_eq!(try_coerce(&mut it, p1, p2), CoerceResult::Fail);
+    }
+
+    #[test]
+    fn is_coercible_reports_ok_for_successful_coercion() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let f64 = it.intern(builtin(BuiltinType::f64));
+        let lit = it.int_literal();
+
+        assert!(is_coercible(&mut it, lit, i32));
+        assert!(!is_coercible(&mut it, lit, f64));
+    }
 }
