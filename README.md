@@ -30,6 +30,7 @@ List to-do before release first stable ready-to-use version:
 - [ ] Add `Iterator` interface in `core` library for iterator loop _`for`_.
 - [ ] Add `Write` interface in core with receiving `[]const T` as an argument, and add @write(dest, value) macro to it.
 - [ ] Add support for global "let" and "const" cars (explicit type and initialized rules)
+- [ ] Write at least basic language documentation (minimum is GitHub Wiki, better is a static website)
 
 ## Ideas
 Ideas for the future language ecosystem:
@@ -85,3 +86,6 @@ Ideas for the future language ecosystem:
 > [deps]
 > json = "https://github.com/mealet/json-zn@0.13.0"
 > ```
+
+## License
+Project is licensed under the Apache 2.0 license. See LICENSE file for more information.
