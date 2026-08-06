@@ -214,6 +214,16 @@ pub fn verify_cast(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> boo
 mod tests {
     use super::*;
 
+    fn coerce(it: &mut TypeInterner, from: Type, to: Type) -> CoerceResult {
+        let from = it.intern(from);
+        let to = it.intern(to);
+        try_coerce(it, from, to)
+    }
+
+    fn builtin(b: BuiltinType) -> Type {
+        Type::Builtin(b)
+    }
+
     #[test]
     fn builtin_is_integer_signed_and_unsigned() {
         for b in [
@@ -248,5 +258,106 @@ mod tests {
         assert!(!builtin_is_float(BuiltinType::i32));
         assert!(!builtin_is_float(BuiltinType::u64));
         assert!(!builtin_is_float(BuiltinType::bool));
+    }
+
+    #[test]
+    fn coerce_identity_for_equal_types() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+
+        assert_eq!(try_coerce(&mut it, i32, i32), CoerceResult::Identity);
+        let void = it.void();
+        assert_eq!(try_coerce(&mut it, void, void), CoerceResult::Identity);
+    }
+
+    #[test]
+    fn coerce_structural_identity() {
+        let mut it = TypeInterner::new();
+        let inner = it.intern(builtin(BuiltinType::i32));
+        let a = it.intern(Type::Pointer {
+            inner,
+            is_const: true,
+        });
+        let b = it.intern(Type::Pointer {
+            inner,
+            is_const: true,
+        });
+
+        assert_eq!(try_coerce(&mut it, a, b), CoerceResult::Identity);
+    }
+
+    #[test]
+    fn coerce_error_recovers_on_error_type() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let err = it.error();
+
+        assert_eq!(try_coerce(&mut it, err, i32), CoerceResult::ErrorRecovery);
+        assert_eq!(try_coerce(&mut it, i32, err), CoerceResult::ErrorRecovery);
+    }
+
+    #[test]
+    fn coerce_never_flows_to_any() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let never = it.never();
+        let void = it.void();
+
+        assert_eq!(try_coerce(&mut it, never, i32), CoerceResult::NeverCoercion);
+        assert_eq!(
+            try_coerce(&mut it, never, void),
+            CoerceResult::NeverCoercion
+        );
+    }
+
+    #[test]
+    fn coerce_pins_int_literal_to_integer_builtins() {
+        let mut it = TypeInterner::new();
+
+        for b in [
+            BuiltinType::i8,
+            BuiltinType::i16,
+            BuiltinType::i32,
+            BuiltinType::i64,
+            BuiltinType::isize,
+            BuiltinType::u8,
+            BuiltinType::u16,
+            BuiltinType::u32,
+            BuiltinType::u64,
+            BuiltinType::usize,
+        ] {
+            assert_eq!(
+                coerce(&mut it, Type::IntLiteral, builtin(b)),
+                CoerceResult::PinLiteral
+            );
+        }
+    }
+
+    #[test]
+    fn coerce_pins_float_literal_to_float_builtins() {
+        let mut it = TypeInterner::new();
+
+        assert_eq!(
+            coerce(&mut it, Type::FloatLiteral, builtin(BuiltinType::f32)),
+            CoerceResult::PinLiteral
+        );
+        assert_eq!(
+            coerce(&mut it, Type::FloatLiteral, builtin(BuiltinType::f64)),
+            CoerceResult::PinLiteral
+        );
+    }
+
+    #[test]
+    fn coerce_does_not_pin_literals_to_wrong_kind() {
+        let mut it = TypeInterner::new();
+
+        assert_eq!(
+            coerce(&mut it, Type::IntLiteral, builtin(BuiltinType::f64)),
+            CoerceResult::Fail
+        );
+        assert_eq!(
+            coerce(&mut it, Type::FloatLiteral, builtin(BuiltinType::i32)),
+            CoerceResult::Fail
+        );
     }
 }
