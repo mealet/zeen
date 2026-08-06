@@ -209,3 +209,44 @@ pub fn verify_cast(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> boo
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_is_integer_signed_and_unsigned() {
+        for b in [
+            BuiltinType::i8,
+            BuiltinType::i16,
+            BuiltinType::i32,
+            BuiltinType::i64,
+            BuiltinType::isize,
+            BuiltinType::u8,
+            BuiltinType::u16,
+            BuiltinType::u32,
+            BuiltinType::u64,
+            BuiltinType::usize,
+        ] {
+            assert!(builtin_is_integer(b));
+        }
+    }
+
+    #[test]
+    fn builtin_is_integer_false_for_non_integers() {
+        assert!(!builtin_is_integer(BuiltinType::f32));
+        assert!(!builtin_is_integer(BuiltinType::f64));
+        assert!(!builtin_is_integer(BuiltinType::bool));
+        assert!(!builtin_is_integer(BuiltinType::char));
+        assert!(!builtin_is_integer(BuiltinType::void));
+    }
+
+    #[test]
+    fn builtin_is_float_matches_only_floats() {
+        assert!(builtin_is_float(BuiltinType::f32));
+        assert!(builtin_is_float(BuiltinType::f64));
+        assert!(!builtin_is_float(BuiltinType::i32));
+        assert!(!builtin_is_float(BuiltinType::u64));
+        assert!(!builtin_is_float(BuiltinType::bool));
+    }
+}
