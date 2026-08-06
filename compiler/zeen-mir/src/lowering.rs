@@ -209,8 +209,6 @@ impl<'ctx> MirLowering<'ctx> {
         self.substitute_fn_type(fb, raw)
     }
 
-    /// Substitute a recorded type against the currently-lowered function's
-    /// generic bindings, so no abstract `GenericParam` survives into the MIR.
     fn substitute_fn_type(&mut self, fb: &FnBuilder, ty: TypeId) -> TypeId {
         if fb.bindings.is_empty() {
             ty
