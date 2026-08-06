@@ -694,6 +694,7 @@ name = "zeen-types"
 version = "0.0.0"
 dependencies = [
  "lasso",
+ "miette",
  "zeen-ast",
  "zeen-hir",
  "zeen-resolve",
