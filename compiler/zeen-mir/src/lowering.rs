@@ -236,6 +236,8 @@ impl<'ctx> MirLowering<'ctx> {
     fn mir_type_is_copy(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(_)
+            | Type::IntLiteral
+            | Type::FloatLiteral
             | Type::Enum { .. }
             | Type::Pointer { .. }
             | Type::ManyPointer { .. }
