@@ -360,4 +360,128 @@ mod tests {
             CoerceResult::Fail
         );
     }
+
+    #[test]
+    fn coerce_adds_and_removes_const_on_pointers() {
+        let mut it = TypeInterner::new();
+        let inner = it.intern(builtin(BuiltinType::i32));
+
+        let mut_ty = Type::Pointer {
+            inner,
+            is_const: false,
+        };
+        let const_ty = Type::Pointer {
+            inner,
+            is_const: true,
+        };
+        let mut_id = it.intern(mut_ty.clone());
+        let const_id = it.intern(const_ty.clone());
+
+        assert_eq!(
+            try_coerce(&mut it, mut_id, const_id),
+            CoerceResult::AddConst
+        );
+        assert_eq!(
+            try_coerce(&mut it, const_id, mut_id),
+            CoerceResult::RemoveConst
+        );
+    }
+
+    #[test]
+    fn coerce_void_pointer_is_universal() {
+        let mut it = TypeInterner::new();
+        let inner = it.intern(builtin(BuiltinType::i32));
+        let void = it.void();
+
+        let i32_ptr = it.intern(Type::Pointer {
+            inner,
+            is_const: false,
+        });
+        let void_ptr = it.intern(Type::Pointer {
+            inner: void,
+            is_const: false,
+        });
+
+        assert_eq!(
+            try_coerce(&mut it, i32_ptr, void_ptr),
+            CoerceResult::VoidPtrCoercion
+        );
+        assert_eq!(
+            try_coerce(&mut it, void_ptr, i32_ptr),
+            CoerceResult::VoidPtrCoercion
+        );
+    }
+
+    #[test]
+    fn coerce_array_to_slice() {
+        let mut it = TypeInterner::new();
+        let elem = it.intern(builtin(BuiltinType::i32));
+
+        let arr = it.intern(Type::Array {
+            element: elem,
+            len: Some(8),
+        });
+        let slice = it.intern(Type::Slice {
+            element: elem,
+            is_const: false,
+        });
+
+        assert_eq!(try_coerce(&mut it, arr, slice), CoerceResult::ArrayToSlice);
+    }
+
+    #[test]
+    fn coerce_array_to_many_pointer() {
+        let mut it = TypeInterner::new();
+        let elem = it.intern(builtin(BuiltinType::u8));
+
+        let arr = it.intern(Type::Array {
+            element: elem,
+            len: Some(4),
+        });
+        let many = it.intern(Type::ManyPointer {
+            inner: elem,
+            is_const: false,
+        });
+
+        assert_eq!(
+            try_coerce(&mut it, arr, many),
+            CoerceResult::ArrayToManyPointer
+        );
+    }
+
+    #[test]
+    fn coerce_const_variants_on_many_pointer_and_slice() {
+        let mut it = TypeInterner::new();
+        let elem = it.intern(builtin(BuiltinType::i32));
+
+        let many_mut = Type::ManyPointer {
+            inner: elem,
+            is_const: false,
+        };
+        let many_const = Type::ManyPointer {
+            inner: elem,
+            is_const: true,
+        };
+        let slice_mut = Type::Slice {
+            element: elem,
+            is_const: false,
+        };
+        let slice_const = Type::Slice {
+            element: elem,
+            is_const: true,
+        };
+
+        assert_eq!(
+            coerce(&mut it, many_mut, many_const),
+            CoerceResult::AddConst
+        );
+        assert_eq!(
+            coerce(&mut it, slice_mut.clone(), slice_const.clone()),
+            CoerceResult::AddConst
+        );
+        assert_eq!(
+            coerce(&mut it, slice_const, slice_mut),
+            CoerceResult::RemoveConst
+        );
+    }
 }
