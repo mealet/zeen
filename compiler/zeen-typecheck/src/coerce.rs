@@ -526,4 +526,76 @@ mod tests {
         assert!(is_coercible(&mut it, lit, i32));
         assert!(!is_coercible(&mut it, lit, f64));
     }
+
+    #[test]
+    fn verify_cast_accepts_numeric_conversions() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let f64 = it.intern(builtin(BuiltinType::f64));
+        let u8 = it.intern(builtin(BuiltinType::u8));
+
+        assert!(verify_cast(&mut it, i32, f64));
+        assert!(verify_cast(&mut it, f64, i32));
+        assert!(verify_cast(&mut it, f64, u8));
+    }
+
+    #[test]
+    fn verify_cast_accepts_bool_and_char_round_trips() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let bool_id = it.intern(builtin(BuiltinType::bool));
+        let char_id = it.intern(builtin(BuiltinType::char));
+
+        assert!(verify_cast(&mut it, bool_id, i32));
+        assert!(verify_cast(&mut it, i32, bool_id));
+        assert!(verify_cast(&mut it, char_id, i32));
+        assert!(verify_cast(&mut it, i32, char_id));
+        assert!(!verify_cast(&mut it, bool_id, char_id));
+    }
+
+    #[test]
+    fn verify_cast_accepts_enum_to_integer() {
+        let mut it = TypeInterner::new();
+        let enum_ty = it.intern(Type::Enum {
+            def_id: zeen_resolve::DefId(1),
+        });
+        let i32 = it.intern(builtin(BuiltinType::i32));
+
+        assert!(verify_cast(&mut it, enum_ty, i32));
+        assert!(verify_cast(&mut it, i32, enum_ty));
+    }
+
+    #[test]
+    fn verify_cast_accepts_pointer_between_pointers() {
+        let mut it = TypeInterner::new();
+        let inner = it.intern(builtin(BuiltinType::i32));
+        let void = it.void();
+
+        let i32_ptr = it.intern(Type::Pointer {
+            inner,
+            is_const: false,
+        });
+        let void_ptr = it.intern(Type::Pointer {
+            inner: void,
+            is_const: false,
+        });
+
+        assert!(verify_cast(&mut it, i32_ptr, void_ptr));
+        assert!(verify_cast(&mut it, void_ptr, i32_ptr));
+    }
+
+    #[test]
+    fn verify_cast_rejects_non_numeric_to_pointer() {
+        let mut it = TypeInterner::new();
+        let bool_id = it.intern(builtin(BuiltinType::bool));
+        let inner = it.intern(builtin(BuiltinType::i32));
+        let ptr = it.intern(Type::Pointer {
+            inner,
+            is_const: false,
+        });
+
+        assert!(!verify_cast(&mut it, bool_id, ptr));
+        let void = it.void();
+        assert!(!verify_cast(&mut it, void, ptr));
+    }
 }
