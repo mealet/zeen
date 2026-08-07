@@ -217,6 +217,12 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    fn substitute_generic_args(&mut self, fb: &FnBuilder, args: &[TypeId]) -> Vec<TypeId> {
+        args.iter()
+            .map(|&t| self.substitute_fn_type(fb, t))
+            .collect()
+    }
+
     fn struct_info(&self, def_id: DefId) -> Option<&zeen_types::StructTypeInfo> {
         self.typecheck.struct_info.get(&def_id)
     }
@@ -610,7 +616,8 @@ impl<'ctx> MirLowering<'ctx> {
                 };
 
                 let fn_def = resolution.fn_def;
-                let generic_args = resolution.generic_args.clone();
+                let raw_args = resolution.generic_args.clone();
+                let generic_args = self.substitute_generic_args(fb, &raw_args);
 
                 let Some(hir_fn) = self.hir_fns_by_def.get(&fn_def).cloned() else {
                     unreachable!("must been recorded this table");
@@ -1023,7 +1030,8 @@ impl<'ctx> MirLowering<'ctx> {
             panic!("operator method {:?} has no HIR body", op_res.method_def);
         };
 
-        let mir_fn_id = self.monomorphize_fn(op_res.method_def, op_res.generic_args.clone(), None);
+        let mono_args = self.substitute_generic_args(fb, &op_res.generic_args);
+        let mir_fn_id = self.monomorphize_fn(op_res.method_def, mono_args, None);
 
         let (block, self_operand) =
             self.lower_receiver_operand(fb, reciever_expr, op_res.method_def, block);
