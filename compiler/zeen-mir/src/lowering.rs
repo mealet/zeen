@@ -1590,7 +1590,7 @@ impl<'ctx> MirLowering<'ctx> {
                             .iter()
                             .map(|&t| self.display_type_name(t))
                             .collect();
-                        format!("{}${}", base_name, arg_names.join("_"))
+                        format!("{}[{}]", base_name, arg_names.join(", "))
                     }
                 }
             };
