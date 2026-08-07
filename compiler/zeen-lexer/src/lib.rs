@@ -113,15 +113,20 @@ impl<'inp> Tokenizer<'inp> {
                     }
 
                     // block comment
-                    '*' => {
-                        while !(self.is_eof() || self.first() == '*' && self.second() == '/') {
-                            if self.bump().is_none() {
-                                break;
-                            }
+                    '*' => loop {
+                        if self.is_eof() {
+                            break;
                         }
 
-                        self.bump_n(2);
-                    }
+                        if self.first() == '*' && self.second() == '/' {
+                            self.bump_n(2);
+                            break;
+                        }
+
+                        if self.bump().is_none() {
+                            break;
+                        }
+                    },
 
                     _ => break,
                 }
