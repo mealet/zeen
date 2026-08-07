@@ -1,11 +1,3 @@
-//! End-to-end pipeline tests: source text -> MIR.
-//!
-//! These wire the whole compiler (lexer -> parser -> resolve -> hir -> typecheck
-//! -> mir) exactly like `zeen/src/main.rs` and assert either that a program
-//! compiles successfully (and produces expected MIR) or that it fails with an
-//! expected diagnostic message. They cover behavior that only becomes visible
-//! after typechecking/lowering, where per-crate unit tests cannot reach.
-
 use std::{
     cell::RefCell,
     collections::HashSet,
@@ -23,7 +15,6 @@ use zeen_mir::lowering::lower_program;
 use zeen_parser::Parser;
 use zeen_typecheck::TypeChecker;
 
-/// All `.zn` files under `lib/core`, embedded like `zeen/build.rs` does.
 fn core_files() -> Vec<(&'static str, &'static str)> {
     let core_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../lib/core")
@@ -44,10 +35,6 @@ fn core_files() -> Vec<(&'static str, &'static str)> {
     files
 }
 
-/// Runs a single source string through the entire compiler pipeline.
-///
-/// Returns `Ok(printed_mir)` on success or `Err(all_error_messages)` on the
-/// first stage that fails (parse, resolve or typecheck).
 fn compile(src: &str) -> Result<String, Vec<String>> {
     let rodeo = Rc::new(RefCell::new(Rodeo::default()));
     let bump = Bump::default();
@@ -125,7 +112,6 @@ fn compile(src: &str) -> Result<String, Vec<String>> {
     ))
 }
 
-/// Asserts a program compiles and returns the printed MIR.
 fn compile_ok(src: &str) -> String {
     match compile(src) {
         Ok(mir) => mir,
@@ -136,8 +122,6 @@ fn compile_ok(src: &str) -> String {
     }
 }
 
-/// Asserts a program fails to compile and that some error message contains
-/// the given substring.
 fn compile_err_contains(src: &str, needle: &str) {
     match compile(src) {
         Ok(_) => panic!("expected compilation to fail with `{needle}`, but it succeeded"),
@@ -151,7 +135,6 @@ fn compile_err_contains(src: &str, needle: &str) {
     }
 }
 
-// --> Generic monomorphization
 #[test]
 fn generic_struct_and_fn_instantiate() {
     let mir = compile_ok(
@@ -180,7 +163,6 @@ fn main() {
     assert!(mir.contains("fn id[i32]"), "MIR:\n{mir}");
 }
 
-// --> Operator overloading: compound assignment dispatch and implement bindings
 #[test]
 fn compound_assign_dispatches_overloaded_operator() {
     let mir = compile_ok(
@@ -217,7 +199,6 @@ fn main() {
     assert!(mir.contains("fn add[i32]"), "MIR:\n{mir}");
 }
 
-// --> Bitwise shift binds the builtin pipeline interfaces (BitShl/BitShr)
 #[test]
 fn shift_left_on_u64_compiles() {
     compile_ok(
@@ -230,13 +211,11 @@ fn main() {
     );
 }
 
-// --> Unicode char literals (char-count based parsing)
 #[test]
 fn unicode_char_literal_single_codepoint() {
     compile_ok("fn main() { let c = 'λ'; }");
 }
 
-// --> Array length const-eval overflow is reported, not UB
 #[test]
 fn array_length_overflow_is_reported() {
     compile_err_contains(
@@ -245,7 +224,6 @@ fn array_length_overflow_is_reported() {
     );
 }
 
-// --> Unterminated literals/comment must produce a diagnostic, not a panic
 #[test]
 fn unterminated_block_comment_is_reported() {
     compile_err_contains("/* never closed", "unterminated block comment");
