@@ -651,9 +651,19 @@ impl<'res> TypeChecker<'res> {
                 let rhs_u64 = self.eval_const_u64(rhs)?;
 
                 let result = match op {
-                    BinaryOp::Add => lhs_u64 + rhs_u64,
+                    BinaryOp::Add => {
+                        let Some(sum) = lhs_u64.checked_add(rhs_u64) else {
+                            self.report(TypeError::ArrayLengthOverflow {
+                                src: expr.source.src(),
+                                span: expr.source.span,
+                            });
+                            return None;
+                        };
+
+                        sum
+                    }
                     BinaryOp::Sub => {
-                        if rhs_u64 > lhs_u64 || lhs_u64 - rhs_u64 == 0 {
+                        if rhs_u64 > lhs_u64 {
                             self.report(TypeError::ArrayLengthNotConst {
                                 src: expr.source.src(),
                                 span: expr.source.span,
@@ -664,15 +674,15 @@ impl<'res> TypeChecker<'res> {
                         lhs_u64 - rhs_u64
                     }
                     BinaryOp::Mul => {
-                        if lhs_u64 == 0 || rhs_u64 == 0 {
-                            self.report(TypeError::ArrayLengthNotConst {
+                        let Some(product) = lhs_u64.checked_mul(rhs_u64) else {
+                            self.report(TypeError::ArrayLengthOverflow {
                                 src: expr.source.src(),
                                 span: expr.source.span,
                             });
                             return None;
-                        }
+                        };
 
-                        lhs_u64 * rhs_u64
+                        product
                     }
                     BinaryOp::Div => {
                         if rhs_u64 == 0 {

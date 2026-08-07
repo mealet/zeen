@@ -231,6 +231,15 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("array length overflows the supported range")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::array_length_overflow))]
+    ArrayLengthOverflow {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("attempt to assign to const")]
     #[diagnostic(severity(Error), code(zeen::typechecker::assign_to_const))]
     AssignToConst {
