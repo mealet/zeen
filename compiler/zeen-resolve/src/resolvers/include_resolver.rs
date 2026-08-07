@@ -20,6 +20,7 @@ struct RawModule<'arena> {
     canonical_path: PathBuf,
     decls: &'arena [&'arena Declaration<'arena>],
     named_src: NamedSource<Arc<String>>,
+    is_core: bool,
 }
 
 pub struct IncludeResolver<'ctx> {
@@ -83,6 +84,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 decls: root_decls,
                 canonical_path: root_canonical.clone(),
                 named_src: root_named_src,
+                is_core: false,
             },
         );
 
@@ -101,6 +103,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                     decls: parsed_module,
                     canonical_path: Path::new(name).to_path_buf(),
                     named_src: NamedSource::new(name, source),
+                    is_core: true,
                 },
             );
         }
@@ -128,6 +131,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 decls: root_decls,
                 canonical_path: root_canonical.clone(),
                 named_src: root_named_src,
+                is_core: false,
             },
         );
 
@@ -274,6 +278,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                     named_src,
                     canonical_path: target_canonical.clone(),
                     decls: target_decls,
+                    is_core: false,
                 },
             );
 
@@ -385,10 +390,10 @@ impl<'ctx> IncludeResolver<'ctx> {
                 let name = self.interner_resolve(&entry.1);
 
                 let first_definition = {
-                    let (path, named_src) = self.module_source_of(first_decl);
+                    let (first_is_core, _, named_src) = self.module_source_of(first_decl);
 
-                    if path.to_string_lossy().starts_with("core") {
-                        let (_, redefinition_src) = self.module_source_of(decl);
+                    if first_is_core {
+                        let (_, _, redefinition_src) = self.module_source_of(decl);
 
                         self.errors.push(ResolveError::CoreReserved {
                             name,
@@ -408,7 +413,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                     }
                 };
 
-                let (_, second_src) = self.module_source_of(decl);
+                let (_, _, second_src) = self.module_source_of(decl);
                 let content = Arc::unwrap_or_clone(second_src.inner().clone());
                 let filename = second_src.name().to_string();
 
@@ -430,18 +435,22 @@ impl<'ctx> IncludeResolver<'ctx> {
     fn module_source_of(
         &self,
         decl: &'ctx Declaration<'ctx>,
-    ) -> (PathBuf, NamedSource<Arc<String>>) {
+    ) -> (bool, PathBuf, NamedSource<Arc<String>>) {
         let target_ptr = decl as *const Declaration as usize;
 
         for module in self.modules.values() {
             for d in module.decls {
                 if (*d as *const Declaration as usize) == target_ptr {
-                    return (module.canonical_path.clone(), module.named_src.clone());
+                    return (
+                        module.is_core,
+                        module.canonical_path.clone(),
+                        module.named_src.clone(),
+                    );
                 }
             }
         }
 
-        (PathBuf::new(), self.named_src())
+        (false, PathBuf::new(), self.named_src())
     }
 }
 
