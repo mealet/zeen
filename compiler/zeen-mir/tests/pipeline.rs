@@ -200,6 +200,23 @@ fn main() {
     assert!(mir.contains("fn add(%0: Vec2"), "MIR:\n{mir}");
 }
 
+#[test]
+fn generic_implement_binding_lowers() {
+    let mir = compile_ok(
+        r#"
+struct Box[T] { value: T }
+implement[U] Add: Box[U] {
+    fn add(self, other: Box[U]) Box[U] { return self; }
+}
+fn main() {
+    let a = Box { .value = 1 };
+    let b = a + a;
+}
+"#,
+    );
+    assert!(mir.contains("fn add[i32]"), "MIR:\n{mir}");
+}
+
 // --> Bitwise shift binds the builtin pipeline interfaces (BitShl/BitShr)
 #[test]
 fn shift_left_on_u64_compiles() {
@@ -228,8 +245,8 @@ fn array_length_overflow_is_reported() {
     );
 }
 
-// --> Unterminated literals must not panic (previously an infinite loop / panic)
+// --> Unterminated literals/comment must produce a diagnostic, not a panic
 #[test]
-fn unterminated_block_comment_does_not_panic() {
-    compile_ok("/* never closed");
+fn unterminated_block_comment_is_reported() {
+    compile_err_contains("/* never closed", "unterminated block comment");
 }

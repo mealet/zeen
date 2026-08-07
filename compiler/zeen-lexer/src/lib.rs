@@ -1,5 +1,7 @@
 use std::str::Chars;
 
+use miette::SourceSpan;
+
 pub use token::{Token, TokenKind};
 
 mod tests;
@@ -93,7 +95,9 @@ impl<'inp> Tokenizer<'inp> {
         }
     }
 
-    fn skip_whitespace(&mut self) {
+    fn skip_whitespace(&mut self) -> Option<SourceSpan> {
+        let mut unterminated: Option<SourceSpan> = None;
+
         while !self.is_eof() {
             let chr = self.first();
 
@@ -113,20 +117,28 @@ impl<'inp> Tokenizer<'inp> {
                     }
 
                     // block comment
-                    '*' => loop {
-                        if self.is_eof() {
-                            break;
-                        }
+                    '*' => {
+                        let start = self.pos_start();
 
-                        if self.first() == '*' && self.second() == '/' {
-                            self.bump_n(2);
-                            break;
-                        }
+                        loop {
+                            if self.is_eof() {
+                                unterminated =
+                                    Some(SourceSpan::new(start.into(), self.length - start));
+                                break;
+                            }
 
-                        if self.bump().is_none() {
-                            break;
+                            if self.first() == '*' && self.second() == '/' {
+                                self.bump_n(2);
+                                break;
+                            }
+
+                            if self.bump().is_none() {
+                                unterminated =
+                                    Some(SourceSpan::new(start.into(), self.length - start));
+                                break;
+                            }
                         }
-                    },
+                    }
 
                     _ => break,
                 }
@@ -136,12 +148,16 @@ impl<'inp> Tokenizer<'inp> {
         }
 
         self.reset_pos();
+
+        unterminated
     }
 
     // Tokenizers
 
     pub fn advance_token(&mut self) -> Token {
-        self.skip_whitespace();
+        if let Some(span) = self.skip_whitespace() {
+            return Token::new(TokenKind::LexError, span);
+        }
 
         let Some(first_char) = self.bump() else {
             return Token::new(TokenKind::Eof, (0, 0).into());

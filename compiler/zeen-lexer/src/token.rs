@@ -76,6 +76,7 @@ pub enum TokenKind {
     CloseBracket, // ]
 
     Unknown,
+    LexError, // reserved for lexer-level diagnostics (e.g. unterminated block comment)
     Eof,
 }
 

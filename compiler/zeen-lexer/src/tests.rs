@@ -574,6 +574,13 @@ fn unterminated_block_comment() {
 
     let mut tokens = tokenize(SOURCE);
 
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::LexError,
+            ..
+        })
+    ));
     assert_eq!(tokens.next(), None);
 }
 
@@ -583,6 +590,13 @@ fn unterminated_block_comment_with_body() {
 
     let mut tokens = tokenize(SOURCE);
 
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::LexError,
+            ..
+        })
+    ));
     assert_eq!(tokens.next(), None);
 }
 
@@ -592,5 +606,12 @@ fn unterminated_block_comment_then_code() {
 
     let mut tokens = tokenize(SOURCE);
 
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::LexError,
+            ..
+        })
+    ));
     assert_eq!(tokens.next(), None);
 }

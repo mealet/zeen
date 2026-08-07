@@ -15,6 +15,15 @@ pub enum ParserError {
         span: SourceSpan,
     },
 
+    #[error("unterminated block comment")]
+    #[diagnostic(severity(Error), code(zeen::parser::unterminated_block_comment))]
+    UnterminatedBlockComment {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("block comment is never closed")]
+        span: SourceSpan,
+    },
+
     #[error("unknown expression found")]
     #[diagnostic(severity(Error), code(zeen::parser::unknown_expression))]
     UnknownExpression {

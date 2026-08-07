@@ -43,7 +43,7 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
             .next()
             .unwrap_or(Token::new(TokenKind::Eof, (0, 0).into()));
 
-        Self {
+        let mut parser = Self {
             filename,
             src,
 
@@ -57,6 +57,22 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
 
             errors: Vec::new(),
             panic_mode: false,
+        };
+        parser.check_special_token();
+        parser
+    }
+
+    fn check_special_token(&mut self) {
+        if self.current.kind == TokenKind::Unknown {
+            self.report(ParserError::UnknownToken {
+                src: self.named_src(),
+                span: self.current.span,
+            });
+        } else if self.current.kind == TokenKind::LexError {
+            self.report(ParserError::UnterminatedBlockComment {
+                src: self.named_src(),
+                span: self.current.span,
+            });
         }
     }
 
@@ -141,12 +157,7 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
 
         self.current = next;
 
-        if self.current.kind == TokenKind::Unknown {
-            self.report(ParserError::UnknownToken {
-                src: self.named_src(),
-                span: self.current.span,
-            });
-        }
+        self.check_special_token();
 
         Some(prev)
     }
