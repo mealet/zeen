@@ -44,12 +44,13 @@ impl NodeKey {
     pub fn from_variant(v: &EnumVariant) -> Self {
         NodeKey(v as *const _ as usize)
     }
-
-    pub fn from_binding_slot(decl: &Declaration, index: usize) -> Self {
-        let base = decl as *const _ as usize;
-        NodeKey(base.wrapping_add(index + 1))
-    }
 }
+
+/// `<decl pointer, slot index>` pair used to key the generic bindings of an
+/// `implement` declaration without fabricating synthetic memory addresses the
+/// way `NodeKey::from_binding_slot` did (which risked aliasing real nodes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BindingSlotKey(pub usize, pub usize);
 
 /// Unique identifier for a resolver definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -98,6 +99,8 @@ pub struct ResolutionResult {
     pub expr_bindings: HashMap<NodeKey, Resolution>,
     /// Type Expr -> Resolution
     pub type_bindings: HashMap<NodeKey, Resolution>,
+    /// Generic bindings of `implement` decls -> Resolution (indexed by slot)
+    pub implement_generic_bindings: HashMap<BindingSlotKey, Resolution>,
     /// All known defs
     pub defs: HashMap<DefId, DefInfo>,
     /// (struct, interface) -> methods

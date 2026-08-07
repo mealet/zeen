@@ -9,7 +9,7 @@ use zeen_ast::{
     statements::{Statement, StatementKind},
     types::{TypeExpr, TypeKind},
 };
-use zeen_resolve::{DefId, DefKind, NodeKey, Resolution, ResolutionResult};
+use zeen_resolve::{BindingSlotKey, DefId, DefKind, NodeKey, Resolution, ResolutionResult};
 
 pub mod decl;
 pub mod expr;
@@ -246,8 +246,8 @@ impl<'res> HirLowering<'res> {
                     .map(|(i, _)| {
                         match self
                             .resolution
-                            .type_bindings
-                            .get(&NodeKey::from_binding_slot(decl, i))
+                            .implement_generic_bindings
+                            .get(&BindingSlotKey(decl as *const _ as usize, i))
                         {
                             Some(Resolution::Def(id)) => *id,
                             _ => DefId(u32::MAX),
