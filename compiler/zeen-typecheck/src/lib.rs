@@ -2835,12 +2835,12 @@ impl<'res> TypeChecker<'res> {
         match b {
             i8 | i16 | i32 | i64 | isize => &[
                 "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
-                "BitXor", "Shl", "Shr", "BitNot", "Neg",
+                "BitXor", "BitShl", "BitShr", "BitNot", "Neg",
             ],
 
             u8 | u16 | u32 | u64 | usize => &[
                 "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
-                "BitXor", "Shl", "Shr", "BitNot",
+                "BitXor", "BitShl", "BitShr", "BitNot",
             ],
 
             f32 | f64 => &["Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Neg"],
