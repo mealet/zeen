@@ -460,3 +460,30 @@ fn complex_symbols() {
 
     assert_eq!(tokens.next(), None);
 }
+
+#[test]
+fn unterminated_block_comment() {
+    const SOURCE: &str = "/*";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn unterminated_block_comment_with_body() {
+    const SOURCE: &str = "/* abc with * and / chars but no close";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn unterminated_block_comment_then_code() {
+    const SOURCE: &str = "/* unterminated\nlet a = 1;";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(tokens.next(), None);
+}
