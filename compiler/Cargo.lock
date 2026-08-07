@@ -634,9 +634,13 @@ dependencies = [
 name = "zeen-mir"
 version = "0.0.0"
 dependencies = [
+ "bumpalo",
  "lasso",
  "zeen-ast",
+ "zeen-driver",
  "zeen-hir",
+ "zeen-lexer",
+ "zeen-parser",
  "zeen-resolve",
  "zeen-typecheck",
  "zeen-types",

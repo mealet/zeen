@@ -4,7 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc},
+    sync::Arc,
 };
 
 use bumpalo::Bump;
@@ -20,6 +20,7 @@ struct RawModule<'arena> {
     canonical_path: PathBuf,
     decls: &'arena [&'arena Declaration<'arena>],
     named_src: NamedSource<Arc<String>>,
+    is_core: bool,
 }
 
 pub struct IncludeResolver<'ctx> {
@@ -83,6 +84,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 decls: root_decls,
                 canonical_path: root_canonical.clone(),
                 named_src: root_named_src,
+                is_core: false,
             },
         );
 
@@ -101,6 +103,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                     decls: parsed_module,
                     canonical_path: Path::new(name).to_path_buf(),
                     named_src: NamedSource::new(name, source),
+                    is_core: true,
                 },
             );
         }
@@ -128,6 +131,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 decls: root_decls,
                 canonical_path: root_canonical.clone(),
                 named_src: root_named_src,
+                is_core: false,
             },
         );
 
@@ -274,6 +278,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                     named_src,
                     canonical_path: target_canonical.clone(),
                     decls: target_decls,
+                    is_core: false,
                 },
             );
 
@@ -385,17 +390,10 @@ impl<'ctx> IncludeResolver<'ctx> {
                 let name = self.interner_resolve(&entry.1);
 
                 let first_definition = {
-                    let path = self.module_path_of(first_decl);
+                    let (first_is_core, _, named_src) = self.module_source_of(first_decl);
 
-                    if path.to_string_lossy().starts_with("core") {
-                        let redefinition_src = {
-                            let path = self.module_path_of(decl);
-
-                            let content = fs::read_to_string(&path).expect("why tf this happened");
-                            let filename = path.file_name().unwrap().to_string_lossy();
-
-                            NamedSource::new(filename, Arc::new(content))
-                        };
+                    if first_is_core {
+                        let (_, _, redefinition_src) = self.module_source_of(decl);
 
                         self.errors.push(ResolveError::CoreReserved {
                             name,
@@ -406,29 +404,22 @@ impl<'ctx> IncludeResolver<'ctx> {
                         continue;
                     }
 
-                    let content = fs::read_to_string(&path).expect("why tf this happened");
-                    let filename = path.file_name().unwrap().to_string_lossy();
-
-                    let named_source = NamedSource::new(filename, content);
+                    let content = Arc::unwrap_or_clone(named_src.inner().clone());
+                    let filename = named_src.name().to_string();
 
                     crate::error::DuplicateLocation {
-                        src: named_source,
+                        src: NamedSource::new(filename, content),
                         span: *first_span,
                     }
                 };
 
-                let second_definition = {
-                    let path = self.module_path_of(decl);
+                let (_, _, second_src) = self.module_source_of(decl);
+                let content = Arc::unwrap_or_clone(second_src.inner().clone());
+                let filename = second_src.name().to_string();
 
-                    let content = fs::read_to_string(&path).expect("why tf this happened");
-                    let filename = path.file_name().unwrap().to_string_lossy();
-
-                    let named_source = NamedSource::new(filename, content);
-
-                    crate::error::DuplicateLocation {
-                        src: named_source,
-                        span,
-                    }
+                let second_definition = crate::error::DuplicateLocation {
+                    src: NamedSource::new(filename, content),
+                    span,
                 };
 
                 self.errors.push(ResolveError::DuplicateDefinition {
@@ -441,19 +432,25 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
     }
 
-    // fuck... i'll refactor this later (maybe)
-    fn module_path_of(&self, decl: &'ctx Declaration<'ctx>) -> PathBuf {
+    fn module_source_of(
+        &self,
+        decl: &'ctx Declaration<'ctx>,
+    ) -> (bool, PathBuf, NamedSource<Arc<String>>) {
         let target_ptr = decl as *const Declaration as usize;
 
         for module in self.modules.values() {
             for d in module.decls {
                 if (*d as *const Declaration as usize) == target_ptr {
-                    return module.canonical_path.clone();
+                    return (
+                        module.is_core,
+                        module.canonical_path.clone(),
+                        module.named_src.clone(),
+                    );
                 }
             }
         }
 
-        PathBuf::new()
+        (false, PathBuf::new(), self.named_src())
     }
 }
 

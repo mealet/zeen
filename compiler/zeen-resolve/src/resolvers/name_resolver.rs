@@ -13,7 +13,7 @@ use zeen_ast::{
 
 use crate::{
     error::ResolveError,
-    resolution::{DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult},
+    resolution::{BindingSlotKey, DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult},
     same_source_file,
     symbol_table::{ScopeKind, SymbolTable},
 };
@@ -433,8 +433,8 @@ impl<'ctx> NameResolver {
                     };
 
                     self.result
-                        .type_bindings
-                        .insert(NodeKey::from_binding_slot(decl, idx), resolution);
+                        .implement_generic_bindings
+                        .insert(BindingSlotKey(decl as *const _ as usize, idx), resolution);
                 }
 
                 let mut methods_ids = Vec::new();

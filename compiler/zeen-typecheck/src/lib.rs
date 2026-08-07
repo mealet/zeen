@@ -651,9 +651,19 @@ impl<'res> TypeChecker<'res> {
                 let rhs_u64 = self.eval_const_u64(rhs)?;
 
                 let result = match op {
-                    BinaryOp::Add => lhs_u64 + rhs_u64,
+                    BinaryOp::Add => {
+                        let Some(sum) = lhs_u64.checked_add(rhs_u64) else {
+                            self.report(TypeError::ArrayLengthOverflow {
+                                src: expr.source.src(),
+                                span: expr.source.span,
+                            });
+                            return None;
+                        };
+
+                        sum
+                    }
                     BinaryOp::Sub => {
-                        if rhs_u64 > lhs_u64 || lhs_u64 - rhs_u64 == 0 {
+                        if rhs_u64 > lhs_u64 {
                             self.report(TypeError::ArrayLengthNotConst {
                                 src: expr.source.src(),
                                 span: expr.source.span,
@@ -664,15 +674,15 @@ impl<'res> TypeChecker<'res> {
                         lhs_u64 - rhs_u64
                     }
                     BinaryOp::Mul => {
-                        if lhs_u64 == 0 || rhs_u64 == 0 {
-                            self.report(TypeError::ArrayLengthNotConst {
+                        let Some(product) = lhs_u64.checked_mul(rhs_u64) else {
+                            self.report(TypeError::ArrayLengthOverflow {
                                 src: expr.source.src(),
                                 span: expr.source.span,
                             });
                             return None;
-                        }
+                        };
 
-                        lhs_u64 * rhs_u64
+                        product
                     }
                     BinaryOp::Div => {
                         if rhs_u64 == 0 {
@@ -2825,12 +2835,12 @@ impl<'res> TypeChecker<'res> {
         match b {
             i8 | i16 | i32 | i64 | isize => &[
                 "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
-                "BitXor", "Shl", "Shr", "BitNot", "Neg",
+                "BitXor", "BitShl", "BitShr", "BitNot", "Neg",
             ],
 
             u8 | u16 | u32 | u64 | usize => &[
                 "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
-                "BitXor", "Shl", "Shr", "BitNot",
+                "BitXor", "BitShl", "BitShr", "BitNot",
             ],
 
             f32 | f64 => &["Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Neg"],
@@ -3129,8 +3139,27 @@ impl<'res> TypeChecker<'res> {
         let Some(impl_sig) = self.fn_sigs.get(&impl_method_def) else {
             return;
         };
-        let impl_params = impl_sig.params.clone();
-        let impl_ret = impl_sig.ret;
+        let impl_params_raw = impl_sig.params.clone();
+        let impl_ret_raw = impl_sig.ret;
+
+        // `implement[U] Add: Box[U]` binds the implement generic (U) positionally
+        // to the object struct's generic slot. Substitute them so the impl
+        // signature (written with U) can be compared against the interface one
+        // (written with the struct's own generic).
+        let struct_generic_args: Vec<TypeId> = match self.result.interner.get(self_struct_ty) {
+            Type::Struct { generic_args, .. } => generic_args.clone(),
+            _ => Vec::new(),
+        };
+        let mut impl_subst: HashMap<DefId, TypeId> = HashMap::new();
+        for (imp_g, struct_arg) in imp_generics.iter().zip(struct_generic_args.iter()) {
+            impl_subst.insert(*imp_g, *struct_arg);
+        }
+
+        let impl_params: Vec<TypeId> = impl_params_raw
+            .iter()
+            .map(|&p| self.substitute_generics(p, &impl_subst))
+            .collect();
+        let impl_ret = self.substitute_generics(impl_ret_raw, &impl_subst);
 
         let params_match = iface_params.len() == impl_params.len()
             && iface_params

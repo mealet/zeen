@@ -217,6 +217,12 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    fn substitute_generic_args(&mut self, fb: &FnBuilder, args: &[TypeId]) -> Vec<TypeId> {
+        args.iter()
+            .map(|&t| self.substitute_fn_type(fb, t))
+            .collect()
+    }
+
     fn struct_info(&self, def_id: DefId) -> Option<&zeen_types::StructTypeInfo> {
         self.typecheck.struct_info.get(&def_id)
     }
@@ -610,7 +616,8 @@ impl<'ctx> MirLowering<'ctx> {
                 };
 
                 let fn_def = resolution.fn_def;
-                let generic_args = resolution.generic_args.clone();
+                let raw_args = resolution.generic_args.clone();
+                let generic_args = self.substitute_generic_args(fb, &raw_args);
 
                 let Some(hir_fn) = self.hir_fns_by_def.get(&fn_def).cloned() else {
                     unreachable!("must been recorded this table");
@@ -839,6 +846,20 @@ impl<'ctx> MirLowering<'ctx> {
         method_def_id: DefId,
         block: BlockId,
     ) -> (BlockId, Operand) {
+        let obj_ty = self.expr_type(fb, object);
+        let (block, place) = self.lower_expr_to_place(fb, object, block);
+
+        self.lower_place_receiver_operand(fb, place, obj_ty, method_def_id, block)
+    }
+
+    fn lower_place_receiver_operand(
+        &mut self,
+        fb: &mut FnBuilder,
+        place: Place,
+        obj_ty: TypeId,
+        method_def_id: DefId,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
         let method_ty = self
             .typecheck
             .def_types
@@ -850,9 +871,6 @@ impl<'ctx> MirLowering<'ctx> {
             Type::Fn { params, .. } if !params.is_empty() => Some(params[0]),
             _ => None,
         };
-
-        let obj_ty = self.expr_type(fb, object);
-        let (block, place) = self.lower_expr_to_place(fb, object, block);
 
         match expected_self_ty.map(|t| self.typecheck.interner.get(t).clone()) {
             Some(Type::Struct { .. }) | None => (block, self.place_to_operand(place, obj_ty)),
@@ -1019,17 +1037,33 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
         result_ty: TypeId,
     ) -> (BlockId, Operand) {
-        let Some(hir_fn) = self.hir_fns_by_def.get(&op_res.method_def).cloned() else {
-            panic!("operator method {:?} has no HIR body", op_res.method_def);
-        };
-
-        let mir_fn_id = self.monomorphize_fn(op_res.method_def, op_res.generic_args.clone(), None);
-
         let (block, self_operand) =
             self.lower_receiver_operand(fb, reciever_expr, op_res.method_def, block);
 
+        self.lower_operator_method_call_from_operands(
+            fb,
+            op_res,
+            self_operand,
+            extra_args.to_vec(),
+            block,
+            result_ty,
+        )
+    }
+
+    fn lower_operator_method_call_from_operands(
+        &mut self,
+        fb: &mut FnBuilder,
+        op_res: &OperatorResolution,
+        self_operand: Operand,
+        extra_args: Vec<Operand>,
+        block: BlockId,
+        result_ty: TypeId,
+    ) -> (BlockId, Operand) {
+        let mono_args = self.substitute_generic_args(fb, &op_res.generic_args);
+        let mir_fn_id = self.monomorphize_fn(op_res.method_def, mono_args, None);
+
         let mut args = vec![self_operand];
-        args.extend_from_slice(extra_args);
+        args.extend(extra_args);
 
         let dest = fb.new_temp(result_ty);
         let next = fb.new_block();
@@ -1123,8 +1157,37 @@ impl<'ctx> MirLowering<'ctx> {
 
             HirStmtKind::CompoundAssign { object, value, op } => {
                 let (block, place) = self.lower_expr_to_place(fb, object, block);
-
                 let place_ty = self.place_type(fb, &place);
+
+                if let Some(op_res) = self.typecheck.operator_resolutions.get(&object.id).cloned() {
+                    let (block, rhs_operand) = self.lower_expr_to_operand(fb, value, block);
+                    let (block, self_operand) = self.lower_place_receiver_operand(
+                        fb,
+                        place.clone(),
+                        place_ty,
+                        op_res.method_def,
+                        block,
+                    );
+                    let (block, result_operand) = self.lower_operator_method_call_from_operands(
+                        fb,
+                        &op_res,
+                        self_operand,
+                        vec![rhs_operand],
+                        block,
+                        place_ty,
+                    );
+
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place,
+                            rvalue: Rvalue::Use(result_operand),
+                        },
+                    );
+
+                    return block;
+                }
+
                 let lhs_operand = self.place_to_operand(place.clone(), place_ty);
 
                 let (block, rhs_operand) = self.lower_expr_to_operand(fb, value, block);
@@ -1582,7 +1645,7 @@ impl<'ctx> MirLowering<'ctx> {
                             .iter()
                             .map(|&t| self.display_type_name(t))
                             .collect();
-                        format!("{}${}", base_name, arg_names.join("_"))
+                        format!("{}[{}]", base_name, arg_names.join(", "))
                     }
                 }
             };

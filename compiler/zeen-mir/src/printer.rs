@@ -106,7 +106,11 @@ impl<'a> MirPrinter<'a> {
 
         let name = self.display_type(ty);
 
-        let field_strs: Vec<String> = layout.fields.iter().map(|f| self.display_type(f.ty)).collect();
+        let field_strs: Vec<String> = layout
+            .fields
+            .iter()
+            .map(|f| self.display_type(f.ty))
+            .collect();
 
         let _ = writeln!(out, "struct {} {{ {} }};", name, field_strs.join(", "));
     }

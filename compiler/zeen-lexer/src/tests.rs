@@ -93,6 +93,113 @@ fn reference() {
 }
 
 #[test]
+fn ampersand_whitespace_disambiguation() {
+    const SOURCE: &str = "a && b a&&b a &&b a & b a &b & x &x";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(0.into(), 1)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::BooleanAnd,
+            SourceSpan::new(2.into(), 2)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(5.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(7.into(), 1)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::BooleanAnd,
+            SourceSpan::new(8.into(), 2)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(10.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(12.into(), 1)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::BooleanAnd,
+            SourceSpan::new(14.into(), 2)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(16.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(18.into(), 1)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::Ampersand,
+            SourceSpan::new(20.into(), 1)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(22.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(24.into(), 1)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ref, SourceSpan::new(26.into(), 1)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(27.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::Ampersand,
+            SourceSpan::new(29.into(), 1)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(31.into(), 1)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ref, SourceSpan::new(33.into(), 1)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(34.into(), 1)))
+    );
+
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
 fn integers() {
     const SOURCE: &str = "123 0b101 0x1aF 0o14";
 
@@ -458,5 +565,53 @@ fn complex_symbols() {
         Some(Token::new(TokenKind::RShift, SourceSpan::new(21.into(), 2)))
     );
 
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn unterminated_block_comment() {
+    const SOURCE: &str = "/*";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::LexError,
+            ..
+        })
+    ));
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn unterminated_block_comment_with_body() {
+    const SOURCE: &str = "/* abc with * and / chars but no close";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::LexError,
+            ..
+        })
+    ));
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn unterminated_block_comment_then_code() {
+    const SOURCE: &str = "/* unterminated\nlet a = 1;";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::LexError,
+            ..
+        })
+    ));
     assert_eq!(tokens.next(), None);
 }

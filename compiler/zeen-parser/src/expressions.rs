@@ -344,8 +344,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             LiteralKind::ByteChar { terminated, empty } => {
                 self.parse_literal_char(true, terminated, empty)
             }
-            LiteralKind::Str { .. } => self.parse_literal_string(),
-            LiteralKind::RawStr { .. } => self.parse_literal_raw_string(),
+            LiteralKind::Str { terminated } => self.parse_literal_string(terminated),
+            LiteralKind::RawStr { terminated } => self.parse_literal_raw_string(terminated),
             LiteralKind::InvalidRawStr => {
                 self.p.report(ParserError::InvalidLiteral {
                     message: "invalid raw string literal found".into(),
@@ -469,36 +469,33 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
         let inner_str = &str_value[1..str_value.len() - 1];
 
-        let inner_value = match inner_str.len() {
-            1 => inner_str.chars().nth(0).unwrap(),
-            2 => {
-                if let Some('\\') = inner_str.chars().nth(0) {
-                    let escape = inner_str.chars().nth(1).unwrap();
+        let chars: Vec<char> = inner_str.chars().collect();
 
-                    character_escape(escape).unwrap_or_else(|| {
-                        self.p.report(ParserError::InvalidCharacterEscape {
-                            src: self.p.named_src(),
-                            span,
-                        });
+        let inner_value = match chars.as_slice() {
+            ['\\', escaped] => character_escape(*escaped).unwrap_or_else(|| {
+                self.p.report(ParserError::InvalidCharacterEscape {
+                    src: self.p.named_src(),
+                    span,
+                });
 
-                        ' '
-                    })
-                } else {
-                    self.p.report(ParserError::InvalidLiteral {
-                        message: "invalid char literal".into(),
-                        label: "`char` literal must be a signle character".into(),
-                        src: self.p.named_src(),
-                        span,
-                    });
+                ' '
+            }),
 
-                    ' '
-                }
+            ['\\'] => {
+                self.p.report(ParserError::InvalidCharacterEscape {
+                    src: self.p.named_src(),
+                    span,
+                });
+
+                ' '
             }
+
+            [chr] => *chr,
 
             _ => {
                 self.p.report(ParserError::InvalidLiteral {
                     message: "invalid char literal".into(),
-                    label: "`char` literal must be a signle character".into(),
+                    label: "`char` literal must be a single character".into(),
                     src: self.p.named_src(),
                     span,
                 });
@@ -532,15 +529,23 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         Some(expr)
     }
 
-    fn parse_literal_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_literal_string(&mut self, terminated: bool) -> Option<&'ctx Expression<'ctx>> {
         let token = self.p.current();
         let span = token.span;
 
+        if !terminated {
+            self.p.report(ParserError::InvalidLiteral {
+                message: "invalid string literal".into(),
+                label: "string literal is not closed".into(),
+                src: self.p.named_src(),
+                span,
+            });
+
+            return None;
+        }
+
         let token_slice =
             self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_owned();
-
-        debug_assert_eq!(token_slice.chars().nth(0), Some('"'));
-        debug_assert_eq!(token_slice.chars().last(), Some('"'));
 
         let raw_str = &token_slice[1..token_slice.len() - 1];
 
@@ -591,15 +596,23 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         Some(expr)
     }
 
-    fn parse_literal_raw_string(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    fn parse_literal_raw_string(&mut self, terminated: bool) -> Option<&'ctx Expression<'ctx>> {
         let token = self.p.current();
         let span = token.span;
 
+        if !terminated {
+            self.p.report(ParserError::InvalidLiteral {
+                message: "invalid raw string literal".into(),
+                label: "raw string literal is not closed".into(),
+                src: self.p.named_src(),
+                span,
+            });
+
+            return None;
+        }
+
         let token_slice =
             self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_owned();
-
-        debug_assert_eq!(token_slice.chars().nth(0), Some('r'));
-        debug_assert_eq!(token_slice.chars().last(), Some('#'));
 
         let raw_str = &token_slice["r#\"".len()..token_slice.len() - "\"#".len()];
 
@@ -1334,6 +1347,37 @@ mod tests {
     }
 
     #[test]
+    fn literal_char_unicode() {
+        const SRC: &str = "'λ' '😀'";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        {
+            let expr = expr_parser.parse().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::Char('λ')),
+                    span: (0, 4).into()
+                }
+            );
+        }
+
+        {
+            let expr = expr_parser.parse().unwrap();
+
+            assert_eq!(
+                expr,
+                &Expression {
+                    kind: ExpressionKind::Literal(expressions::Literal::Char('😀')),
+                    span: (5, 6).into()
+                }
+            );
+        }
+    }
+
+    #[test]
     fn literal_bytechar() {
         const SRC: &str = "b'a' b'\\0' b'\\\\'";
 
@@ -1458,6 +1502,30 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn unterminated_string_literal_reports_error() {
+        const SRC: &str = "\"abc def";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let expr = expr_parser.parse();
+
+        assert!(expr.is_none());
+        assert!(!parser.errors.is_empty());
+    }
+
+    #[test]
+    fn unterminated_raw_string_literal_reports_error() {
+        const SRC: &str = "r#\"abc def";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let expr = expr_parser.parse();
+
+        assert!(expr.is_none());
+        assert!(!parser.errors.is_empty());
     }
 
     #[test]
