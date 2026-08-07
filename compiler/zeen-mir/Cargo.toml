@@ -15,3 +15,9 @@ zeen-resolve = {path = "../zeen-resolve"}
 zeen-typecheck = {path = "../zeen-typecheck"}
 zeen-types = {path = "../zeen-types"}
 zeen-hir = {path = "../zeen-hir"}
+
+[dev-dependencies]
+bumpalo = "3.20.2"
+zeen-lexer = {path = "../zeen-lexer"}
+zeen-parser = {path = "../zeen-parser"}
+zeen-driver = {path = "../zeen-driver"}
