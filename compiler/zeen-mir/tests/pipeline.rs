@@ -248,6 +248,18 @@ fn unused_core_functions_are_not_lowered_without_main() {
 }
 
 #[test]
+fn user_struct_layouts_are_printed_without_main() {
+    let mir = compile_ok(
+        r#"
+struct Vector { x: i32, y: i32 }
+struct Box[T] { value: T }
+"#,
+    );
+    assert!(mir.contains("struct Vector { i32, i32 };"), "MIR:\n{mir}");
+    assert!(mir.contains("struct Box[T] { T };"), "MIR:\n{mir}");
+}
+
+#[test]
 fn user_functions_are_lowered_without_main() {
     let mir = compile_ok("fn unused() i32 { return 42; }");
     assert!(mir.contains("fn unused() i32"), "MIR:\n{mir}");
