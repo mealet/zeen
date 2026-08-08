@@ -786,6 +786,15 @@ mod tests {
                 .expect("function not found")
         }
 
+        fn interface_decl(&self, name: &str) -> Rc<HirInterface> {
+            self.find_by_name(name)
+                .and_then(|kind| match kind {
+                    HirDeclKind::Interface(i) => Some(i.clone()),
+                    _ => None,
+                })
+                .expect("interface not found")
+        }
+
         fn enum_decl(&self, name: &str) -> Rc<HirEnum> {
             self.find_by_name(name)
                 .and_then(|kind| match kind {
@@ -793,6 +802,17 @@ mod tests {
                     _ => None,
                 })
                 .expect("enum not found")
+        }
+
+        fn implement_decl(&self) -> Rc<HirImplement> {
+            self.module
+                .decls
+                .iter()
+                .find_map(|decl| match &decl.kind {
+                    HirDeclKind::Implement(i) => Some(i.clone()),
+                    _ => None,
+                })
+                .expect("no implement decl in module")
         }
 
         fn find_by_name(&self, name: &str) -> Option<&HirDeclKind> {
@@ -984,6 +1004,23 @@ mod tests {
     }
 
     #[test]
+    fn interface_lowers_with_methods() {
+        let fx = lower_ok("interface Named { fn name(self) *char; }");
+        let named = fx.interface_decl("Named");
+
+        assert!(!named.is_pub);
+        assert_eq!(named.methods.len(), 1);
+
+        let method = &named.methods[0];
+        let HirDeclKind::Fn(f) = &method.kind else {
+            panic!("interface method must lower to a function")
+        };
+
+        assert!(f.body.is_none());
+        assert_eq!(f.params.len(), 1);
+    }
+
+    #[test]
     fn enum_lowers_with_variants() {
         let fx = lower_ok("enum Color { Red, Green, Blue }");
         let color = fx.enum_decl("Color");
@@ -996,5 +1033,19 @@ mod tests {
         for variant in &color.variants {
             assert_ne!(variant.def_id, DefId(u32::MAX));
         }
+    }
+
+    #[test]
+    fn implement_lowers_interface_and_object() {
+        let fx = lower_ok(
+            "interface Pretty { fn pretty(self) i32; } \
+             struct Foo { value: i32 } \
+             implement Pretty : Foo { fn pretty(self) i32 { return self.value; } }",
+        );
+        let implement = fx.implement_decl();
+
+        assert!(implement.interface.is_some());
+        assert!(implement.object.is_some());
+        assert_eq!(implement.methods.len(), 1);
     }
 }
