@@ -733,3 +733,173 @@ impl<'res> HirLowering<'res> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decl::HirDeclKind;
+    use crate::types::HirTypeKind;
+    use bumpalo::Bump;
+    use lasso::Rodeo;
+    use std::{
+        cell::RefCell,
+        collections::HashSet,
+        path::{Path, PathBuf},
+        rc::Rc,
+        sync::Arc,
+    };
+    use zeen_ast::types::BuiltinType;
+    use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
+    use zeen_parser::Parser;
+
+    const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
+
+    #[derive(Debug)]
+    struct Fixture {
+        rodeo: Rc<RefCell<Rodeo>>,
+        module: HirModule,
+    }
+
+    impl Fixture {
+        fn name(&self, spur: Spur) -> String {
+            self.rodeo.borrow().resolve(&spur).to_string()
+        }
+
+        fn struct_decl(&self, name: &str) -> Rc<HirStruct> {
+            self.find_by_name(name)
+                .and_then(|kind| match kind {
+                    HirDeclKind::Struct(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .expect("struct not found")
+        }
+
+        fn enum_decl(&self, name: &str) -> Rc<HirEnum> {
+            self.find_by_name(name)
+                .and_then(|kind| match kind {
+                    HirDeclKind::Enum(e) => Some(e.clone()),
+                    _ => None,
+                })
+                .expect("enum not found")
+        }
+
+        fn find_by_name(&self, name: &str) -> Option<&HirDeclKind> {
+            self.module.decls.iter().find_map(|decl| {
+                let matches = match &decl.kind {
+                    HirDeclKind::Fn(f) => self.name(f.name.0) == name,
+                    HirDeclKind::Struct(s) => self.name(s.name.0) == name,
+                    HirDeclKind::Interface(i) => self.name(i.name.0) == name,
+                    HirDeclKind::Enum(e) => self.name(e.name.0) == name,
+                    _ => false,
+                };
+
+                matches.then_some(&decl.kind)
+            })
+        }
+    }
+
+    fn lower_full(src: &str) -> Result<Fixture, Vec<String>> {
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let bump = Bump::default();
+        let content = Arc::new(src.to_string());
+        let filename = Rc::new("test.zn".to_string());
+
+        let mut context = CompilationContext {
+            paths: PathsConfig {
+                project_root: PathBuf::from("/"),
+                std_root: None,
+                linked: HashSet::new(),
+            },
+            core_files: vec![("core.ops", CORE_OPS)],
+            mode: CompilationMode::Debug,
+            output: CompilationOutput::EmitMIR,
+        };
+
+        let mut tokens = zeen_lexer::tokenize(&content);
+        let mut parser = Parser::new(
+            Rc::clone(&filename),
+            Arc::clone(&content),
+            &mut tokens,
+            &bump,
+            Rc::clone(&rodeo),
+        );
+        let program = parser
+            .parse_program()
+            .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())?;
+
+        let lookup_rodeo = Rc::clone(&rodeo);
+
+        let (resolved_program, resolution) = zeen_resolve::resolve(
+            Rc::clone(&filename),
+            Arc::clone(&content),
+            Path::new("/test.zn"),
+            program,
+            &bump,
+            rodeo,
+            &mut context,
+        )
+        .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())?;
+
+        let mut hir_lowering = HirLowering::new(&resolution, Rc::clone(&lookup_rodeo));
+        let module = hir_lowering.lower_module(resolved_program);
+
+        Ok(Fixture {
+            rodeo: lookup_rodeo,
+            module,
+        })
+    }
+
+    fn lower_ok(src: &str) -> Fixture {
+        lower_full(src).unwrap_or_else(|errors| {
+            panic!(
+                "expected lowering to succeed, got errors:\n{}",
+                errors.join("\n")
+            )
+        })
+    }
+
+    #[test]
+    fn struct_lowers_with_fields_types_and_names() {
+        let fx = lower_ok("struct Foo { x: i32, y: bool }");
+        let foo = fx.struct_decl("Foo");
+
+        assert_eq!(foo.fields.len(), 2);
+        assert_eq!(fx.name(foo.fields[0].name), "x");
+        assert_eq!(fx.name(foo.fields[1].name), "y");
+
+        assert!(matches!(
+            foo.fields[0].ty.kind,
+            HirTypeKind::Builtin(BuiltinType::i32)
+        ));
+        assert!(matches!(
+            foo.fields[1].ty.kind,
+            HirTypeKind::Builtin(BuiltinType::bool)
+        ));
+
+        assert_ne!(foo.fields[0].def_id, DefId(u32::MAX));
+        assert_ne!(foo.fields[1].def_id, DefId(u32::MAX));
+    }
+
+    #[test]
+    fn visibility_flag_is_propagated_to_struct() {
+        let fx = lower_ok("pub struct Foo { x: i32 } struct Bar { y: i32 }");
+
+        assert!(fx.struct_decl("Foo").is_pub);
+        assert!(!fx.struct_decl("Bar").is_pub);
+    }
+
+    #[test]
+    fn enum_lowers_with_variants() {
+        let fx = lower_ok("enum Color { Red, Green, Blue }");
+        let color = fx.enum_decl("Color");
+
+        assert_eq!(color.variants.len(), 3);
+        assert_eq!(fx.name(color.variants[0].name), "Red");
+        assert_eq!(fx.name(color.variants[1].name), "Green");
+        assert_eq!(fx.name(color.variants[2].name), "Blue");
+
+        for variant in &color.variants {
+            assert_ne!(variant.def_id, DefId(u32::MAX));
+        }
+    }
+}
