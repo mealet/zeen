@@ -60,6 +60,9 @@ pub struct DataFlow<'ctx> {
     field_types: HashMap<DefId, TypeId>,
     /// Snapshot of the function currently being analyzed.
     snapshot: Option<FunctionSnapshot>,
+    /// Source of the statement/terminator currently being processed, used to
+    /// point borrow/move diagnostics at the offending use site.
+    current_source: Option<Source>,
 
     diagnostics: Vec<FlowError>,
     functions_with_drops: Vec<MirFunctionId>,
@@ -89,6 +92,7 @@ impl<'ctx> DataFlow<'ctx> {
             read_locals: HashSet::new(),
             field_types,
             snapshot: None,
+            current_source: None,
             diagnostics: Vec::new(),
             functions_with_drops: Vec::new(),
         }
@@ -158,6 +162,7 @@ impl<'ctx> DataFlow<'ctx> {
                 .unwrap_or_default();
 
             let block = &blocks[block_id.0 as usize];
+            self.current_source = None;
             for stmt in &block.statements {
                 self.apply_statement(stmt);
             }
@@ -184,7 +189,12 @@ impl<'ctx> DataFlow<'ctx> {
     /// Applies a statement's effect to `self.current`.
     fn apply_statement(&mut self, stmt: &MirStatement) {
         match stmt {
-            MirStatement::Assign { place, rvalue } => {
+            MirStatement::Assign {
+                place,
+                rvalue,
+                source,
+            } => {
+                self.current_source = source.clone();
                 match rvalue {
                     Rvalue::Use(operand) => self.consume_operand(operand),
                     Rvalue::BinaryOp { lhs, rhs, .. } => {
@@ -210,9 +220,12 @@ impl<'ctx> DataFlow<'ctx> {
                 self.current.write_place(place);
             }
             MirStatement::Drop(place) => {
+                self.current_source = None;
                 self.consume_move_place(place);
             }
-            MirStatement::StorageLive(_) | MirStatement::StorageDead(_) | MirStatement::Nop => {}
+            MirStatement::StorageLive(_) | MirStatement::StorageDead(_) | MirStatement::Nop => {
+                self.current_source = None;
+            }
         }
     }
 
@@ -225,21 +238,38 @@ impl<'ctx> DataFlow<'ctx> {
                 self.consume_operand(discriminant);
             }
             Terminator::Call {
-                args, destination, ..
+                args,
+                destination,
+                source,
+                ..
             }
             | Terminator::MacroCall {
-                args, destination, ..
+                args,
+                destination,
+                source,
+                ..
             } => {
+                self.current_source = source.clone();
                 for arg in args {
                     self.consume_operand(arg);
                 }
                 self.current.write_place(destination);
             }
             Terminator::Return(operand) => {
+                self.current_source = None;
                 self.consume_operand(operand);
                 self.exit_states.push(self.current.clone());
             }
-            Terminator::Unreachable => {}
+            Terminator::Goto(_) => {
+                self.current_source = None;
+            }
+            Terminator::SwitchInt { discriminant, .. } => {
+                self.current_source = None;
+                self.consume_operand(discriminant);
+            }
+            Terminator::Unreachable => {
+                self.current_source = None;
+            }
         }
     }
 
@@ -288,8 +318,8 @@ impl<'ctx> DataFlow<'ctx> {
     }
 
     fn read_error(&self, place: &Place, outcome: ReadOutcome) -> Option<FlowError> {
-        let (name, source) = self.local_name_and_source(place.local)?;
-        let src = source?;
+        let (name, _) = self.local_name_and_source(place.local)?;
+        let src = self.use_source(place.local)?;
         let span = src.span;
 
         match outcome {
@@ -314,11 +344,22 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
+    /// Best available source for a read of `local`: the current statement or
+    /// terminator, falling back to the local's declaration.
+    fn use_source(&self, local: LocalId) -> Option<zeen_ast::Source> {
+        self.current_source.clone().or_else(|| {
+            self.snapshot
+                .as_ref()
+                .and_then(|s| s.locals.get(local.0 as usize))
+                .and_then(|info| info.source.clone())
+        })
+    }
+
     fn emit_drop_move_error(&mut self, place: &Place) {
-        let Some((name, source)) = self.local_name_and_source(place.local) else {
+        let Some((name, _)) = self.local_name_and_source(place.local) else {
             return;
         };
-        let Some(src) = source else {
+        let Some(src) = self.use_source(place.local) else {
             return;
         };
         self.diagnostics.push(FlowError::MoveOutOfDrop {
