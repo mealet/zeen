@@ -10,7 +10,7 @@ use std::{
 use bumpalo::Bump;
 use lasso::Rodeo;
 use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
-use zeen_flow::{FlowResult, run_dataflow};
+use zeen_flow::{FlowError, FlowResult, run_dataflow};
 use zeen_hir::HirLowering;
 use zeen_mir::lowering::lower_program;
 use zeen_parser::Parser;
@@ -248,4 +248,63 @@ fn main() {
 "#,
     );
     assert!(!errors.is_empty());
+}
+
+#[test]
+fn dropped_local_registers_its_function() {
+    let result = flow_ok(
+        r#"
+struct Buffer { pub x: i32 }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    let b = Buffer { .x = 1 };
+}
+"#,
+    );
+    assert!(!result.functions_with_drops.is_empty());
+}
+
+#[test]
+fn copy_struct_multiple_uses_passes() {
+    flow_ok(
+        r#"
+struct S {}
+implement Copy : S {}
+fn main() {
+    let a = S {};
+    let b = a;
+    let c = a;
+}
+"#,
+    );
+}
+
+#[test]
+fn used_locals_produce_no_warnings() {
+    let result = flow_ok(
+        r#"
+struct Pair { pub a: i32, pub b: i32 }
+fn destroy(p: Pair) {}
+fn main() {
+    let p = Pair { .a = 1, .b = 2 };
+    destroy(p);
+}
+"#,
+    );
+    assert!(result.warnings.is_empty());
+}
+
+#[test]
+fn unused_variable_produces_warning() {
+    let result = flow_ok("fn main() { let x = 1; }");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|e| matches!(e, FlowError::UnusedVariable { .. })),
+        "expected an UnusedVariable warning, got: {:?}",
+        result.warnings
+    );
 }
