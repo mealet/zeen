@@ -18,3 +18,8 @@ zeen-resolve = {path = "../zeen-resolve"}
 zeen-hir = {path = "../zeen-hir"}
 zeen-types = {path = "../zeen-types"}
 zeen-driver = {path = "../zeen-driver"}
+
+[dev-dependencies]
+bumpalo = "3.20.2"
+zeen-lexer = {path = "../zeen-lexer"}
+zeen-parser = {path = "../zeen-parser"}

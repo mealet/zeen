@@ -3792,3 +3792,246 @@ fn format_error_to_diagnostic(err: &FormatParseError, format_source: &Source) ->
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, collections::HashSet, path::Path, rc::Rc, sync::Arc};
+
+    use bumpalo::Bump;
+    use lasso::Rodeo;
+    use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
+    use zeen_hir::HirLowering;
+    use zeen_resolve::resolve;
+
+    use crate::{TypeCheckResult, TypeChecker, TypeError};
+
+    fn typecheck(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let bump = Bump::default();
+        let content = Arc::new(source.to_string());
+        let filename = Rc::new("test.zn".to_string());
+
+        let mut context = CompilationContext {
+            paths: PathsConfig {
+                project_root: std::env::temp_dir(),
+                std_root: None,
+                linked: HashSet::new(),
+            },
+            core_files: Vec::new(),
+            mode: CompilationMode::Debug,
+            output: CompilationOutput::Binary,
+        };
+
+        let mut tokens = zeen_lexer::tokenize(&content);
+        let mut parser = zeen_parser::Parser::new(
+            Rc::clone(&filename),
+            Arc::clone(&content),
+            &mut tokens,
+            &bump,
+            Rc::clone(&rodeo),
+        );
+        let program = parser.parse_program().expect("parser returned errors");
+
+        let (resolved_program, mut resolution_result) = resolve(
+            Rc::clone(&filename),
+            Arc::clone(&content),
+            Path::new("test.zn"),
+            program,
+            &bump,
+            Rc::clone(&rodeo),
+            &mut context,
+        )
+        .expect("resolver returned errors");
+
+        let mut hir_lowering = HirLowering::new(&resolution_result, Rc::clone(&rodeo));
+        let hir_module = hir_lowering.lower_module(resolved_program);
+
+        let mut typechecker = TypeChecker::new(&mut resolution_result, &context, Rc::clone(&rodeo));
+        typechecker.check_module(&hir_module);
+        typechecker.finish()
+    }
+
+    #[test]
+    fn operator_call_through_implement() {
+        let result = typecheck(
+            r#"
+            interface Add {
+                fn add(self, other: Self) Self;
+            }
+
+            struct Vector {
+                x: i32,
+                y: i32,
+                z: i32,
+            }
+
+            implement Add : Vector {
+                fn add(self, other: Self) Self {
+                    return self;
+                }
+            }
+
+            fn main() {
+                let a = Vector { .x = 1, .y = 2, .z = 3 };
+                let b = Vector { .x = 1, .y = 2, .z = 3 };
+                let c = a + b;
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "operator call through interface should typecheck: {:?}",
+            result.err().map(|errors| errors.len())
+        );
+    }
+
+    #[test]
+    fn instance_call_accepts_all_self_modes() {
+        let result = typecheck(
+            r#"
+            struct Methods {
+                pub fn v(self) {}
+                pub fn cv(const self) {}
+                pub fn p(*self) {}
+                pub fn pc(*const self) {}
+            }
+
+            fn main() {
+                let methods = Methods {};
+                methods.v();
+                methods.cv();
+                methods.p();
+                methods.pc();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "all self modes should typecheck as value receivers"
+        );
+    }
+
+    #[test]
+    fn implement_method_is_implicitly_public() {
+        let result = typecheck(
+            r#"
+            interface Asd {
+                fn asd();
+            }
+
+            struct Foo {
+            }
+
+            implement Asd : Foo {
+                fn asd() {}
+            }
+
+            fn main() {
+                let foo = Foo.asd();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "implement method fulfilling an interface is public"
+        );
+    }
+
+    #[test]
+    fn static_method_on_instance_is_error() {
+        let errors = typecheck(
+            r#"
+            struct Foo {
+                fn asd() {}
+            }
+
+            fn main() {
+                let foo = Foo {};
+                foo.asd();
+            }
+            "#,
+        )
+        .expect_err("static method calls on instances must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::StaticMethodOnInstance { .. })),
+            "expected StaticMethodOnInstance error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn static_method_call_through_type_works() {
+        let result = typecheck(
+            r#"
+            struct Foo {
+                pub fn asd() {}
+            }
+
+            fn main() {
+                let foo = Foo.asd();
+            }
+            "#,
+        );
+
+        assert!(result.is_ok(), "static method called via type should work");
+    }
+
+    #[test]
+    fn unknown_method_reports_error_not_panic() {
+        let errors = typecheck(
+            r#"
+            struct Foo {
+                fn asd() {}
+            }
+
+            fn main() {
+                let foo = Foo {};
+                foo.nope();
+            }
+            "#,
+        )
+        .expect_err("unknown method should produce a diagnostic");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownField { .. })),
+            "expected UnknownField error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn argument_count_skips_self_param() {
+        let errors = typecheck(
+            r#"
+            struct Foo {
+                pub fn takes_one(self, x: i32) {}
+            }
+
+            fn main() {
+                let foo = Foo {};
+                foo.takes_one();
+            }
+            "#,
+        )
+        .expect_err("missing argument should be rejected");
+
+        assert!(
+            errors.iter().any(|err| {
+                matches!(
+                    err,
+                    TypeError::ArgCountMismatch {
+                        expected: 1,
+                        found: 0,
+                        ..
+                    }
+                )
+            }),
+            "expected ArgCountMismatch(1, 0), got: {errors:?}"
+        );
+    }
+}

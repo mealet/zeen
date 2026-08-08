@@ -685,6 +685,7 @@ dependencies = [
 name = "zeen-typecheck"
 version = "0.0.0"
 dependencies = [
+ "bumpalo",
  "lasso",
  "miette",
  "smol_str",
@@ -692,6 +693,8 @@ dependencies = [
  "zeen-ast",
  "zeen-driver",
  "zeen-hir",
+ "zeen-lexer",
+ "zeen-parser",
  "zeen-resolve",
  "zeen-types",
 ]
