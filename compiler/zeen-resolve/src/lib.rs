@@ -67,3 +67,194 @@ pub fn same_source_file(a: &NamedSource<Arc<String>>, b: &NamedSource<Arc<String
     // TODO: Needs improvement, maybe mark each source with its own ID and verify it.
     a.name() == b.name()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::ResolveError;
+    use lasso::Rodeo;
+    use std::{
+        cell::RefCell,
+        collections::HashSet,
+        path::{Path, PathBuf},
+        rc::Rc,
+        sync::Arc,
+    };
+    use zeen_driver::{CompilationMode, CompilationOutput, PathsConfig};
+    use zeen_parser::Parser;
+
+    const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
+
+    #[derive(Debug)]
+    struct Fixture {
+        rodeo: Rc<RefCell<Rodeo>>,
+        resolution: ResolutionResult,
+    }
+
+    impl Fixture {
+        fn name(&self, def: &DefInfo) -> String {
+            self.rodeo.borrow().resolve(&def.name).to_string()
+        }
+
+        fn find_def(&self, name: &str) -> Option<DefInfo> {
+            self.resolution
+                .defs
+                .values()
+                .find(|def| self.name(def) == name)
+                .cloned()
+        }
+    }
+
+    fn resolve_full(src: &str) -> Result<Fixture, Vec<ResolveError>> {
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let bump = Bump::default();
+        let content = Arc::new(src.to_string());
+        let filename = Rc::new("test.zn".to_string());
+
+        let mut context = CompilationContext {
+            paths: PathsConfig {
+                project_root: PathBuf::from("/"),
+                std_root: None,
+                linked: HashSet::new(),
+            },
+            core_files: vec![("core.ops", CORE_OPS)],
+            mode: CompilationMode::Debug,
+            output: CompilationOutput::EmitMIR,
+        };
+
+        let mut tokens = zeen_lexer::tokenize(&content);
+        let mut parser = Parser::new(
+            Rc::clone(&filename),
+            Arc::clone(&content),
+            &mut tokens,
+            &bump,
+            Rc::clone(&rodeo),
+        );
+        let program = parser.parse_program().map_err(|errs| {
+            errs.iter()
+                .map(|e| ResolveError::ModuleParseError(e.clone()))
+                .collect::<Vec<_>>()
+        })?;
+
+        let lookup_rodeo = Rc::clone(&rodeo);
+
+        resolve(
+            Rc::clone(&filename),
+            Arc::clone(&content),
+            Path::new("/test.zn"),
+            program,
+            &bump,
+            rodeo,
+            &mut context,
+        )
+        .map(|(_, resolution_result)| Fixture {
+            rodeo: lookup_rodeo,
+            resolution: resolution_result,
+        })
+    }
+
+    fn resolve_ok(src: &str) -> Fixture {
+        resolve_full(src).unwrap_or_else(|errors| {
+            panic!(
+                "expected resolution to succeed, got errors:\n{}",
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        })
+    }
+
+    #[test]
+    fn registers_struct_field_and_function_and_param_defs() {
+        let fx = resolve_ok("struct Foo { x: i32 } fn bar(a: i32) i32 { return a; }");
+
+        let foo = fx.find_def("Foo").expect("struct Foo must be defined");
+        assert!(matches!(foo.kind, DefKind::Struct));
+        assert!(!foo.is_pub);
+
+        let x = fx.find_def("x").expect("field x must be defined");
+        assert!(matches!(x.kind, DefKind::Field));
+
+        let bar = fx.find_def("bar").expect("function bar must be defined");
+        assert!(matches!(bar.kind, DefKind::Function));
+
+        let a = fx.find_def("a").expect("param a must be defined");
+        assert!(matches!(a.kind, DefKind::Param));
+
+        let foox_key = fx.find_def("x").expect("field x must be defined");
+        assert!(foox_key.decl.is_some());
+    }
+
+    #[test]
+    fn registers_struct_generic_param() {
+        let fx = resolve_ok("struct Box[T] { value: T }");
+
+        let t = fx.find_def("T").expect("generic T must be defined");
+        assert!(matches!(t.kind, DefKind::GenericParam));
+    }
+
+    #[test]
+    fn generic_implement_binding_slots_point_at_resolved_generic() {
+        let fx = resolve_ok(
+            "struct Box[T] { value: T } implement[U] Add: Box[U] { fn add(self) void {} }",
+        );
+
+        assert_eq!(fx.resolution.implement_generic_bindings.len(), 1);
+        for resolution in fx.resolution.implement_generic_bindings.values() {
+            assert!(matches!(resolution, Resolution::Def(_)));
+        }
+    }
+
+    #[test]
+    fn implement_names_tie_interface_and_object() {
+        let fx = resolve_ok("struct Foo {} implement Foo : Copy {}");
+
+        let entries: Vec<_> = fx.resolution.implement_names.values().collect();
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0].0, Resolution::Def(_)));
+        assert!(matches!(entries[0].1, Resolution::Def(_)));
+    }
+
+    #[test]
+    fn unresolved_type_error_is_reported() {
+        let errs = resolve_full("struct Foo { x: Missing }").unwrap_err();
+
+        assert_eq!(
+            errs.iter()
+                .filter(|e| matches!(e, ResolveError::UnresolvedType { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn unresolved_ident_error_is_reported() {
+        let errs = resolve_full("fn main() { let a = b; }").unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::UnresolvedIdent { name, .. } if name.as_str() == "b")
+        ));
+    }
+
+    #[test]
+    fn duplicate_type_definition_is_reported() {
+        let errs = resolve_full("struct Foo {} struct Foo {}").unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ResolveError::DuplicateDefinition { .. }))
+        );
+    }
+
+    #[test]
+    fn core_interface_name_is_reserved() {
+        let errs = resolve_full("struct Display {}").unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ResolveError::CoreReserved { .. }))
+        );
+    }
+}

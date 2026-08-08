@@ -121,3 +121,114 @@ impl SymbolTable {
         self.current_mut().types.insert(name, id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lasso::Rodeo;
+    use std::{cell::RefCell, rc::Rc};
+
+    fn intern(rodeo: &Rc<RefCell<Rodeo>>, string: &str) -> Spur {
+        rodeo.borrow_mut().get_or_intern(string)
+    }
+
+    #[test]
+    fn declared_value_is_visible_in_own_scope() {
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let mut table = SymbolTable::new();
+
+        let name = intern(&rodeo, "foo");
+        table.declare_value(name, DefId(1));
+
+        assert_eq!(table.lookup_value(name), Some(DefId(1)));
+        assert_eq!(table.lookup_type(name), None);
+    }
+
+    #[test]
+    fn values_and_types_are_separate_namespaces() {
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let mut table = SymbolTable::new();
+
+        let name = intern(&rodeo, "foo");
+        table.declare_type(name, DefId(1));
+
+        assert_eq!(table.lookup_type(name), Some(DefId(1)));
+        assert_eq!(table.lookup_value(name), None);
+    }
+
+    #[test]
+    fn inner_scope_shadows_outer_until_pop() {
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let mut table = SymbolTable::new();
+
+        let name = intern(&rodeo, "foo");
+        table.declare_value(name, DefId(1));
+
+        table.push(ScopeKind::Block);
+        table.declare_value(name, DefId(2));
+
+        assert_eq!(table.lookup_value(name), Some(DefId(2)));
+
+        table.pop();
+        assert_eq!(table.lookup_value(name), Some(DefId(1)));
+    }
+
+    #[test]
+    fn lookup_searches_outwards_from_current_scope() {
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let mut table = SymbolTable::new();
+
+        let outer = intern(&rodeo, "outer");
+        let inner = intern(&rodeo, "inner");
+
+        table.declare_value(outer, DefId(1));
+
+        table.push(ScopeKind::Function);
+        table.declare_value(inner, DefId(2));
+
+        assert_eq!(table.lookup_value(outer), Some(DefId(1)));
+        assert_eq!(table.lookup_value(inner), Some(DefId(2)));
+
+        table.pop();
+        assert_eq!(table.lookup_value(inner), None);
+    }
+
+    #[test]
+    fn enclosing_method_scope_is_found_inside_nested_blocks() {
+        let mut table = SymbolTable::new();
+
+        table.push(ScopeKind::Method {
+            self_def: DefId(10),
+            self_param: Some(DefId(11)),
+        });
+        table.push(ScopeKind::Block);
+
+        assert_eq!(
+            table.enclosing_method_or_interface(),
+            Some((DefId(10), Some(DefId(11))))
+        );
+    }
+
+    #[test]
+    fn enclosing_interface_method_scope_is_found() {
+        let mut table = SymbolTable::new();
+
+        table.push(ScopeKind::InterfaceMethod {
+            self_placeholder: DefId(20),
+            self_param: None,
+        });
+
+        assert_eq!(
+            table.enclosing_method_or_interface(),
+            Some((DefId(20), None))
+        );
+    }
+
+    #[test]
+    fn no_method_scope_returns_none() {
+        let mut table = SymbolTable::new();
+        table.push(ScopeKind::Block);
+
+        assert_eq!(table.enclosing_method_or_interface(), None);
+    }
+}
