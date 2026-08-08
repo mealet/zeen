@@ -4,16 +4,12 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
-/// Diagnostics reported by the dataflow pass.
-///
-/// Move/init violations are `severity(Error)`, code quality checks
-/// (unused variables, redundant mutability) are `severity(Warning)`.
 #[derive(Debug, Error, Diagnostic, Clone)]
 pub enum FlowError {
     #[error("use of uninitialized value `{name}`")]
     #[diagnostic(
         severity(Error),
-        code(zeen::flow::use_of_uninitialized),
+        code(zeen::dataflow::use_of_uninitialized),
         help("initialize `{name}` before using it")
     )]
     UseOfUninitialized {
@@ -28,7 +24,7 @@ pub enum FlowError {
     #[error("use of moved value `{name}`")]
     #[diagnostic(
         severity(Error),
-        code(zeen::flow::use_after_move),
+        code(zeen::dataflow::use_after_move),
         help("value `{name}` was moved out, borrow or clone it instead")
     )]
     UseAfterMove {
@@ -43,7 +39,7 @@ pub enum FlowError {
     #[error("cannot move out of field of `{name}`: struct implements `Drop`")]
     #[diagnostic(
         severity(Error),
-        code(zeen::flow::move_out_of_drop),
+        code(zeen::dataflow::move_out_of_drop),
         help(
             "structs implementing `Drop` cannot be partially moved, drop would be called on a partial value"
         )
@@ -60,7 +56,7 @@ pub enum FlowError {
     #[error("use of partially moved struct `{name}`")]
     #[diagnostic(
         severity(Error),
-        code(zeen::flow::use_of_partially_moved),
+        code(zeen::dataflow::use_of_partially_moved),
         help("reinitialize all moved fields before using the struct as a whole")
     )]
     UseOfPartiallyMoved {
@@ -75,7 +71,7 @@ pub enum FlowError {
     #[error("cannot assign to constant `{name}`")]
     #[diagnostic(
         severity(Error),
-        code(zeen::flow::assign_to_const),
+        code(zeen::dataflow::assign_to_const),
         help("declare `{name}` with `var` to make it mutable")
     )]
     AssignToConst {
@@ -90,7 +86,7 @@ pub enum FlowError {
     #[error("unused variable `{name}`")]
     #[diagnostic(
         severity(Warning),
-        code(zeen::flow::unused_variable),
+        code(zeen::dataflow::unused_variable),
         help("consider removing it, or prefixing the name with `_`")
     )]
     UnusedVariable {
@@ -105,8 +101,8 @@ pub enum FlowError {
     #[error("variable `{name}` does not need to be mutable")]
     #[diagnostic(
         severity(Warning),
-        code(zeen::flow::unused_mut),
-        help("remove the `var` keyword from `{name}`")
+        code(zeen::dataflow::unused_mut),
+        help("replace the `var` keyword with `const` for `{name}`")
     )]
     UnusedMut {
         name: SmolStr,
