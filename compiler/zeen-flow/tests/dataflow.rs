@@ -182,3 +182,70 @@ fn main() {
     );
     assert!(!errors.is_empty());
 }
+
+#[test]
+fn reinitialized_struct_is_usable_again() {
+    flow_ok(
+        r#"
+struct Inner { pub x: i32 }
+struct Pair { pub a: Inner, pub b: Inner }
+fn main() {
+    let p = Pair { .a = Inner { .x = 1 }, .b = Inner { .x = 2 } };
+    let a = p.a;
+    p.a = Inner { .x = 3 };
+    let b = p;
+}
+"#,
+    );
+}
+
+#[test]
+fn use_of_partially_moved_struct_is_error() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+struct Pair { pub a: Inner, pub b: Inner }
+fn main() {
+    let p = Pair { .a = Inner { .x = 1 }, .b = Inner { .x = 2 } };
+    let a = p.a;
+    let b = p;
+}
+"#,
+    );
+    assert!(!errors.is_empty());
+}
+
+#[test]
+fn move_out_of_drop_struct_field_is_error() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+struct Buffer { pub data: Inner }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    let b = Buffer { .data = Inner { .x = 1 } };
+    let x = b.data;
+}
+"#,
+    );
+    assert!(!errors.is_empty());
+}
+
+#[test]
+fn use_after_move_across_call_is_error() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+struct Pair { pub a: Inner, pub b: Inner }
+fn take(p: Pair) {}
+fn main() {
+    let p = Pair { .a = Inner { .x = 1 }, .b = Inner { .x = 2 } };
+    take(p);
+    take(p);
+}
+"#,
+    );
+    assert!(!errors.is_empty());
+}
