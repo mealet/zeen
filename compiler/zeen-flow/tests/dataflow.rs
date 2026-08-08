@@ -308,3 +308,257 @@ fn unused_variable_produces_warning() {
         result.warnings
     );
 }
+
+#[test]
+fn pointer_type_is_copy() {
+    flow_ok(
+        r#"
+fn main() {
+    let x = 5;
+    let p = &x;
+    let a = p;
+    let b = p;
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_passed_to_function_multiple_times() {
+    flow_ok(
+        r#"
+fn peek(p: *i32) {}
+fn main() {
+    let x = 5;
+    let p = &x;
+    peek(p);
+    peek(p);
+}
+"#,
+    );
+}
+
+#[test]
+fn array_use_after_move_is_error() {
+    let errors = flow_err(
+        r#"
+fn main() {
+    let a = [1, 2, 3];
+    let b = a;
+    let c = a;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
+fn string_literal_array_use_after_move_is_error() {
+    let errors = flow_err(
+        r#"
+fn main() {
+    let s = "hello";
+    let t = s;
+    let u = s;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
+fn array_moved_into_function_then_used_again_is_error() {
+    let errors = flow_err(
+        r#"
+fn max(a: [3]i32) i32 {
+    return a[0];
+}
+fn main() {
+    let arr = [1, 2, 3];
+    max(arr);
+    max(arr);
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
+fn array_element_reads_do_not_move_the_array() {
+    flow_ok(
+        r#"
+fn main() {
+    let a = [1, 2, 3];
+    let x = a[0];
+    let y = a[1];
+}
+"#,
+    );
+}
+
+#[test]
+fn slice_use_after_move_is_error() {
+    let errors = flow_err(
+        r#"
+fn main() {
+    let s: []i32 = [1, 2, 3];
+    let t = s;
+    let u = s;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
+fn slice_passed_to_function_multiple_times_is_error() {
+    let errors = flow_err(
+        r#"
+fn sum(s: []i32) i32 {
+    return s[0];
+}
+fn main() {
+    let s: []i32 = [1, 2, 3];
+    sum(s);
+    sum(s);
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
+fn slice_element_reads_do_not_copy_the_slice() {
+    flow_ok(
+        r#"
+fn main() {
+    let s: []i32 = [1, 2, 3];
+    let a = s[0];
+    let b = s[1];
+}
+"#,
+    );
+}
+
+#[test]
+fn generic_struct_is_move_only_even_with_copy_field() {
+    let errors = flow_err(
+        r#"
+struct Box[T] { pub v: T }
+fn main() {
+    let b = Box { .v = 30 };
+    let c = b;
+    let d = b;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
+fn generic_struct_partial_move_is_error_on_whole_use() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+struct Box[T] { pub v: T }
+fn main() {
+    let b = Box { .v = Inner { .x = 1 } };
+    let v = b.v;
+    let u = b;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseOfPartiallyMoved")));
+}
+
+#[test]
+fn generic_struct_field_can_be_reinitialized_and_moved_whole() {
+    flow_ok(
+        r#"
+struct Inner { pub x: i32 }
+struct Box[T] { pub v: T }
+fn main() {
+    let b = Box { .v = Inner { .x = 1 } };
+    let v = b.v;
+    b.v = Inner { .x = 2 };
+    let whole = b;
+}
+"#,
+    );
+}
+
+#[test]
+fn whole_local_reassigned_after_move_is_usable() {
+    flow_ok(
+        r#"
+struct Inner { pub x: i32 }
+fn main() {
+    let p = Inner { .x = 1 };
+    let q = p;
+    p = Inner { .x = 2 };
+    let r = p;
+}
+"#,
+    );
+}
+
+#[test]
+fn generic_function_param_move_is_detected() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+fn id[T](v: T) T {
+    return v;
+}
+fn main() {
+    let i = Inner { .x = 1 };
+    let a = id(i);
+    let b = id(i);
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
+fn generic_function_copy_param_passes() {
+    flow_ok(
+        r#"
+fn id[T](v: T) T {
+    return v;
+}
+fn main() {
+    let a = id(30);
+    let b = id(40);
+}
+"#,
+    );
+}
+
+#[test]
+fn ref_receiver_method_does_not_move_then_ownership_method_consumes() {
+    flow_ok(
+        r#"
+struct Foo {
+    pub fn new() Self {
+        Self {}
+    }
+
+    pub fn no_ownership(*self) {}
+    pub fn ownership(self) {}
+}
+implement Drop : Foo {
+    fn drop(self) {
+        
+    }
+}
+fn main() {
+    let a = Foo.new();
+    let b = a;
+
+    b.no_ownership();
+    b.ownership();
+}
+"#,
+    );
+}
