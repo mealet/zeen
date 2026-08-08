@@ -9,9 +9,12 @@
 
 #![allow(unused)]
 
+pub mod analysis;
+pub mod drop;
 pub mod error;
 pub mod result;
 pub mod state;
 
+pub use analysis::DataFlow;
 pub use error::FlowError;
 pub use result::FlowResult;
