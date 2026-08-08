@@ -738,6 +738,8 @@ impl<'res> HirLowering<'res> {
 mod tests {
     use super::*;
     use crate::decl::HirDeclKind;
+    use crate::expr::HirExprKind;
+    use crate::stmt::HirStmtKind;
     use crate::types::HirTypeKind;
     use bumpalo::Bump;
     use lasso::Rodeo;
@@ -748,6 +750,7 @@ mod tests {
         rc::Rc,
         sync::Arc,
     };
+    use zeen_ast::expressions::BinaryOp;
     use zeen_ast::types::BuiltinType;
     use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
     use zeen_parser::Parser;
@@ -772,6 +775,15 @@ mod tests {
                     _ => None,
                 })
                 .expect("struct not found")
+        }
+
+        fn fn_decl(&self, name: &str) -> Rc<HirFn> {
+            self.find_by_name(name)
+                .and_then(|kind| match kind {
+                    HirDeclKind::Fn(f) => Some(f.clone()),
+                    _ => None,
+                })
+                .expect("function not found")
         }
 
         fn enum_decl(&self, name: &str) -> Rc<HirEnum> {
@@ -886,6 +898,89 @@ mod tests {
 
         assert!(fx.struct_decl("Foo").is_pub);
         assert!(!fx.struct_decl("Bar").is_pub);
+    }
+
+    #[test]
+    fn struct_method_lowers_as_fn_with_self() {
+        let fx = lower_ok("struct Foo { x: i32, fn get(self) i32 { return self.x; } }");
+        let foo = fx.struct_decl("Foo");
+
+        assert_eq!(foo.methods.len(), 1);
+
+        let method = &foo.methods[0];
+        assert!(matches!(method.kind, HirDeclKind::Fn(_)));
+
+        let HirDeclKind::Fn(f) = &method.kind else {
+            unreachable!("kind already matched")
+        };
+
+        assert!(f.self_param.is_some());
+        assert!(matches!(
+            f.return_type.as_ref().map(|ty| &ty.kind),
+            Some(HirTypeKind::Builtin(BuiltinType::i32))
+        ));
+
+        let body = f.body.as_ref().expect("method body must be lowered");
+        let HirStmtKind::Expr(expr) = &body.kind else {
+            panic!("method body must be an expression block")
+        };
+        let HirExprKind::Block { stmts, trailing } = &expr.kind else {
+            panic!("method body must be a block expression")
+        };
+
+        assert!(trailing.is_none());
+        assert_eq!(stmts.len(), 1);
+        assert!(matches!(stmts[0].kind, HirStmtKind::Return { .. }));
+    }
+
+    #[test]
+    fn fn_lowers_params_return_and_body() {
+        let fx = lower_ok("fn add(a: i32, b: i32) i32 { return a + b; }");
+        let add = fx.fn_decl("add");
+
+        assert_eq!(add.params.len(), 2);
+        assert!(add.params[0].def_id.is_some());
+        assert!(add.params[1].def_id.is_some());
+        assert!(matches!(
+            add.params[0].ty.kind,
+            HirTypeKind::Builtin(BuiltinType::i32)
+        ));
+        assert!(matches!(
+            add.return_type.as_ref().map(|ty| &ty.kind),
+            Some(HirTypeKind::Builtin(BuiltinType::i32))
+        ));
+
+        let body = add.body.as_ref().expect("body must be lowered");
+        let HirStmtKind::Expr(expr) = &body.kind else {
+            panic!("function body must be an expression block");
+        };
+        let HirExprKind::Block { stmts, trailing } = &expr.kind else {
+            panic!("function body must be a block expression");
+        };
+
+        assert!(trailing.is_none());
+        assert_eq!(stmts.len(), 1);
+
+        let HirStmtKind::Return { value } = &stmts[0].kind else {
+            panic!("block must contain a return statement");
+        };
+
+        let value = value.as_ref().expect("return value required");
+        let HirExprKind::Binary { op, lhs, rhs } = &value.kind else {
+            panic!("return value must be a binary expression");
+        };
+
+        assert_eq!(*op, BinaryOp::Add);
+
+        let HirExprKind::VarRef(lhs_id) = lhs.kind else {
+            panic!("add lhs must reference a parameter")
+        };
+        let HirExprKind::VarRef(rhs_id) = rhs.kind else {
+            panic!("add rhs must reference a parameter")
+        };
+
+        assert_eq!(Some(lhs_id), add.params[0].def_id);
+        assert_eq!(Some(rhs_id), add.params[1].def_id);
     }
 
     #[test]
