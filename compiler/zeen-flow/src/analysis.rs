@@ -231,6 +231,10 @@ impl<'ctx> DataFlow<'ctx> {
                 self.current_source = None;
                 self.consume_move_place(place);
             }
+            MirStatement::Discard(operand) => {
+                self.current_source = None;
+                self.consume_operand(operand);
+            }
             MirStatement::StorageLive(_) | MirStatement::StorageDead(_) | MirStatement::Nop => {
                 self.current_source = None;
             }

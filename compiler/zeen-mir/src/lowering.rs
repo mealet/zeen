@@ -1205,6 +1205,30 @@ impl<'ctx> MirLowering<'ctx> {
                     .copied()
                     .unwrap_or_else(|| panic!("let statement missing recorded type"));
 
+                // `let _ = expr;` discards the value: evaluate the expression
+                // for its side effects but don't allocate a storage local.
+                // A non-constant operand rooted at a real user variable is
+                // still consumed (reads/moves keep mattering), so it gets a
+                // `Discard` statement; temporaries and literals need none.
+                if self.rodeo.borrow().resolve(name) == "_" {
+                    return match value {
+                        Some(v) => {
+                            let (block, operand) = self.lower_expr_to_operand(fb, v, block);
+                            let is_user = match &operand {
+                                Operand::Copy(place) | Operand::Move(place) => {
+                                    fb.func.local(place.local).kind != LocalKind::Temporary
+                                }
+                                Operand::Constant(_) => false,
+                            };
+                            if is_user {
+                                fb.push_stmt(block, MirStatement::Discard(operand));
+                            }
+                            block
+                        }
+                        None => block,
+                    };
+                }
+
                 let local = fb.new_local(
                     ty,
                     LocalKind::UserVariable,

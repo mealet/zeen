@@ -12,6 +12,7 @@ use lasso::Rodeo;
 use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
 use zeen_flow::{FlowError, FlowResult, run_dataflow};
 use zeen_hir::HirLowering;
+use zeen_mir::MirProgram;
 use zeen_mir::lowering::lower_program;
 use zeen_parser::Parser;
 use zeen_typecheck::TypeChecker;
@@ -36,7 +37,14 @@ fn core_files() -> Vec<(&'static str, &'static str)> {
     files
 }
 
-fn run(src: &str) -> Result<FlowResult, Vec<String>> {
+struct Compiled {
+    program: MirProgram,
+    typecheck: zeen_typecheck::result::TypeCheckResult,
+    resolution: zeen_resolve::ResolutionResult,
+    rodeo: Rc<RefCell<Rodeo>>,
+}
+
+fn compile(src: &str) -> Result<Compiled, Vec<String>> {
     let rodeo = Rc::new(RefCell::new(Rodeo::default()));
     let bump = Bump::default();
     let content = Arc::new(src.to_string());
@@ -98,18 +106,29 @@ fn run(src: &str) -> Result<FlowResult, Vec<String>> {
             .collect::<Vec<String>>()
     })?;
 
-    let mut lowered = lower_program(
+    let lowered = lower_program(
         Rc::clone(&rodeo),
         &mut typecheck_result,
         &resolution_result,
         &hir_module,
     );
 
+    Ok(Compiled {
+        program: lowered.program,
+        typecheck: typecheck_result,
+        resolution: resolution_result,
+        rodeo,
+    })
+}
+
+fn run(src: &str) -> Result<FlowResult, Vec<String>> {
+    let mut compiled = compile(src)?;
+
     run_dataflow(
-        &mut lowered.program,
-        &typecheck_result,
-        &resolution_result,
-        Rc::clone(&rodeo),
+        &mut compiled.program,
+        &compiled.typecheck,
+        &compiled.resolution,
+        compiled.rodeo,
     )
     .map_err(|errors| errors.iter().map(|e| format!("{e:?}")).collect())
 }
@@ -623,4 +642,88 @@ fn main() {
 }
 "#,
     );
+}
+
+#[test]
+fn underscore_let_binds_no_mir_local() {
+    let compiled = compile(
+        r#"
+fn main() {
+    let a = 5;
+    let _ = a;
+    let _ = 11 + 7;
+}
+"#,
+    )
+    .unwrap();
+
+    let main_id = compiled
+        .program
+        .function_names
+        .iter()
+        .find(|(_, name)| name.as_str() == "main")
+        .map(|(id, _)| *id)
+        .unwrap();
+    let main_fn = compiled.program.functions.get(&main_id).unwrap();
+
+    let names: Vec<String> = main_fn
+        .locals
+        .iter()
+        .filter_map(|local| {
+            local
+                .name
+                .map(|spur| compiled.rodeo.borrow().resolve(&spur).to_string())
+        })
+        .collect();
+    assert!(
+        !names.iter().any(|n| n == "_"),
+        "`let _ =` must not allocate a `_` local, got: {names:?}"
+    );
+}
+
+#[test]
+fn underscore_let_suppresses_unused_variable() {
+    let result = flow_ok(
+        r#"
+fn main() {
+    let a = 5;
+    let _ = a;
+    let _ = 11 + 7;
+}
+"#,
+    );
+    assert!(
+        result.warnings.is_empty(),
+        "expected no warnings, got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn underscore_let_still_consumes_moved_values() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+fn main() {
+    let p = Inner { .x = 1 };
+    let _ = p;
+    let q = p;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
+fn underscore_let_of_uninitialized_value_is_error() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+fn main() {
+    let x: Inner;
+    let _ = x;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseOfUninitialized")));
 }

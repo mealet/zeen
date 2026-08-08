@@ -153,6 +153,11 @@ pub enum MirStatement {
     },
     Drop(Place),
 
+    /// Evaluates an operand and throws the value away, e.g. `let _ = expr;`.
+    /// The operand is still consumed (moves are recorded), but no local is
+    /// allocated and nothing is stored.
+    Discard(Operand),
+
     StorageLive(LocalId),
     StorageDead(LocalId),
 

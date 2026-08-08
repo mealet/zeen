@@ -225,6 +225,9 @@ impl<'a> MirPrinter<'a> {
             MirStatement::Drop(place) => {
                 let _ = writeln!(out, "        drop({});", self.place_ref(place, func));
             }
+            MirStatement::Discard(operand) => {
+                let _ = writeln!(out, "        discard({});", self.operand_ref(operand, func));
+            }
             MirStatement::StorageLive(local) => {
                 let _ = writeln!(out, "        StorageLive({});", self.local_ref(*local));
             }
