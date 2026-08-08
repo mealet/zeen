@@ -727,3 +727,53 @@ fn main() {
     );
     assert!(errors.iter().any(|e| e.contains("UseOfUninitialized")));
 }
+
+#[test]
+fn drop_impls_are_registered_without_recursing_on_self() {
+    let mut compiled = compile(
+        r#"
+struct Foo {
+}
+implement Drop : Foo {
+    fn drop(self) void {
+    }
+}
+fn take_dropper[T: Drop](x: T) void {
+}
+fn main() {
+    take_dropper(Foo {});
+}
+"#,
+    )
+    .unwrap();
+
+    run_dataflow(
+        &mut compiled.program,
+        &compiled.typecheck,
+        &compiled.resolution,
+        Rc::clone(&compiled.rodeo),
+    )
+    .expect("dataflow must pass");
+
+    let drop_id = compiled
+        .program
+        .function_names
+        .iter()
+        .find(|(_, name)| name.as_str() == "Foo.drop")
+        .map(|(id, _)| *id)
+        .expect("`Foo.drop` must be registered");
+    let self_local = compiled.program.functions[&drop_id].params[0];
+
+    let has_self_drop = compiled.program.functions[&drop_id]
+        .blocks
+        .iter()
+        .any(|block| {
+            block.statements.iter().any(
+            |stmt| matches!(stmt, zeen_mir::MirStatement::Drop(place) if place.local == self_local),
+        )
+        });
+    assert!(
+        !has_self_drop,
+        "the drop impl must not auto-drop its own `self` parameter"
+    );
+}

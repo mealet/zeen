@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use lasso::{Rodeo, Spur};
 use zeen_ast::{
@@ -80,6 +84,8 @@ pub fn lower_program<'ctx>(
         lowering.register_user_struct_layouts(resolution);
     }
 
+    lowering.register_drop_functions();
+
     let mut program = lowering.finish();
     let extern_vars = crate::collecter::collect_extern_vars(module, typecheck, &rodeo);
 
@@ -146,6 +152,7 @@ impl FnBuilder {
                 params: Vec::new(),
                 entry_block: entry,
                 ret_ty,
+                is_drop_impl: false,
             },
             locals_by_def: HashMap::new(),
             loop_stack: Vec::new(),
@@ -207,6 +214,73 @@ impl<'ctx> MirLowering<'ctx> {
 
     pub fn finish(self) -> MirProgram {
         self.program
+    }
+
+    /// Ensures a concrete `drop` MIR function exists for every struct type
+    /// that implements the `Drop` interface and shows up in the lowered
+    /// program. `drop(%x)` statements refer to that function, so it must be
+    /// registered even when nothing calls it explicitly.
+    fn register_drop_functions(&mut self) {
+        let Some(drop_iface) = self.find_interface_def("Drop") else {
+            return;
+        };
+
+        let candidate_types: Vec<(DefId, Vec<TypeId>)> = self
+            .program
+            .functions
+            .values()
+            .flat_map(|func| func.locals.iter().map(|local| local.ty))
+            .filter_map(|ty| match self.typecheck.interner.get(ty).clone() {
+                Type::Struct {
+                    def_id,
+                    generic_args,
+                } => Some((def_id, generic_args)),
+                _ => None,
+            })
+            .collect();
+
+        let mut seen: HashSet<(DefId, Vec<TypeId>)> = HashSet::new();
+        for (struct_def, generic_args) in candidate_types {
+            let is_new = seen.insert((struct_def, generic_args.clone()));
+            if !is_new {
+                continue;
+            }
+
+            let drop_impl = self
+                .typecheck
+                .struct_info
+                .get(&struct_def)
+                .is_some_and(|info| info.capabalities.has_explicit_drop);
+            if !drop_impl {
+                continue;
+            }
+
+            let Some(methods) = self.resolution.impls.get(&(struct_def, drop_iface)) else {
+                continue;
+            };
+            let Some(drop_method) = methods.iter().find(|def| {
+                let name = &self.resolution.defs[*def].name;
+                self.rodeo.borrow().resolve(name) == "drop"
+            }) else {
+                continue;
+            };
+
+            let mono_id = self.monomorphize_fn(*drop_method, generic_args, Some(struct_def));
+            if let Some(func) = self.program.functions.get_mut(&mono_id) {
+                func.is_drop_impl = true;
+            }
+        }
+    }
+
+    fn find_interface_def(&self, interface_name: &str) -> Option<DefId> {
+        for (def, info) in &self.resolution.defs {
+            if matches!(info.kind, DefKind::Interface)
+                && self.rodeo.borrow().resolve(&info.name) == interface_name
+            {
+                return Some(*def);
+            }
+        }
+        None
     }
 
     fn expr_type(&mut self, fb: &FnBuilder, expr: &HirExpr) -> TypeId {

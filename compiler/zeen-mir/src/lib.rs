@@ -78,6 +78,11 @@ pub struct MirFunction {
 
     pub entry_block: BlockId,
     pub ret_ty: TypeId,
+
+    /// Whether this function is the generated `drop` implementation of a
+    /// struct, produced by [`lowering::register_drop_functions`]. Its `self`
+    /// parameter must not get an automatic scope-exit drop.
+    pub is_drop_impl: bool,
 }
 
 impl MirFunction {

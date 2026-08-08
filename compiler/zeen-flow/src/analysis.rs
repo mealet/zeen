@@ -435,6 +435,21 @@ impl<'ctx> DataFlow<'ctx> {
             return;
         }
 
+        let is_drop_impl = self
+            .program
+            .functions
+            .get(&function_id)
+            .map(|func| func.is_drop_impl)
+            .unwrap_or(false);
+        let self_param = is_drop_impl
+            .then(|| {
+                self.program
+                    .functions
+                    .get(&function_id)
+                    .and_then(|func| func.params.first().map(|&local| Place::from_local(local)))
+            })
+            .flatten();
+
         let mut combined = drop::DropSet::default();
         {
             let function = self.program.functions.get(&function_id).unwrap();
@@ -447,6 +462,14 @@ impl<'ctx> DataFlow<'ctx> {
                 );
                 combined.places.extend(drops.places);
             }
+        }
+
+        // A `drop` implementation sorts out its own `self`; giving it an
+        // automatic scope-exit drop would call itself recursively.
+        if let Some(self_param) = self_param {
+            combined
+                .places
+                .retain(|place| !(place.projection.is_empty() && place.local == self_param.local));
         }
 
         if combined.places.is_empty() {
