@@ -11,7 +11,7 @@ use zeen_hir::{
     expr::{HirExpr, HirExprKind},
     stmt::{HirStmt, HirStmtKind},
 };
-use zeen_resolve::{DefId, ResolutionResult};
+use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_typecheck::{
     coerce::builtin_is_integer,
     result::{CallResolution, OperatorResolution, TypeCheckResult},
@@ -76,6 +76,8 @@ pub fn lower_program<'ctx>(
                 lowering.monomorphize_fn(*def_id, Vec::new(), *owner);
             }
         });
+
+        lowering.register_user_struct_layouts(resolution);
     }
 
     let mut program = lowering.finish();
@@ -279,6 +281,47 @@ impl<'ctx> MirLowering<'ctx> {
             &self.typecheck.interner,
             self.resolution,
         )
+    }
+
+    /// Register layouts for every user-defined struct (skipping core files) so that
+    /// structs which are never referenced by any lowered function still get printed.
+    fn register_user_struct_layouts(&mut self, resolution: &ResolutionResult) {
+        let mut struct_defs: Vec<DefId> = resolution
+            .defs
+            .iter()
+            .filter_map(|(def_id, info)| {
+                if !matches!(info.kind, DefKind::Struct)
+                    || info.span.src().name().starts_with("core.")
+                {
+                    return None;
+                }
+
+                Some(*def_id)
+            })
+            .collect();
+
+        struct_defs.sort_by_key(|def_id| def_id.0);
+
+        for struct_def in struct_defs {
+            let generic_args: Vec<TypeId> = self
+                .typecheck
+                .struct_generics
+                .get(&struct_def)
+                .map(|generics| {
+                    generics
+                        .iter()
+                        .map(|&generic| self.typecheck.interner.intern(Type::GenericParam(generic)))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let struct_ty = self.typecheck.interner.intern(Type::Struct {
+                def_id: struct_def,
+                generic_args,
+            });
+
+            self.register_struct_layout(struct_ty, struct_def);
+        }
     }
 
     fn register_struct_layout(&mut self, ty: TypeId, struct_def: DefId) {
