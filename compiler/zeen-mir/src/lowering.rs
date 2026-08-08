@@ -1060,7 +1060,11 @@ impl<'ctx> MirLowering<'ctx> {
         result_ty: TypeId,
     ) -> (BlockId, Operand) {
         let mono_args = self.substitute_generic_args(fb, &op_res.generic_args);
-        let mir_fn_id = self.monomorphize_fn(op_res.method_def, mono_args, None);
+        let mir_fn_id = self.monomorphize_fn(
+            op_res.method_def,
+            mono_args,
+            self.typecheck.method_owner.get(&op_res.method_def).copied(),
+        );
 
         let mut args = vec![self_operand];
         args.extend(extra_args);
