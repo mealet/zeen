@@ -66,7 +66,15 @@ pub fn lower_program<'ctx>(
         main_fn = Some(main_fn_monomorphized);
     } else {
         fns_with_owners.iter().for_each(|(def_id, _, owner)| {
-            lowering.monomorphize_fn(*def_id, Vec::new(), *owner);
+            let is_core = resolution
+                .defs
+                .get(def_id)
+                .map(|info| info.span.src().name().starts_with("core."))
+                .unwrap_or(false);
+
+            if !is_core {
+                lowering.monomorphize_fn(*def_id, Vec::new(), *owner);
+            }
         });
     }
 

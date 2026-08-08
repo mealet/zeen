@@ -228,3 +228,45 @@ fn array_length_overflow_is_reported() {
 fn unterminated_block_comment_is_reported() {
     compile_err_contains("/* never closed", "unterminated block comment");
 }
+
+#[test]
+fn unused_core_functions_are_not_lowered_without_main() {
+    let mir = compile_ok("");
+    for core_method in [
+        "fn eq(",
+        "fn add(",
+        "fn sub(",
+        "fn display()",
+        "fn debug()",
+        "fn slice(",
+    ] {
+        assert!(
+            !mir.contains(core_method),
+            "unused core method `{core_method}` must not be lowered:\n{mir}"
+        );
+    }
+}
+
+#[test]
+fn user_functions_are_lowered_without_main() {
+    let mir = compile_ok("fn unused() i32 { return 42; }");
+    assert!(mir.contains("fn unused() i32"), "MIR:\n{mir}");
+}
+
+#[test]
+fn reachable_core_method_lowers_without_main() {
+    let mir = compile_ok(
+        r#"
+struct Vec2 { x: i32, y: i32 }
+implement Add: Vec2 {
+    fn add(self, other: Vec2) Vec2 { return self; }
+}
+fn make() Vec2 {
+    let a = Vec2 { .x = 1, .y = 2 };
+    let b = Vec2 { .x = 3, .y = 4 };
+    return a + b;
+}
+"#,
+    );
+    assert!(mir.contains("fn Vec2.add("), "MIR:\n{mir}");
+}
