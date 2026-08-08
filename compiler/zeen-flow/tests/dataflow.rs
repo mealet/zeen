@@ -562,3 +562,65 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn enum_variant_value_is_copy() {
+    flow_ok(
+        r#"
+enum Color { Red, Green, Blue }
+fn main() {
+    let c = Color.Red;
+    let d = c;
+    let e = c;
+}
+"#,
+    );
+}
+
+#[test]
+fn generic_drop_struct_field_move_is_error() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+struct Box[T] { pub v: T }
+implement[T] Drop : Box[T] {
+    fn drop(self) void {}
+}
+fn main() {
+    let b = Box { .v = Inner { .x = 1 } };
+    let v = b.v;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("MoveOutOfDrop")));
+}
+
+#[test]
+fn generic_drop_struct_registers_scope_drop() {
+    let result = flow_ok(
+        r#"
+struct Box[T] { pub v: T }
+implement[T] Drop : Box[T] {
+    fn drop(self) void {}
+}
+fn main() {
+    let b = Box { .v = 30 };
+}
+"#,
+    );
+    assert!(!result.functions_with_drops.is_empty());
+}
+
+#[test]
+fn many_pointer_indexing_via_cast_works() {
+    flow_ok(
+        r#"
+fn main() {
+    let x = 5;
+    let p: [*]i32 = @as([*]i32, &x);
+    let a = p[0];
+    let b = p[1];
+}
+"#,
+    );
+}

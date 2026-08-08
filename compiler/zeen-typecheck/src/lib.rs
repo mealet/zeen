@@ -114,6 +114,7 @@ impl<'res> TypeChecker<'res> {
 
     pub fn finish(mut self) -> Result<TypeCheckResult, Vec<TypeError>> {
         self.result.struct_generics = self.struct_generics;
+        self.result.enum_variants = self.enum_variants;
 
         if self.errors.is_empty() {
             return Ok(self.result);

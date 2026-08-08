@@ -526,7 +526,25 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, self.place_to_operand(elem_place, ty))
             }
 
-            HirExprKind::FieldAccess { .. } => {
+            HirExprKind::FieldAccess { object, .. } => {
+                // C-like enum variant access, e.g. `Color.Red`: the whole
+                // expression is just a constant, not a real place.
+                if let HirExprKind::VarRef(enum_def) = &object.kind
+                    && matches!(
+                        self.resolution.defs.get(enum_def).map(|info| &info.kind),
+                        Some(DefKind::Enum)
+                    )
+                {
+                    let variant_def = self.field_resolution(expr.id);
+                    let index = self
+                        .typecheck
+                        .enum_variants
+                        .get(enum_def)
+                        .and_then(|variants| variants.iter().position(|&v| Some(v) == variant_def))
+                        .unwrap_or(0) as i64;
+                    return (block, Operand::Constant(ConstValue::Int(index as i128)));
+                }
+
                 let (block, place) = self.lower_expr_to_place(fb, expr, block);
                 let ty = self.expr_type(fb, expr);
                 (block, self.place_to_operand(place, ty))
