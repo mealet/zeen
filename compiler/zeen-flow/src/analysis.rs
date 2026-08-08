@@ -172,10 +172,18 @@ impl<'ctx> DataFlow<'ctx> {
             let after = self.current.clone();
             let succ_ids = successors.get(&block_id).cloned().unwrap_or_default();
             for succ in succ_ids {
-                let mut merged = self.block_in_states.get(&succ).cloned().unwrap_or_default();
-                let changed = merged.merge(&after);
-                if changed {
-                    self.block_in_states.insert(succ, merged);
+                // A block with no incoming edge yet adopts this edge's state
+                // outright; joining would mix it with the bottom
+                // (all-uninitialized) default and poison every first visit.
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    self.block_in_states.entry(succ)
+                {
+                    entry.insert(after.clone());
+                    worklist.push(succ);
+                    continue;
+                }
+                let merged = self.block_in_states.get_mut(&succ).unwrap();
+                if merged.merge(&after) {
                     worklist.push(succ);
                 }
             }
