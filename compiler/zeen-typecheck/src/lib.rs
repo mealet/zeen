@@ -2360,7 +2360,19 @@ impl<'res> TypeChecker<'res> {
             return None;
         }
 
-        let method_def_id = *self.struct_methods.get(&struct_def)?.get(&field_name)?;
+        let method_def_id = {
+            let Some(method_def_id) = self.struct_methods.get(&struct_def)?.get(&field_name) else {
+                let field = self.interner.borrow().resolve(&field_name).into();
+                self.report(TypeError::UnknownField {
+                    struct_name: self.display_type(obj_ty).into(),
+                    field,
+                    src: source.src(),
+                    span: field_span,
+                });
+                return Some(self.result.interner.error());
+            };
+            *method_def_id
+        };
         let sig = &self.fn_sigs[&method_def_id];
         let self_mode = sig.self_mode;
 
@@ -2368,7 +2380,15 @@ impl<'res> TypeChecker<'res> {
         let sig_ret = sig.ret;
         let sig_generics = sig.generics.clone();
 
-        let _ = self_mode?; // wth i didn't even knew this exist in Rust
+        if self_mode.is_none() {
+            let method = self.interner.borrow().resolve(&field_name).into();
+            self.report(TypeError::StaticMethodOnInstance {
+                method,
+                src: source.src(),
+                span: field_span,
+            });
+            return Some(self.result.interner.error());
+        }
 
         self.check_method_visibility(
             method_def_id,
@@ -2377,9 +2397,12 @@ impl<'res> TypeChecker<'res> {
             &(field_span, source.src()).into(),
         );
 
-        if args.len() != sig_params.len() {
+        let has_self = true;
+        let expected_args = sig_params.len() - 1;
+
+        if args.len() != expected_args {
             self.report(TypeError::ArgCountMismatch {
-                expected: sig_params.len(),
+                expected: expected_args,
                 found: args.len(),
                 src: source.src(),
                 span: source.span,
@@ -2432,7 +2455,13 @@ impl<'res> TypeChecker<'res> {
             bindings.insert(*g, ty);
         }
 
-        for (param_ty, arg) in sig_params.iter().zip(args.iter()) {
+        let user_params = if has_self {
+            &sig_params[1..]
+        } else {
+            &sig_params[..]
+        };
+
+        for (param_ty, arg) in user_params.iter().zip(args.iter()) {
             self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
         }
 
@@ -3242,6 +3271,11 @@ impl<'res> TypeChecker<'res> {
                         imp_generics,
                         source,
                     );
+
+                    // implement methods fulfilling an interface are implicitly public
+                    if let Some(sig) = self.fn_sigs.get_mut(&impl_method_def) {
+                        sig.is_pub = true;
+                    }
                 }
             }
         }
@@ -3757,3 +3791,4 @@ fn format_error_to_diagnostic(err: &FormatParseError, format_source: &Source) ->
         }
     }
 }
+

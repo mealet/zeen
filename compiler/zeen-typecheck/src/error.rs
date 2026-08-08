@@ -136,7 +136,22 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("unable to infer `{generic_name}` generic type")]
+    #[error("`{method}` is a static method and cannot be called on an instance")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::static_method_on_instance),
+        help("use `Type.method(...)` to call a static method")
+    )]
+    StaticMethodOnInstance {
+        method: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("cannot infer `{generic_name}` generic type")]
     #[diagnostic(severity(Error), code(zeen::typechecker::cannot_infer_generic))]
     CannotInferGeneric {
         generic_name: SmolStr,
