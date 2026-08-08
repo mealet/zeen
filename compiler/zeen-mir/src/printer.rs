@@ -214,7 +214,7 @@ impl<'a> MirPrinter<'a> {
 
     fn print_statement(&self, out: &mut String, stmt: &MirStatement, func: &MirFunction) {
         match stmt {
-            MirStatement::Assign { place, rvalue } => {
+            MirStatement::Assign { place, rvalue, .. } => {
                 let _ = writeln!(
                     out,
                     "        {} = {};",
@@ -266,6 +266,7 @@ impl<'a> MirPrinter<'a> {
                 args,
                 destination,
                 target,
+                ..
             } => {
                 let arg_strs: Vec<String> =
                     args.iter().map(|a| self.operand_ref(a, func)).collect();
@@ -289,6 +290,7 @@ impl<'a> MirPrinter<'a> {
                 args,
                 destination,
                 target,
+                ..
             } => {
                 let arg_strs: Vec<String> =
                     args.iter().map(|a| self.operand_ref(a, func)).collect();

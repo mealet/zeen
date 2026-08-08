@@ -426,6 +426,7 @@ impl<'ctx> MirLowering<'ctx> {
                             lhs: lhs_op,
                             rhs: rhs_op,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
@@ -453,6 +454,7 @@ impl<'ctx> MirLowering<'ctx> {
                             place: inner_place,
                             is_const,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
@@ -478,6 +480,7 @@ impl<'ctx> MirLowering<'ctx> {
                             op: *op,
                             operand: inner_op,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
@@ -567,6 +570,7 @@ impl<'ctx> MirLowering<'ctx> {
                             kind: AggregateKind::Struct(struct_def),
                             operands: ordered_operands,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
@@ -593,6 +597,7 @@ impl<'ctx> MirLowering<'ctx> {
                             kind: AggregateKind::Array,
                             operands,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
@@ -642,6 +647,7 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place: Place::from_local(result_local),
                         rvalue: Rvalue::Use(then_operand),
+                        source: Some(expr.source.clone()),
                     },
                 );
                 fb.set_terminator(then_end, Terminator::Goto(join));
@@ -651,6 +657,7 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place: Place::from_local(result_local),
                         rvalue: Rvalue::Use(else_operand),
+                        source: Some(expr.source.clone()),
                     },
                 );
                 fb.set_terminator(else_end, Terminator::Goto(join));
@@ -713,6 +720,7 @@ impl<'ctx> MirLowering<'ctx> {
                         args: arg_operands,
                         destination: dest_place.clone(),
                         target: if is_diverging { None } else { Some(next_block) },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
@@ -744,6 +752,7 @@ impl<'ctx> MirLowering<'ctx> {
                         MirStatement::Assign {
                             place: Place::from_local(temp),
                             rvalue,
+                            source: Some(expr.source.clone()),
                         },
                     );
                     (block, Operand::Move(Place::from_local(temp)))
@@ -766,6 +775,7 @@ impl<'ctx> MirLowering<'ctx> {
                                 operand: value_operand,
                                 target: target_ty,
                             },
+                            source: Some(expr.source.clone()),
                         },
                     );
                     (block, Operand::Move(Place::from_local(temp)))
@@ -845,6 +855,7 @@ impl<'ctx> MirLowering<'ctx> {
                             MirStatement::Assign {
                                 place: Place::from_local(temp),
                                 rvalue: Rvalue::Use(other),
+                                source: Some(expr.source.clone()),
                             },
                         );
 
@@ -942,6 +953,7 @@ impl<'ctx> MirLowering<'ctx> {
                             MirStatement::Assign {
                                 place: Place::from_local(temp),
                                 rvalue: Rvalue::Ref { place, is_const },
+                                source: None,
                             },
                         );
                         (block, Operand::Move(Place::from_local(temp)))
@@ -971,6 +983,7 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place: Place::from_local(temp),
                         rvalue: Rvalue::Use(operand),
+                        source: None,
                     },
                 );
                 temp
@@ -1022,6 +1035,7 @@ impl<'ctx> MirLowering<'ctx> {
                 args: operands,
                 destination: Place::from_local(dest),
                 target: if is_diverging { None } else { Some(next) },
+                source: None,
             },
         );
 
@@ -1054,6 +1068,7 @@ impl<'ctx> MirLowering<'ctx> {
                 args: Vec::new(),
                 destination: Place::from_local(dest),
                 target: None,
+                source: None,
             },
         );
 
@@ -1130,6 +1145,7 @@ impl<'ctx> MirLowering<'ctx> {
                 args,
                 destination: Place::from_local(dest),
                 target: Some(next),
+                source: None,
             },
         );
 
@@ -1188,6 +1204,7 @@ impl<'ctx> MirLowering<'ctx> {
                         MirStatement::Assign {
                             place: Place::from_local(local),
                             rvalue: Rvalue::Use(operand),
+                            source: Some(stmt.source.clone()),
                         },
                     );
                     block
@@ -1205,6 +1222,7 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place,
                         rvalue: Rvalue::Use(operand),
+                        source: Some(stmt.source.clone()),
                     },
                 );
                 block
@@ -1237,6 +1255,7 @@ impl<'ctx> MirLowering<'ctx> {
                         MirStatement::Assign {
                             place,
                             rvalue: Rvalue::Use(result_operand),
+                            source: Some(stmt.source.clone()),
                         },
                     );
 
@@ -1259,6 +1278,7 @@ impl<'ctx> MirLowering<'ctx> {
                             lhs: lhs_operand,
                             rhs: rhs_operand,
                         },
+                        source: Some(stmt.source.clone()),
                     },
                 );
                 fb.push_stmt(
@@ -1266,6 +1286,7 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place,
                         rvalue: Rvalue::Use(Operand::Move(Place::from_local(temp))),
+                        source: Some(stmt.source.clone()),
                     },
                 );
 
@@ -1394,6 +1415,7 @@ impl<'ctx> MirLowering<'ctx> {
             MirStatement::Assign {
                 place: Place::from_local(counter),
                 rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0))),
+                source: None,
             },
         );
 
@@ -1420,6 +1442,7 @@ impl<'ctx> MirLowering<'ctx> {
             MirStatement::Assign {
                 place: Place::from_local(loop_var),
                 rvalue: Rvalue::Use(Operand::Copy(Place::from_local(counter))),
+                source: None,
             },
         );
 
@@ -1437,6 +1460,7 @@ impl<'ctx> MirLowering<'ctx> {
                     lhs: Operand::Copy(Place::from_local(counter)),
                     rhs: count_operand,
                 },
+                source: None,
             },
         );
 
@@ -1469,6 +1493,7 @@ impl<'ctx> MirLowering<'ctx> {
                     lhs: Operand::Copy(Place::from_local(counter)),
                     rhs: Operand::Constant(ConstValue::Int(1)),
                 },
+                source: None,
             },
         );
         fb.push_stmt(
@@ -1476,6 +1501,7 @@ impl<'ctx> MirLowering<'ctx> {
             MirStatement::Assign {
                 place: Place::from_local(counter),
                 rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented))),
+                source: None,
             },
         );
         fb.set_terminator(body_end, Terminator::Goto(header));
@@ -1516,6 +1542,7 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place: Place::from_local(len_local),
                         rvalue: Rvalue::Use(Operand::Copy(len_place)),
+                        source: None,
                     },
                 );
 
@@ -1531,6 +1558,7 @@ impl<'ctx> MirLowering<'ctx> {
             MirStatement::Assign {
                 place: Place::from_local(counter),
                 rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0))),
+                source: None,
             },
         );
 
@@ -1553,6 +1581,7 @@ impl<'ctx> MirLowering<'ctx> {
                     lhs: Operand::Copy(Place::from_local(counter)),
                     rhs: len_operand,
                 },
+                source: None,
             },
         );
 
@@ -1596,6 +1625,7 @@ impl<'ctx> MirLowering<'ctx> {
             MirStatement::Assign {
                 place: Place::from_local(loop_var),
                 rvalue: Rvalue::Use(elem_operand),
+                source: None,
             },
         );
 
@@ -1619,6 +1649,7 @@ impl<'ctx> MirLowering<'ctx> {
                     lhs: Operand::Copy(Place::from_local(counter)),
                     rhs: Operand::Constant(ConstValue::Int(1)),
                 },
+                source: None,
             },
         );
 
@@ -1627,6 +1658,7 @@ impl<'ctx> MirLowering<'ctx> {
             MirStatement::Assign {
                 place: Place::from_local(counter),
                 rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented))),
+                source: None,
             },
         );
 
@@ -1878,6 +1910,7 @@ impl<'ctx> MirLowering<'ctx> {
                 args: arg_operands,
                 destination: dest_place.clone(),
                 target: if is_diverging { None } else { Some(next_block) },
+                source: None,
             },
         );
 

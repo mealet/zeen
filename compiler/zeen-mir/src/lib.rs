@@ -144,7 +144,13 @@ pub struct BasicBlock {
 
 #[derive(Debug, Clone)]
 pub enum MirStatement {
-    Assign { place: Place, rvalue: Rvalue },
+    Assign {
+        place: Place,
+        rvalue: Rvalue,
+        /// Source of the expression that produced this statement, used for
+        /// diagnostics on reads of the operands.
+        source: Option<Source>,
+    },
     Drop(Place),
 
     StorageLive(LocalId),
@@ -270,6 +276,8 @@ pub enum Terminator {
         args: Vec<Operand>,
         destination: Place,
         target: Option<BlockId>,
+        /// Source of the call expression, used for diagnostics on arg reads.
+        source: Option<Source>,
     },
 
     MacroCall {
@@ -278,6 +286,8 @@ pub enum Terminator {
         args: Vec<Operand>,
         destination: Place,
         target: Option<BlockId>,
+        /// Source of the macro call expression, used for diagnostics on arg reads.
+        source: Option<Source>,
     },
 
     Return(Operand),
