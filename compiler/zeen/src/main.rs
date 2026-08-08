@@ -136,7 +136,7 @@ fn main() {
             eprintln!("{}", report_string);
         }
 
-        cli::println_error(format!("Compiler returned {} errors", errors.len()));
+        cli::println_error(format!("Compiler returned {} error(s)", errors.len()));
 
         exit(1);
     });
@@ -189,7 +189,7 @@ fn main() {
             eprintln!("{}", report_string);
         }
 
-        cli::println_error(format!("Compiler returned {} errors", errors.len()));
+        cli::println_error(format!("Compiler returned {} error(s)", errors.len()));
 
         exit(1);
     });
@@ -200,8 +200,6 @@ fn main() {
         &resolution_result,
         &hir_module,
     );
-
-    cli::println_info("Analyzing", "dataflow, move semantics and drop insertion");
 
     let flow_result = zeen_flow::run_dataflow(
         &mut lowered_mir.program,
@@ -218,7 +216,7 @@ fn main() {
             }
             if !result.warnings.is_empty() {
                 cli::println_warn(format!(
-                    "Dataflow analysis reported {} warning(s)",
+                    "Compiler reported {} warning(s)",
                     result.warnings.len()
                 ));
             }
@@ -230,7 +228,7 @@ fn main() {
             }
 
             cli::println_error(format!(
-                "Dataflow analysis reported {} error(s)",
+                "Compiler returned {} error(s)",
                 errors.len()
             ));
 
