@@ -358,8 +358,12 @@ impl<'a> MirPrinter<'a> {
             }
 
             Rvalue::Ref { place, is_const } => {
-                let prefix = if *is_const { "&const " } else { "&" };
-                format!("{}{}", prefix, self.place_ref(place, func))
+                let prefix = if *is_const {
+                    "addr_of_const"
+                } else {
+                    "addr_of"
+                };
+                format!("{}({})", prefix, self.place_ref(place, func))
             }
 
             Rvalue::Cast { operand, target } => {
