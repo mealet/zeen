@@ -179,7 +179,7 @@ fn main() {
 }
 "#,
     );
-    assert!(mir.contains("fn add(%0: Vec2"), "MIR:\n{mir}");
+    assert!(mir.contains("fn Vec2.add(%0: Vec2"), "MIR:\n{mir}");
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn main() {
 }
 "#,
     );
-    assert!(mir.contains("fn add[i32]"), "MIR:\n{mir}");
+    assert!(mir.contains("fn Box[i32].add("), "MIR:\n{mir}");
 }
 
 #[test]

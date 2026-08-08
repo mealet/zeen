@@ -17,6 +17,9 @@ pub mod collecter;
 pub mod lowering;
 pub mod printer;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MirFunctionId(pub u32);
 
