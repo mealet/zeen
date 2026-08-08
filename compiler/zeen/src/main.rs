@@ -194,12 +194,49 @@ fn main() {
         exit(1);
     });
 
-    let lowered_mir = zeen_mir::lowering::lower_program(
+    let mut lowered_mir = zeen_mir::lowering::lower_program(
         Rc::clone(&rodeo),
         &mut typechecker_result,
         &resolution_result,
         &hir_module,
     );
+
+    cli::println_info("Analyzing", "dataflow, move semantics and drop insertion");
+
+    let flow_result = zeen_flow::run_dataflow(
+        &mut lowered_mir.program,
+        &typechecker_result,
+        &resolution_result,
+        Rc::clone(&rodeo),
+    );
+
+    match flow_result {
+        Ok(result) => {
+            for warning in &result.warnings {
+                let report_string = driver.report(warning).unwrap();
+                eprintln!("{}", report_string);
+            }
+            if !result.warnings.is_empty() {
+                cli::println_warn(format!(
+                    "Dataflow analysis reported {} warning(s)",
+                    result.warnings.len()
+                ));
+            }
+        }
+        Err(errors) => {
+            for err in &errors {
+                let report_string = driver.report(err).unwrap();
+                eprintln!("{}", report_string);
+            }
+
+            cli::println_error(format!(
+                "Dataflow analysis reported {} error(s)",
+                errors.len()
+            ));
+
+            exit(1);
+        }
+    }
 
     if args.emit == CompilationOutput::EmitMIR {
         let printed_mir = zeen_mir::printer::print_mir_program(
