@@ -826,3 +826,124 @@ fn main() {
         "the drop impl must not auto-drop its own `self` parameter"
     );
 }
+
+/// Formats the projection of a `Drop` statement target as a display string
+/// (e.g. `%0` for a whole local, `%2.field1.field2` for a nested field).
+fn drop_targets(src: &str) -> Vec<String> {
+    let mut compiled = compile(src).expect("compilation must succeed");
+    run_dataflow(
+        &mut compiled.program,
+        &compiled.typecheck,
+        &compiled.resolution,
+        Rc::clone(&compiled.rodeo),
+    )
+    .expect("dataflow must pass");
+
+    let main_id = compiled
+        .program
+        .function_names
+        .iter()
+        .find(|(_, name)| name.as_str() == "main")
+        .map(|(id, _)| *id)
+        .expect("`main` must exist");
+    let main_fn = &compiled.program.functions[&main_id];
+
+    let mut targets = Vec::new();
+    for block in &main_fn.blocks {
+        for stmt in &block.statements {
+            let zeen_mir::MirStatement::Drop(place) = stmt else {
+                continue;
+            };
+            let mut target = format!("%{}", place.local.0);
+            for elem in &place.projection {
+                if let zeen_mir::PlaceElem::Field(field) = elem {
+                    target.push_str(&format!(".{}", field.0));
+                }
+            }
+            targets.push(target);
+        }
+    }
+    targets
+}
+
+#[test]
+fn non_drop_struct_drops_its_drop_fields_recursively() {
+    let targets = drop_targets(
+        r#"
+struct Leaf { pub x: i32 }
+implement Drop : Leaf { fn drop(self) void {} }
+struct Wrapper { pub a: Leaf, pub b: Leaf }
+fn main() {
+    let w = Wrapper { .a = Leaf { .x = 1 }, .b = Leaf { .x = 2 } };
+}
+"#,
+    );
+    assert!(
+        !targets
+            .iter()
+            .any(|t| t.starts_with("%0") && !t.contains('.')),
+        "a non-Drop struct must not be dropped whole, got: {targets:?}"
+    );
+    assert_eq!(targets.len(), 2, "got: {targets:?}");
+}
+
+#[test]
+fn explicit_drop_struct_is_dropped_whole() {
+    let targets = drop_targets(
+        r#"
+struct Leaf { pub x: i32 }
+implement Drop : Leaf { fn drop(self) void {} }
+fn main() {
+    let l = Leaf { .x = 1 };
+}
+"#,
+    );
+    assert!(
+        targets.iter().any(|t| t == "%0"),
+        "an explicit-Drop struct must be dropped as a whole value, got: {targets:?}"
+    );
+}
+
+#[test]
+fn partially_moved_struct_drops_only_live_fields_deep() {
+    let targets = drop_targets(
+        r#"
+struct Leaf { pub x: i32 }
+implement Drop : Leaf { fn drop(self) void {} }
+struct Inner { pub a: Leaf, pub b: Leaf }
+struct Outer { pub i: Inner, pub j: Leaf }
+fn main() {
+    let o = Outer { .i = Inner { .a = Leaf { .x = 1 }, .b = Leaf { .x = 2 } }, .j = Leaf { .x = 3 } };
+    let _ = o.j;
+}
+"#,
+    );
+    assert!(
+        !targets
+            .iter()
+            .any(|t| t.starts_with("%0") && !t.contains('.')),
+        "must not drop the whole `o`, got: {targets:?}"
+    );
+    assert!(
+        !targets.iter().any(|t| t == "%0.i"),
+        "must not drop the whole live `Inner`, got: {targets:?}"
+    );
+    let prefixes: std::collections::HashSet<String> = targets
+        .iter()
+        .map(|t| {
+            let mut parts = t.splitn(3, '.');
+            let root = parts.next().unwrap();
+            let inner = parts.next().unwrap_or("").to_string();
+            let leaf = parts.next().unwrap_or("").to_string();
+            (root.to_string(), inner, leaf)
+        })
+        .filter(|(_, _, leaf)| !leaf.is_empty())
+        .map(|(_, inner, _)| inner)
+        .collect();
+    assert_eq!(
+        prefixes.len(),
+        1,
+        "expected both live leaves under `o.i`, got: {targets:?}"
+    );
+    assert_eq!(targets.len(), 2, "got: {targets:?}");
+}

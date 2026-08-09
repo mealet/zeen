@@ -5,7 +5,7 @@ use zeen_resolve::DefId;
 use zeen_typecheck::result::TypeCheckResult;
 use zeen_types::{Type, TypeId, TypeInterner};
 
-use crate::state::{FunctionState, LocalState, ValueState};
+use crate::state::{FunctionState, LocalState, PartialMoveState, ValueState};
 
 /// Places that need a `Drop` statement at scope exit.
 #[derive(Debug, Default)]
@@ -74,6 +74,121 @@ fn type_needs_drop_impl(
     }
 }
 
+/// Expands the drop places of a wholly-live value of type `ty` rooted at
+/// `place`, flattening structs that do not implement `Drop` into their fields.
+///
+/// A struct with an explicit `Drop` implementation is dropped as a whole — the
+/// codegen emits the implementation's `drop` call. Any other struct is expanded
+/// recursively: each field that (transitively) needs a drop ends up as its own
+/// `Drop` place. Arrays/slices stay a single drop of the whole aggregate, since
+/// their elements are never moved individually. This front-loading keeps the
+/// partially-moved state knowledge here; codegen only ever drops the places it
+/// is given and never has to decide which fields are live.
+fn expand_live_drops(
+    interner: &TypeInterner,
+    typecheck: &TypeCheckResult,
+    place: &Place,
+    ty: TypeId,
+    bindings: &HashMap<DefId, TypeId>,
+    out: &mut Vec<Place>,
+) {
+    match interner.get(ty).clone() {
+        Type::Struct {
+            def_id,
+            generic_args,
+        } => {
+            let Some(info) = typecheck.struct_info.get(&def_id) else {
+                return;
+            };
+            if info.capabalities.has_explicit_drop {
+                out.push(place.clone());
+                return;
+            }
+            let nested = bind_type_generics(interner, typecheck, &def_id, &generic_args, bindings);
+            for field in &info.fields {
+                if !type_needs_drop_impl(interner, typecheck, field.field_ty, &nested) {
+                    continue;
+                }
+                expand_live_drops(
+                    interner,
+                    typecheck,
+                    &place.clone().field(field.field_def),
+                    field.field_ty,
+                    &nested,
+                    out,
+                );
+            }
+        }
+        // Substitute a generic parameter before recursing.
+        Type::GenericParam(def) => {
+            if let Some(&bound) = bindings.get(&def) {
+                expand_live_drops(interner, typecheck, place, bound, bindings, out);
+            }
+        }
+        Type::Array { .. } | Type::Slice { .. } => out.push(place.clone()),
+        _ => {}
+    }
+}
+
+/// Expands the drop places of a partially moved struct: only the fields that
+/// are still live are dropped, each expanded to its own (possibly nested)
+/// explicit drops. Partially moved structs without an explicit `Drop` impl are
+/// the only ones that get here — field moves are rejected for `Drop` structs.
+fn expand_partial_drops(
+    interner: &TypeInterner,
+    typecheck: &TypeCheckResult,
+    root: &Place,
+    ty: TypeId,
+    partial: &PartialMoveState,
+    out: &mut Vec<Place>,
+) {
+    match interner.get(ty).clone() {
+        Type::Struct {
+            def_id,
+            generic_args,
+        } => {
+            let Some(info) = typecheck.struct_info.get(&def_id) else {
+                return;
+            };
+            if info.capabalities.has_explicit_drop {
+                return;
+            }
+            let nested = bind_type_generics(
+                interner,
+                typecheck,
+                &def_id,
+                &generic_args,
+                &HashMap::default(),
+            );
+            for field in &info.fields {
+                if partial.field(field.field_def) != ValueState::Initialized {
+                    continue;
+                }
+                if !type_needs_drop_impl(interner, typecheck, field.field_ty, &nested) {
+                    continue;
+                }
+                expand_live_drops(
+                    interner,
+                    typecheck,
+                    &root.clone().field(field.field_def),
+                    field.field_ty,
+                    &nested,
+                    out,
+                );
+            }
+        }
+        // Not a resolvable struct: fall back to the directly tracked live
+        // fields.
+        _ => {
+            for (field, state) in partial.fields() {
+                if *state == ValueState::Initialized {
+                    out.push(root.clone().field(*field));
+                }
+            }
+        }
+    }
+}
+
 /// Extends `bindings` with the generic parameters of `struct_def`, resolved to
 /// the concrete `generic_args` of this instantiation. An argument may itself be
 /// a `GenericParam` of an outer struct, so it is resolved through `bindings`
@@ -100,53 +215,13 @@ fn bind_type_generics(
     nested
 }
 
-/// Field `DefId`s of a (possibly monomorphized) struct type whose concrete,
-/// substituted type requires a drop. Used to drop only the live fields of a
-/// partially moved struct: tracked fields miss untouched ones, and the declared
-/// `field_ty` of a generic struct is a `GenericParam` until the args are
-/// substituted.
-pub fn struct_drop_fields(
-    interner: &TypeInterner,
-    typecheck: &TypeCheckResult,
-    ty: TypeId,
-) -> Vec<DefId> {
-    match interner.get(ty).clone() {
-        Type::Struct {
-            def_id,
-            generic_args,
-        } => {
-            let Some(info) = typecheck.struct_info.get(&def_id) else {
-                return Vec::new();
-            };
-            // Partial moves are rejected for explicit-Drop structs, but guard
-            // anyway: dropping fields would bypass the implementation's `drop`.
-            if info.capabalities.has_explicit_drop {
-                return Vec::new();
-            }
-            let bindings = bind_type_generics(
-                interner,
-                typecheck,
-                &def_id,
-                &generic_args,
-                &HashMap::default(),
-            );
-            info.fields
-                .iter()
-                .filter(|field| {
-                    type_needs_drop_impl(interner, typecheck, field.field_ty, &bindings)
-                })
-                .map(|field| field.field_def)
-                .collect()
-        }
-        _ => Vec::new(),
-    }
-}
-
 /// Computes the set of live places that need dropping at scope exit.
 ///
 /// Only values that are still initialized at the point of exit, are not `Copy`
-/// and actually need a drop participate in the set. Structs that were only
-/// partially moved drop their remaining live fields instead of the root.
+/// and actually need a drop participate in the set. A struct with an explicit
+/// `Drop` implementation is dropped as a whole; any other struct is expanded
+/// into its live fields (recursively), so codegen never works with a partially
+/// moved root.
 pub fn collect_scope_drops(
     function: &MirFunction,
     state: &FunctionState,
@@ -167,30 +242,35 @@ pub fn collect_scope_drops(
 
         match state.state_of(local) {
             LocalState::Whole(ValueState::Initialized) => {
-                drops.places.push(Place::from_local(local));
+                expand_live_drops(
+                    interner,
+                    typecheck,
+                    &Place::from_local(local),
+                    decl.ty,
+                    &HashMap::default(),
+                    &mut drops.places,
+                );
             }
             LocalState::Whole(ValueState::MaybeInitialized) => {
                 // Conditionally live: drop conservatively.
-                drops.places.push(Place::from_local(local));
+                expand_live_drops(
+                    interner,
+                    typecheck,
+                    &Place::from_local(local),
+                    decl.ty,
+                    &HashMap::default(),
+                    &mut drops.places,
+                );
             }
             LocalState::PartiallyMoved(partial) => {
-                // Drop only the fields that are still live. Iterate the
-                // struct's own drop-requiring fields: untouched fields are not
-                // tracked in `partial` but must still be dropped.
-                let drop_fields = struct_drop_fields(interner, typecheck, decl.ty);
-                if !drop_fields.is_empty() {
-                    for field in drop_fields {
-                        if partial.field(field) == ValueState::Initialized {
-                            drops.places.push(Place::from_local(local).field(field));
-                        }
-                    }
-                } else {
-                    for (field, field_state) in partial.fields() {
-                        if *field_state == ValueState::Initialized {
-                            drops.places.push(Place::from_local(local).field(*field));
-                        }
-                    }
-                }
+                expand_partial_drops(
+                    interner,
+                    typecheck,
+                    &Place::from_local(local),
+                    decl.ty,
+                    &partial,
+                    &mut drops.places,
+                );
             }
             LocalState::Whole(ValueState::Uninitialized)
             | LocalState::Whole(ValueState::Moved)
