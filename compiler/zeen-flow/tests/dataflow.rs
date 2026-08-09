@@ -507,6 +507,55 @@ fn main() {
 }
 
 #[test]
+fn uninitialized_struct_used_whole_before_all_fields_written_is_error() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+struct Pair { pub a: Inner, pub b: Inner }
+fn main() {
+    let p: Pair;
+    p.a = Inner { .x = 1 };
+    let q = p;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseOfPartiallyMoved")));
+}
+
+#[test]
+fn uninitialized_struct_fully_reconstructed_fieldwise_is_usable() {
+    flow_ok(
+        r#"
+struct Inner { pub x: i32 }
+struct Pair { pub a: Inner, pub b: Inner }
+fn main() {
+    let p: Pair;
+    p.a = Inner { .x = 1 };
+    p.b = Inner { .x = 2 };
+    let q = p;
+}
+"#,
+    );
+}
+
+#[test]
+fn moved_struct_field_rebuilt_only_partially_is_still_error() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+struct Pair { pub a: Inner, pub b: Inner }
+fn main() {
+    let p = Pair { .a = Inner { .x = 1 }, .b = Inner { .x = 2 } };
+    let _ = p.a;
+    p.b = Inner { .x = 3 };
+    let q = p;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseOfPartiallyMoved")));
+}
+
+#[test]
 fn whole_local_reassigned_after_move_is_usable() {
     flow_ok(
         r#"
