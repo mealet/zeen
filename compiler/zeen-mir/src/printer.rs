@@ -401,9 +401,9 @@ impl<'a> MirPrinter<'a> {
 
     fn operand_ref(&self, operand: &Operand, func: &MirFunction) -> String {
         match operand {
-            Operand::Copy(place) => self.place_ref(place, func),
-            Operand::Move(place) => format!("move {}", self.place_ref(place, func)),
-            Operand::Constant(c) => self.const_ref(c),
+            Operand::Copy(place, _) => self.place_ref(place, func),
+            Operand::Move(place, _) => format!("move {}", self.place_ref(place, func)),
+            Operand::Constant(value, _) => self.const_ref(value),
         }
     }
 
