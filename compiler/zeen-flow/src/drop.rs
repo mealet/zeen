@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use zeen_mir::{LocalId, LocalKind, MirFunction, MirStatement, Place, PlaceElem, Terminator};
+use zeen_mir::{BlockId, LocalId, LocalKind, MirFunction, MirStatement, Place, PlaceElem};
 use zeen_resolve::DefId;
 use zeen_typecheck::result::TypeCheckResult;
 use zeen_types::{Type, TypeId, TypeInterner};
@@ -148,28 +148,12 @@ pub fn collect_scope_drops(
     drops
 }
 
-/// Appends `MirStatement::Drop` before the terminator of exit blocks, in
-/// reverse drop order.
-pub fn insert_drops(function: &mut MirFunction, drops: &DropSet) {
-    let exit_blocks: Vec<usize> = function
-        .blocks
-        .iter()
-        .enumerate()
-        .filter_map(|(i, block)| match &block.terminator {
-            Terminator::Return(_) => Some(i),
-            _ => None,
-        })
-        .collect();
-
-    if exit_blocks.is_empty() {
-        return;
-    }
-
-    for block_index in exit_blocks {
-        let block = &mut function.blocks[block_index];
-        for place in drops.places.iter().rev() {
-            block.statements.push(MirStatement::Drop(place.clone()));
-        }
+/// Appends `MirStatement::Drop` statements before the terminator of a specific
+/// exit block, in reverse drop order (last declared first).
+pub fn insert_drops(function: &mut MirFunction, block: BlockId, drops: &DropSet) {
+    let block = function.block_mut(block);
+    for place in drops.places.iter().rev() {
+        block.statements.push(MirStatement::Drop(place.clone()));
     }
 }
 

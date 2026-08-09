@@ -17,7 +17,7 @@ use zeen_typecheck::result::TypeCheckResult;
 use zeen_types::{Type, TypeId};
 
 use crate::{
-    drop,
+    drop::{self, DropSet},
     error::FlowError,
     result::FlowResult,
     state::{FunctionState, ReadOutcome},
@@ -52,8 +52,11 @@ pub struct DataFlow<'ctx> {
     current: FunctionState,
     /// Merged in-states of each block, used by the worklist.
     block_in_states: HashMap<BlockId, FunctionState>,
-    /// States at the `Return` terminators, used for drop insertion.
-    exit_states: Vec<FunctionState>,
+    /// States at the `Return` terminators, keyed by the returning block. Drop
+    /// insertion looks up the state of the exact exit block, so different exits
+    /// of a function keep their own live-set (a value live on one early-return
+    /// path must not be dropped on a path where it was already moved).
+    exit_states: HashMap<BlockId, FunctionState>,
     /// Locals read anywhere in the current function, for unused warnings.
     read_locals: HashSet<LocalId>,
     /// Cache of `field DefId -> field TypeId`, built from `struct_info`.
@@ -63,6 +66,8 @@ pub struct DataFlow<'ctx> {
     /// Source of the statement/terminator currently being processed, used to
     /// point borrow/move diagnostics at the offending use site.
     current_source: Option<Source>,
+    /// Block currently being analysed, used to record exit states.
+    active_block: BlockId,
 
     diagnostics: Vec<FlowError>,
     functions_with_drops: Vec<MirFunctionId>,
@@ -88,11 +93,12 @@ impl<'ctx> DataFlow<'ctx> {
             rodeo,
             current: FunctionState::default(),
             block_in_states: HashMap::new(),
-            exit_states: Vec::new(),
+            exit_states: HashMap::new(),
             read_locals: HashSet::new(),
             field_types,
             snapshot: None,
             current_source: None,
+            active_block: BlockId(0),
             diagnostics: Vec::new(),
             functions_with_drops: Vec::new(),
         }
@@ -161,6 +167,7 @@ impl<'ctx> DataFlow<'ctx> {
                 .cloned()
                 .unwrap_or_default();
 
+            self.active_block = block_id;
             let block = &blocks[block_id.0 as usize];
             self.current_source = None;
             for stmt in &block.statements {
@@ -242,12 +249,15 @@ impl<'ctx> DataFlow<'ctx> {
     }
 
     /// Applies a terminator's effect: consumes operands, writes the call
-    /// destination, and records exit states on `Return`.
+    /// destination, and records the block's state on `Return`.
     fn apply_terminator(&mut self, terminator: &Terminator) {
         match terminator {
-            Terminator::Goto(_) => {}
+            Terminator::Goto(_) | Terminator::Unreachable => {
+                self.current_source = None;
+            }
             Terminator::SwitchInt { discriminant, .. } => {
                 self.consume_operand(discriminant);
+                self.current_source = None;
             }
             Terminator::Call {
                 args,
@@ -270,17 +280,7 @@ impl<'ctx> DataFlow<'ctx> {
             Terminator::Return(operand) => {
                 self.current_source = None;
                 self.consume_operand(operand);
-                self.exit_states.push(self.current.clone());
-            }
-            Terminator::Goto(_) => {
-                self.current_source = None;
-            }
-            Terminator::SwitchInt { discriminant, .. } => {
-                self.current_source = None;
-                self.consume_operand(discriminant);
-            }
-            Terminator::Unreachable => {
-                self.current_source = None;
+                self.exit_states.insert(self.active_block, self.current.clone());
             }
         }
     }
@@ -428,7 +428,9 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Inserts `Drop` statements at scope exits for values live at the end.
+    /// Inserts `Drop` statements at the exit blocks, using the live-set computed
+    /// for each specific exit. Values live on one early-return path are not
+    /// dropped on a path where they were already moved out.
     fn insert_drops(&mut self, function_id: MirFunctionId) {
         let exit_states = std::mem::take(&mut self.exit_states);
         if exit_states.is_empty() {
@@ -450,35 +452,40 @@ impl<'ctx> DataFlow<'ctx> {
             })
             .flatten();
 
-        let mut combined = drop::DropSet::default();
-        {
-            let function = self.program.functions.get(&function_id).unwrap();
-            for state in &exit_states {
-                let drops = drop::collect_scope_drops(
+        // A `drop` implementation sorts out its own `self`; giving it an
+        // automatic scope-exit drop would call itself recursively.
+        let retain = |drops: &mut DropSet| {
+            if let Some(self_param) = &self_param {
+                drops.places.retain(|place| {
+                    !(place.projection.is_empty() && place.local == self_param.local)
+                });
+            }
+        };
+
+        let mut any_inserted = false;
+        for (block_id, state) in &exit_states {
+            let mut drops = {
+                let function = self.program.functions.get(&function_id).unwrap();
+                drop::collect_scope_drops(
                     function,
                     state,
                     &self.typecheck.interner,
                     self.typecheck,
-                );
-                combined.places.extend(drops.places);
+                )
+            };
+            retain(&mut drops);
+            if drops.places.is_empty() {
+                continue;
             }
+
+            let function = self.program.functions.get_mut(&function_id).unwrap();
+            drop::insert_drops(function, *block_id, &drops);
+            any_inserted = true;
         }
 
-        // A `drop` implementation sorts out its own `self`; giving it an
-        // automatic scope-exit drop would call itself recursively.
-        if let Some(self_param) = self_param {
-            combined
-                .places
-                .retain(|place| !(place.projection.is_empty() && place.local == self_param.local));
+        if any_inserted {
+            self.functions_with_drops.push(function_id);
         }
-
-        if combined.places.is_empty() {
-            return;
-        }
-
-        let function = self.program.functions.get_mut(&function_id).unwrap();
-        drop::insert_drops(function, &combined);
-        self.functions_with_drops.push(function_id);
     }
 
     fn type_is_copy_place(&self, place: &Place) -> bool {
