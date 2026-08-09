@@ -111,7 +111,10 @@ pub fn struct_drop_fields(
     ty: TypeId,
 ) -> Vec<DefId> {
     match interner.get(ty).clone() {
-        Type::Struct { def_id, generic_args } => {
+        Type::Struct {
+            def_id,
+            generic_args,
+        } => {
             let Some(info) = typecheck.struct_info.get(&def_id) else {
                 return Vec::new();
             };
@@ -120,10 +123,18 @@ pub fn struct_drop_fields(
             if info.capabalities.has_explicit_drop {
                 return Vec::new();
             }
-            let bindings = bind_type_generics(interner, typecheck, &def_id, &generic_args, &HashMap::default());
+            let bindings = bind_type_generics(
+                interner,
+                typecheck,
+                &def_id,
+                &generic_args,
+                &HashMap::default(),
+            );
             info.fields
                 .iter()
-                .filter(|field| type_needs_drop_impl(interner, typecheck, field.field_ty, &bindings))
+                .filter(|field| {
+                    type_needs_drop_impl(interner, typecheck, field.field_ty, &bindings)
+                })
                 .map(|field| field.field_def)
                 .collect()
         }

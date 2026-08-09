@@ -227,10 +227,7 @@ fn main() {
                 eprintln!("{}", report_string);
             }
 
-            cli::println_error(format!(
-                "Compiler returned {} error(s)",
-                errors.len()
-            ));
+            cli::println_error(format!("Compiler returned {} error(s)", errors.len()));
 
             exit(1);
         }
