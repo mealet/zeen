@@ -100,6 +100,37 @@ fn bind_type_generics(
     nested
 }
 
+/// Field `DefId`s of a (possibly monomorphized) struct type whose concrete,
+/// substituted type requires a drop. Used to drop only the live fields of a
+/// partially moved struct: tracked fields miss untouched ones, and the declared
+/// `field_ty` of a generic struct is a `GenericParam` until the args are
+/// substituted.
+pub fn struct_drop_fields(
+    interner: &TypeInterner,
+    typecheck: &TypeCheckResult,
+    ty: TypeId,
+) -> Vec<DefId> {
+    match interner.get(ty).clone() {
+        Type::Struct { def_id, generic_args } => {
+            let Some(info) = typecheck.struct_info.get(&def_id) else {
+                return Vec::new();
+            };
+            // Partial moves are rejected for explicit-Drop structs, but guard
+            // anyway: dropping fields would bypass the implementation's `drop`.
+            if info.capabalities.has_explicit_drop {
+                return Vec::new();
+            }
+            let bindings = bind_type_generics(interner, typecheck, &def_id, &generic_args, &HashMap::default());
+            info.fields
+                .iter()
+                .filter(|field| type_needs_drop_impl(interner, typecheck, field.field_ty, &bindings))
+                .map(|field| field.field_def)
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Computes the set of live places that need dropping at scope exit.
 ///
 /// Only values that are still initialized at the point of exit, are not `Copy`
@@ -132,10 +163,21 @@ pub fn collect_scope_drops(
                 drops.places.push(Place::from_local(local));
             }
             LocalState::PartiallyMoved(partial) => {
-                // Drop only the fields that are still live.
-                for (field, field_state) in partial.fields() {
-                    if *field_state == ValueState::Initialized {
-                        drops.places.push(Place::from_local(local).field(*field));
+                // Drop only the fields that are still live. Iterate the
+                // struct's own drop-requiring fields: untouched fields are not
+                // tracked in `partial` but must still be dropped.
+                let drop_fields = struct_drop_fields(interner, typecheck, decl.ty);
+                if !drop_fields.is_empty() {
+                    for field in drop_fields {
+                        if partial.field(field) == ValueState::Initialized {
+                            drops.places.push(Place::from_local(local).field(field));
+                        }
+                    }
+                } else {
+                    for (field, field_state) in partial.fields() {
+                        if *field_state == ValueState::Initialized {
+                            drops.places.push(Place::from_local(local).field(*field));
+                        }
                     }
                 }
             }
