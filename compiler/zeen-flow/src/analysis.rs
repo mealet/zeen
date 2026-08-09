@@ -294,12 +294,11 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// A plain read of a place (no ownership transfer).
+    /// A plain read of a place (no ownership transfer). Read validation always
+/// happens: even a `Copy` value can't be read before it is initialized or after
+/// it was moved out. Only the state transition differs from a full move.
     fn consume_copy_place(&mut self, place: &Place) {
         self.mark_read(place.local);
-        if self.type_is_copy_place(place) {
-            return;
-        }
         self.check_read(place);
     }
 
