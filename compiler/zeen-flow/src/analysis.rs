@@ -232,7 +232,7 @@ impl<'ctx> DataFlow<'ctx> {
                     Rvalue::SizeOf(_) | Rvalue::AlignOf(_) => {}
                 }
 
-                self.current.write_place(place);
+                self.write_destination(place);
             }
             MirStatement::Drop(place) => {
                 self.current_source = None;
@@ -275,12 +275,13 @@ impl<'ctx> DataFlow<'ctx> {
                 for arg in args {
                     self.consume_operand(arg);
                 }
-                self.current.write_place(destination);
+                self.write_destination(destination);
             }
             Terminator::Return(operand) => {
                 self.current_source = None;
                 self.consume_operand(operand);
-                self.exit_states.insert(self.active_block, self.current.clone());
+                self.exit_states
+                    .insert(self.active_block, self.current.clone());
             }
         }
     }
@@ -295,8 +296,9 @@ impl<'ctx> DataFlow<'ctx> {
     }
 
     /// A plain read of a place (no ownership transfer). Read validation always
-/// happens: even a `Copy` value can't be read before it is initialized or after
-/// it was moved out. Only the state transition differs from a full move.
+    /// happens: even a `Copy` value can't be read before it is initialized or
+    /// after it was moved out. Only the state transition differs from a full
+    /// move.
     fn consume_copy_place(&mut self, place: &Place) {
         self.mark_read(place.local);
         self.check_read(place);
@@ -319,6 +321,30 @@ impl<'ctx> DataFlow<'ctx> {
 
         self.check_read(place);
         self.current.move_place(place);
+    }
+
+    /// Writes into a place, supplying the struct field set when the
+    /// destination is a field so reconstruction is tracked precisely.
+    fn write_destination(&mut self, place: &Place) {
+        let is_field = matches!(place.projection.first(), Some(PlaceElem::Field(_)));
+        if is_field && let Some(fields) = self.struct_fields_of(place.local) {
+            self.current.write_struct_place(place, &fields);
+            return;
+        }
+        self.current.write_place(place);
+    }
+
+    /// Field `DefId`s of the struct type of `local`, in declaration order.
+    fn struct_fields_of(&self, local: LocalId) -> Option<Vec<DefId>> {
+        let ty = self.snapshot.as_ref()?.locals.get(local.0 as usize)?.ty;
+        match self.typecheck.interner.get(ty) {
+            Type::Struct { def_id, .. } => self
+                .typecheck
+                .struct_info
+                .get(def_id)
+                .map(|info| info.fields.iter().map(|field| field.field_def).collect()),
+            _ => None,
+        }
     }
 
     /// Emits the appropriate diagnostic if `place` isn't safely readable.
@@ -466,12 +492,7 @@ impl<'ctx> DataFlow<'ctx> {
         for (block_id, state) in &exit_states {
             let mut drops = {
                 let function = self.program.functions.get(&function_id).unwrap();
-                drop::collect_scope_drops(
-                    function,
-                    state,
-                    &self.typecheck.interner,
-                    self.typecheck,
-                )
+                drop::collect_scope_drops(function, state, &self.typecheck.interner, self.typecheck)
             };
             retain(&mut drops);
             if drops.places.is_empty() {
