@@ -53,6 +53,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::Continue) => self.parse_continue(),
             TokenKind::Keyword(CompilerKeyword::While) => self.parse_while(),
             TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(),
+            TokenKind::Keyword(CompilerKeyword::If) => self.parse_if(),
             TokenKind::OpenBrace => self.parse_block(),
 
             _ => self.parse_expr_or_assign(),
@@ -266,6 +267,20 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         let expr = expr_parser.parse()?;
 
         self.expect_optional_semicolon()?;
+
+        let stmt = self.p.arena.alloc(Statement {
+            kind: StatementKind::Expr(expr),
+            span: expr.span,
+        });
+
+        Some(stmt)
+    }
+
+    pub fn parse_if(&mut self) -> Option<&'ctx Statement<'ctx>> {
+        let mut expr_parser = ExprParser::new(self.p);
+        let expr = expr_parser.parse()?;
+
+        let _ = self.p.eat(TokenKind::Semicolon);
 
         let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::Expr(expr),
