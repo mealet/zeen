@@ -907,12 +907,6 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let locals = fb.scope_stack.pop().unwrap();
 
-                // A trailing expression may produce the value of a local owned
-                // by this scope (e.g. `{ let x = ...; x }`). That local is
-                // about to be `StorageDead`'d, but the block's caller consumes
-                // the operand *after* the deads — so the value must be moved
-                // out into a temporary that outlives the scope first. Without
-                // this the value would be sourced from a dead local.
                 let (cur, operand) = match &operand {
                     Operand::Copy(place) | Operand::Move(place) => {
                         if locals.contains(&place.local) {

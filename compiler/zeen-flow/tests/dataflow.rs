@@ -1163,9 +1163,6 @@ fn main() {
 }
 "#,
     );
-    // `inner` (block-scoped in the `if`) is dropped at its scope end, and the
-    // value yielded by the outer block is moved into `_ignore` (dropped at
-    // function exit). Both are dropped exactly once.
     assert!(
         targets.iter().any(|t| t.starts_with("%")),
         "expected drop targets, got: {targets:?}"
