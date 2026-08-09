@@ -904,6 +904,29 @@ impl<'ctx> MirLowering<'ctx> {
                 };
 
                 let locals = fb.scope_stack.pop().unwrap();
+
+                // Move block-owned trailing values before StorageDead.
+                let (cur, operand) = match &operand {
+                    Operand::Copy(place) | Operand::Move(place) => {
+                        if locals.contains(&place.local) {
+                            let ty = fb.func.local(place.local).ty;
+                            let temp = fb.new_temp(ty);
+                            fb.push_stmt(
+                                cur,
+                                MirStatement::Assign {
+                                    place: Place::from_local(temp),
+                                    rvalue: Rvalue::Use(operand),
+                                    source: Some(expr.source.clone()),
+                                },
+                            );
+                            (cur, Operand::Move(Place::from_local(temp)))
+                        } else {
+                            (cur, operand)
+                        }
+                    }
+                    Operand::Constant(_) => (cur, operand),
+                };
+
                 for local in locals.iter().rev() {
                     fb.push_stmt(cur, MirStatement::StorageDead(*local));
                 }
