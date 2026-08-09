@@ -232,53 +232,58 @@ pub fn collect_scope_drops(
 
     for i in 0..function.locals.len() {
         let local = LocalId(i as u32);
-        let decl = function.local(local);
-        if decl.kind == LocalKind::Temporary {
-            continue;
-        }
-        if !type_needs_drop(interner, typecheck, decl.ty) {
-            continue;
-        }
-
-        match state.state_of(local) {
-            LocalState::Whole(ValueState::Initialized) => {
-                expand_live_drops(
-                    interner,
-                    typecheck,
-                    &Place::from_local(local),
-                    decl.ty,
-                    &HashMap::default(),
-                    &mut drops.places,
-                );
-            }
-            LocalState::Whole(ValueState::MaybeInitialized) => {
-                // Conditionally live: drop conservatively.
-                expand_live_drops(
-                    interner,
-                    typecheck,
-                    &Place::from_local(local),
-                    decl.ty,
-                    &HashMap::default(),
-                    &mut drops.places,
-                );
-            }
-            LocalState::PartiallyMoved(partial) => {
-                expand_partial_drops(
-                    interner,
-                    typecheck,
-                    &Place::from_local(local),
-                    decl.ty,
-                    &partial,
-                    &mut drops.places,
-                );
-            }
-            LocalState::Whole(ValueState::Uninitialized)
-            | LocalState::Whole(ValueState::Moved)
-            | LocalState::Whole(ValueState::MaybeMoved) => {}
-        }
+        collect_local_drops(function, local, state, interner, typecheck, &mut drops);
     }
 
     drops
+}
+
+/// Adds the drop places of a single local to `drops` if it is live at scope
+/// exit. `MaybeInitialized` is *not* dropped here: it is up to the caller to
+/// decide whether every path initialized the value (and report an error
+/// otherwise).
+pub fn collect_local_drops(
+    function: &MirFunction,
+    local: LocalId,
+    state: &FunctionState,
+    interner: &TypeInterner,
+    typecheck: &TypeCheckResult,
+    drops: &mut DropSet,
+) {
+    let decl = function.local(local);
+    if decl.kind == LocalKind::Temporary {
+        return;
+    }
+    if !type_needs_drop(interner, typecheck, decl.ty) {
+        return;
+    }
+
+    match state.state_of(local) {
+        LocalState::Whole(ValueState::Initialized) => {
+            expand_live_drops(
+                interner,
+                typecheck,
+                &Place::from_local(local),
+                decl.ty,
+                &HashMap::default(),
+                &mut drops.places,
+            );
+        }
+        LocalState::PartiallyMoved(partial) => {
+            expand_partial_drops(
+                interner,
+                typecheck,
+                &Place::from_local(local),
+                decl.ty,
+                &partial,
+                &mut drops.places,
+            );
+        }
+        LocalState::Whole(ValueState::Uninitialized)
+        | LocalState::Whole(ValueState::Moved)
+        | LocalState::Whole(ValueState::MaybeMoved)
+        | LocalState::Whole(ValueState::MaybeInitialized) => {}
+    }
 }
 
 /// Appends `MirStatement::Drop` statements before the terminator of a specific
@@ -287,6 +292,22 @@ pub fn insert_drops(function: &mut MirFunction, block: BlockId, drops: &DropSet)
     let block = function.block_mut(block);
     for place in drops.places.iter().rev() {
         block.statements.push(MirStatement::Drop(place.clone()));
+    }
+}
+
+/// Inserts `MirStatement::Drop` statements before the statement at `index` in
+/// the given block, in reverse drop order (last declared first).
+pub fn insert_scope_drop(
+    function: &mut MirFunction,
+    block: BlockId,
+    index: usize,
+    drops: &DropSet,
+) {
+    let block = function.block_mut(block);
+    for (offset, place) in drops.places.iter().rev().enumerate() {
+        block
+            .statements
+            .insert(index + offset, MirStatement::Drop(place.clone()));
     }
 }
 

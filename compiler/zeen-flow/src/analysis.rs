@@ -20,7 +20,7 @@ use crate::{
     drop::{self, DropSet},
     error::FlowError,
     result::FlowResult,
-    state::{FunctionState, ReadOutcome},
+    state::{FunctionState, LocalState, ReadOutcome, ValueState},
 };
 
 /// Owned snapshot of a function, taken so the analysis never borrows the
@@ -57,6 +57,10 @@ pub struct DataFlow<'ctx> {
     /// of a function keep their own live-set (a value live on one early-return
     /// path must not be dropped on a path where it was already moved).
     exit_states: HashMap<BlockId, FunctionState>,
+    /// States prior to each `StorageDead`, keyed by `(block, statment index)`
+    /// with the local being ended. Scope-exit drop insertion uses these to
+    /// drop exactly the locals that are still live when a block scope ends.
+    storage_states: HashMap<(BlockId, usize), FunctionState>,
     /// Locals read anywhere in the current function, for unused warnings.
     read_locals: HashSet<LocalId>,
     /// Cache of `field DefId -> field TypeId`, built from `struct_info`.
@@ -94,6 +98,7 @@ impl<'ctx> DataFlow<'ctx> {
             current: FunctionState::default(),
             block_in_states: HashMap::new(),
             exit_states: HashMap::new(),
+            storage_states: HashMap::new(),
             read_locals: HashSet::new(),
             field_types,
             snapshot: None,
@@ -119,6 +124,7 @@ impl<'ctx> DataFlow<'ctx> {
         self.current.clear();
         self.block_in_states.clear();
         self.exit_states.clear();
+        self.storage_states.clear();
         self.read_locals.clear();
 
         // Take an owned snapshot of the function's shapes.
@@ -170,8 +176,8 @@ impl<'ctx> DataFlow<'ctx> {
             self.active_block = block_id;
             let block = &blocks[block_id.0 as usize];
             self.current_source = None;
-            for stmt in &block.statements {
-                self.apply_statement(stmt);
+            for (stmt_index, stmt) in block.statements.iter().enumerate() {
+                self.apply_statement(stmt, stmt_index);
             }
 
             self.apply_terminator(&block.terminator);
@@ -198,11 +204,12 @@ impl<'ctx> DataFlow<'ctx> {
 
         self.report_unused();
 
+        self.insert_scope_drops(function_id);
         self.insert_drops(function_id);
     }
 
     /// Applies a statement's effect to `self.current`.
-    fn apply_statement(&mut self, stmt: &MirStatement) {
+    fn apply_statement(&mut self, stmt: &MirStatement, stmt_index: usize) {
         match stmt {
             MirStatement::Assign {
                 place,
@@ -242,7 +249,18 @@ impl<'ctx> DataFlow<'ctx> {
                 self.current_source = None;
                 self.consume_operand(operand);
             }
-            MirStatement::StorageLive(_) | MirStatement::StorageDead(_) | MirStatement::Nop => {
+            MirStatement::StorageLive(local) => {
+                self.current_source = None;
+                self.current
+                    .set_state(*local, LocalState::Whole(ValueState::Uninitialized));
+            }
+            MirStatement::StorageDead(local) => {
+                self.storage_states
+                    .insert((self.active_block, stmt_index), self.current.clone());
+                self.current_source = None;
+                self.current.mark_moved(*local);
+            }
+            MirStatement::Nop => {
                 self.current_source = None;
             }
         }
@@ -506,6 +524,96 @@ impl<'ctx> DataFlow<'ctx> {
 
         if any_inserted {
             self.functions_with_drops.push(function_id);
+        }
+    }
+
+    /// Inserts `Drop` statements right before the `StorageDead` of a local,
+    /// so nested block scopes end their values exactly when the scope ends.
+    ///
+    /// Unlike `insert_drops`, a `MaybeInitialized` value at scope end is a hard
+    /// error: it is impossible to tell whether it was initialized on runtime,
+    /// so a drop cannot be emitted safely.
+    #[allow(clippy::needless_collect)]
+    fn insert_scope_drops(&mut self, function_id: MirFunctionId) {
+        let storage_states = std::mem::take(&mut self.storage_states);
+        if storage_states.is_empty() {
+            return;
+        }
+
+        #[derive(Default)]
+        struct Plan {
+            insertions: Vec<(usize, DropSet)>,
+            errors: Vec<FlowError>,
+        }
+        let mut per_block: HashMap<BlockId, Plan> = HashMap::new();
+
+        {
+            let Some(snapshot) = &self.snapshot else {
+                return;
+            };
+            let function = self.program.functions.get(&function_id).unwrap();
+
+            for ((block, stmt_index), state) in &storage_states {
+                let Some(MirStatement::StorageDead(local)) = snapshot.blocks[block.0 as usize]
+                    .statements
+                    .get(*stmt_index)
+                else {
+                    continue;
+                };
+                let info = &snapshot.locals[local.0 as usize];
+                if info.kind == LocalKind::Temporary
+                    || !drop::type_needs_drop(&self.typecheck.interner, self.typecheck, info.ty)
+                {
+                    continue;
+                }
+
+                match state.state_of(*local) {
+                    LocalState::Whole(ValueState::Initialized) | LocalState::PartiallyMoved(_) => {
+                        let mut drops = DropSet::default();
+                        drop::collect_local_drops(
+                            function,
+                            *local,
+                            state,
+                            &self.typecheck.interner,
+                            self.typecheck,
+                            &mut drops,
+                        );
+                        if !drops.places.is_empty() {
+                            per_block
+                                .entry(*block)
+                                .or_default()
+                                .insertions
+                                .push((*stmt_index, drops));
+                        }
+                    }
+                    LocalState::Whole(ValueState::MaybeInitialized) => {
+                        if let Some((name, Some(src))) = self.local_name_and_source(*local) {
+                            per_block.entry(*block).or_default().errors.push(
+                                FlowError::MaybeUninitializedDrop {
+                                    name,
+                                    src: src.src(),
+                                    span: src.span,
+                                },
+                            );
+                        }
+                    }
+                    LocalState::Whole(ValueState::Uninitialized)
+                    | LocalState::Whole(ValueState::Moved)
+                    | LocalState::Whole(ValueState::MaybeMoved) => {}
+                }
+            }
+        }
+
+        // Insert drops deepest/rightmost first so earlier index shifts don't
+        // disturb the positions of drops that come after them.
+        for (block, mut plan) in per_block {
+            plan.insertions
+                .sort_by_key(|(index, _)| std::cmp::Reverse(*index));
+            for (index, drops) in plan.insertions {
+                let function = self.program.functions.get_mut(&function_id).unwrap();
+                drop::insert_scope_drop(function, block, index, &drops);
+            }
+            self.diagnostics.extend(plan.errors);
         }
     }
 

@@ -993,3 +993,94 @@ fn main() {
     );
     assert_eq!(targets.len(), 2, "got: {targets:?}");
 }
+
+#[test]
+fn nested_block_scope_drops_its_locals_at_block_end() {
+    /// `(%local, Drop)` pairs in statement order.
+    fn drops_in(src: &str) -> Vec<(usize, String)> {
+        let mut compiled = compile(src).expect("compilation must succeed");
+        run_dataflow(
+            &mut compiled.program,
+            &compiled.typecheck,
+            &compiled.resolution,
+            Rc::clone(&compiled.rodeo),
+        )
+        .expect("dataflow must pass");
+
+        let main_id = compiled
+            .program
+            .function_names
+            .iter()
+            .find(|(_, name)| name.as_str() == "main")
+            .map(|(id, _)| *id)
+            .unwrap();
+        let main_fn = &compiled.program.functions[&main_id];
+
+        let mut drops = Vec::new();
+        for block in &main_fn.blocks {
+            for stmt in &block.statements {
+                let zeen_mir::MirStatement::Drop(place) = stmt else {
+                    continue;
+                };
+                let mut label = format!("%{}", place.local.0);
+                for elem in &place.projection {
+                    if let zeen_mir::PlaceElem::Field(field) = elem {
+                        label.push_str(&format!(".{}", field.0));
+                    }
+                }
+                drops.push((place.local.0 as usize, label));
+            }
+        }
+        drops
+    }
+
+    // A drop-typed local inside a nested block is dropped at the end of that
+    // block (its own `StorageDead`) and not only at function exit. The green
+    // local is dropped twice: once for its block scope, once... no — a local
+    // must be dropped exactly once. This function has no explicit drops, so the
+    // scope-end drop is the only drop of the block-scoped value.
+    let drops = drops_in(
+        r#"
+struct Buffer { pub x: i32 }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    let keep = Buffer { .x = 1 };
+    if (1 == 1) {
+        let inner = Buffer { .x = 2 };
+    }
+}
+"#,
+    );
+    // `%0` (keep) is dropped at function exit; the block-scoped `inner` is
+    // dropped at its block's `StorageDead` (before the function-exit drop).
+    // Both appear exactly once.
+    assert_eq!(drops, vec![(3, "%3".into()), (0, "%0".into())]);
+}
+
+#[test]
+fn maybe_uninitialized_at_scope_end_is_an_error() {
+    let errors = flow_err(
+        r#"
+struct Buffer { pub x: i32 }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    let go = 1;
+    if (go == 1) {
+        let guard: Buffer;
+        let inner_go = 1;
+        if (inner_go == 1) {
+            guard = Buffer { .x = 1 };
+        }
+    }
+}
+"#,
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("MaybeUninitializedDrop")),
+        "expected a maybe-uninitialized drop error, got: {errors:?}"
+    );
+}
