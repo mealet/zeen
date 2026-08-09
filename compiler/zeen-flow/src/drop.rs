@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use zeen_mir::{BlockId, LocalId, LocalKind, MirFunction, MirStatement, Place, PlaceElem};
+use zeen_mir::{BlockId, LocalId, LocalKind, MirFunction, MirStatement, Place};
 use zeen_resolve::DefId;
 use zeen_typecheck::result::TypeCheckResult;
 use zeen_types::{Type, TypeId, TypeInterner};

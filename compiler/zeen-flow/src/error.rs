@@ -68,21 +68,6 @@ pub enum FlowError {
         span: SourceSpan,
     },
 
-    #[error("cannot assign to constant `{name}`")]
-    #[diagnostic(
-        severity(Error),
-        code(zeen::dataflow::assign_to_const),
-        help("declare `{name}` with `var` to make it mutable")
-    )]
-    AssignToConst {
-        name: SmolStr,
-
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label]
-        span: SourceSpan,
-    },
-
     #[error("unused variable `{name}`")]
     #[diagnostic(
         severity(Warning),
@@ -90,21 +75,6 @@ pub enum FlowError {
         help("consider removing it, or prefixing the name with `_`")
     )]
     UnusedVariable {
-        name: SmolStr,
-
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label]
-        span: SourceSpan,
-    },
-
-    #[error("variable `{name}` does not need to be mutable")]
-    #[diagnostic(
-        severity(Warning),
-        code(zeen::dataflow::unused_mut),
-        help("replace the `var` keyword with `const` for `{name}`")
-    )]
-    UnusedMut {
         name: SmolStr,
 
         #[source_code]

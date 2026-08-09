@@ -84,13 +84,6 @@ pub enum LocalState {
     PartiallyMoved(PartialMoveState),
 }
 
-/// Kind of an outstanding borrow of a local.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BorrowKind {
-    Mut,
-    Const,
-}
-
 /// Outcome of attempting to read a place as a fully-initialized value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadOutcome {
@@ -106,7 +99,6 @@ pub enum ReadOutcome {
 #[derive(Debug, Clone, Default)]
 pub struct FunctionState {
     locals: HashMap<LocalId, LocalState>,
-    borrowed: HashMap<LocalId, BorrowKind>,
 }
 
 impl FunctionState {
@@ -237,16 +229,6 @@ impl FunctionState {
         }
     }
 
-    /// Records a borrow of a local.
-    pub fn borrow_place(&mut self, local: LocalId, kind: BorrowKind) {
-        self.borrowed.insert(local, kind);
-    }
-
-    /// Kind of outstanding borrow of a local, if any.
-    pub fn borrow_of(&self, local: LocalId) -> Option<BorrowKind> {
-        self.borrowed.get(&local).copied()
-    }
-
     /// Merges another state into this one (join of the dataflow lattice),
     /// producing maybe-* states when the two disagree.
     pub fn merge(&mut self, other: &Self) -> bool {
@@ -277,43 +259,12 @@ impl FunctionState {
             }
         }
 
-        let mut borrowed_keys: Vec<LocalId> = self.borrowed.keys().copied().collect();
-        for local in other.borrowed.keys().copied() {
-            if !borrowed_keys.contains(&local) {
-                borrowed_keys.push(local);
-            }
-        }
-        for local in borrowed_keys {
-            let left = self.borrowed.get(&local).copied();
-            let right = other.borrowed.get(&local).copied();
-            match (left, right) {
-                (Some(a), Some(b)) => {
-                    let kind = match (a, b) {
-                        (BorrowKind::Mut, _) | (_, BorrowKind::Mut) => BorrowKind::Mut,
-                        (BorrowKind::Const, BorrowKind::Const) => BorrowKind::Const,
-                    };
-                    if self.borrowed.get(&local) != Some(&kind) {
-                        changed = true;
-                        self.borrowed.insert(local, kind);
-                    }
-                }
-                (None, None) => {}
-                (Some(kind), None) | (None, Some(kind)) => {
-                    if self.borrowed.get(&local) != Some(&kind) {
-                        changed = true;
-                        self.borrowed.insert(local, kind);
-                    }
-                }
-            }
-        }
-
         changed
     }
 
     /// Resets the state (fresh function entry).
     pub fn clear(&mut self) {
         self.locals.clear();
-        self.borrowed.clear();
     }
 }
 

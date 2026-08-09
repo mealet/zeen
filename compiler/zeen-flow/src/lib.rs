@@ -7,8 +7,6 @@
 //! On top of the analysis it performs drop insertion and reports move/init
 //! errors plus unused-variable warnings (see `error` for diagnostics).
 
-#![allow(unused)]
-
 use std::{cell::RefCell, rc::Rc};
 
 use lasso::Rodeo;
