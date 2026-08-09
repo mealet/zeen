@@ -1084,3 +1084,90 @@ fn main() {
         "expected a maybe-uninitialized drop error, got: {errors:?}"
     );
 }
+
+#[test]
+fn block_trailing_value_moved_out_of_scope_passes() {
+    flow_ok(
+        r#"
+struct Buffer { pub x: i32 }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    let _a = Buffer { .x = 1 };
+
+    let _b = {
+        let temporary = Buffer { .x = 2 };
+        let ownered = temporary;
+
+        ownered
+    };
+}
+"#,
+    );
+}
+
+#[test]
+fn block_trailing_value_copy_passes() {
+    flow_ok(
+        r#"
+fn main() {
+    let _b = {
+        let temporary = 1;
+        let ownered = temporary;
+        ownered
+    };
+}
+"#,
+    );
+}
+
+#[test]
+fn if_branches_returning_block_scoped_drop_values_passes() {
+    flow_ok(
+        r#"
+struct Buffer { pub x: i32 }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    let go = 1;
+    let _b = if (go == 1) {
+        let temporary = Buffer { .x = 2 };
+        temporary
+    } else {
+        let other = Buffer { .x = 3 };
+        other
+    };
+}
+"#,
+    );
+}
+
+#[test]
+fn block_scoped_value_is_dropped_when_not_consumed() {
+    let targets = drop_targets(
+        r#"
+struct Buffer { pub x: i32 }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    let _ignore = {
+        let temporary = Buffer { .x = 1 };
+        if (1 == 1) {
+            let inner = Buffer { .x = 2 };
+        }
+        temporary
+    };
+}
+"#,
+    );
+    // `inner` (block-scoped in the `if`) is dropped at its scope end, and the
+    // value yielded by the outer block is moved into `_ignore` (dropped at
+    // function exit). Both are dropped exactly once.
+    assert!(
+        targets.iter().any(|t| t.starts_with("%")),
+        "expected drop targets, got: {targets:?}"
+    );
+}
