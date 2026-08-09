@@ -306,8 +306,9 @@ impl<'ctx> DataFlow<'ctx> {
     fn consume_move_place(&mut self, place: &Place) {
         self.mark_read(place.local);
 
-        // Moving a field out of a `Drop` type is forbidden entirely.
-        if first_field(place).is_some() && self.type_is_drop_place(place) {
+        // Moving a field out of a struct with an explicit `Drop` impl is forbidden
+        // entirely.
+        if first_field(place).is_some() && self.type_has_explicit_drop(place) {
             self.emit_drop_move_error(place);
         }
 
@@ -494,11 +495,23 @@ impl<'ctx> DataFlow<'ctx> {
         self.type_is_copy(ty)
     }
 
-    fn type_is_drop_place(&self, place: &Place) -> bool {
+    /// Moves out of a field of a struct with an *explicit* `Drop` implementation
+    /// are rejected: dropping the partial value would bypass the
+    /// implementation's `drop`. Structs that merely *contain* drop values (and
+    /// drop per-field) may be partially moved freely.
+    fn type_has_explicit_drop(&self, place: &Place) -> bool {
         let Some(ty) = self.root_type(place) else {
             return false;
         };
-        drop::type_needs_drop(&self.typecheck.interner, self.typecheck, ty)
+        match self.typecheck.interner.get(ty) {
+            Type::Struct { def_id, .. } => self
+                .typecheck
+                .struct_info
+                .get(def_id)
+                .map(|info| info.capabalities.has_explicit_drop)
+                .unwrap_or(false),
+            _ => false,
+        }
     }
 
     fn type_at_place(&self, place: &Place) -> Option<TypeId> {
