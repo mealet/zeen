@@ -133,6 +133,8 @@ pub struct FnBuilder {
     locals_by_def: HashMap<DefId, LocalId>,
     loop_stack: Vec<LoopTargets>,
     bindings: HashMap<DefId, TypeId>,
+    /// Locals belonging to the current lexical scopes.
+    scope_stack: Vec<Vec<LocalId>>,
 }
 
 impl FnBuilder {
@@ -157,6 +159,7 @@ impl FnBuilder {
             locals_by_def: HashMap::new(),
             loop_stack: Vec::new(),
             bindings,
+            scope_stack: Vec::new(),
         }
     }
 
@@ -887,16 +890,25 @@ impl<'ctx> MirLowering<'ctx> {
             },
 
             HirExprKind::Block { stmts, trailing } => {
+                fb.scope_stack.push(Vec::new());
+
                 let mut cur = block;
 
                 for stmt in stmts.iter() {
                     cur = self.lower_stmt(fb, stmt, cur);
                 }
 
-                match trailing {
+                let (cur, operand) = match trailing {
                     Some(t) => self.lower_expr_to_operand(fb, t, cur),
                     None => (cur, Operand::Constant(ConstValue::Void)),
+                };
+
+                let locals = fb.scope_stack.pop().unwrap();
+                for local in locals.iter().rev() {
+                    fb.push_stmt(cur, MirStatement::StorageDead(*local));
                 }
+
+                (cur, operand)
             }
 
             HirExprKind::Switch => unreachable!("not implemented in previous stages"),
@@ -1311,6 +1323,10 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(stmt.source.clone()),
                 );
                 fb.locals_by_def.insert(*def_id, local);
+                fb.push_stmt(block, MirStatement::StorageLive(local));
+                if let Some(scope) = fb.scope_stack.last_mut() {
+                    scope.push(local);
+                }
 
                 if let Some(v) = value {
                     let (block, operand) = self.lower_expr_to_operand(fb, v, block);
