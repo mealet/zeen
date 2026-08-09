@@ -203,7 +203,7 @@ fn main() {
 
     let flow_result = zeen_flow::run_dataflow(
         &mut lowered_mir.program,
-        &typechecker_result,
+        &mut typechecker_result,
         &resolution_result,
         Rc::clone(&rodeo),
     );

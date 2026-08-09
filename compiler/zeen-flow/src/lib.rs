@@ -31,7 +31,7 @@ pub use result::FlowResult;
 /// right after MIR lowering.
 pub fn run_dataflow(
     program: &mut MirProgram,
-    typecheck: &TypeCheckResult,
+    typecheck: &mut TypeCheckResult,
     resolution: &ResolutionResult,
     rodeo: Rc<RefCell<Rodeo>>,
 ) -> Result<FlowResult, Vec<FlowError>> {

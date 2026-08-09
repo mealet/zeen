@@ -126,7 +126,7 @@ fn run(src: &str) -> Result<FlowResult, Vec<String>> {
 
     run_dataflow(
         &mut compiled.program,
-        &compiled.typecheck,
+        &mut compiled.typecheck,
         &compiled.resolution,
         compiled.rodeo,
     )
@@ -537,6 +537,36 @@ fn main() {
 }
 
 #[test]
+fn generic_struct_field_read_does_not_move_copy_concrete_type() {
+    flow_ok(
+        r#"
+struct Box[T] { pub v: T }
+fn main() {
+    let b = Box { .v = 30 };
+    let x = b.v;
+    let y = b.v;
+}
+"#,
+    );
+}
+
+#[test]
+fn generic_struct_field_move_is_detected_for_move_only_concrete_type() {
+    let errors = flow_err(
+        r#"
+struct Inner { pub x: i32 }
+struct Box[T] { pub v: T }
+fn main() {
+    let b = Box { .v = Inner { .x = 1 } };
+    let x = b.v;
+    let y = b.v;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
 fn uninitialized_struct_used_whole_before_all_fields_written_is_error() {
     let errors = flow_err(
         r#"
@@ -874,7 +904,7 @@ fn main() {
 
     run_dataflow(
         &mut compiled.program,
-        &compiled.typecheck,
+        &mut compiled.typecheck,
         &compiled.resolution,
         Rc::clone(&compiled.rodeo),
     )
@@ -909,7 +939,7 @@ fn drop_targets(src: &str) -> Vec<String> {
     let mut compiled = compile(src).expect("compilation must succeed");
     run_dataflow(
         &mut compiled.program,
-        &compiled.typecheck,
+        &mut compiled.typecheck,
         &compiled.resolution,
         Rc::clone(&compiled.rodeo),
     )
@@ -1031,7 +1061,7 @@ fn nested_block_scope_drops_its_locals_at_block_end() {
         let mut compiled = compile(src).expect("compilation must succeed");
         run_dataflow(
             &mut compiled.program,
-            &compiled.typecheck,
+            &mut compiled.typecheck,
             &compiled.resolution,
             Rc::clone(&compiled.rodeo),
         )

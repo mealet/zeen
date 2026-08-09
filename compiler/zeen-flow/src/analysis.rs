@@ -45,7 +45,7 @@ struct LocalInfo {
 /// move/init diagnostics and inserts `Drop` statements where needed.
 pub struct DataFlow<'ctx> {
     program: &'ctx mut MirProgram,
-    typecheck: &'ctx TypeCheckResult,
+    typecheck: &'ctx mut TypeCheckResult,
     rodeo: Rc<RefCell<Rodeo>>,
 
     /// In-progress state of the currently analyzed function.
@@ -63,8 +63,6 @@ pub struct DataFlow<'ctx> {
     storage_states: HashMap<(BlockId, usize), FunctionState>,
     /// Locals read anywhere in the current function, for unused warnings.
     read_locals: HashSet<LocalId>,
-    /// Cache of `field DefId -> field TypeId`, built from `struct_info`.
-    field_types: HashMap<DefId, TypeId>,
     /// Snapshot of the function currently being analyzed.
     snapshot: Option<FunctionSnapshot>,
     /// Source of the statement/terminator currently being processed, used to
@@ -80,17 +78,10 @@ pub struct DataFlow<'ctx> {
 impl<'ctx> DataFlow<'ctx> {
     pub fn new(
         program: &'ctx mut MirProgram,
-        typecheck: &'ctx TypeCheckResult,
+        typecheck: &'ctx mut TypeCheckResult,
         _resolution: &'ctx ResolutionResult,
         rodeo: Rc<RefCell<Rodeo>>,
     ) -> Self {
-        let mut field_types = HashMap::new();
-        for info in typecheck.struct_info.values() {
-            for field in &info.fields {
-                field_types.insert(field.field_def, field.field_ty);
-            }
-        }
-
         Self {
             program,
             typecheck,
@@ -100,7 +91,6 @@ impl<'ctx> DataFlow<'ctx> {
             exit_states: HashMap::new(),
             storage_states: HashMap::new(),
             read_locals: HashSet::new(),
-            field_types,
             snapshot: None,
             current_source: None,
             active_block: BlockId(0),
@@ -617,7 +607,7 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    fn type_is_copy_place(&self, place: &Place) -> bool {
+    fn type_is_copy_place(&mut self, place: &Place) -> bool {
         let Some(ty) = self.type_at_place(place) else {
             return false;
         };
@@ -643,18 +633,51 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    fn type_at_place(&self, place: &Place) -> Option<TypeId> {
+    fn type_at_place(&mut self, place: &Place) -> Option<TypeId> {
         let mut ty = self
             .snapshot
             .as_ref()?
             .locals
             .get(place.local.0 as usize)?
             .ty;
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
         for elem in &place.projection {
             let PlaceElem::Field(field) = elem else {
                 return None;
             };
-            ty = *self.field_types.get(field)?;
+            let Type::Struct {
+                def_id,
+                generic_args,
+            } = self.typecheck.interner.get(ty).clone()
+            else {
+                return None;
+            };
+            let field_info = self
+                .typecheck
+                .struct_info
+                .get(&def_id)
+                .and_then(|info| info.fields.iter().find(|f| f.field_def == *field))?;
+
+            let params = self
+                .typecheck
+                .struct_generics
+                .get(&def_id)
+                .cloned()
+                .unwrap_or_default();
+            let mut nested = bindings;
+            for (param, arg) in params.iter().zip(generic_args.iter().copied()) {
+                let resolved = match self.typecheck.interner.get(arg) {
+                    Type::GenericParam(def) => nested.get(def).copied().unwrap_or(arg),
+                    _ => arg,
+                };
+                nested.insert(*param, resolved);
+            }
+            ty = zeen_types::substitute_generics(
+                &mut self.typecheck.interner,
+                field_info.field_ty,
+                &nested,
+            );
+            bindings = nested;
         }
         Some(ty)
     }
