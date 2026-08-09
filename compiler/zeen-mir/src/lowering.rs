@@ -905,7 +905,6 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let locals = fb.scope_stack.pop().unwrap();
 
-                // Move block-owned trailing values before StorageDead.
                 let (cur, operand) = match &operand {
                     Operand::Copy(place) | Operand::Move(place) => {
                         if locals.contains(&place.local) {
