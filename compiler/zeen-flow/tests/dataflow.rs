@@ -1264,3 +1264,177 @@ fn use_after_move_points_at_the_operand_not_the_statement() {
         "error must label only the single `a` identifier"
     );
 }
+
+/// Labels every statement of `main`, in statement order, so test can assert
+/// relative positions of `Drop`s vs `StorageLive`/`StorageDead`.
+fn main_stmt_labels(src: &str) -> Vec<String> {
+    let mut compiled = compile(src).expect("compilation must succeed");
+    run_dataflow(
+        &mut compiled.program,
+        &mut compiled.typecheck,
+        &compiled.resolution,
+        Rc::clone(&compiled.rodeo),
+    )
+    .expect("dataflow must pass");
+
+    let main_id = compiled
+        .program
+        .function_names
+        .iter()
+        .find(|(_, name)| name.as_str() == "main")
+        .map(|(id, _)| *id)
+        .expect("`main` must exist");
+    let main_fn = &compiled.program.functions[&main_id];
+
+    let mut labels = Vec::new();
+    for block in &main_fn.blocks {
+        for stmt in &block.statements {
+            match stmt {
+                zeen_mir::MirStatement::StorageLive(local) => {
+                    labels.push(format!("StorageLive(%{})", local.0));
+                }
+                zeen_mir::MirStatement::StorageDead(local) => {
+                    labels.push(format!("StorageDead(%{})", local.0));
+                }
+                zeen_mir::MirStatement::Drop(place) => {
+                    labels.push(format!("Drop(%{})", place.local.0));
+                }
+                zeen_mir::MirStatement::Discard(_) => labels.push("Discard".into()),
+                zeen_mir::MirStatement::Assign { place, .. } => {
+                    labels.push(format!("Assign(%{})", place.local.0));
+                }
+                zeen_mir::MirStatement::Nop => labels.push("Nop".into()),
+            }
+        }
+    }
+    labels
+}
+
+#[test]
+fn scope_drop_hoists_to_the_last_use_of_the_local() {
+    // `only` is read (`let _ = only.x`) before a later block-scoped local is
+    // created. The whole-value drop must be emitted right after that last read,
+    // not at the end of the block scope.
+    let labels = main_stmt_labels(
+        r#"
+struct Buffer { pub x: i32 }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    if (1 == 1) {
+        let only = Buffer { .x = 1 };
+        let _ = only.x;
+        let later = Buffer { .x = 2 };
+    }
+}
+"#,
+    );
+
+    let (drops, lives) = drop_and_live_ids(&labels);
+    assert_eq!(
+        drops.len(),
+        2,
+        "two block-scoped drops expected: {labels:?}"
+    );
+
+    // `only`'s drop must be hoisted to right after its read, i.e. before the
+    // other local's `StorageLive` (its `let later = ...` initializer).
+    let (drop_only, drop_later) = (drops[0], drops[1]);
+    let drop_only_pos = labels
+        .iter()
+        .position(|l| l == &format!("Drop(%{drop_only})"))
+        .expect("drop of `only` must exist");
+    let drop_later_pos = labels
+        .iter()
+        .position(|l| l == &format!("Drop(%{drop_later})"))
+        .expect("drop of `later` must exist");
+    let live_later_pos = lives
+        .iter()
+        .find(|id| **id != drop_only)
+        .and_then(|id| {
+            labels
+                .iter()
+                .position(|l| l == &format!("StorageLive(%{id})"))
+        })
+        .expect("StorageLive of `later` must exist");
+
+    assert!(
+        drop_only_pos < live_later_pos,
+        "the drop of `only` must be hoisted before `later` is created\nsequence: {labels:?}"
+    );
+    // The hoisted drop must sit immediately after the read (`let _ = only.x;`).
+    assert!(
+        labels
+            .windows(2)
+            .any(|w| w[0] == "Discard" && w[1] == format!("Drop(%{drop_only})")),
+        "the hoisted drop must follow the read of `only`\nsequence: {labels:?}"
+    );
+    assert!(
+        drop_later_pos > drop_only_pos,
+        "`later`'s drop (at its scope end) must come after the hoisted `only` drop\n\
+         sequence: {labels:?}"
+    );
+}
+
+#[test]
+fn scope_drop_stays_at_scope_end_when_local_is_rewritten() {
+    // `only` is read mid-block but then reassigned. Hoisting the drop past the
+    // reassignment would drop the new value at the wrong place, so the drop
+    // must remain right before the scope-end `StorageDead`.
+    let labels = main_stmt_labels(
+        r#"
+struct Buffer { pub x: i32 }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    if (1 == 1) {
+        let only = Buffer { .x = 1 };
+        let _ = only.x;
+        only = Buffer { .x = 2 };
+    }
+}
+"#,
+    );
+
+    let (drops, _) = drop_and_live_ids(&labels);
+    assert_eq!(drops.len(), 1, "exactly one drop expected: {labels:?}");
+    let dead_only = labels
+        .iter()
+        .position(|l| l == &format!("StorageDead(%{})", drops[0]))
+        .expect("StorageDead of `only` must exist");
+    let drop_pos = labels
+        .iter()
+        .position(|l| l == &format!("Drop(%{})", drops[0]))
+        .expect("drop of `only` must exist");
+
+    // The reassigned value must still be dropped at scope end: the drop sits
+    // immediately before the local's `StorageDead`.
+    assert_eq!(drop_pos + 1, dead_only, "sequence: {labels:?}");
+}
+
+/// `(drop local ids, StorageLive local ids)` in label order.
+fn drop_and_live_ids(labels: &[String]) -> (Vec<usize>, Vec<usize>) {
+    let drops: Vec<usize> = labels
+        .iter()
+        .filter_map(|l| {
+            l.strip_prefix("Drop(%").map(|r| {
+                r.trim_end_matches(')')
+                    .parse::<usize>()
+                    .expect("local id parse")
+            })
+        })
+        .collect();
+    let lives: Vec<usize> = labels
+        .iter()
+        .filter_map(|l| {
+            l.strip_prefix("StorageLive(%").map(|r| {
+                r.trim_end_matches(')')
+                    .parse::<usize>()
+                    .expect("local id parse")
+            })
+        })
+        .collect();
+    (drops, lives)
+}

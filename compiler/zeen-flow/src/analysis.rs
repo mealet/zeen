@@ -574,11 +574,16 @@ impl<'ctx> DataFlow<'ctx> {
                             &mut drops,
                         );
                         if !drops.places.is_empty() {
+                            let insert_at = drop_insert_position(
+                                &snapshot.blocks[block.0 as usize].statements,
+                                *stmt_index,
+                                *local,
+                            );
                             per_block
                                 .entry(*block)
                                 .or_default()
                                 .insertions
-                                .push((*stmt_index, drops));
+                                .push((insert_at, drops));
                         }
                     }
                     LocalState::Whole(ValueState::MaybeInitialized) => {
@@ -760,6 +765,69 @@ fn first_field(place: &Place) -> Option<DefId> {
     match place.projection.first() {
         Some(PlaceElem::Field(field)) => Some(*field),
         _ => None,
+    }
+}
+
+/// Statement index at which a scope-end drop for `local` should be inserted:
+/// right after the last statement that reads `local`, provided nothing rewrites
+/// `local` between that read and the scope end. Otherwise it stays right before
+/// the `StorageDead` at `storage_idx`.
+fn drop_insert_position(statements: &[MirStatement], storage_idx: usize, local: LocalId) -> usize {
+    let last_read = statements[..storage_idx]
+        .iter()
+        .rposition(|stmt| stmt_reads_local(stmt, local));
+
+    match last_read {
+        Some(use_idx)
+            if !statements[use_idx + 1..storage_idx]
+                .iter()
+                .any(|stmt| stmt_writes_local(stmt, local)) =>
+        {
+            use_idx + 1
+        }
+        _ => storage_idx,
+    }
+}
+
+/// Whether the statement reads (uses) `local`'s value as an operand.
+fn stmt_reads_local(stmt: &MirStatement, local: LocalId) -> bool {
+    match stmt {
+        MirStatement::Assign { rvalue, .. } => rvalue_reads_local(rvalue, local),
+        MirStatement::Discard(operand) => operand_reads_local(operand, local),
+        _ => false,
+    }
+}
+
+/// Whether the statement (re)writes `local`, which would make the value to drop
+/// a different one than the value already planned for.
+fn stmt_writes_local(stmt: &MirStatement, local: LocalId) -> bool {
+    match stmt {
+        MirStatement::Assign { place, .. } => place.local == local,
+        _ => false,
+    }
+}
+
+fn rvalue_reads_local(rvalue: &Rvalue, local: LocalId) -> bool {
+    match rvalue {
+        Rvalue::Use(operand) => operand_reads_local(operand, local),
+        Rvalue::BinaryOp { lhs, rhs, .. } => {
+            operand_reads_local(lhs, local) || operand_reads_local(rhs, local)
+        }
+        Rvalue::UnaryOp { operand, .. } => operand_reads_local(operand, local),
+        Rvalue::Cast { operand, .. } => operand_reads_local(operand, local),
+        Rvalue::Aggregate { operands, .. } => operands
+            .iter()
+            .any(|operand| operand_reads_local(operand, local)),
+        Rvalue::Ref { place, .. } => place.local == local,
+        Rvalue::Discriminant(place) => place.local == local,
+        Rvalue::SizeOf(_) | Rvalue::AlignOf(_) => false,
+    }
+}
+
+fn operand_reads_local(operand: &Operand, local: LocalId) -> bool {
+    match operand {
+        Operand::Copy(place, _) | Operand::Move(place, _) => place.local == local,
+        Operand::Constant(_, _) => false,
     }
 }
 
