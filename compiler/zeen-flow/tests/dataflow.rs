@@ -778,6 +778,52 @@ fn main() {
 }
 
 #[test]
+fn copy_and_drop_implementations_are_an_error() {
+    let errors = flow_err(
+        r#"
+struct Foo { pub x: i32 }
+implement Copy : Foo {}
+implement Drop : Foo {
+    fn drop(self) void {}
+}
+fn main() {}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("CopyWithDrop") || e.contains("Copy`")),
+        "expected the dataflow to reject Copy + Drop, got: {errors:?}"
+    );
+}
+
+#[test]
+fn copy_only_or_drop_only_are_allowed() {
+    flow_ok(
+        r#"
+struct CopyFoo { pub x: i32 }
+implement Copy : CopyFoo {}
+fn main() {
+    let a = CopyFoo { .x = 1 };
+    let b = a;
+    let c = a;
+}
+"#,
+    );
+    flow_ok(
+        r#"
+struct DropFoo { pub x: i32 }
+implement Drop : DropFoo {
+    fn drop(self) void {}
+}
+fn main() {
+    let a = DropFoo { .x = 1 };
+}
+"#,
+    );
+}
+
+#[test]
 fn drop_impls_are_registered_without_recursing_on_self() {
     let mut compiled = compile(
         r#"

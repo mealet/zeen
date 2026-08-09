@@ -470,6 +470,32 @@ impl<'res> TypeChecker<'res> {
             return;
         };
 
+        // `Copy` and `Drop` are mutually exclusive: a `Copy` value is dropped
+        // implicitly (bitwise + nothing to release), so letting the user run a
+        // custom `drop` on it would double-manage whatever it owns. Reject the
+        // `Drop` implementation early and watch the impl registry directly so
+        // the check also fires when `Copy` is implemented afterwards.
+        if iface_def
+            == self
+                .interface_registry
+                .get("Drop")
+                .unwrap_or(DefId(u32::MAX))
+            && self.struct_implements_by_name(object_def, "Copy")
+        {
+            let struct_name = self
+                .resolution
+                .defs
+                .get(&object_def)
+                .map(|d| self.interner.borrow().resolve(&d.name).into())
+                .unwrap_or_else(|| "?".into());
+
+            self.report(TypeError::CopyWithDrop {
+                struct_name,
+                src: source.src(),
+                span: imp.object_bindings_span,
+            });
+        }
+
         let imp_generics: Vec<DefId> = imp.generics.iter().map(|g| g.def_id).collect();
 
         self.check_implement_matches_interface(
