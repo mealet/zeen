@@ -358,8 +358,8 @@ fn main() {
 }
 
 #[test]
-fn array_use_after_move_is_error() {
-    let errors = flow_err(
+fn array_of_copy_elements_is_copyable() {
+    flow_ok(
         r#"
 fn main() {
     let a = [1, 2, 3];
@@ -368,12 +368,11 @@ fn main() {
 }
 "#,
     );
-    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
 }
 
 #[test]
-fn string_literal_array_use_after_move_is_error() {
-    let errors = flow_err(
+fn string_literal_array_is_copyable() {
+    flow_ok(
         r#"
 fn main() {
     let s = "hello";
@@ -382,12 +381,11 @@ fn main() {
 }
 "#,
     );
-    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
 }
 
 #[test]
-fn array_moved_into_function_then_used_again_is_error() {
-    let errors = flow_err(
+fn array_of_copy_elements_passed_to_function_multiple_times() {
+    flow_ok(
         r#"
 fn max(a: [3]i32) i32 {
     return a[0];
@@ -399,7 +397,6 @@ fn main() {
 }
 "#,
     );
-    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
 }
 
 #[test]
@@ -413,6 +410,39 @@ fn main() {
 }
 "#,
     );
+}
+
+#[test]
+fn array_of_move_only_elements_is_still_move_only() {
+    let errors = flow_err(
+        r#"
+struct Buffer { pub x: i32 }
+fn main() {
+    let a = [Buffer { .x = 1 }, Buffer { .x = 2 }];
+    let b = a;
+    let c = a;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
+}
+
+#[test]
+fn array_of_drop_elements_is_still_move_only() {
+    let errors = flow_err(
+        r#"
+struct Buffer { pub x: i32 }
+implement Drop : Buffer {
+    fn drop(self) void {}
+}
+fn main() {
+    let a = [Buffer { .x = 1 }, Buffer { .x = 2 }];
+    let b = a;
+    let c = a;
+}
+"#,
+    );
+    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
 }
 
 #[test]

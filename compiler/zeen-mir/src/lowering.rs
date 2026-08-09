@@ -348,7 +348,9 @@ impl<'ctx> MirLowering<'ctx> {
                 .map(|info| info.capabalities.is_copy)
                 .unwrap_or(false),
 
-            Type::Slice { .. } | Type::Array { .. } => false,
+            Type::Array { element, .. } => self.mir_type_is_copy(element),
+
+            Type::Slice { .. } => false,
 
             _ => false,
         }

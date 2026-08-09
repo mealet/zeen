@@ -690,7 +690,8 @@ impl<'ctx> DataFlow<'ctx> {
                 .get(&def_id)
                 .map(|info| info.capabalities.is_copy)
                 .unwrap_or(false),
-            Type::Slice { .. } | Type::Array { .. } => false,
+            Type::Array { element, .. } => self.type_is_copy(element),
+            Type::Slice { .. } => false,
             _ => false,
         }
     }
