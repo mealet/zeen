@@ -465,7 +465,10 @@ impl<'ctx> MirLowering<'ctx> {
         match &expr.kind {
             HirExprKind::Literal(lit) => {
                 let ty = self.expr_type(fb, expr);
-                (block, Operand::Constant(self.lower_literal(lit, ty)))
+                (
+                    block,
+                    Operand::Constant(self.lower_literal(lit, ty), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
@@ -474,7 +477,7 @@ impl<'ctx> MirLowering<'ctx> {
                 });
                 let place = Place::from_local(local);
                 let ty = fb.func.local(local).ty;
-                let operand = self.place_to_operand(place, ty);
+                let operand = self.place_to_operand(place, ty, Some(expr.source.clone()));
                 (block, operand)
             }
 
@@ -511,7 +514,10 @@ impl<'ctx> MirLowering<'ctx> {
                     },
                 );
 
-                (block, Operand::Move(Place::from_local(temp)))
+                (
+                    block,
+                    Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::Unary {
@@ -539,7 +545,10 @@ impl<'ctx> MirLowering<'ctx> {
                     },
                 );
 
-                (block, Operand::Move(Place::from_local(temp)))
+                (
+                    block,
+                    Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::Unary { expr: inner, op } => {
@@ -565,7 +574,10 @@ impl<'ctx> MirLowering<'ctx> {
                     },
                 );
 
-                (block, Operand::Move(Place::from_local(temp)))
+                (
+                    block,
+                    Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::SliceAccess { object, index } => {
@@ -604,7 +616,10 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let ty = self.expr_type(fb, expr);
 
-                (block, self.place_to_operand(elem_place, ty))
+                (
+                    block,
+                    self.place_to_operand(elem_place, ty, Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::FieldAccess { object, .. } => {
@@ -623,12 +638,21 @@ impl<'ctx> MirLowering<'ctx> {
                         .get(enum_def)
                         .and_then(|variants| variants.iter().position(|&v| Some(v) == variant_def))
                         .unwrap_or(0) as i64;
-                    return (block, Operand::Constant(ConstValue::Int(index as i128)));
+                    return (
+                        block,
+                        Operand::Constant(
+                            ConstValue::Int(index as i128),
+                            Some(expr.source.clone()),
+                        ),
+                    );
                 }
 
                 let (block, place) = self.lower_expr_to_place(fb, expr, block);
                 let ty = self.expr_type(fb, expr);
-                (block, self.place_to_operand(place, ty))
+                (
+                    block,
+                    self.place_to_operand(place, ty, Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::StructInit { fields, .. } => {
@@ -673,7 +697,10 @@ impl<'ctx> MirLowering<'ctx> {
                     },
                 );
 
-                (block, self.place_to_operand(Place::from_local(temp), ty))
+                (
+                    block,
+                    self.place_to_operand(Place::from_local(temp), ty, Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::ArrayInit { elements } => {
@@ -700,7 +727,10 @@ impl<'ctx> MirLowering<'ctx> {
                     },
                 );
 
-                (block, self.place_to_operand(Place::from_local(temp), ty))
+                (
+                    block,
+                    self.place_to_operand(Place::from_local(temp), ty, Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::If {
@@ -732,7 +762,7 @@ impl<'ctx> MirLowering<'ctx> {
                     let join = fb.new_block();
                     fb.set_terminator(then_end, Terminator::Goto(join));
                     fb.set_terminator(else_bb, Terminator::Goto(join));
-                    return (join, Operand::Constant(ConstValue::Void));
+                    return (join, Operand::Constant(ConstValue::Void, None));
                 }
 
                 let (else_end, else_operand) =
@@ -761,7 +791,10 @@ impl<'ctx> MirLowering<'ctx> {
                 );
                 fb.set_terminator(else_end, Terminator::Goto(join));
 
-                (join, Operand::Move(Place::from_local(result_local)))
+                (
+                    join,
+                    Operand::Move(Place::from_local(result_local), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::Call { callee, args, .. } => {
@@ -825,9 +858,12 @@ impl<'ctx> MirLowering<'ctx> {
 
                 if is_diverging {
                     fb.set_terminator(next_block, Terminator::Unreachable);
-                    (next_block, Operand::Constant(ConstValue::Void))
+                    (next_block, Operand::Constant(ConstValue::Void, None))
                 } else {
-                    (next_block, self.place_to_operand(dest_place, ret_ty))
+                    (
+                        next_block,
+                        self.place_to_operand(dest_place, ret_ty, Some(expr.source.clone())),
+                    )
                 }
             }
 
@@ -854,7 +890,10 @@ impl<'ctx> MirLowering<'ctx> {
                             source: Some(expr.source.clone()),
                         },
                     );
-                    (block, Operand::Move(Place::from_local(temp)))
+                    (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    )
                 }
 
                 HirMacroKind::As => {
@@ -877,7 +916,10 @@ impl<'ctx> MirLowering<'ctx> {
                             source: Some(expr.source.clone()),
                         },
                     );
-                    (block, Operand::Move(Place::from_local(temp)))
+                    (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    )
                 }
 
                 HirMacroKind::Print
@@ -904,13 +946,13 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let (cur, operand) = match trailing {
                     Some(t) => self.lower_expr_to_operand(fb, t, cur),
-                    None => (cur, Operand::Constant(ConstValue::Void)),
+                    None => (cur, Operand::Constant(ConstValue::Void, None)),
                 };
 
                 let locals = fb.scope_stack.pop().unwrap();
 
                 let (cur, operand) = match &operand {
-                    Operand::Copy(place) | Operand::Move(place) => {
+                    Operand::Copy(place, _) | Operand::Move(place, _) => {
                         if locals.contains(&place.local) {
                             let ty = fb.func.local(place.local).ty;
                             let temp = fb.new_temp(ty);
@@ -922,12 +964,15 @@ impl<'ctx> MirLowering<'ctx> {
                                     source: Some(expr.source.clone()),
                                 },
                             );
-                            (cur, Operand::Move(Place::from_local(temp)))
+                            (
+                                cur,
+                                Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                            )
                         } else {
                             (cur, operand)
                         }
                     }
-                    Operand::Constant(_) => (cur, operand),
+                    Operand::Constant(_, _) => (cur, operand),
                 };
 
                 for local in locals.iter().rev() {
@@ -971,7 +1016,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
 
                 let index_local = match index_operand {
-                    Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
+                    Operand::Copy(p, _) | Operand::Move(p, _) if p.projection.is_empty() => p.local,
                     other => {
                         let usize_ty = self
                             .typecheck
@@ -1019,11 +1064,11 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    fn place_to_operand(&self, place: Place, ty: TypeId) -> Operand {
+    fn place_to_operand(&self, place: Place, ty: TypeId, source: Option<Source>) -> Operand {
         if self.mir_type_is_copy(ty) {
-            Operand::Copy(place)
+            Operand::Copy(place, source)
         } else {
-            Operand::Move(place)
+            Operand::Move(place, source)
         }
     }
 
@@ -1041,7 +1086,14 @@ impl<'ctx> MirLowering<'ctx> {
         let obj_ty = self.expr_type(fb, object);
         let (block, place) = self.lower_expr_to_place(fb, object, block);
 
-        self.lower_place_receiver_operand(fb, place, obj_ty, method_def_id, block)
+        self.lower_place_receiver_operand(
+            fb,
+            place,
+            obj_ty,
+            method_def_id,
+            Some(object.source.clone()),
+            block,
+        )
     }
 
     fn lower_place_receiver_operand(
@@ -1050,6 +1102,7 @@ impl<'ctx> MirLowering<'ctx> {
         place: Place,
         obj_ty: TypeId,
         method_def_id: DefId,
+        source: Option<Source>,
         block: BlockId,
     ) -> (BlockId, Operand) {
         let method_ty = self
@@ -1065,11 +1118,13 @@ impl<'ctx> MirLowering<'ctx> {
         };
 
         match expected_self_ty.map(|t| self.typecheck.interner.get(t).clone()) {
-            Some(Type::Struct { .. }) | None => (block, self.place_to_operand(place, obj_ty)),
+            Some(Type::Struct { .. }) | None => {
+                (block, self.place_to_operand(place, obj_ty, source))
+            }
 
             Some(Type::Pointer { is_const, .. }) => {
                 match self.typecheck.interner.get(obj_ty).clone() {
-                    Type::Pointer { .. } => (block, self.place_to_operand(place, obj_ty)),
+                    Type::Pointer { .. } => (block, self.place_to_operand(place, obj_ty, source)),
                     _ => {
                         let ptr_ty = self.typecheck.interner.intern(Type::Pointer {
                             inner: obj_ty,
@@ -1083,15 +1138,15 @@ impl<'ctx> MirLowering<'ctx> {
                             MirStatement::Assign {
                                 place: Place::from_local(temp),
                                 rvalue: Rvalue::Ref { place, is_const },
-                                source: None,
+                                source: source.clone(),
                             },
                         );
-                        (block, Operand::Move(Place::from_local(temp)))
+                        (block, Operand::Move(Place::from_local(temp), None))
                     }
                 }
             }
 
-            _ => (block, self.place_to_operand(place, obj_ty)),
+            _ => (block, self.place_to_operand(place, obj_ty, source)),
         }
     }
 
@@ -1103,7 +1158,7 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> LocalId {
         match &operand {
-            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+            Operand::Copy(place, _) | Operand::Move(place, _) if place.projection.is_empty() => {
                 place.local
             }
             _ => {
@@ -1171,11 +1226,11 @@ impl<'ctx> MirLowering<'ctx> {
 
         if is_diverging {
             fb.set_terminator(next, Terminator::Unreachable);
-            (next, Operand::Constant(ConstValue::Void))
+            (next, Operand::Constant(ConstValue::Void, None))
         } else {
             (
                 next,
-                self.place_to_operand(Place::from_local(dest), result_ty),
+                self.place_to_operand(Place::from_local(dest), result_ty, None),
             )
         }
     }
@@ -1203,7 +1258,7 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         fb.set_terminator(next, Terminator::Unreachable);
-        (next, Operand::Constant(ConstValue::Void))
+        (next, Operand::Constant(ConstValue::Void, None))
     }
 
     fn lower_operator_method_call(
@@ -1281,7 +1336,7 @@ impl<'ctx> MirLowering<'ctx> {
 
         (
             next,
-            self.place_to_operand(Place::from_local(dest), result_ty),
+            self.place_to_operand(Place::from_local(dest), result_ty, None),
         )
     }
 }
@@ -1297,7 +1352,7 @@ impl<'ctx> MirLowering<'ctx> {
             HirStmtKind::Expr(block_expr) => self.lower_expr_to_operand(fb, block_expr, block),
             _ => {
                 let block = self.lower_stmt(fb, stmt, block);
-                (block, Operand::Constant(ConstValue::Void))
+                (block, Operand::Constant(ConstValue::Void, None))
             }
         }
     }
@@ -1327,10 +1382,10 @@ impl<'ctx> MirLowering<'ctx> {
                         Some(v) => {
                             let (block, operand) = self.lower_expr_to_operand(fb, v, block);
                             let is_user = match &operand {
-                                Operand::Copy(place) | Operand::Move(place) => {
+                                Operand::Copy(place, _) | Operand::Move(place, _) => {
                                     fb.func.local(place.local).kind != LocalKind::Temporary
                                 }
-                                Operand::Constant(_) => false,
+                                Operand::Constant(_, _) => false,
                             };
                             if is_user {
                                 fb.push_stmt(block, MirStatement::Discard(operand));
@@ -1397,6 +1452,7 @@ impl<'ctx> MirLowering<'ctx> {
                         place.clone(),
                         place_ty,
                         op_res.method_def,
+                        Some(stmt.source.clone()),
                         block,
                     );
                     let (block, result_operand) = self.lower_operator_method_call_from_operands(
@@ -1420,7 +1476,8 @@ impl<'ctx> MirLowering<'ctx> {
                     return block;
                 }
 
-                let lhs_operand = self.place_to_operand(place.clone(), place_ty);
+                let lhs_operand =
+                    self.place_to_operand(place.clone(), place_ty, Some(stmt.source.clone()));
 
                 let (block, rhs_operand) = self.lower_expr_to_operand(fb, value, block);
 
@@ -1443,7 +1500,7 @@ impl<'ctx> MirLowering<'ctx> {
                     block,
                     MirStatement::Assign {
                         place,
-                        rvalue: Rvalue::Use(Operand::Move(Place::from_local(temp))),
+                        rvalue: Rvalue::Use(Operand::Move(Place::from_local(temp), None)),
                         source: Some(stmt.source.clone()),
                     },
                 );
@@ -1518,7 +1575,7 @@ impl<'ctx> MirLowering<'ctx> {
                         fb.set_terminator(block, Terminator::Return(op));
                         return block;
                     }
-                    None => Operand::Constant(ConstValue::Void),
+                    None => Operand::Constant(ConstValue::Void, None),
                 };
                 fb.set_terminator(block, Terminator::Return(operand));
                 block
@@ -1572,7 +1629,7 @@ impl<'ctx> MirLowering<'ctx> {
             block,
             MirStatement::Assign {
                 place: Place::from_local(counter),
-                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0))),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0), None)),
                 source: None,
             },
         );
@@ -1599,7 +1656,7 @@ impl<'ctx> MirLowering<'ctx> {
             header,
             MirStatement::Assign {
                 place: Place::from_local(loop_var),
-                rvalue: Rvalue::Use(Operand::Copy(Place::from_local(counter))),
+                rvalue: Rvalue::Use(Operand::Copy(Place::from_local(counter), None)),
                 source: None,
             },
         );
@@ -1615,7 +1672,7 @@ impl<'ctx> MirLowering<'ctx> {
                 place: Place::from_local(cmp_result),
                 rvalue: Rvalue::BinaryOp {
                     op: BinaryOp::Lt,
-                    lhs: Operand::Copy(Place::from_local(counter)),
+                    lhs: Operand::Copy(Place::from_local(counter), None),
                     rhs: count_operand,
                 },
                 source: None,
@@ -1628,7 +1685,7 @@ impl<'ctx> MirLowering<'ctx> {
         fb.set_terminator(
             header,
             Terminator::SwitchInt {
-                discriminant: Operand::Move(Place::from_local(cmp_result)),
+                discriminant: Operand::Move(Place::from_local(cmp_result), None),
                 targets: vec![(1, body_bb)],
                 otherwise: exit_bb,
             },
@@ -1648,8 +1705,8 @@ impl<'ctx> MirLowering<'ctx> {
                 place: Place::from_local(incremented),
                 rvalue: Rvalue::BinaryOp {
                     op: BinaryOp::Add,
-                    lhs: Operand::Copy(Place::from_local(counter)),
-                    rhs: Operand::Constant(ConstValue::Int(1)),
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Constant(ConstValue::Int(1), None),
                 },
                 source: None,
             },
@@ -1658,7 +1715,7 @@ impl<'ctx> MirLowering<'ctx> {
             body_end,
             MirStatement::Assign {
                 place: Place::from_local(counter),
-                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented))),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented), None)),
                 source: None,
             },
         );
@@ -1687,7 +1744,10 @@ impl<'ctx> MirLowering<'ctx> {
             Type::Array { element, len } => {
                 let len_val = len.expect("unknown array length (must be comptime known)");
 
-                (Operand::Constant(ConstValue::Int(len_val as i128)), element)
+                (
+                    Operand::Constant(ConstValue::Int(len_val as i128), None),
+                    element,
+                )
             }
             Type::Slice { element, .. } => {
                 let mut len_place = iter_place.clone();
@@ -1699,12 +1759,12 @@ impl<'ctx> MirLowering<'ctx> {
                     block,
                     MirStatement::Assign {
                         place: Place::from_local(len_local),
-                        rvalue: Rvalue::Use(Operand::Copy(len_place)),
+                        rvalue: Rvalue::Use(Operand::Copy(len_place, None)),
                         source: None,
                     },
                 );
 
-                (Operand::Move(Place::from_local(len_local)), element)
+                (Operand::Move(Place::from_local(len_local), None), element)
             }
 
             _err_type => panic!("non-iterable type: {:?}", _err_type),
@@ -1715,7 +1775,7 @@ impl<'ctx> MirLowering<'ctx> {
             block,
             MirStatement::Assign {
                 place: Place::from_local(counter),
-                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0))),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0), None)),
                 source: None,
             },
         );
@@ -1736,7 +1796,7 @@ impl<'ctx> MirLowering<'ctx> {
                 place: Place::from_local(cmp_result),
                 rvalue: Rvalue::BinaryOp {
                     op: BinaryOp::Lt,
-                    lhs: Operand::Copy(Place::from_local(counter)),
+                    lhs: Operand::Copy(Place::from_local(counter), None),
                     rhs: len_operand,
                 },
                 source: None,
@@ -1749,7 +1809,7 @@ impl<'ctx> MirLowering<'ctx> {
         fb.set_terminator(
             header,
             Terminator::SwitchInt {
-                discriminant: Operand::Move(Place::from_local(cmp_result)),
+                discriminant: Operand::Move(Place::from_local(cmp_result), None),
                 targets: vec![(1, body_bb)],
                 otherwise: exit_bb,
             },
@@ -1776,7 +1836,8 @@ impl<'ctx> MirLowering<'ctx> {
             _ => unreachable!(),
         };
 
-        let elem_operand = self.place_to_operand(elem_place, elem_ty);
+        let elem_operand =
+            self.place_to_operand(elem_place, elem_ty, Some(iterator.source.clone()));
 
         fb.push_stmt(
             body_bb,
@@ -1804,8 +1865,8 @@ impl<'ctx> MirLowering<'ctx> {
                 place: Place::from_local(incremented),
                 rvalue: Rvalue::BinaryOp {
                     op: BinaryOp::Add,
-                    lhs: Operand::Copy(Place::from_local(counter)),
-                    rhs: Operand::Constant(ConstValue::Int(1)),
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Constant(ConstValue::Int(1), None),
                 },
                 source: None,
             },
@@ -1815,7 +1876,7 @@ impl<'ctx> MirLowering<'ctx> {
             body_end,
             MirStatement::Assign {
                 place: Place::from_local(counter),
-                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented))),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented), None)),
                 source: None,
             },
         );
@@ -2006,7 +2067,7 @@ impl<'ctx> MirLowering<'ctx> {
                             if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
                                 fb.set_terminator(
                                     cur,
-                                    Terminator::Return(Operand::Constant(ConstValue::Void)),
+                                    Terminator::Return(Operand::Constant(ConstValue::Void, None)),
                                 );
                             }
                             cur
@@ -2017,7 +2078,7 @@ impl<'ctx> MirLowering<'ctx> {
                     if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
                         fb.set_terminator(
                             cur,
-                            Terminator::Return(Operand::Constant(ConstValue::Void)),
+                            Terminator::Return(Operand::Constant(ConstValue::Void, None)),
                         );
                     }
                     cur
@@ -2027,7 +2088,10 @@ impl<'ctx> MirLowering<'ctx> {
             _ => {
                 let cur = self.lower_stmt(&mut fb, body, entry);
                 if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
-                    fb.set_terminator(cur, Terminator::Return(Operand::Constant(ConstValue::Void)));
+                    fb.set_terminator(
+                        cur,
+                        Terminator::Return(Operand::Constant(ConstValue::Void, None)),
+                    );
                 }
                 cur
             }
@@ -2074,9 +2138,9 @@ impl<'ctx> MirLowering<'ctx> {
 
         if is_diverging {
             fb.set_terminator(next_block, Terminator::Unreachable);
-            (next_block, Operand::Constant(ConstValue::Void))
+            (next_block, Operand::Constant(ConstValue::Void, None))
         } else {
-            (next_block, self.place_to_operand(dest_place, ret_ty))
+            (next_block, self.place_to_operand(dest_place, ret_ty, None))
         }
     }
 

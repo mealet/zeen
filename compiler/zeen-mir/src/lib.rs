@@ -148,6 +148,7 @@ pub struct BasicBlock {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum MirStatement {
     Assign {
         place: Place,
@@ -212,9 +213,9 @@ pub enum PlaceElem {
 
 #[derive(Debug, Clone)]
 pub enum Operand {
-    Copy(Place),
-    Move(Place),
-    Constant(ConstValue),
+    Copy(Place, Option<Source>),
+    Move(Place, Option<Source>),
+    Constant(ConstValue, Option<Source>),
 }
 
 #[derive(Debug, Clone)]

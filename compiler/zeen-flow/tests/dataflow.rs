@@ -147,6 +147,19 @@ fn flow_err(src: &str) -> Vec<String> {
     }
 }
 
+fn flow_err_span(src: &str) -> Vec<FlowError> {
+    let mut compiled = compile(src).expect("compilation must succeed");
+    match run_dataflow(
+        &mut compiled.program,
+        &mut compiled.typecheck,
+        &compiled.resolution,
+        compiled.rodeo,
+    ) {
+        Ok(_) => panic!("expected dataflow to fail, but it passed"),
+        Err(errors) => errors,
+    }
+}
+
 #[test]
 fn simple_copy_arithmetic_passes() {
     flow_ok(
@@ -1226,5 +1239,28 @@ fn main() {
     assert!(
         targets.iter().any(|t| t.starts_with("%")),
         "expected drop targets, got: {targets:?}"
+    );
+}
+
+#[test]
+fn use_after_move_points_at_the_operand_not_the_statement() {
+    let src = "struct Pair { pub x: i32 }\nfn main() {\n    let a = Pair { .x = 1 };\n    let b = a;\n    let c = a;\n}\n";
+    let errors = flow_err_span(src);
+    assert_eq!(errors.len(), 1, "got: {errors:?}");
+
+    let FlowError::UseAfterMove { span, .. } = &errors[0] else {
+        panic!("expected UseAfterMove, got: {errors:?}");
+    };
+
+    let operand_offset = src.find("let c = ").expect("statement present") + "let c = ".len();
+    assert_eq!(
+        span.offset(),
+        operand_offset,
+        "error must label `a`, not the whole statement"
+    );
+    assert_eq!(
+        span.len(),
+        1,
+        "error must label only the single `a` identifier"
     );
 }

@@ -218,14 +218,14 @@ impl<'ctx> DataFlow<'ctx> {
                     Rvalue::Ref {
                         place: ref_place, ..
                     } => {
-                        self.consume_copy_place(ref_place);
+                        self.consume_copy_place(ref_place, None);
                     }
                     Rvalue::Aggregate { operands, .. } => {
                         for operand in operands {
                             self.consume_operand(operand);
                         }
                     }
-                    Rvalue::Discriminant(place) => self.consume_copy_place(place),
+                    Rvalue::Discriminant(place) => self.consume_copy_place(place, None),
                     Rvalue::SizeOf(_) | Rvalue::AlignOf(_) => {}
                 }
 
@@ -233,7 +233,7 @@ impl<'ctx> DataFlow<'ctx> {
             }
             MirStatement::Drop(place) => {
                 self.current_source = None;
-                self.consume_move_place(place);
+                self.consume_move_place(place, None);
             }
             MirStatement::Discard(operand) => {
                 self.current_source = None;
@@ -297,9 +297,9 @@ impl<'ctx> DataFlow<'ctx> {
     /// Consumes an operand: reads its place, applying move/init checks.
     fn consume_operand(&mut self, operand: &Operand) {
         match operand {
-            Operand::Constant(_) => {}
-            Operand::Copy(place) => self.consume_copy_place(place),
-            Operand::Move(place) => self.consume_move_place(place),
+            Operand::Constant(_, _) => {}
+            Operand::Copy(place, source) => self.consume_copy_place(place, source.clone()),
+            Operand::Move(place, source) => self.consume_move_place(place, source.clone()),
         }
     }
 
@@ -307,27 +307,27 @@ impl<'ctx> DataFlow<'ctx> {
     /// happens: even a `Copy` value can't be read before it is initialized or
     /// after it was moved out. Only the state transition differs from a full
     /// move.
-    fn consume_copy_place(&mut self, place: &Place) {
+    fn consume_copy_place(&mut self, place: &Place, source: Option<Source>) {
         self.mark_read(place.local);
-        self.check_read(place);
+        self.check_read(place, source);
     }
 
     /// A move of a place (ownership transfer).
-    fn consume_move_place(&mut self, place: &Place) {
+    fn consume_move_place(&mut self, place: &Place, source: Option<Source>) {
         self.mark_read(place.local);
 
         // Moving a field out of a struct with an explicit `Drop` impl is forbidden
         // entirely.
         if first_field(place).is_some() && self.type_has_explicit_drop(place) {
-            self.emit_drop_move_error(place);
+            self.emit_drop_move_error(place, source.clone());
         }
 
         if self.type_is_copy_place(place) {
-            self.check_read(place);
+            self.check_read(place, source);
             return;
         }
 
-        self.check_read(place);
+        self.check_read(place, source);
         self.current.move_place(place);
     }
 
@@ -356,16 +356,21 @@ impl<'ctx> DataFlow<'ctx> {
     }
 
     /// Emits the appropriate diagnostic if `place` isn't safely readable.
-    fn check_read(&mut self, place: &Place) {
+    fn check_read(&mut self, place: &Place, source: Option<Source>) {
         let outcome = self.current.read_place(place);
-        if let Some(error) = self.read_error(place, outcome) {
+        if let Some(error) = self.read_error(place, outcome, source) {
             self.diagnostics.push(error);
         }
     }
 
-    fn read_error(&self, place: &Place, outcome: ReadOutcome) -> Option<FlowError> {
+    fn read_error(
+        &self,
+        place: &Place,
+        outcome: ReadOutcome,
+        operand_source: Option<Source>,
+    ) -> Option<FlowError> {
         let (name, _) = self.local_name_and_source(place.local)?;
-        let src = self.use_source(place.local)?;
+        let src = operand_source.or_else(|| self.use_source(place.local))?;
         let span = src.span;
 
         match outcome {
@@ -401,11 +406,11 @@ impl<'ctx> DataFlow<'ctx> {
         })
     }
 
-    fn emit_drop_move_error(&mut self, place: &Place) {
+    fn emit_drop_move_error(&mut self, place: &Place, source: Option<Source>) {
         let Some((name, _)) = self.local_name_and_source(place.local) else {
             return;
         };
-        let Some(src) = self.use_source(place.local) else {
+        let Some(src) = source.or_else(|| self.use_source(place.local)) else {
             return;
         };
         self.diagnostics.push(FlowError::MoveOutOfDrop {
