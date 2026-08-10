@@ -299,6 +299,10 @@ fn main() {
         "slice layout must be printed: MIR:\n{mir}"
     );
     assert!(
+        mir.contains("slice { move %3, 4 }"),
+        "&array must build a `{{ ptr, len }}` slice aggregate: MIR:\n{mir}"
+    );
+    assert!(
         mir.contains(".ptr["),
         "slice index must project through the slice `ptr`: MIR:\n{mir}"
     );

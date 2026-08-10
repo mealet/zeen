@@ -569,6 +569,59 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, inner_place) = self.lower_expr_to_place(fb, inner, block);
                 let result_ty = self.expr_type(fb, expr);
 
+                // `&array` lowers to a slice: build the `{ ptr, len }` fat
+                // pointer as a real slice aggregate instead of shoving a bare
+                // `addr_of` into a slice-typed local.
+                if let Type::Slice { element, is_const } =
+                    self.typecheck.interner.get(result_ty).clone()
+                {
+                    let inner_ty = self.expr_type(fb, inner);
+                    let len_val = match self.typecheck.interner.get(inner_ty).clone() {
+                        Type::Array { len: Some(len), .. } => len,
+                        _ => panic!("&slice: inner operand must be a fixed array"),
+                    };
+
+                    let ptr_ty = self.typecheck.interner.intern(Type::ManyPointer {
+                        inner: element,
+                        is_const,
+                    });
+                    let ptr_temp = fb.new_temp(ptr_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(ptr_temp),
+                            rvalue: Rvalue::Ref {
+                                place: inner_place,
+                                is_const,
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+
+                    let len_operand = Operand::Constant(ConstValue::Int(len_val as i128), None);
+
+                    let temp = fb.new_temp(result_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Aggregate {
+                                kind: AggregateKind::Slice,
+                                operands: vec![
+                                    Operand::Move(Place::from_local(ptr_temp), None),
+                                    len_operand,
+                                ],
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+
+                    return (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    );
+                }
+
                 let is_const = match self.typecheck.interner.get(result_ty).clone() {
                     Type::Pointer { is_const, .. } => is_const,
                     _ => false,
