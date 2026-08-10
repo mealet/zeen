@@ -205,11 +205,14 @@ pub enum PlaceElem {
     Field(DefId),
     Index(LocalId),
     Deref,
-
-    // builtin slice's fields
-    SliceLen,
-    SlicePtr,
 }
+
+/// Synthetic `Field` projections used to reach into a slice's
+/// `{ ptr: [*]T, len: usize }` storage without a user-declared structure.
+/// These share no numbering with real `DefId`s (which stay small).
+pub const SLICE_STRUCT_DEF: DefId = DefId(u32::MAX - 3);
+pub const SLICE_PTR_FIELD: DefId = DefId(u32::MAX - 2);
+pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
 
 #[derive(Debug, Clone)]
 pub enum Operand {

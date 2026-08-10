@@ -62,9 +62,11 @@ fn type_needs_drop_impl(
                 .any(|field| type_needs_drop_impl(interner, typecheck, field.field_ty, &nested))
         }
 
-        Type::Array { element, .. } | Type::Slice { element, .. } => {
-            type_needs_drop_impl(interner, typecheck, element, bindings)
-        }
+        Type::Array { element, .. } => type_needs_drop_impl(interner, typecheck, element, bindings),
+
+        // A slice is a view (`{ ptr, len }`) over someone else's storage: it
+        // owns nothing, so it never requires a drop.
+        Type::Slice { .. } => false,
 
         Type::GenericParam(def) => bindings
             .get(&def)

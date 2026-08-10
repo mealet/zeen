@@ -3534,6 +3534,15 @@ impl<'res> TypeChecker<'res> {
         }
 
         if let UnaryOp::AddrOf = op {
+            // `&array` produces a slice (a fat `{ ptr, len }` view), not a
+            // pointer to the array: slices never alias to `*[N]T`.
+            if let Type::Array { element, .. } = self.result.interner.get(operand).clone() {
+                return self.result.interner.intern(Type::Slice {
+                    element,
+                    is_const: false,
+                });
+            }
+
             return self.result.interner.intern(Type::Pointer {
                 inner: operand,
                 is_const: false,

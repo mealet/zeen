@@ -459,8 +459,8 @@ fn main() {
 }
 
 #[test]
-fn slice_use_after_move_is_error() {
-    let errors = flow_err(
+fn slice_is_copy_and_usable_multiple_times() {
+    flow_ok(
         r#"
 fn main() {
     let s: []i32 = [1, 2, 3];
@@ -469,12 +469,11 @@ fn main() {
 }
 "#,
     );
-    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
 }
 
 #[test]
-fn slice_passed_to_function_multiple_times_is_error() {
-    let errors = flow_err(
+fn slice_passed_to_function_multiple_times_is_ok() {
+    flow_ok(
         r#"
 fn sum(s: []i32) i32 {
     return s[0];
@@ -486,7 +485,6 @@ fn main() {
 }
 "#,
     );
-    assert!(errors.iter().any(|e| e.contains("UseAfterMove")));
 }
 
 #[test]
@@ -499,6 +497,37 @@ fn main() {
     let b = s[1];
 }
 "#,
+    );
+}
+
+#[test]
+fn addr_of_array_yields_a_slice() {
+    flow_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let b: []i32 = &a;
+    let _ = b[2];
+}
+"#,
+    );
+}
+
+#[test]
+fn addr_of_array_never_yields_pointer_to_array() {
+    // `&array` types as a slice, never as `*[N]T`; a supposed pointer-to-array
+    // annotation must fail to compile with a type mismatch.
+    assert!(
+        compile(
+            r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let b: *[4]i32 = &a;
+}
+"#,
+        )
+        .is_err(),
+        "`&array` must never type as `*[N]T`, only as a slice"
     );
 }
 
