@@ -282,3 +282,24 @@ fn make() Vec2 {
     );
     assert!(mir.contains("fn Vec2.add("), "MIR:\n{mir}");
 }
+
+#[test]
+fn slice_layout_is_printed_and_addr_of_array_yields_slice() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let b: []i32 = &a;
+    let _ = b[2];
+}
+"#,
+    );
+    assert!(
+        mir.contains("struct []i32 { [*]i32, usize };"),
+        "slice layout must be printed: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains(".ptr["),
+        "slice index must project through the slice `ptr`: MIR:\n{mir}"
+    );
+}

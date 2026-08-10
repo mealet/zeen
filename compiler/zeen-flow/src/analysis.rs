@@ -724,7 +724,7 @@ impl<'ctx> DataFlow<'ctx> {
                 .map(|info| info.capabalities.is_copy)
                 .unwrap_or(false),
             Type::Array { element, .. } => self.type_is_copy(element),
-            Type::Slice { .. } => false,
+            Type::Slice { .. } => true,
             _ => false,
         }
     }

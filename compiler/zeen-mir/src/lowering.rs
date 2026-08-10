@@ -25,7 +25,8 @@ use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
     LocalKind, MirFunction, MirFunctionId, MirProgram, MirStatement, Mutability, Operand, Place,
-    PlaceElem, Rvalue, StructFieldLayout, StructLayout, Terminator,
+    PlaceElem, Rvalue, SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructFieldLayout,
+    StructLayout, Terminator,
 };
 
 pub struct MirLoweringResult {
@@ -350,7 +351,7 @@ impl<'ctx> MirLowering<'ctx> {
 
             Type::Array { element, .. } => self.mir_type_is_copy(element),
 
-            Type::Slice { .. } => false,
+            Type::Slice { .. } => true,
 
             _ => false,
         }
@@ -450,6 +451,47 @@ impl<'ctx> MirLowering<'ctx> {
                 def_id: struct_def,
                 generic_args,
                 fields,
+            },
+        );
+    }
+
+    /// Registers a monomorphized `Slice[T]` as a synthetic struct layout so the
+    /// MIR printer can show it and indexing/len projections have a home. The
+    /// reserved `DefId`s stand in for the (never-user-visible) `ptr`/`len`
+    /// fields.
+    fn register_slice_layout(&mut self, ty: TypeId) {
+        if self.program.struct_layouts.contains_key(&ty) {
+            return;
+        }
+
+        let typecheck = &mut self.typecheck;
+        let Type::Slice { element, is_const } = typecheck.interner.get(ty).clone() else {
+            return;
+        };
+
+        let ptr_ty = typecheck.interner.intern(Type::ManyPointer {
+            inner: element,
+            is_const,
+        });
+        let len_ty = typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+
+        self.program.struct_layouts.insert(
+            ty,
+            StructLayout {
+                def_id: SLICE_STRUCT_DEF,
+                generic_args: vec![element],
+                fields: vec![
+                    StructFieldLayout {
+                        def_id: SLICE_PTR_FIELD,
+                        ty: ptr_ty,
+                    },
+                    StructFieldLayout {
+                        def_id: SLICE_LEN_FIELD,
+                        ty: len_ty,
+                    },
+                ],
             },
         );
     }
@@ -608,7 +650,7 @@ impl<'ctx> MirLowering<'ctx> {
                     Type::Array { .. } | Type::ManyPointer { .. } => obj_place.index(index_local),
                     Type::Slice { .. } => {
                         let mut ptr_place = obj_place;
-                        ptr_place.projection.push(PlaceElem::SlicePtr);
+                        ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
                         ptr_place.index(index_local)
                     }
                     _ => unreachable!(),
@@ -1751,7 +1793,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
             Type::Slice { element, .. } => {
                 let mut len_place = iter_place.clone();
-                len_place.projection.push(PlaceElem::SliceLen);
+                len_place.projection.push(PlaceElem::Field(SLICE_LEN_FIELD));
 
                 let len_local = fb.new_temp(usize_ty);
 
@@ -1830,7 +1872,7 @@ impl<'ctx> MirLowering<'ctx> {
             Type::Slice { .. } => {
                 let mut ptr_place = iter_place.clone();
 
-                ptr_place.projection.push(PlaceElem::SlicePtr);
+                ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
                 ptr_place.index(counter)
             }
             _ => unreachable!(),
@@ -1905,6 +1947,11 @@ impl<'ctx> MirLowering<'ctx> {
         self.mono_cache.cache.insert(key, id);
 
         let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args, owner_struct);
+        for local in &mir_func.locals {
+            if matches!(self.typecheck.interner.get(local.ty), Type::Slice { .. }) {
+                self.register_slice_layout(local.ty);
+            }
+        }
         self.program.functions.insert(id, mir_func);
 
         let interner = self.rodeo.borrow();
