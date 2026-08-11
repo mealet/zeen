@@ -342,6 +342,29 @@ fn unused_variable_produces_warning() {
 }
 
 #[test]
+fn variable_used_as_slice_index_is_not_unused() {
+    let result = flow_ok(
+        r#"
+fn last_element[T](slice: []T) T {
+    let last_index = slice.len - 1;
+    slice[last_index]
+}
+
+fn main() {
+    let arr = [1, 2, 3, 4];
+    let slice = &arr;
+    let _elem = last_element(slice);
+}
+"#,
+    );
+    assert!(
+        result.warnings.is_empty(),
+        "expected no warnings, got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
 fn pointer_type_is_copy() {
     flow_ok(
         r#"
