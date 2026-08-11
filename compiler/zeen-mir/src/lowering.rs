@@ -20,13 +20,14 @@ use zeen_typecheck::{
     coerce::builtin_is_integer,
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
-use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
+use zeen_types::{
+    SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
+};
 
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
     LocalKind, MirFunction, MirFunctionId, MirProgram, MirStatement, Mutability, Operand, Place,
-    PlaceElem, Rvalue, SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructFieldLayout,
-    StructLayout, Terminator,
+    PlaceElem, Rvalue, StructFieldLayout, StructLayout, Terminator,
 };
 
 pub struct MirLoweringResult {
@@ -717,7 +718,7 @@ impl<'ctx> MirLowering<'ctx> {
                 )
             }
 
-            HirExprKind::FieldAccess { object, .. } => {
+            HirExprKind::FieldAccess { object, field } => {
                 // C-like enum variant access, e.g. `Color.Red`: the whole
                 // expression is just a constant, not a real place.
                 if let HirExprKind::VarRef(enum_def) = &object.kind
@@ -739,6 +740,20 @@ impl<'ctx> MirLowering<'ctx> {
                             ConstValue::Int(index as i128),
                             Some(expr.source.clone()),
                         ),
+                    );
+                }
+
+                // `arr.len` on a fixed array is a compile-time constant: arrays
+                // carry no runtime length field, so lower it to a constant
+                // instead of projecting into storage.
+                let obj_ty = self.expr_type(fb, object);
+                if let Type::Array { len: Some(len), .. } =
+                    self.typecheck.interner.get(obj_ty).clone()
+                    && self.rodeo.borrow().resolve(&field.0) == "len"
+                {
+                    return (
+                        block,
+                        Operand::Constant(ConstValue::Int(len as i128), Some(expr.source.clone())),
                     );
                 }
 

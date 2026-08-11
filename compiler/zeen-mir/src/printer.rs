@@ -9,12 +9,12 @@ use std::rc::Rc;
 use lasso::Rodeo;
 use zeen_resolve::{DefId, ResolutionResult};
 use zeen_typecheck::result::TypeCheckResult;
-use zeen_types::{Type, TypeId, TypeInterner};
+use zeen_types::{ARRAY_LEN_FIELD, SLICE_LEN_FIELD, SLICE_PTR_FIELD, Type, TypeId, TypeInterner};
 
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, LocalDecl, LocalId, LocalKind,
     MirFunction, MirFunctionId, MirProgram, MirStatement, Mutability, Operand, Place, PlaceElem,
-    Rvalue, SLICE_LEN_FIELD, SLICE_PTR_FIELD, Terminator,
+    Rvalue, Terminator,
 };
 
 pub fn print_mir_program(
@@ -430,6 +430,9 @@ impl<'a> MirPrinter<'a> {
                 }
                 PlaceElem::Field(SLICE_PTR_FIELD) => {
                     let _ = write!(s, ".ptr");
+                }
+                PlaceElem::Field(ARRAY_LEN_FIELD) => {
+                    let _ = write!(s, ".len");
                 }
                 PlaceElem::Field(def_id) => {
                     let _ = write!(s, ".{}", self.resolve_def_name(*def_id));
