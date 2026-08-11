@@ -266,28 +266,41 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         let mut expr_parser = ExprParser::new(self.p);
         let expr = expr_parser.parse()?;
 
-        self.expect_optional_semicolon()?;
-
-        let stmt = self.p.arena.alloc(Statement {
-            kind: StatementKind::Expr(expr),
-            span: expr.span,
-        });
-
-        Some(stmt)
+        self.finish_expr_stmt(expr)
     }
 
     pub fn parse_if(&mut self) -> Option<&'ctx Statement<'ctx>> {
         let mut expr_parser = ExprParser::new(self.p);
         let expr = expr_parser.parse()?;
 
+        self.finish_expr_stmt(expr)
+    }
+
+    /// Completes an expression statement (`if`, bare block, …). Directly
+    /// inside a `{ ... }` block the trailing semicolon is optional, and when
+    /// the block is about to close the statement becomes its trailing value.
+    /// In an if/while/for body position a semicolon belongs to the enclosing
+    /// statement, so it is left untouched.
+    fn finish_expr_stmt(&mut self, expr: &'ctx Expression<'ctx>) -> Option<&'ctx Statement<'ctx>> {
+        if !self.expect_optional_semicolon {
+            return Some(self.p.arena.alloc(Statement {
+                kind: StatementKind::Expr(expr),
+                span: expr.span,
+            }));
+        }
+
         let _ = self.p.eat(TokenKind::Semicolon);
 
-        let stmt = self.p.arena.alloc(Statement {
-            kind: StatementKind::Expr(expr),
-            span: expr.span,
-        });
+        let kind = if self.p.at(TokenKind::CloseBrace) {
+            StatementKind::TrailingExpr(expr)
+        } else {
+            StatementKind::Expr(expr)
+        };
 
-        Some(stmt)
+        Some(self.p.arena.alloc(Statement {
+            kind,
+            span: expr.span,
+        }))
     }
 
     pub fn parse_expr_or_assign(&mut self) -> Option<&'ctx Statement<'ctx>> {
@@ -948,5 +961,145 @@ mod tests {
         );
 
         assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn if_at_block_end_is_trailing() {
+        const SRC: &str = "{ if (a) { 1 } else { 2 } }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, _stmt_parser);
+        let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block {
+                        trailing: Some(Expression {
+                            kind: ExpressionKind::If { .. },
+                            ..
+                        }),
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn block_expr_at_block_end_is_trailing() {
+        const SRC: &str = "{ { 42 } }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, _stmt_parser);
+        let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block {
+                        trailing: Some(Expression {
+                            kind: ExpressionKind::Block { .. },
+                            ..
+                        }),
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn if_semicolon_is_optional_inside_block() {
+        const SRC: &str = "if (a) { 1 }; let b = 2;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, _stmt_parser);
+        let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::If { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let { .. },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn block_expr_semicolon_is_optional_inside_block() {
+        const SRC: &str = "{ 42 } let b = 2;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, _stmt_parser);
+        let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let { .. },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn while_and_for_at_block_end_parse_without_semicolon() {
+        for src in ["while (a) { 1 }", "for (i : 10) { 1 }"] {
+            let src_arc = Arc::new(src.to_string());
+            let rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
+            let bump = bumpalo::Bump::new();
+            let mut tokens = zeen_lexer::tokenize(src);
+            let mut parser = Parser::new(
+                Rc::new("tests.zn".to_string()),
+                src_arc,
+                &mut tokens,
+                &bump,
+                Rc::clone(&rodeo),
+            );
+            let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+            let stmt = stmt_parser.parse().expect("loop statement must parse");
+            assert!(
+                matches!(
+                    stmt.kind,
+                    StatementKind::While { .. } | StatementKind::For { .. }
+                ),
+                "expected loop statement at block end, got: {stmt:?}"
+            );
+            assert!(stmt_parser.parse().is_none());
+        }
     }
 }
