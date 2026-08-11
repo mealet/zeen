@@ -324,7 +324,13 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             return Some(stmt);
         }
 
-        if let Some(bin_info) = expressions::BinaryInfo::new(self.p.current()) {
+        // compound assignment (a += b), but only when the binary operator is
+        // directly followed by `=`. Otherwise the operator starts a plain
+        // binary expression statement, e.g. `a + b` or a trailing `a + b`.
+
+        if self.p.peek().is_some_and(|next| next.kind == TokenKind::Eq)
+            && let Some(bin_info) = expressions::BinaryInfo::new(self.p.current())
+        {
             const NOT_ALLOWED: &[zeen_ast::expressions::BinaryOp] = &[
                 zeen_ast::expressions::BinaryOp::Eq,
                 zeen_ast::expressions::BinaryOp::Ne,
@@ -364,19 +370,24 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             return Some(stmt);
         }
 
-        // expr in statement
+        // expr in statement (may be a full binary expression)
 
-        let mut kind = StatementKind::Expr(lhs);
+        let expr = {
+            let mut expr_parser = ExprParser::new(self.p);
+            expr_parser.parse_binary_rest(lhs, expressions::Precedence::Lowest)?
+        };
+
+        let mut kind = StatementKind::Expr(expr);
 
         if self.p.at(TokenKind::CloseBrace) {
-            kind = StatementKind::TrailingExpr(lhs);
+            kind = StatementKind::TrailingExpr(expr);
         } else {
             self.expect_optional_semicolon()?;
         }
 
         let stmt = self.p.arena.alloc(Statement {
             kind,
-            span: lhs.span,
+            span: expr.span,
         });
 
         Some(stmt)
@@ -842,6 +853,95 @@ mod tests {
                         kind: StatementKind::Expr(..),
                         ..
                     }
+                },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn binary_expr_is_not_compound_assign() {
+        const SRC: &str = "a + b;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Binary {
+                        op: zeen_ast::expressions::BinaryOp::Add,
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn binary_expr_with_comparison_is_plain_expr() {
+        const SRC: &str = "a == b;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Binary {
+                        op: zeen_ast::expressions::BinaryOp::Eq,
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn trailing_binary_expr_in_block() {
+        const SRC: &str = "{ slice[i] + slice[0] }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block {
+                        trailing: Some(..),
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn compound_assign_still_parses() {
+        const SRC: &str = "a += b;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::CompoundAssign {
+                    op: zeen_ast::expressions::BinaryOp::Add,
+                    ..
                 },
                 ..
             }

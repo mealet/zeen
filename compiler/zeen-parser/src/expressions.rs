@@ -183,8 +183,19 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     }
 
     fn parse_precedence(&mut self, min_prec: Precedence) -> Option<&'ctx Expression<'ctx>> {
-        let mut lhs = self.parse_unary()?;
+        let lhs = self.parse_unary()?;
+        self.parse_binary_rest(lhs, min_prec)
+    }
 
+    /// Continues parsing binary operators after an already-parsed left-hand
+    /// side, as if the whole expression had been parsed at once. Lets callers
+    /// parse the LHS at a higher precedence first (e.g. to sniff an upcoming
+    /// `=`) and then keep going with the rest of the binary expression.
+    pub fn parse_binary_rest(
+        &mut self,
+        mut lhs: &'ctx Expression<'ctx>,
+        min_prec: Precedence,
+    ) -> Option<&'ctx Expression<'ctx>> {
         while self.p.current().kind != TokenKind::Eof {
             let current = self.p.current();
 
