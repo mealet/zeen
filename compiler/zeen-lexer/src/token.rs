@@ -224,7 +224,7 @@ impl CompilerKeyword {
 
             "true" => Some(CompilerKeyword::True),
             "false" => Some(CompilerKeyword::False),
-            "null" => Some(CompilerKeyword::Null),
+            "nullptr" => Some(CompilerKeyword::Null),
 
             "self" => Some(CompilerKeyword::SelfLower),
             "Self" => Some(CompilerKeyword::SelfUpper),

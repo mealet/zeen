@@ -582,6 +582,7 @@ dependencies = [
  "thiserror",
  "zeen-ast",
  "zeen-driver",
+ "zeen-flow",
  "zeen-hir",
  "zeen-lexer",
  "zeen-mir",
@@ -606,6 +607,26 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "miette",
+]
+
+[[package]]
+name = "zeen-flow"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "miette",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-hir",
+ "zeen-lexer",
+ "zeen-mir",
+ "zeen-parser",
+ "zeen-resolve",
+ "zeen-typecheck",
+ "zeen-types",
 ]
 
 [[package]]

@@ -30,8 +30,9 @@ use zeen_hir::{
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_types::{
-    Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId,
-    binary_op_interface, self_mode_of, unary_op_interface,
+    ARRAY_LEN_FIELD, Capabilities, ReceiverAccess, SLICE_LEN_FIELD, SLICE_PTR_FIELD, SelfMode,
+    StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface, self_mode_of,
+    unary_op_interface,
 };
 
 pub mod coerce;
@@ -114,6 +115,7 @@ impl<'res> TypeChecker<'res> {
 
     pub fn finish(mut self) -> Result<TypeCheckResult, Vec<TypeError>> {
         self.result.struct_generics = self.struct_generics;
+        self.result.enum_variants = self.enum_variants;
 
         if self.errors.is_empty() {
             return Ok(self.result);
@@ -468,6 +470,32 @@ impl<'res> TypeChecker<'res> {
         let Some(iface_def) = imp.interface else {
             return;
         };
+
+        // `Copy` and `Drop` are mutually exclusive: a `Copy` value is dropped
+        // implicitly (bitwise + nothing to release), so letting the user run a
+        // custom `drop` on it would double-manage whatever it owns. Reject the
+        // `Drop` implementation early and watch the impl registry directly so
+        // the check also fires when `Copy` is implemented afterwards.
+        if iface_def
+            == self
+                .interface_registry
+                .get("Drop")
+                .unwrap_or(DefId(u32::MAX))
+            && self.struct_implements_by_name(object_def, "Copy")
+        {
+            let struct_name = self
+                .resolution
+                .defs
+                .get(&object_def)
+                .map(|d| self.interner.borrow().resolve(&d.name).into())
+                .unwrap_or_else(|| "?".into());
+
+            self.report(TypeError::CopyWithDrop {
+                struct_name,
+                src: source.src(),
+                span: imp.object_bindings_span,
+            });
+        }
 
         let imp_generics: Vec<DefId> = imp.generics.iter().map(|g| g.def_id).collect();
 
@@ -899,7 +927,8 @@ impl<'res> TypeChecker<'res> {
         match &body.kind {
             HirStmtKind::Expr(block_expr) => {
                 if let HirExprKind::Block { stmts, trailing } = &block_expr.kind {
-                    let ty = self.check_block(stmts, trailing, Some(sig.ret), &block_expr.source);
+                    let sig_source = self.fn_signature_source(hir_fn, &block_expr.source);
+                    let ty = self.check_block(stmts, trailing, Some(sig.ret), &sig_source);
                     self.result.record_expr_type(block_expr.id, ty);
                 } else {
                     self.check_stmt(body);
@@ -910,6 +939,28 @@ impl<'res> TypeChecker<'res> {
         };
 
         self.ctx.pop_fn();
+    }
+
+    /// A `Source` pointing at just the function's signature (name through
+    /// return type) instead of the whole body, so a return-type mismatch on a
+    /// body that yields no trailing value is annotated at the signature.
+    fn fn_signature_source(&self, hir_fn: &HirFn, body: &Source) -> Source {
+        let mut start = hir_fn.name.1.offset();
+        let mut end = start + hir_fn.name.1.len();
+
+        for param in &hir_fn.params {
+            let span = param.span;
+            start = start.min(span.offset());
+            end = end.max(span.offset() + span.len());
+        }
+
+        if let Some(ret) = &hir_fn.return_type {
+            let span = ret.source.span;
+            start = start.min(span.offset());
+            end = end.max(span.offset() + span.len());
+        }
+
+        (SourceSpan::new(start.into(), end - start), body.src()).into()
     }
 
     // Statements
@@ -1673,17 +1724,32 @@ impl<'res> TypeChecker<'res> {
 
         // -----------| Hard coded piece of shit section |-----------
         // > What is this for?
-        // Answer: for arrays and slices builtin `.len` field
+        // Answer: for arrays and slices builtin `.len` and `.ptr` fields.
+        // `.ptr` is `[*]T`, `.len` is `usize`; both resolve to synthetic
+        // `DefId`s so MIR lowering can project into the slice storage.
 
         {
             let mut interner = self.interner.borrow_mut();
-            if field_name == interner.get_or_intern("len")
-                && matches!(
-                    self.result.interner.get(obj_ty),
-                    Type::Array { .. } | Type::Slice { .. }
-                )
-            {
-                return self.result.interner.builtin(BuiltinType::usize);
+            let len_name = interner.get_or_intern("len");
+            let ptr_name = interner.get_or_intern("ptr");
+
+            match self.result.interner.get(obj_ty).clone() {
+                Type::Array { .. } if field_name == len_name => {
+                    self.result.field_resolutions.insert(id, ARRAY_LEN_FIELD);
+                    return self.result.interner.builtin(BuiltinType::usize);
+                }
+                Type::Slice { .. } if field_name == len_name => {
+                    self.result.field_resolutions.insert(id, SLICE_LEN_FIELD);
+                    return self.result.interner.builtin(BuiltinType::usize);
+                }
+                Type::Slice { element, is_const } if field_name == ptr_name => {
+                    self.result.field_resolutions.insert(id, SLICE_PTR_FIELD);
+                    return self.result.interner.intern(Type::ManyPointer {
+                        inner: element,
+                        is_const,
+                    });
+                }
+                _ => {}
             }
         }
 
@@ -3507,6 +3573,15 @@ impl<'res> TypeChecker<'res> {
         }
 
         if let UnaryOp::AddrOf = op {
+            // `&array` produces a slice (a fat `{ ptr, len }` view), not a
+            // pointer to the array: slices never alias to `*[N]T`.
+            if let Type::Array { element, .. } = self.result.interner.get(operand).clone() {
+                return self.result.interner.intern(Type::Slice {
+                    element,
+                    is_const: false,
+                });
+            }
+
             return self.result.interner.intern(Type::Pointer {
                 inner: operand,
                 is_const: false,
@@ -4032,6 +4107,48 @@ mod tests {
                 )
             }),
             "expected ArgCountMismatch(1, 0), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn missing_return_value_spans_signature() {
+        let source = r#"
+            fn foo(a: i32) i32 {
+                let x = a;
+            }
+            "#;
+
+        let errors = typecheck(source).expect_err("void body should be rejected");
+
+        let err = errors
+            .iter()
+            .find(|err| {
+                matches!(err, TypeError::Mismatch { expected, found, .. }
+                if expected.as_str() == "i32" && found.as_str() == "void")
+            })
+            .expect("expected a Mismatch(i32, void) error, got: {errors:?}");
+
+        let TypeError::Mismatch { span, .. } = err else {
+            unreachable!()
+        };
+
+        let line = source
+            .split('\n')
+            .find(|l| l.contains("fn foo(a: i32) i32"))
+            .unwrap();
+        let line_offset = source.find(line).unwrap();
+        let sig_start = line.find("foo").unwrap();
+        let sig_end = line.rfind("i32").unwrap() + 3;
+
+        assert_eq!(
+            span.offset(),
+            line_offset + sig_start,
+            "mismatch should start at the signature, not the whole body"
+        );
+        assert_eq!(
+            span.len(),
+            sig_end - sig_start,
+            "mismatch should cover just the signature"
         );
     }
 }

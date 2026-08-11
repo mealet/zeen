@@ -9,6 +9,14 @@ use zeen_resolve::DefId;
 pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
+/// Synthetic `DefId`s for the builtin slice's `{ ptr, len }` view and for a
+/// fixed array's compile-time `.len`. They never appear in user declarations
+/// and share no numbering with real `DefId`s (which stay small).
+pub const SLICE_STRUCT_DEF: DefId = DefId(u32::MAX - 3);
+pub const SLICE_PTR_FIELD: DefId = DefId(u32::MAX - 2);
+pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
+pub const ARRAY_LEN_FIELD: DefId = DefId(u32::MAX - 4);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub u32);
 

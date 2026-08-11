@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use lasso::{Rodeo, Spur};
 use zeen_ast::{
@@ -16,7 +20,9 @@ use zeen_typecheck::{
     coerce::builtin_is_integer,
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
-use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
+use zeen_types::{
+    SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
+};
 
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
@@ -80,6 +86,8 @@ pub fn lower_program<'ctx>(
         lowering.register_user_struct_layouts(resolution);
     }
 
+    lowering.register_drop_functions();
+
     let mut program = lowering.finish();
     let extern_vars = crate::collecter::collect_extern_vars(module, typecheck, &rodeo);
 
@@ -127,6 +135,10 @@ pub struct FnBuilder {
     locals_by_def: HashMap<DefId, LocalId>,
     loop_stack: Vec<LoopTargets>,
     bindings: HashMap<DefId, TypeId>,
+    /// Lexical scope stack. Each active `HirExprKind::Block` pushes an entry;
+    /// every `let` inside it registers its local. On scope exit the locals are
+    /// emitted as `StorageDead`, giving zeen-flow a per-scope drop point.
+    scope_stack: Vec<Vec<LocalId>>,
 }
 
 impl FnBuilder {
@@ -146,10 +158,12 @@ impl FnBuilder {
                 params: Vec::new(),
                 entry_block: entry,
                 ret_ty,
+                is_drop_impl: false,
             },
             locals_by_def: HashMap::new(),
             loop_stack: Vec::new(),
             bindings,
+            scope_stack: Vec::new(),
         }
     }
 
@@ -207,6 +221,73 @@ impl<'ctx> MirLowering<'ctx> {
 
     pub fn finish(self) -> MirProgram {
         self.program
+    }
+
+    /// Ensures a concrete `drop` MIR function exists for every struct type
+    /// that implements the `Drop` interface and shows up in the lowered
+    /// program. `drop(%x)` statements refer to that function, so it must be
+    /// registered even when nothing calls it explicitly.
+    fn register_drop_functions(&mut self) {
+        let Some(drop_iface) = self.find_interface_def("Drop") else {
+            return;
+        };
+
+        let candidate_types: Vec<(DefId, Vec<TypeId>)> = self
+            .program
+            .functions
+            .values()
+            .flat_map(|func| func.locals.iter().map(|local| local.ty))
+            .filter_map(|ty| match self.typecheck.interner.get(ty).clone() {
+                Type::Struct {
+                    def_id,
+                    generic_args,
+                } => Some((def_id, generic_args)),
+                _ => None,
+            })
+            .collect();
+
+        let mut seen: HashSet<(DefId, Vec<TypeId>)> = HashSet::new();
+        for (struct_def, generic_args) in candidate_types {
+            let is_new = seen.insert((struct_def, generic_args.clone()));
+            if !is_new {
+                continue;
+            }
+
+            let drop_impl = self
+                .typecheck
+                .struct_info
+                .get(&struct_def)
+                .is_some_and(|info| info.capabalities.has_explicit_drop);
+            if !drop_impl {
+                continue;
+            }
+
+            let Some(methods) = self.resolution.impls.get(&(struct_def, drop_iface)) else {
+                continue;
+            };
+            let Some(drop_method) = methods.iter().find(|def| {
+                let name = &self.resolution.defs[*def].name;
+                self.rodeo.borrow().resolve(name) == "drop"
+            }) else {
+                continue;
+            };
+
+            let mono_id = self.monomorphize_fn(*drop_method, generic_args, Some(struct_def));
+            if let Some(func) = self.program.functions.get_mut(&mono_id) {
+                func.is_drop_impl = true;
+            }
+        }
+    }
+
+    fn find_interface_def(&self, interface_name: &str) -> Option<DefId> {
+        for (def, info) in &self.resolution.defs {
+            if matches!(info.kind, DefKind::Interface)
+                && self.rodeo.borrow().resolve(&info.name) == interface_name
+            {
+                return Some(*def);
+            }
+        }
+        None
     }
 
     fn expr_type(&mut self, fb: &FnBuilder, expr: &HirExpr) -> TypeId {
@@ -269,7 +350,9 @@ impl<'ctx> MirLowering<'ctx> {
                 .map(|info| info.capabalities.is_copy)
                 .unwrap_or(false),
 
-            Type::Slice { .. } | Type::Array { .. } => false,
+            Type::Array { element, .. } => self.mir_type_is_copy(element),
+
+            Type::Slice { .. } => true,
 
             _ => false,
         }
@@ -372,6 +455,47 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
     }
+
+    /// Registers a monomorphized `Slice[T]` as a synthetic struct layout so the
+    /// MIR printer can show it and indexing/len projections have a home. The
+    /// reserved `DefId`s stand in for the (never-user-visible) `ptr`/`len`
+    /// fields.
+    fn register_slice_layout(&mut self, ty: TypeId) {
+        if self.program.struct_layouts.contains_key(&ty) {
+            return;
+        }
+
+        let typecheck = &mut self.typecheck;
+        let Type::Slice { element, is_const } = typecheck.interner.get(ty).clone() else {
+            return;
+        };
+
+        let ptr_ty = typecheck.interner.intern(Type::ManyPointer {
+            inner: element,
+            is_const,
+        });
+        let len_ty = typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+
+        self.program.struct_layouts.insert(
+            ty,
+            StructLayout {
+                def_id: SLICE_STRUCT_DEF,
+                generic_args: vec![element],
+                fields: vec![
+                    StructFieldLayout {
+                        def_id: SLICE_PTR_FIELD,
+                        ty: ptr_ty,
+                    },
+                    StructFieldLayout {
+                        def_id: SLICE_LEN_FIELD,
+                        ty: len_ty,
+                    },
+                ],
+            },
+        );
+    }
 }
 
 impl<'ctx> MirLowering<'ctx> {
@@ -384,7 +508,10 @@ impl<'ctx> MirLowering<'ctx> {
         match &expr.kind {
             HirExprKind::Literal(lit) => {
                 let ty = self.expr_type(fb, expr);
-                (block, Operand::Constant(self.lower_literal(lit, ty)))
+                (
+                    block,
+                    Operand::Constant(self.lower_literal(lit, ty), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
@@ -393,7 +520,7 @@ impl<'ctx> MirLowering<'ctx> {
                 });
                 let place = Place::from_local(local);
                 let ty = fb.func.local(local).ty;
-                let operand = self.place_to_operand(place, ty);
+                let operand = self.place_to_operand(place, ty, Some(expr.source.clone()));
                 (block, operand)
             }
 
@@ -426,10 +553,14 @@ impl<'ctx> MirLowering<'ctx> {
                             lhs: lhs_op,
                             rhs: rhs_op,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
-                (block, Operand::Move(Place::from_local(temp)))
+                (
+                    block,
+                    Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::Unary {
@@ -438,6 +569,59 @@ impl<'ctx> MirLowering<'ctx> {
             } => {
                 let (block, inner_place) = self.lower_expr_to_place(fb, inner, block);
                 let result_ty = self.expr_type(fb, expr);
+
+                // `&array` lowers to a slice: build the `{ ptr, len }` fat
+                // pointer as a real slice aggregate instead of shoving a bare
+                // `addr_of` into a slice-typed local.
+                if let Type::Slice { element, is_const } =
+                    self.typecheck.interner.get(result_ty).clone()
+                {
+                    let inner_ty = self.expr_type(fb, inner);
+                    let len_val = match self.typecheck.interner.get(inner_ty).clone() {
+                        Type::Array { len: Some(len), .. } => len,
+                        _ => panic!("&slice: inner operand must be a fixed array"),
+                    };
+
+                    let ptr_ty = self.typecheck.interner.intern(Type::ManyPointer {
+                        inner: element,
+                        is_const,
+                    });
+                    let ptr_temp = fb.new_temp(ptr_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(ptr_temp),
+                            rvalue: Rvalue::Ref {
+                                place: inner_place,
+                                is_const,
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+
+                    let len_operand = Operand::Constant(ConstValue::Int(len_val as i128), None);
+
+                    let temp = fb.new_temp(result_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Aggregate {
+                                kind: AggregateKind::Slice,
+                                operands: vec![
+                                    Operand::Move(Place::from_local(ptr_temp), None),
+                                    len_operand,
+                                ],
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+
+                    return (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    );
+                }
 
                 let is_const = match self.typecheck.interner.get(result_ty).clone() {
                     Type::Pointer { is_const, .. } => is_const,
@@ -453,10 +637,14 @@ impl<'ctx> MirLowering<'ctx> {
                             place: inner_place,
                             is_const,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
-                (block, Operand::Move(Place::from_local(temp)))
+                (
+                    block,
+                    Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::Unary { expr: inner, op } => {
@@ -478,10 +666,14 @@ impl<'ctx> MirLowering<'ctx> {
                             op: *op,
                             operand: inner_op,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
-                (block, Operand::Move(Place::from_local(temp)))
+                (
+                    block,
+                    Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::SliceAccess { object, index } => {
@@ -512,7 +704,7 @@ impl<'ctx> MirLowering<'ctx> {
                     Type::Array { .. } | Type::ManyPointer { .. } => obj_place.index(index_local),
                     Type::Slice { .. } => {
                         let mut ptr_place = obj_place;
-                        ptr_place.projection.push(PlaceElem::SlicePtr);
+                        ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
                         ptr_place.index(index_local)
                     }
                     _ => unreachable!(),
@@ -520,13 +712,57 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let ty = self.expr_type(fb, expr);
 
-                (block, self.place_to_operand(elem_place, ty))
+                (
+                    block,
+                    self.place_to_operand(elem_place, ty, Some(expr.source.clone())),
+                )
             }
 
-            HirExprKind::FieldAccess { .. } => {
+            HirExprKind::FieldAccess { object, field } => {
+                // C-like enum variant access, e.g. `Color.Red`: the whole
+                // expression is just a constant, not a real place.
+                if let HirExprKind::VarRef(enum_def) = &object.kind
+                    && matches!(
+                        self.resolution.defs.get(enum_def).map(|info| &info.kind),
+                        Some(DefKind::Enum)
+                    )
+                {
+                    let variant_def = self.field_resolution(expr.id);
+                    let index = self
+                        .typecheck
+                        .enum_variants
+                        .get(enum_def)
+                        .and_then(|variants| variants.iter().position(|&v| Some(v) == variant_def))
+                        .unwrap_or(0) as i64;
+                    return (
+                        block,
+                        Operand::Constant(
+                            ConstValue::Int(index as i128),
+                            Some(expr.source.clone()),
+                        ),
+                    );
+                }
+
+                // `arr.len` on a fixed array is a compile-time constant: arrays
+                // carry no runtime length field, so lower it to a constant
+                // instead of projecting into storage.
+                let obj_ty = self.expr_type(fb, object);
+                if let Type::Array { len: Some(len), .. } =
+                    self.typecheck.interner.get(obj_ty).clone()
+                    && self.rodeo.borrow().resolve(&field.0) == "len"
+                {
+                    return (
+                        block,
+                        Operand::Constant(ConstValue::Int(len as i128), Some(expr.source.clone())),
+                    );
+                }
+
                 let (block, place) = self.lower_expr_to_place(fb, expr, block);
                 let ty = self.expr_type(fb, expr);
-                (block, self.place_to_operand(place, ty))
+                (
+                    block,
+                    self.place_to_operand(place, ty, Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::StructInit { fields, .. } => {
@@ -567,10 +803,14 @@ impl<'ctx> MirLowering<'ctx> {
                             kind: AggregateKind::Struct(struct_def),
                             operands: ordered_operands,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
-                (block, self.place_to_operand(Place::from_local(temp), ty))
+                (
+                    block,
+                    self.place_to_operand(Place::from_local(temp), ty, Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::ArrayInit { elements } => {
@@ -593,10 +833,14 @@ impl<'ctx> MirLowering<'ctx> {
                             kind: AggregateKind::Array,
                             operands,
                         },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
-                (block, self.place_to_operand(Place::from_local(temp), ty))
+                (
+                    block,
+                    self.place_to_operand(Place::from_local(temp), ty, Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::If {
@@ -628,7 +872,7 @@ impl<'ctx> MirLowering<'ctx> {
                     let join = fb.new_block();
                     fb.set_terminator(then_end, Terminator::Goto(join));
                     fb.set_terminator(else_bb, Terminator::Goto(join));
-                    return (join, Operand::Constant(ConstValue::Void));
+                    return (join, Operand::Constant(ConstValue::Void, None));
                 }
 
                 let (else_end, else_operand) =
@@ -642,6 +886,7 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place: Place::from_local(result_local),
                         rvalue: Rvalue::Use(then_operand),
+                        source: Some(expr.source.clone()),
                     },
                 );
                 fb.set_terminator(then_end, Terminator::Goto(join));
@@ -651,11 +896,15 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place: Place::from_local(result_local),
                         rvalue: Rvalue::Use(else_operand),
+                        source: Some(expr.source.clone()),
                     },
                 );
                 fb.set_terminator(else_end, Terminator::Goto(join));
 
-                (join, Operand::Move(Place::from_local(result_local)))
+                (
+                    join,
+                    Operand::Move(Place::from_local(result_local), Some(expr.source.clone())),
+                )
             }
 
             HirExprKind::Call { callee, args, .. } => {
@@ -713,14 +962,18 @@ impl<'ctx> MirLowering<'ctx> {
                         args: arg_operands,
                         destination: dest_place.clone(),
                         target: if is_diverging { None } else { Some(next_block) },
+                        source: Some(expr.source.clone()),
                     },
                 );
 
                 if is_diverging {
                     fb.set_terminator(next_block, Terminator::Unreachable);
-                    (next_block, Operand::Constant(ConstValue::Void))
+                    (next_block, Operand::Constant(ConstValue::Void, None))
                 } else {
-                    (next_block, self.place_to_operand(dest_place, ret_ty))
+                    (
+                        next_block,
+                        self.place_to_operand(dest_place, ret_ty, Some(expr.source.clone())),
+                    )
                 }
             }
 
@@ -744,9 +997,13 @@ impl<'ctx> MirLowering<'ctx> {
                         MirStatement::Assign {
                             place: Place::from_local(temp),
                             rvalue,
+                            source: Some(expr.source.clone()),
                         },
                     );
-                    (block, Operand::Move(Place::from_local(temp)))
+                    (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    )
                 }
 
                 HirMacroKind::As => {
@@ -766,9 +1023,13 @@ impl<'ctx> MirLowering<'ctx> {
                                 operand: value_operand,
                                 target: target_ty,
                             },
+                            source: Some(expr.source.clone()),
                         },
                     );
-                    (block, Operand::Move(Place::from_local(temp)))
+                    (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    )
                 }
 
                 HirMacroKind::Print
@@ -785,16 +1046,50 @@ impl<'ctx> MirLowering<'ctx> {
             },
 
             HirExprKind::Block { stmts, trailing } => {
+                fb.scope_stack.push(Vec::new());
+
                 let mut cur = block;
 
                 for stmt in stmts.iter() {
                     cur = self.lower_stmt(fb, stmt, cur);
                 }
 
-                match trailing {
+                let (cur, operand) = match trailing {
                     Some(t) => self.lower_expr_to_operand(fb, t, cur),
-                    None => (cur, Operand::Constant(ConstValue::Void)),
+                    None => (cur, Operand::Constant(ConstValue::Void, None)),
+                };
+
+                let locals = fb.scope_stack.pop().unwrap();
+
+                let (cur, operand) = match &operand {
+                    Operand::Copy(place, _) | Operand::Move(place, _) => {
+                        if locals.contains(&place.local) {
+                            let ty = fb.func.local(place.local).ty;
+                            let temp = fb.new_temp(ty);
+                            fb.push_stmt(
+                                cur,
+                                MirStatement::Assign {
+                                    place: Place::from_local(temp),
+                                    rvalue: Rvalue::Use(operand),
+                                    source: Some(expr.source.clone()),
+                                },
+                            );
+                            (
+                                cur,
+                                Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                            )
+                        } else {
+                            (cur, operand)
+                        }
+                    }
+                    Operand::Constant(_, _) => (cur, operand),
+                };
+
+                for local in locals.iter().rev() {
+                    fb.push_stmt(cur, MirStatement::StorageDead(*local));
                 }
+
+                (cur, operand)
             }
 
             HirExprKind::Switch => unreachable!("not implemented in previous stages"),
@@ -831,7 +1126,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
 
                 let index_local = match index_operand {
-                    Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
+                    Operand::Copy(p, _) | Operand::Move(p, _) if p.projection.is_empty() => p.local,
                     other => {
                         let usize_ty = self
                             .typecheck
@@ -845,6 +1140,7 @@ impl<'ctx> MirLowering<'ctx> {
                             MirStatement::Assign {
                                 place: Place::from_local(temp),
                                 rvalue: Rvalue::Use(other),
+                                source: Some(expr.source.clone()),
                             },
                         );
 
@@ -878,11 +1174,11 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    fn place_to_operand(&self, place: Place, ty: TypeId) -> Operand {
+    fn place_to_operand(&self, place: Place, ty: TypeId, source: Option<Source>) -> Operand {
         if self.mir_type_is_copy(ty) {
-            Operand::Copy(place)
+            Operand::Copy(place, source)
         } else {
-            Operand::Move(place)
+            Operand::Move(place, source)
         }
     }
 
@@ -900,7 +1196,14 @@ impl<'ctx> MirLowering<'ctx> {
         let obj_ty = self.expr_type(fb, object);
         let (block, place) = self.lower_expr_to_place(fb, object, block);
 
-        self.lower_place_receiver_operand(fb, place, obj_ty, method_def_id, block)
+        self.lower_place_receiver_operand(
+            fb,
+            place,
+            obj_ty,
+            method_def_id,
+            Some(object.source.clone()),
+            block,
+        )
     }
 
     fn lower_place_receiver_operand(
@@ -909,6 +1212,7 @@ impl<'ctx> MirLowering<'ctx> {
         place: Place,
         obj_ty: TypeId,
         method_def_id: DefId,
+        source: Option<Source>,
         block: BlockId,
     ) -> (BlockId, Operand) {
         let method_ty = self
@@ -924,11 +1228,13 @@ impl<'ctx> MirLowering<'ctx> {
         };
 
         match expected_self_ty.map(|t| self.typecheck.interner.get(t).clone()) {
-            Some(Type::Struct { .. }) | None => (block, self.place_to_operand(place, obj_ty)),
+            Some(Type::Struct { .. }) | None => {
+                (block, self.place_to_operand(place, obj_ty, source))
+            }
 
             Some(Type::Pointer { is_const, .. }) => {
                 match self.typecheck.interner.get(obj_ty).clone() {
-                    Type::Pointer { .. } => (block, self.place_to_operand(place, obj_ty)),
+                    Type::Pointer { .. } => (block, self.place_to_operand(place, obj_ty, source)),
                     _ => {
                         let ptr_ty = self.typecheck.interner.intern(Type::Pointer {
                             inner: obj_ty,
@@ -942,14 +1248,15 @@ impl<'ctx> MirLowering<'ctx> {
                             MirStatement::Assign {
                                 place: Place::from_local(temp),
                                 rvalue: Rvalue::Ref { place, is_const },
+                                source: source.clone(),
                             },
                         );
-                        (block, Operand::Move(Place::from_local(temp)))
+                        (block, Operand::Move(Place::from_local(temp), None))
                     }
                 }
             }
 
-            _ => (block, self.place_to_operand(place, obj_ty)),
+            _ => (block, self.place_to_operand(place, obj_ty, source)),
         }
     }
 
@@ -961,7 +1268,7 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> LocalId {
         match &operand {
-            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+            Operand::Copy(place, _) | Operand::Move(place, _) if place.projection.is_empty() => {
                 place.local
             }
             _ => {
@@ -971,6 +1278,7 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place: Place::from_local(temp),
                         rvalue: Rvalue::Use(operand),
+                        source: None,
                     },
                 );
                 temp
@@ -1022,16 +1330,17 @@ impl<'ctx> MirLowering<'ctx> {
                 args: operands,
                 destination: Place::from_local(dest),
                 target: if is_diverging { None } else { Some(next) },
+                source: None,
             },
         );
 
         if is_diverging {
             fb.set_terminator(next, Terminator::Unreachable);
-            (next, Operand::Constant(ConstValue::Void))
+            (next, Operand::Constant(ConstValue::Void, None))
         } else {
             (
                 next,
-                self.place_to_operand(Place::from_local(dest), result_ty),
+                self.place_to_operand(Place::from_local(dest), result_ty, None),
             )
         }
     }
@@ -1054,11 +1363,12 @@ impl<'ctx> MirLowering<'ctx> {
                 args: Vec::new(),
                 destination: Place::from_local(dest),
                 target: None,
+                source: None,
             },
         );
 
         fb.set_terminator(next, Terminator::Unreachable);
-        (next, Operand::Constant(ConstValue::Void))
+        (next, Operand::Constant(ConstValue::Void, None))
     }
 
     fn lower_operator_method_call(
@@ -1130,12 +1440,13 @@ impl<'ctx> MirLowering<'ctx> {
                 args,
                 destination: Place::from_local(dest),
                 target: Some(next),
+                source: None,
             },
         );
 
         (
             next,
-            self.place_to_operand(Place::from_local(dest), result_ty),
+            self.place_to_operand(Place::from_local(dest), result_ty, None),
         )
     }
 }
@@ -1151,7 +1462,7 @@ impl<'ctx> MirLowering<'ctx> {
             HirStmtKind::Expr(block_expr) => self.lower_expr_to_operand(fb, block_expr, block),
             _ => {
                 let block = self.lower_stmt(fb, stmt, block);
-                (block, Operand::Constant(ConstValue::Void))
+                (block, Operand::Constant(ConstValue::Void, None))
             }
         }
     }
@@ -1171,6 +1482,30 @@ impl<'ctx> MirLowering<'ctx> {
                     .copied()
                     .unwrap_or_else(|| panic!("let statement missing recorded type"));
 
+                // `let _ = expr;` discards the value: evaluate the expression
+                // for its side effects but don't allocate a storage local.
+                // A non-constant operand rooted at a real user variable is
+                // still consumed (reads/moves keep mattering), so it gets a
+                // `Discard` statement; temporaries and literals need none.
+                if self.rodeo.borrow().resolve(name) == "_" {
+                    return match value {
+                        Some(v) => {
+                            let (block, operand) = self.lower_expr_to_operand(fb, v, block);
+                            let is_user = match &operand {
+                                Operand::Copy(place, _) | Operand::Move(place, _) => {
+                                    fb.func.local(place.local).kind != LocalKind::Temporary
+                                }
+                                Operand::Constant(_, _) => false,
+                            };
+                            if is_user {
+                                fb.push_stmt(block, MirStatement::Discard(operand));
+                            }
+                            block
+                        }
+                        None => block,
+                    };
+                }
+
                 let local = fb.new_local(
                     ty,
                     LocalKind::UserVariable,
@@ -1179,6 +1514,10 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(stmt.source.clone()),
                 );
                 fb.locals_by_def.insert(*def_id, local);
+                fb.push_stmt(block, MirStatement::StorageLive(local));
+                if let Some(scope) = fb.scope_stack.last_mut() {
+                    scope.push(local);
+                }
 
                 if let Some(v) = value {
                     let (block, operand) = self.lower_expr_to_operand(fb, v, block);
@@ -1188,6 +1527,7 @@ impl<'ctx> MirLowering<'ctx> {
                         MirStatement::Assign {
                             place: Place::from_local(local),
                             rvalue: Rvalue::Use(operand),
+                            source: Some(stmt.source.clone()),
                         },
                     );
                     block
@@ -1205,6 +1545,7 @@ impl<'ctx> MirLowering<'ctx> {
                     MirStatement::Assign {
                         place,
                         rvalue: Rvalue::Use(operand),
+                        source: Some(stmt.source.clone()),
                     },
                 );
                 block
@@ -1221,6 +1562,7 @@ impl<'ctx> MirLowering<'ctx> {
                         place.clone(),
                         place_ty,
                         op_res.method_def,
+                        Some(stmt.source.clone()),
                         block,
                     );
                     let (block, result_operand) = self.lower_operator_method_call_from_operands(
@@ -1237,13 +1579,15 @@ impl<'ctx> MirLowering<'ctx> {
                         MirStatement::Assign {
                             place,
                             rvalue: Rvalue::Use(result_operand),
+                            source: Some(stmt.source.clone()),
                         },
                     );
 
                     return block;
                 }
 
-                let lhs_operand = self.place_to_operand(place.clone(), place_ty);
+                let lhs_operand =
+                    self.place_to_operand(place.clone(), place_ty, Some(stmt.source.clone()));
 
                 let (block, rhs_operand) = self.lower_expr_to_operand(fb, value, block);
 
@@ -1259,13 +1603,15 @@ impl<'ctx> MirLowering<'ctx> {
                             lhs: lhs_operand,
                             rhs: rhs_operand,
                         },
+                        source: Some(stmt.source.clone()),
                     },
                 );
                 fb.push_stmt(
                     block,
                     MirStatement::Assign {
                         place,
-                        rvalue: Rvalue::Use(Operand::Move(Place::from_local(temp))),
+                        rvalue: Rvalue::Use(Operand::Move(Place::from_local(temp), None)),
+                        source: Some(stmt.source.clone()),
                     },
                 );
 
@@ -1339,7 +1685,7 @@ impl<'ctx> MirLowering<'ctx> {
                         fb.set_terminator(block, Terminator::Return(op));
                         return block;
                     }
-                    None => Operand::Constant(ConstValue::Void),
+                    None => Operand::Constant(ConstValue::Void, None),
                 };
                 fb.set_terminator(block, Terminator::Return(operand));
                 block
@@ -1393,7 +1739,8 @@ impl<'ctx> MirLowering<'ctx> {
             block,
             MirStatement::Assign {
                 place: Place::from_local(counter),
-                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0))),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0), None)),
+                source: None,
             },
         );
 
@@ -1419,7 +1766,8 @@ impl<'ctx> MirLowering<'ctx> {
             header,
             MirStatement::Assign {
                 place: Place::from_local(loop_var),
-                rvalue: Rvalue::Use(Operand::Copy(Place::from_local(counter))),
+                rvalue: Rvalue::Use(Operand::Copy(Place::from_local(counter), None)),
+                source: None,
             },
         );
 
@@ -1434,9 +1782,10 @@ impl<'ctx> MirLowering<'ctx> {
                 place: Place::from_local(cmp_result),
                 rvalue: Rvalue::BinaryOp {
                     op: BinaryOp::Lt,
-                    lhs: Operand::Copy(Place::from_local(counter)),
+                    lhs: Operand::Copy(Place::from_local(counter), None),
                     rhs: count_operand,
                 },
+                source: None,
             },
         );
 
@@ -1446,7 +1795,7 @@ impl<'ctx> MirLowering<'ctx> {
         fb.set_terminator(
             header,
             Terminator::SwitchInt {
-                discriminant: Operand::Move(Place::from_local(cmp_result)),
+                discriminant: Operand::Move(Place::from_local(cmp_result), None),
                 targets: vec![(1, body_bb)],
                 otherwise: exit_bb,
             },
@@ -1466,16 +1815,18 @@ impl<'ctx> MirLowering<'ctx> {
                 place: Place::from_local(incremented),
                 rvalue: Rvalue::BinaryOp {
                     op: BinaryOp::Add,
-                    lhs: Operand::Copy(Place::from_local(counter)),
-                    rhs: Operand::Constant(ConstValue::Int(1)),
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Constant(ConstValue::Int(1), None),
                 },
+                source: None,
             },
         );
         fb.push_stmt(
             body_end,
             MirStatement::Assign {
                 place: Place::from_local(counter),
-                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented))),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented), None)),
+                source: None,
             },
         );
         fb.set_terminator(body_end, Terminator::Goto(header));
@@ -1503,11 +1854,14 @@ impl<'ctx> MirLowering<'ctx> {
             Type::Array { element, len } => {
                 let len_val = len.expect("unknown array length (must be comptime known)");
 
-                (Operand::Constant(ConstValue::Int(len_val as i128)), element)
+                (
+                    Operand::Constant(ConstValue::Int(len_val as i128), None),
+                    element,
+                )
             }
             Type::Slice { element, .. } => {
                 let mut len_place = iter_place.clone();
-                len_place.projection.push(PlaceElem::SliceLen);
+                len_place.projection.push(PlaceElem::Field(SLICE_LEN_FIELD));
 
                 let len_local = fb.new_temp(usize_ty);
 
@@ -1515,11 +1869,12 @@ impl<'ctx> MirLowering<'ctx> {
                     block,
                     MirStatement::Assign {
                         place: Place::from_local(len_local),
-                        rvalue: Rvalue::Use(Operand::Copy(len_place)),
+                        rvalue: Rvalue::Use(Operand::Copy(len_place, None)),
+                        source: None,
                     },
                 );
 
-                (Operand::Move(Place::from_local(len_local)), element)
+                (Operand::Move(Place::from_local(len_local), None), element)
             }
 
             _err_type => panic!("non-iterable type: {:?}", _err_type),
@@ -1530,7 +1885,8 @@ impl<'ctx> MirLowering<'ctx> {
             block,
             MirStatement::Assign {
                 place: Place::from_local(counter),
-                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0))),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0), None)),
+                source: None,
             },
         );
 
@@ -1550,9 +1906,10 @@ impl<'ctx> MirLowering<'ctx> {
                 place: Place::from_local(cmp_result),
                 rvalue: Rvalue::BinaryOp {
                     op: BinaryOp::Lt,
-                    lhs: Operand::Copy(Place::from_local(counter)),
+                    lhs: Operand::Copy(Place::from_local(counter), None),
                     rhs: len_operand,
                 },
+                source: None,
             },
         );
 
@@ -1562,7 +1919,7 @@ impl<'ctx> MirLowering<'ctx> {
         fb.set_terminator(
             header,
             Terminator::SwitchInt {
-                discriminant: Operand::Move(Place::from_local(cmp_result)),
+                discriminant: Operand::Move(Place::from_local(cmp_result), None),
                 targets: vec![(1, body_bb)],
                 otherwise: exit_bb,
             },
@@ -1583,19 +1940,21 @@ impl<'ctx> MirLowering<'ctx> {
             Type::Slice { .. } => {
                 let mut ptr_place = iter_place.clone();
 
-                ptr_place.projection.push(PlaceElem::SlicePtr);
+                ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
                 ptr_place.index(counter)
             }
             _ => unreachable!(),
         };
 
-        let elem_operand = self.place_to_operand(elem_place, elem_ty);
+        let elem_operand =
+            self.place_to_operand(elem_place, elem_ty, Some(iterator.source.clone()));
 
         fb.push_stmt(
             body_bb,
             MirStatement::Assign {
                 place: Place::from_local(loop_var),
                 rvalue: Rvalue::Use(elem_operand),
+                source: None,
             },
         );
 
@@ -1616,9 +1975,10 @@ impl<'ctx> MirLowering<'ctx> {
                 place: Place::from_local(incremented),
                 rvalue: Rvalue::BinaryOp {
                     op: BinaryOp::Add,
-                    lhs: Operand::Copy(Place::from_local(counter)),
-                    rhs: Operand::Constant(ConstValue::Int(1)),
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Constant(ConstValue::Int(1), None),
                 },
+                source: None,
             },
         );
 
@@ -1626,7 +1986,8 @@ impl<'ctx> MirLowering<'ctx> {
             body_end,
             MirStatement::Assign {
                 place: Place::from_local(counter),
-                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented))),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented), None)),
+                source: None,
             },
         );
 
@@ -1654,6 +2015,11 @@ impl<'ctx> MirLowering<'ctx> {
         self.mono_cache.cache.insert(key, id);
 
         let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args, owner_struct);
+        for local in &mir_func.locals {
+            if matches!(self.typecheck.interner.get(local.ty), Type::Slice { .. }) {
+                self.register_slice_layout(local.ty);
+            }
+        }
         self.program.functions.insert(id, mir_func);
 
         let interner = self.rodeo.borrow();
@@ -1816,7 +2182,7 @@ impl<'ctx> MirLowering<'ctx> {
                             if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
                                 fb.set_terminator(
                                     cur,
-                                    Terminator::Return(Operand::Constant(ConstValue::Void)),
+                                    Terminator::Return(Operand::Constant(ConstValue::Void, None)),
                                 );
                             }
                             cur
@@ -1827,7 +2193,7 @@ impl<'ctx> MirLowering<'ctx> {
                     if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
                         fb.set_terminator(
                             cur,
-                            Terminator::Return(Operand::Constant(ConstValue::Void)),
+                            Terminator::Return(Operand::Constant(ConstValue::Void, None)),
                         );
                     }
                     cur
@@ -1837,7 +2203,10 @@ impl<'ctx> MirLowering<'ctx> {
             _ => {
                 let cur = self.lower_stmt(&mut fb, body, entry);
                 if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
-                    fb.set_terminator(cur, Terminator::Return(Operand::Constant(ConstValue::Void)));
+                    fb.set_terminator(
+                        cur,
+                        Terminator::Return(Operand::Constant(ConstValue::Void, None)),
+                    );
                 }
                 cur
             }
@@ -1878,14 +2247,15 @@ impl<'ctx> MirLowering<'ctx> {
                 args: arg_operands,
                 destination: dest_place.clone(),
                 target: if is_diverging { None } else { Some(next_block) },
+                source: None,
             },
         );
 
         if is_diverging {
             fb.set_terminator(next_block, Terminator::Unreachable);
-            (next_block, Operand::Constant(ConstValue::Void))
+            (next_block, Operand::Constant(ConstValue::Void, None))
         } else {
-            (next_block, self.place_to_operand(dest_place, ret_ty))
+            (next_block, self.place_to_operand(dest_place, ret_ty, None))
         }
     }
 
