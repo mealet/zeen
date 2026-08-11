@@ -1541,7 +1541,7 @@ mod tests {
 
     #[test]
     fn literal_null() {
-        const SRC: &str = "null";
+        const SRC: &str = "nullptr";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
@@ -1552,7 +1552,7 @@ mod tests {
                 expr,
                 &Expression {
                     kind: ExpressionKind::Literal(expressions::Literal::Null),
-                    span: (0, "null".len()).into()
+                    span: (0, "nullptr".len()).into()
                 }
             );
         }
