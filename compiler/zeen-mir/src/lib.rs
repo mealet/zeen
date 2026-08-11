@@ -78,6 +78,11 @@ pub struct MirFunction {
 
     pub entry_block: BlockId,
     pub ret_ty: TypeId,
+
+    /// Whether this function is the generated `drop` implementation of a
+    /// struct, produced by [`lowering::register_drop_functions`]. Its `self`
+    /// parameter must not get an automatic scope-exit drop.
+    pub is_drop_impl: bool,
 }
 
 impl MirFunction {
@@ -143,9 +148,21 @@ pub struct BasicBlock {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum MirStatement {
-    Assign { place: Place, rvalue: Rvalue },
+    Assign {
+        place: Place,
+        rvalue: Rvalue,
+        /// Source of the expression that produced this statement, used for
+        /// diagnostics on reads of the operands.
+        source: Option<Source>,
+    },
     Drop(Place),
+
+    /// Evaluates an operand and throws the value away, e.g. `let _ = expr;`.
+    /// The operand is still consumed (moves are recorded), but no local is
+    /// allocated and nothing is stored.
+    Discard(Operand),
 
     StorageLive(LocalId),
     StorageDead(LocalId),
@@ -188,17 +205,13 @@ pub enum PlaceElem {
     Field(DefId),
     Index(LocalId),
     Deref,
-
-    // builtin slice's fields
-    SliceLen,
-    SlicePtr,
 }
 
 #[derive(Debug, Clone)]
 pub enum Operand {
-    Copy(Place),
-    Move(Place),
-    Constant(ConstValue),
+    Copy(Place, Option<Source>),
+    Move(Place, Option<Source>),
+    Constant(ConstValue, Option<Source>),
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +283,8 @@ pub enum Terminator {
         args: Vec<Operand>,
         destination: Place,
         target: Option<BlockId>,
+        /// Source of the call expression, used for diagnostics on arg reads.
+        source: Option<Source>,
     },
 
     MacroCall {
@@ -278,6 +293,8 @@ pub enum Terminator {
         args: Vec<Operand>,
         destination: Place,
         target: Option<BlockId>,
+        /// Source of the macro call expression, used for diagnostics on arg reads.
+        source: Option<Source>,
     },
 
     Return(Operand),

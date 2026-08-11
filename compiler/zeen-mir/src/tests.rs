@@ -101,3 +101,36 @@ fn implement_operator_fn_is_named_with_struct_owner() {
         "bare `add` name must not be used, got {names:?}"
     );
 }
+
+#[test]
+fn drop_impl_function_is_registered_with_struct_owner() {
+    let mir = compile_mir_ok(
+        "struct Foo {} \
+         implement Drop : Foo { fn drop(self) void {} } \
+         fn take_dropper[T: Drop](x: T) void {} \
+         fn main() { take_dropper(Foo {}); }",
+    );
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+
+    assert!(
+        names.iter().any(|n| n == "Foo.drop"),
+        "expected a registered `Foo.drop` in MIR function names, got {names:?}"
+    );
+}
+
+#[test]
+fn generic_drop_impl_is_registered_per_concrete_type() {
+    let mir = compile_mir_ok(
+        "struct Box[T] { pub v: T } \
+         implement[T] Drop : Box[T] { fn drop(self) void {} } \
+         fn main() { let b = Box { .v = 30 }; }",
+    );
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+
+    assert!(
+        names.iter().any(|n| n == "Box[i32].drop"),
+        "expected a registered `Box[i32].drop` in MIR function names, got {names:?}"
+    );
+}

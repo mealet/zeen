@@ -136,6 +136,21 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("cannot implement `Drop` for `{struct_name}`: the struct also implements `Copy`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::copy_with_drop),
+        help("`Copy` types own no resources to release; pick one: `Copy` or `Drop`")
+    )]
+    CopyWithDrop {
+        struct_name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("`{method}` is a static method and cannot be called on an instance")]
     #[diagnostic(
         severity(Error),

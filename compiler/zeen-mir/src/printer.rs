@@ -9,7 +9,7 @@ use std::rc::Rc;
 use lasso::Rodeo;
 use zeen_resolve::{DefId, ResolutionResult};
 use zeen_typecheck::result::TypeCheckResult;
-use zeen_types::{Type, TypeId, TypeInterner};
+use zeen_types::{ARRAY_LEN_FIELD, SLICE_LEN_FIELD, SLICE_PTR_FIELD, Type, TypeId, TypeInterner};
 
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, LocalDecl, LocalId, LocalKind,
@@ -214,7 +214,7 @@ impl<'a> MirPrinter<'a> {
 
     fn print_statement(&self, out: &mut String, stmt: &MirStatement, func: &MirFunction) {
         match stmt {
-            MirStatement::Assign { place, rvalue } => {
+            MirStatement::Assign { place, rvalue, .. } => {
                 let _ = writeln!(
                     out,
                     "        {} = {};",
@@ -224,6 +224,9 @@ impl<'a> MirPrinter<'a> {
             }
             MirStatement::Drop(place) => {
                 let _ = writeln!(out, "        drop({});", self.place_ref(place, func));
+            }
+            MirStatement::Discard(operand) => {
+                let _ = writeln!(out, "        discard({});", self.operand_ref(operand, func));
             }
             MirStatement::StorageLive(local) => {
                 let _ = writeln!(out, "        StorageLive({});", self.local_ref(*local));
@@ -266,6 +269,7 @@ impl<'a> MirPrinter<'a> {
                 args,
                 destination,
                 target,
+                ..
             } => {
                 let arg_strs: Vec<String> =
                     args.iter().map(|a| self.operand_ref(a, func)).collect();
@@ -289,6 +293,7 @@ impl<'a> MirPrinter<'a> {
                 args,
                 destination,
                 target,
+                ..
             } => {
                 let arg_strs: Vec<String> =
                     args.iter().map(|a| self.operand_ref(a, func)).collect();
@@ -396,9 +401,9 @@ impl<'a> MirPrinter<'a> {
 
     fn operand_ref(&self, operand: &Operand, func: &MirFunction) -> String {
         match operand {
-            Operand::Copy(place) => self.place_ref(place, func),
-            Operand::Move(place) => format!("move {}", self.place_ref(place, func)),
-            Operand::Constant(c) => self.const_ref(c),
+            Operand::Copy(place, _) => self.place_ref(place, func),
+            Operand::Move(place, _) => format!("move {}", self.place_ref(place, func)),
+            Operand::Constant(value, _) => self.const_ref(value),
         }
     }
 
@@ -420,6 +425,15 @@ impl<'a> MirPrinter<'a> {
 
         for elem in &place.projection {
             match elem {
+                PlaceElem::Field(SLICE_LEN_FIELD) => {
+                    let _ = write!(s, ".len");
+                }
+                PlaceElem::Field(SLICE_PTR_FIELD) => {
+                    let _ = write!(s, ".ptr");
+                }
+                PlaceElem::Field(ARRAY_LEN_FIELD) => {
+                    let _ = write!(s, ".len");
+                }
                 PlaceElem::Field(def_id) => {
                     let _ = write!(s, ".{}", self.resolve_def_name(*def_id));
                 }
@@ -429,12 +443,6 @@ impl<'a> MirPrinter<'a> {
                 PlaceElem::Deref => {
                     s = format!("(*{})", s);
                     deref_prefix = true;
-                }
-                PlaceElem::SliceLen => {
-                    let _ = write!(s, ".len");
-                }
-                PlaceElem::SlicePtr => {
-                    let _ = write!(s, ".ptr");
                 }
             }
         }

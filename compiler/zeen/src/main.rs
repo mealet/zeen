@@ -136,7 +136,7 @@ fn main() {
             eprintln!("{}", report_string);
         }
 
-        cli::println_error(format!("Compiler returned {} errors", errors.len()));
+        cli::println_error(format!("Compiler returned {} error(s)", errors.len()));
 
         exit(1);
     });
@@ -189,17 +189,49 @@ fn main() {
             eprintln!("{}", report_string);
         }
 
-        cli::println_error(format!("Compiler returned {} errors", errors.len()));
+        cli::println_error(format!("Compiler returned {} error(s)", errors.len()));
 
         exit(1);
     });
 
-    let lowered_mir = zeen_mir::lowering::lower_program(
+    let mut lowered_mir = zeen_mir::lowering::lower_program(
         Rc::clone(&rodeo),
         &mut typechecker_result,
         &resolution_result,
         &hir_module,
     );
+
+    let flow_result = zeen_flow::run_dataflow(
+        &mut lowered_mir.program,
+        &mut typechecker_result,
+        &resolution_result,
+        Rc::clone(&rodeo),
+    );
+
+    match flow_result {
+        Ok(result) => {
+            for warning in &result.warnings {
+                let report_string = driver.report(warning).unwrap();
+                eprintln!("{}", report_string);
+            }
+            if !result.warnings.is_empty() {
+                cli::println_warn(format!(
+                    "Compiler reported {} warning(s)",
+                    result.warnings.len()
+                ));
+            }
+        }
+        Err(errors) => {
+            for err in &errors {
+                let report_string = driver.report(err).unwrap();
+                eprintln!("{}", report_string);
+            }
+
+            cli::println_error(format!("Compiler returned {} error(s)", errors.len()));
+
+            exit(1);
+        }
+    }
 
     if args.emit == CompilationOutput::EmitMIR {
         let printed_mir = zeen_mir::printer::print_mir_program(

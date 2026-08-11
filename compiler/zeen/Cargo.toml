@@ -23,3 +23,4 @@ zeen-resolve = {path = "../zeen-resolve"}
 zeen-hir = { path = "../zeen-hir" }
 zeen-typecheck = { path = "../zeen-typecheck" }
 zeen-mir = { path = "../zeen-mir" }
+zeen-flow = { path = "../zeen-flow" }

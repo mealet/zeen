@@ -282,3 +282,67 @@ fn make() Vec2 {
     );
     assert!(mir.contains("fn Vec2.add("), "MIR:\n{mir}");
 }
+
+#[test]
+fn slice_layout_is_printed_and_addr_of_array_yields_slice() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let b: []i32 = &a;
+    let _ = b[2];
+}
+"#,
+    );
+    assert!(
+        mir.contains("struct []i32 { [*]i32, usize };"),
+        "slice layout must be printed: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("slice { move %3, 4 }"),
+        "&array must build a `{{ ptr, len }}` slice aggregate: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains(".ptr["),
+        "slice index must project through the slice `ptr`: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn slice_ptr_and_len_fields_are_accessible() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let b: []i32 = &a;
+
+    let slice_ptr: [*]i32 = b.ptr;
+    let slice_len: usize = b.len;
+}
+"#,
+    );
+    assert!(
+        mir.contains("= %2.ptr;"),
+        "`b.ptr` must project through the slice `ptr` field: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("= %2.len;"),
+        "`b.len` must project through the slice `len` field: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn array_len_is_a_compile_time_constant() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let n: usize = a.len;
+}
+"#,
+    );
+    assert!(
+        mir.contains("= 4;"),
+        "`a.len` must lower to the constant array length: MIR:\n{mir}"
+    );
+}

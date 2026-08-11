@@ -53,6 +53,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::Continue) => self.parse_continue(),
             TokenKind::Keyword(CompilerKeyword::While) => self.parse_while(),
             TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(),
+            TokenKind::Keyword(CompilerKeyword::If) => self.parse_if(),
             TokenKind::OpenBrace => self.parse_block(),
 
             _ => self.parse_expr_or_assign(),
@@ -265,14 +266,41 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         let mut expr_parser = ExprParser::new(self.p);
         let expr = expr_parser.parse()?;
 
-        self.expect_optional_semicolon()?;
+        self.finish_expr_stmt(expr)
+    }
 
-        let stmt = self.p.arena.alloc(Statement {
-            kind: StatementKind::Expr(expr),
+    pub fn parse_if(&mut self) -> Option<&'ctx Statement<'ctx>> {
+        let mut expr_parser = ExprParser::new(self.p);
+        let expr = expr_parser.parse()?;
+
+        self.finish_expr_stmt(expr)
+    }
+
+    /// Completes an expression statement (`if`, bare block, …). Directly
+    /// inside a `{ ... }` block the trailing semicolon is optional, and when
+    /// the block is about to close the statement becomes its trailing value.
+    /// In an if/while/for body position a semicolon belongs to the enclosing
+    /// statement, so it is left untouched.
+    fn finish_expr_stmt(&mut self, expr: &'ctx Expression<'ctx>) -> Option<&'ctx Statement<'ctx>> {
+        if !self.expect_optional_semicolon {
+            return Some(self.p.arena.alloc(Statement {
+                kind: StatementKind::Expr(expr),
+                span: expr.span,
+            }));
+        }
+
+        let _ = self.p.eat(TokenKind::Semicolon);
+
+        let kind = if self.p.at(TokenKind::CloseBrace) {
+            StatementKind::TrailingExpr(expr)
+        } else {
+            StatementKind::Expr(expr)
+        };
+
+        Some(self.p.arena.alloc(Statement {
+            kind,
             span: expr.span,
-        });
-
-        Some(stmt)
+        }))
     }
 
     pub fn parse_expr_or_assign(&mut self) -> Option<&'ctx Statement<'ctx>> {
@@ -309,7 +337,13 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             return Some(stmt);
         }
 
-        if let Some(bin_info) = expressions::BinaryInfo::new(self.p.current()) {
+        // compound assignment (a += b), but only when the binary operator is
+        // directly followed by `=`. Otherwise the operator starts a plain
+        // binary expression statement, e.g. `a + b` or a trailing `a + b`.
+
+        if self.p.peek().is_some_and(|next| next.kind == TokenKind::Eq)
+            && let Some(bin_info) = expressions::BinaryInfo::new(self.p.current())
+        {
             const NOT_ALLOWED: &[zeen_ast::expressions::BinaryOp] = &[
                 zeen_ast::expressions::BinaryOp::Eq,
                 zeen_ast::expressions::BinaryOp::Ne,
@@ -349,19 +383,24 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             return Some(stmt);
         }
 
-        // expr in statement
+        // expr in statement (may be a full binary expression)
 
-        let mut kind = StatementKind::Expr(lhs);
+        let expr = {
+            let mut expr_parser = ExprParser::new(self.p);
+            expr_parser.parse_binary_rest(lhs, expressions::Precedence::Lowest)?
+        };
+
+        let mut kind = StatementKind::Expr(expr);
 
         if self.p.at(TokenKind::CloseBrace) {
-            kind = StatementKind::TrailingExpr(lhs);
+            kind = StatementKind::TrailingExpr(expr);
         } else {
             self.expect_optional_semicolon()?;
         }
 
         let stmt = self.p.arena.alloc(Statement {
             kind,
-            span: lhs.span,
+            span: expr.span,
         });
 
         Some(stmt)
@@ -833,5 +872,234 @@ mod tests {
         );
 
         assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn binary_expr_is_not_compound_assign() {
+        const SRC: &str = "a + b;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Binary {
+                        op: zeen_ast::expressions::BinaryOp::Add,
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn binary_expr_with_comparison_is_plain_expr() {
+        const SRC: &str = "a == b;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Binary {
+                        op: zeen_ast::expressions::BinaryOp::Eq,
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn trailing_binary_expr_in_block() {
+        const SRC: &str = "{ slice[i] + slice[0] }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block {
+                        trailing: Some(..),
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn compound_assign_still_parses() {
+        const SRC: &str = "a += b;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::CompoundAssign {
+                    op: zeen_ast::expressions::BinaryOp::Add,
+                    ..
+                },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn if_at_block_end_is_trailing() {
+        const SRC: &str = "{ if (a) { 1 } else { 2 } }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, _stmt_parser);
+        let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block {
+                        trailing: Some(Expression {
+                            kind: ExpressionKind::If { .. },
+                            ..
+                        }),
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn block_expr_at_block_end_is_trailing() {
+        const SRC: &str = "{ { 42 } }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, _stmt_parser);
+        let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block {
+                        trailing: Some(Expression {
+                            kind: ExpressionKind::Block { .. },
+                            ..
+                        }),
+                        ..
+                    },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn if_semicolon_is_optional_inside_block() {
+        const SRC: &str = "if (a) { 1 }; let b = 2;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, _stmt_parser);
+        let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::If { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let { .. },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn block_expr_semicolon_is_optional_inside_block() {
+        const SRC: &str = "{ 42 } let b = 2;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, _stmt_parser);
+        let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let { .. },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn while_and_for_at_block_end_parse_without_semicolon() {
+        for src in ["while (a) { 1 }", "for (i : 10) { 1 }"] {
+            let src_arc = Arc::new(src.to_string());
+            let rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
+            let bump = bumpalo::Bump::new();
+            let mut tokens = zeen_lexer::tokenize(src);
+            let mut parser = Parser::new(
+                Rc::new("tests.zn".to_string()),
+                src_arc,
+                &mut tokens,
+                &bump,
+                Rc::clone(&rodeo),
+            );
+            let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+            let stmt = stmt_parser.parse().expect("loop statement must parse");
+            assert!(
+                matches!(
+                    stmt.kind,
+                    StatementKind::While { .. } | StatementKind::For { .. }
+                ),
+                "expected loop statement at block end, got: {stmt:?}"
+            );
+            assert!(stmt_parser.parse().is_none());
+        }
     }
 }
