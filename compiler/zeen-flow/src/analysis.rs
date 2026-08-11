@@ -308,13 +308,20 @@ impl<'ctx> DataFlow<'ctx> {
     /// after it was moved out. Only the state transition differs from a full
     /// move.
     fn consume_copy_place(&mut self, place: &Place, source: Option<Source>) {
-        self.mark_read(place.local);
-        self.check_read(place, source);
+        for local in place_read_locals(place) {
+            self.mark_read(local);
+        }
+        self.check_read(place, source.clone());
+        for local in index_locals(place) {
+            self.check_read(&Place::from_local(local), source.clone());
+        }
     }
 
     /// A move of a place (ownership transfer).
     fn consume_move_place(&mut self, place: &Place, source: Option<Source>) {
-        self.mark_read(place.local);
+        for local in place_read_locals(place) {
+            self.mark_read(local);
+        }
 
         // Moving a field out of a struct with an explicit `Drop` impl is forbidden
         // entirely.
@@ -322,13 +329,14 @@ impl<'ctx> DataFlow<'ctx> {
             self.emit_drop_move_error(place, source.clone());
         }
 
-        if self.type_is_copy_place(place) {
-            self.check_read(place, source);
-            return;
+        self.check_read(place, source.clone());
+        for local in index_locals(place) {
+            self.check_read(&Place::from_local(local), source.clone());
         }
 
-        self.check_read(place, source);
-        self.current.move_place(place);
+        if !self.type_is_copy_place(place) {
+            self.current.move_place(place);
+        }
     }
 
     /// Writes into a place, supplying the struct field set when the
@@ -792,7 +800,9 @@ fn drop_insert_position(statements: &[MirStatement], storage_idx: usize, local: 
 /// Whether the statement reads (uses) `local`'s value as an operand.
 fn stmt_reads_local(stmt: &MirStatement, local: LocalId) -> bool {
     match stmt {
-        MirStatement::Assign { rvalue, .. } => rvalue_reads_local(rvalue, local),
+        MirStatement::Assign { place, rvalue, .. } => {
+            rvalue_reads_local(rvalue, local) || index_locals(place).contains(&local)
+        }
         MirStatement::Discard(operand) => operand_reads_local(operand, local),
         _ => false,
     }
@@ -818,17 +828,39 @@ fn rvalue_reads_local(rvalue: &Rvalue, local: LocalId) -> bool {
         Rvalue::Aggregate { operands, .. } => operands
             .iter()
             .any(|operand| operand_reads_local(operand, local)),
-        Rvalue::Ref { place, .. } => place.local == local,
-        Rvalue::Discriminant(place) => place.local == local,
+        Rvalue::Ref { place, .. } => place_read_locals(place).contains(&local),
+        Rvalue::Discriminant(place) => place_read_locals(place).contains(&local),
         Rvalue::SizeOf(_) | Rvalue::AlignOf(_) => false,
     }
 }
 
 fn operand_reads_local(operand: &Operand, local: LocalId) -> bool {
     match operand {
-        Operand::Copy(place, _) | Operand::Move(place, _) => place.local == local,
+        Operand::Copy(place, _) | Operand::Move(place, _) => {
+            place_read_locals(place).contains(&local)
+        }
         Operand::Constant(_, _) => false,
     }
+}
+
+/// Base local of a place plus every index local in its projection: reading
+/// `arr.ptr[i]` reads both `arr` and `i`.
+fn place_read_locals(place: &Place) -> Vec<LocalId> {
+    let mut locals = vec![place.local];
+    locals.extend(index_locals(place));
+    locals
+}
+
+/// Index locals referenced by a place's projection.
+fn index_locals(place: &Place) -> Vec<LocalId> {
+    place
+        .projection
+        .iter()
+        .filter_map(|elem| match elem {
+            PlaceElem::Index(local) => Some(*local),
+            _ => None,
+        })
+        .collect()
 }
 
 impl<'ctx> DataFlow<'ctx> {
