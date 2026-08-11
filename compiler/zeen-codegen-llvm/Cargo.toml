@@ -1,0 +1,13 @@
+[package]
+name = "zeen-codegen-llvm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+inkwell = { version = "0.10.0", features = ["llvm22-1"] }
+
+zeen-mir = { path = "../zeen-mir" }
