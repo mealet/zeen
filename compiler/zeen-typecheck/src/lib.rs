@@ -927,7 +927,8 @@ impl<'res> TypeChecker<'res> {
         match &body.kind {
             HirStmtKind::Expr(block_expr) => {
                 if let HirExprKind::Block { stmts, trailing } = &block_expr.kind {
-                    let ty = self.check_block(stmts, trailing, Some(sig.ret), &block_expr.source);
+                    let sig_source = self.fn_signature_source(hir_fn, &block_expr.source);
+                    let ty = self.check_block(stmts, trailing, Some(sig.ret), &sig_source);
                     self.result.record_expr_type(block_expr.id, ty);
                 } else {
                     self.check_stmt(body);
@@ -938,6 +939,28 @@ impl<'res> TypeChecker<'res> {
         };
 
         self.ctx.pop_fn();
+    }
+
+    /// A `Source` pointing at just the function's signature (name through
+    /// return type) instead of the whole body, so a return-type mismatch on a
+    /// body that yields no trailing value is annotated at the signature.
+    fn fn_signature_source(&self, hir_fn: &HirFn, body: &Source) -> Source {
+        let mut start = hir_fn.name.1.offset();
+        let mut end = start + hir_fn.name.1.len();
+
+        for param in &hir_fn.params {
+            let span = param.span;
+            start = start.min(span.offset());
+            end = end.max(span.offset() + span.len());
+        }
+
+        if let Some(ret) = &hir_fn.return_type {
+            let span = ret.source.span;
+            start = start.min(span.offset());
+            end = end.max(span.offset() + span.len());
+        }
+
+        (SourceSpan::new(start.into(), end - start), body.src()).into()
     }
 
     // Statements
@@ -4084,6 +4107,48 @@ mod tests {
                 )
             }),
             "expected ArgCountMismatch(1, 0), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn missing_return_value_spans_signature() {
+        let source = r#"
+            fn foo(a: i32) i32 {
+                let x = a;
+            }
+            "#;
+
+        let errors = typecheck(source).expect_err("void body should be rejected");
+
+        let err = errors
+            .iter()
+            .find(|err| {
+                matches!(err, TypeError::Mismatch { expected, found, .. }
+                if expected.as_str() == "i32" && found.as_str() == "void")
+            })
+            .expect("expected a Mismatch(i32, void) error, got: {errors:?}");
+
+        let TypeError::Mismatch { span, .. } = err else {
+            unreachable!()
+        };
+
+        let line = source
+            .split('\n')
+            .find(|l| l.contains("fn foo(a: i32) i32"))
+            .unwrap();
+        let line_offset = source.find(line).unwrap();
+        let sig_start = line.find("foo").unwrap();
+        let sig_end = line.rfind("i32").unwrap() + 3;
+
+        assert_eq!(
+            span.offset(),
+            line_offset + sig_start,
+            "mismatch should start at the signature, not the whole body"
+        );
+        assert_eq!(
+            span.len(),
+            sig_end - sig_start,
+            "mismatch should cover just the signature"
         );
     }
 }
