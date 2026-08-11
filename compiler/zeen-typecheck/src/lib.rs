@@ -30,8 +30,9 @@ use zeen_hir::{
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_types::{
-    Capabilities, ReceiverAccess, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId,
-    binary_op_interface, self_mode_of, unary_op_interface,
+    ARRAY_LEN_FIELD, Capabilities, ReceiverAccess, SLICE_LEN_FIELD, SLICE_PTR_FIELD, SelfMode,
+    StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface, self_mode_of,
+    unary_op_interface,
 };
 
 pub mod coerce;
@@ -1700,17 +1701,32 @@ impl<'res> TypeChecker<'res> {
 
         // -----------| Hard coded piece of shit section |-----------
         // > What is this for?
-        // Answer: for arrays and slices builtin `.len` field
+        // Answer: for arrays and slices builtin `.len` and `.ptr` fields.
+        // `.ptr` is `[*]T`, `.len` is `usize`; both resolve to synthetic
+        // `DefId`s so MIR lowering can project into the slice storage.
 
         {
             let mut interner = self.interner.borrow_mut();
-            if field_name == interner.get_or_intern("len")
-                && matches!(
-                    self.result.interner.get(obj_ty),
-                    Type::Array { .. } | Type::Slice { .. }
-                )
-            {
-                return self.result.interner.builtin(BuiltinType::usize);
+            let len_name = interner.get_or_intern("len");
+            let ptr_name = interner.get_or_intern("ptr");
+
+            match self.result.interner.get(obj_ty).clone() {
+                Type::Array { .. } if field_name == len_name => {
+                    self.result.field_resolutions.insert(id, ARRAY_LEN_FIELD);
+                    return self.result.interner.builtin(BuiltinType::usize);
+                }
+                Type::Slice { .. } if field_name == len_name => {
+                    self.result.field_resolutions.insert(id, SLICE_LEN_FIELD);
+                    return self.result.interner.builtin(BuiltinType::usize);
+                }
+                Type::Slice { element, is_const } if field_name == ptr_name => {
+                    self.result.field_resolutions.insert(id, SLICE_PTR_FIELD);
+                    return self.result.interner.intern(Type::ManyPointer {
+                        inner: element,
+                        is_const,
+                    });
+                }
+                _ => {}
             }
         }
 
