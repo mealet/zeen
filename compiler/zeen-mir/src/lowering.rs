@@ -9,6 +9,7 @@ use zeen_ast::{
     Source,
     expressions::{BinaryOp, Literal, UnaryOp},
 };
+use zeen_driver::CompilationMode;
 use zeen_hir::{
     HirId, HirMacroKind, HirModule, HirTypeExpr,
     decl::HirFn,
@@ -18,6 +19,7 @@ use zeen_hir::{
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_typecheck::{
     coerce::builtin_is_integer,
+    format_str::{FormatChunk, FormatSpec},
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use zeen_types::{
@@ -40,6 +42,7 @@ pub fn lower_program<'ctx>(
     typecheck: &'ctx mut TypeCheckResult,
     resolution: &'ctx ResolutionResult,
     module: &HirModule,
+    mode: CompilationMode,
 ) -> MirLoweringResult {
     let main_def = typecheck.main_fn_def;
 
@@ -61,6 +64,7 @@ pub fn lower_program<'ctx>(
         resolution,
         module,
         &hir_fns_by_def,
+        mode,
     );
 
     let mut main_fn: Option<MirFunctionId> = None;
@@ -105,6 +109,8 @@ pub struct MirLowering<'ctx> {
 
     program: MirProgram,
     mono_cache: MonoCache,
+
+    mode: CompilationMode,
 }
 
 #[derive(Default)]
@@ -208,6 +214,7 @@ impl<'ctx> MirLowering<'ctx> {
         resolution: &'ctx ResolutionResult,
         module: &HirModule,
         hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
+        mode: CompilationMode,
     ) -> Self {
         Self {
             rodeo,
@@ -216,6 +223,7 @@ impl<'ctx> MirLowering<'ctx> {
             program: MirProgram::default(),
             mono_cache: MonoCache::new(),
             hir_fns_by_def,
+            mode,
         }
     }
 
@@ -700,6 +708,15 @@ impl<'ctx> MirLowering<'ctx> {
                     self.operand_to_local(fb, index_operand, idx_ty, block)
                 };
 
+                let block = self.lower_bounds_check(
+                    fb,
+                    block,
+                    &obj_place,
+                    obj_ty,
+                    index_local,
+                    Some(expr.source.clone()),
+                );
+
                 let elem_place = match self.typecheck.interner.get(obj_ty).clone() {
                     Type::Array { .. } | Type::ManyPointer { .. } => obj_place.index(index_local),
                     Type::Slice { .. } => {
@@ -1032,6 +1049,13 @@ impl<'ctx> MirLowering<'ctx> {
                     )
                 }
 
+                HirMacroKind::Dbg if self.mode == CompilationMode::Release => {
+                    let value = args
+                        .first()
+                        .expect("typechecker requires @dbg to have exactly one argument");
+                    self.lower_expr_to_operand(fb, value, block)
+                }
+
                 HirMacroKind::Print
                 | HirMacroKind::Println
                 | HirMacroKind::Format
@@ -1122,6 +1146,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::SliceAccess { object, index } => {
+                let obj_ty = self.expr_type(fb, object);
                 let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
 
@@ -1147,6 +1172,15 @@ impl<'ctx> MirLowering<'ctx> {
                         temp
                     }
                 };
+
+                let block = self.lower_bounds_check(
+                    fb,
+                    block,
+                    &obj_place,
+                    obj_ty,
+                    index_local,
+                    Some(expr.source.clone()),
+                );
 
                 (block, obj_place.index(index_local))
             }
@@ -1284,6 +1318,104 @@ impl<'ctx> MirLowering<'ctx> {
                 temp
             }
         }
+    }
+
+    /// Inserts a `index < len` guard in front of an array/slice indexing
+    /// access when compiling in Debug mode. An out-of-bounds index diverges
+    /// into a `@panic` call that formats the bounds message. Raw pointers
+    /// carry no length and are never checked. Returns the block the actual
+    /// element access must be lowered into.
+    ///
+    /// `index_local` must be a plain local holding the (copyable) index value;
+    /// it is only read here, never moved, so the element projection can use it
+    /// again.
+    fn lower_bounds_check(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        obj_place: &Place,
+        obj_ty: TypeId,
+        index_local: LocalId,
+        source: Option<Source>,
+    ) -> BlockId {
+        if self.mode != CompilationMode::Debug {
+            return block;
+        }
+
+        let usize_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+
+        let len_operand = match self.typecheck.interner.get(obj_ty).clone() {
+            Type::Array { len: Some(len), .. } => {
+                Operand::Constant(ConstValue::Int(len as i128), None)
+            }
+            Type::Slice { .. } => {
+                let mut len_place = obj_place.clone();
+                len_place.projection.push(PlaceElem::Field(SLICE_LEN_FIELD));
+                self.place_to_operand(len_place, usize_ty, None)
+            }
+            _ => return block,
+        };
+
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let cmp_result = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(cmp_result),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Lt,
+                    lhs: Operand::Copy(Place::from_local(index_local), None),
+                    rhs: len_operand.clone(),
+                },
+                source: source.clone(),
+            },
+        );
+
+        let ok_block = fb.new_block();
+        let panic_block = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(cmp_result), None),
+                targets: vec![(1, ok_block)],
+                otherwise: panic_block,
+            },
+        );
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let dest = fb.new_temp(void_ty);
+        let panic_next = fb.new_block();
+
+        fb.set_terminator(
+            panic_block,
+            Terminator::MacroCall {
+                kind: HirMacroKind::Panic,
+                format_chunks: Some(vec![
+                    FormatChunk::Literal("index out of bounds: the len is ".into()),
+                    FormatChunk::Arg(FormatSpec::Display),
+                    FormatChunk::Literal(" but the index is ".into()),
+                    FormatChunk::Arg(FormatSpec::Display),
+                ]),
+                args: vec![
+                    len_operand,
+                    Operand::Copy(Place::from_local(index_local), None),
+                ],
+                destination: Place::from_local(dest),
+                target: None,
+                source,
+            },
+        );
+        fb.set_terminator(panic_next, Terminator::Unreachable);
+
+        ok_block
     }
 
     fn lower_macro_call(

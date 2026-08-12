@@ -9,7 +9,10 @@ use crate::lowering::{MirLoweringResult, lower_program};
 
 const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
 
-fn compile_mir(src: &str) -> Result<(MirLoweringResult, Rc<RefCell<Rodeo>>), Vec<String>> {
+fn compile_mir_mode(
+    src: &str,
+    mode: CompilationMode,
+) -> Result<(MirLoweringResult, Rc<RefCell<Rodeo>>), Vec<String>> {
     let rodeo = Rc::new(RefCell::new(Rodeo::default()));
     let bump = Bump::default();
     let content = Arc::new(src.to_string());
@@ -22,7 +25,7 @@ fn compile_mir(src: &str) -> Result<(MirLoweringResult, Rc<RefCell<Rodeo>>), Vec
             linked: HashSet::new(),
         },
         core_files: vec![("core.ops", CORE_OPS)],
-        mode: CompilationMode::Debug,
+        mode,
         output: CompilationOutput::EmitMIR,
     };
 
@@ -66,9 +69,14 @@ fn compile_mir(src: &str) -> Result<(MirLoweringResult, Rc<RefCell<Rodeo>>), Vec
         &mut typecheck,
         &resolution_result,
         &hir_module,
+        mode,
     );
 
     Ok((lowered_mir, Rc::clone(&rodeo)))
+}
+
+fn compile_mir(src: &str) -> Result<(MirLoweringResult, Rc<RefCell<Rodeo>>), Vec<String>> {
+    compile_mir_mode(src, CompilationMode::Debug)
 }
 
 fn compile_mir_ok(src: &str) -> MirLoweringResult {

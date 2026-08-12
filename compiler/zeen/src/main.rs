@@ -199,6 +199,7 @@ fn main() {
         &mut typechecker_result,
         &resolution_result,
         &hir_module,
+        context.mode,
     );
 
     let flow_result = zeen_flow::run_dataflow(

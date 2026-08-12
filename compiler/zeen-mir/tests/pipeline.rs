@@ -35,7 +35,7 @@ fn core_files() -> Vec<(&'static str, &'static str)> {
     files
 }
 
-fn compile(src: &str) -> Result<String, Vec<String>> {
+fn compile_mode(src: &str, mode: CompilationMode) -> Result<String, Vec<String>> {
     let rodeo = Rc::new(RefCell::new(Rodeo::default()));
     let bump = Bump::default();
     let content = Arc::new(src.to_string());
@@ -48,7 +48,7 @@ fn compile(src: &str) -> Result<String, Vec<String>> {
             linked: HashSet::new(),
         },
         core_files: core_files(),
-        mode: CompilationMode::Debug,
+        mode,
         output: CompilationOutput::EmitMIR,
     };
 
@@ -102,6 +102,7 @@ fn compile(src: &str) -> Result<String, Vec<String>> {
         &mut typecheck_result,
         &resolution_result,
         &hir_module,
+        mode,
     );
 
     Ok(zeen_mir::printer::print_mir_program(
@@ -110,6 +111,20 @@ fn compile(src: &str) -> Result<String, Vec<String>> {
         &resolution_result,
         &rodeo,
     ))
+}
+
+fn compile(src: &str) -> Result<String, Vec<String>> {
+    compile_mode(src, CompilationMode::Debug)
+}
+
+fn compile_mode_ok(src: &str, mode: CompilationMode) -> String {
+    match compile_mode(src, mode) {
+        Ok(mir) => mir,
+        Err(errors) => panic!(
+            "expected compilation to succeed, got errors:\n{}",
+            errors.join("\n")
+        ),
+    }
 }
 
 fn compile_ok(src: &str) -> String {
@@ -344,5 +359,109 @@ fn main() {
     assert!(
         mir.contains("= 4;"),
         "`a.len` must lower to the constant array length: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn dbg_macro_is_kept_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let i: usize = 1;
+    let x = @dbg(a[i]);
+}
+"#,
+    );
+    assert!(
+        mir.contains("@dbg("),
+        "@dbg must stay in the MIR in Debug mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn dbg_macro_is_elided_in_release_mode() {
+    let mir = compile_mode_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let i: usize = 1;
+    let x = @dbg(a[i]);
+}
+"#,
+        CompilationMode::Release,
+    );
+    assert!(
+        !mir.contains("@dbg"),
+        "@dbg must be removed from the MIR in Release mode, leaving the plain expression: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("= %0[%2];"),
+        "the @dbg argument must still be evaluated and assigned: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn array_index_is_bounds_checked_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let i: usize = 1;
+    let x = a[i];
+}
+"#,
+    );
+    assert!(
+        mir.contains("switchInt"),
+        "array index must be bounds-checked in Debug mode: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("@panic"),
+        "out-of-bounds access must diverge into a panic in Debug mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn array_index_is_not_bounds_checked_in_release_mode() {
+    let mir = compile_mode_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let i: usize = 1;
+    let x = a[i];
+}
+"#,
+        CompilationMode::Release,
+    );
+    assert!(
+        !mir.contains("switchInt"),
+        "array index must not be bounds-checked in Release mode: MIR:\n{mir}"
+    );
+    assert!(
+        !mir.contains("@panic"),
+        "no panic must be emitted for indexing in Release mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn slice_index_is_bounds_checked_against_runtime_len_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let b: []i32 = &a;
+    let i: usize = 1;
+    let x = b[i];
+}
+"#,
+    );
+    assert!(
+        mir.contains(".len)"),
+        "slice index must be bounds-checked against the runtime `.len`: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("@panic"),
+        "out-of-bounds slice access must diverge into a panic: MIR:\n{mir}"
     );
 }
