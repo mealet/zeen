@@ -1,0 +1,11 @@
+fn main() i32 {
+  @println("{}", 1000);
+  @println("{}", 0b1010);
+  @println("{}", 0x3E8);
+  @println("{}", true);
+  @println("{}", false);
+  @println("{}", 'x');
+  @println("{}", 2.5);
+  @println("{}", 3);
+  return 0;
+}
