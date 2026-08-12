@@ -1,9 +1,3 @@
-//! LLVM backend: MIR -> LLVM IR -> object/assembly file.
-//!
-//! This is the last stage of the compiler pipeline. The frontend guarantees
-//! the MIR is well-formed, so almost every failure inside here is a compiler
-//! bug (see [`crate::CodegenError::ModuleVerificationFailed`]).
-
 use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc};
 
 use inkwell::{
@@ -94,8 +88,6 @@ pub struct CodeGen<'ctx, 'prog> {
 }
 
 impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
-    /// Creates a new codegen session: initializes targets, resolves the target
-    /// triple, creates the target machine and the LLVM module.
     pub fn new(
         context: &'ctx Context,
         program: &'prog MirProgram,
@@ -168,7 +160,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         })
     }
 
-    /// Access to the generated module (for inspection in tests).
     pub fn module(&self) -> &Module<'ctx> {
         &self.module
     }
@@ -188,10 +179,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         self.module.print_to_string().to_string_lossy().into_owned()
     }
 
-    /// Generates IR for the whole MIR program: externs, struct layouts,
-    /// function declarations and bodies, then the `main` entry wrapper.
-    ///
-    /// Optimizes the module in Release mode (new pass manager, `default<O3>`).
+    /// Generates IR for the whole MIR program
     pub fn generate(&mut self) -> Result<(), CodegenError> {
         self.register_struct_layouts();
         self.declare_externs();
@@ -239,10 +227,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             })
     }
 
-    // ------------------------------------------------------------------
-    // Module-level emission
-    // ------------------------------------------------------------------
-
     fn run_optimization_passes(&self) -> Result<(), CodegenError> {
         let options = inkwell::passes::PassBuilderOptions::create();
         options.set_verify_each(false);
@@ -259,9 +243,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn register_struct_layouts(&mut self) {
-        // Two passes: register every struct as opaque first, then set the
-        // bodies, so recursive structs (a field that points to the struct
-        // itself) resolve correctly.
         for &ty in self.program.struct_layouts.keys() {
             let name = self.mangle_struct_name(ty);
             let opaque = self.context.opaque_struct_type(&name);
@@ -349,9 +330,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         self.blocks.clear();
         self.builder.position_at_end(entry);
 
-        // Allocate all locals up front (params too), so StorageLive/StorageDead
-        // become no-ops and taking references always works. Void-typed locals
-        // (e.g. the destination of `@panic`/`@print`) carry no value.
         for (idx, decl) in func.locals.iter().enumerate() {
             if self.is_void_ty(decl.ty) {
                 continue;
@@ -363,7 +341,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             self.locals.insert(LocalId(idx as u32), alloca);
         }
 
-        // Copy parameters into their allocas.
         for (i, &param_local) in func.params.iter().enumerate() {
             let Some(arg) = function.get_nth_param(i as u32) else {
                 continue;
@@ -372,7 +349,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             self.builder.build_store(ptr, arg).unwrap();
         }
 
-        // Create the remaining blocks in BlockId order (entry is already first).
         for idx in 1..func.blocks.len() {
             let block = self
                 .context
@@ -397,8 +373,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         );
     }
 
-    /// Entry point wrapper: the real `main` is emitted as `zeen_main`, and we
-    /// generate an external `main` that calls it and returns a process code.
     fn emit_main_wrapper(&mut self) {
         let Some(main_fn) = self.options.main_fn else {
             return;
@@ -426,10 +400,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         assert!(main.verify(false), "LLVM failed to verify main wrapper");
     }
 
-    // ------------------------------------------------------------------
-    // Type mapping
-    // ------------------------------------------------------------------
-
     fn map_type(&self, ty: TypeId) -> AnyTypeEnum<'ctx> {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(BuiltinType::void) => self.context.void_type().into(),
@@ -455,8 +425,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .array_type(len.unwrap_or(0) as u32)
                 .into(),
 
-            // Function values are just pointers (opaque pointers); the exact
-            // function type is only needed at indirect call sites.
             Type::Fn { .. } => self.context.ptr_type(AddressSpace::default()).into(),
 
             Type::Void | Type::Never => self.context.void_type().into(),
@@ -482,8 +450,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Maps a function return type: `void`/`never` -> LLVM void, everything
-    /// else goes through [`CodeGen::map_type`].
     fn map_ret_type(&self, ty: TypeId) -> AnyTypeEnum<'ctx> {
         match self.typecheck.interner.get(ty) {
             Type::Void | Type::Never => self.context.void_type().into(),
@@ -505,8 +471,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// `AnyTypeEnum` has no `From<BasicTypeEnum>` impl, so a manual conversion
-    /// is required when going from a basic value type to an "any" type.
     fn any_from_basic(&self, basic: BasicTypeEnum<'ctx>) -> AnyTypeEnum<'ctx> {
         match basic {
             BasicTypeEnum::ArrayType(t) => t.into(),
@@ -590,10 +554,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             int.into()
         }
     }
-
-    // ------------------------------------------------------------------
-    // Statements and rvalues
-    // ------------------------------------------------------------------
 
     fn emit_statement(&mut self, stmt: &MirStatement, func: &MirFunction) {
         match stmt {
@@ -1093,10 +1053,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    // ------------------------------------------------------------------
-    // Terminators
-    // ------------------------------------------------------------------
-
     fn emit_terminator(&mut self, term: &Terminator, func: &MirFunction, fn_id: MirFunctionId) {
         let _ = fn_id;
         match term {
@@ -1365,10 +1321,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    // ------------------------------------------------------------------
-    // Places
-    // ------------------------------------------------------------------
-
     fn store_place(&mut self, place: &Place, value: BasicValueEnum<'ctx>, func: &MirFunction) {
         let ptr = self.place_ptr(place, func);
         self.builder.build_store(ptr, value).unwrap();
@@ -1465,10 +1417,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             _ => panic!("dereferencing a non-pointer type"),
         }
     }
-
-    // ------------------------------------------------------------------
-    // Helpers
-    // ------------------------------------------------------------------
 
     fn get_or_declare_runtime_fn(
         &mut self,

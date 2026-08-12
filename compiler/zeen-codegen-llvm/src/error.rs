@@ -1,12 +1,6 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
-/// Errors raised by `zeen-codegen-llvm`.
-///
-/// Codegen is the very last stage of the pipeline: the IR is built by the
-/// compiler itself, so almost every failure here is a compiler bug (invalid
-/// IR, pass pipeline crashes, ...). The only "user facing" error is an
-/// unsupported target triple.
 #[derive(Debug, Error, Diagnostic)]
 pub enum CodegenError {
     #[error("unsupported target triple `{triple}`: {detail}")]
