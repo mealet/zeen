@@ -2,3 +2,4 @@ target/
 *.zn
 *.zn.mir
 out*
+!zeen/tests/test_cases/**/*.zn

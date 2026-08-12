@@ -1,0 +1,13 @@
+fn main() i32 {
+  @println("{}", 25 + 5);
+  @println("{}", 25 - 5);
+  @println("{}", 25 * 5);
+  @println("{}", 25 / 5);
+  @println("{}", 25 % 5);
+  @println("{}", 25 << 2);
+  @println("{}", 25 >> 2);
+  @println("{}", 5 & 3);
+  @println("{}", 5 | 3);
+  @println("{}", 5 ^ 3);
+  return 0;
+}

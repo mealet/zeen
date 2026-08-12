@@ -27,3 +27,7 @@ zeen-mir = { path = "../zeen-mir" }
 zeen-flow = { path = "../zeen-flow" }
 zeen-codegen-llvm = { path = "../zeen-codegen-llvm" }
 zeen-linker = { path = "../zeen-linker" }
+
+[dev-dependencies]
+anyhow = "1.0.104"
+assert_cmd = "2.2.2"
