@@ -268,4 +268,82 @@ fn main() {
 
         exit(0);
     }
+
+    cli::println_info("Generating", "LLVM IR from MIR");
+
+    let codegen_options = zeen_codegen_llvm::CodegenOptions {
+        mode: context.mode,
+        target: None,
+        main_fn: lowered_mir.main_fn,
+        source_file_name: filename.to_string(),
+    };
+
+    let context = inkwell::context::Context::create();
+
+    let mut codegen = zeen_codegen_llvm::CodeGen::new(
+        &context,
+        &lowered_mir.program,
+        &typechecker_result,
+        &resolution_result,
+        Rc::clone(&rodeo),
+        codegen_options,
+    )
+    .unwrap_or_else(|err| {
+        let report_string = driver.report(&err).unwrap();
+        eprintln!("{}", report_string);
+        cli::println_error("Codegen failed");
+        exit(1);
+    });
+
+    if let Err(err) = codegen.generate() {
+        let report_string = driver.report(&err).unwrap();
+        eprintln!("{}", report_string);
+        cli::println_error("Codegen failed");
+        exit(1);
+    }
+
+    if let Err(err) = codegen.verify() {
+        let report_string = driver.report(&err).unwrap();
+        eprintln!("{}", report_string);
+        cli::println_error("Codegen failed");
+        exit(1);
+    }
+
+    match args.emit {
+        CompilationOutput::EmitIR => {
+            if let Err(err) = codegen.emit_ir(&args.output) {
+                let report_string = driver.report(&err).unwrap();
+                eprintln!("{}", report_string);
+                cli::println_error("Codegen failed");
+                exit(1);
+            }
+
+            cli::println_info(
+                "Emitted",
+                format!("LLVM IR to the file ({})", args.output.display()),
+            );
+        }
+
+        CompilationOutput::Object => {
+            if let Err(err) = codegen.emit_object(&args.output) {
+                let report_string = driver.report(&err).unwrap();
+                eprintln!("{}", report_string);
+                cli::println_error("Codegen failed");
+                exit(1);
+            }
+
+            cli::println_info(
+                "Emitted",
+                format!("object file to the file ({})", args.output.display()),
+            );
+        }
+
+        CompilationOutput::Binary => {
+            cli::println_warn(
+                "Binary emission requires a linker which is not implemented yet; nothing was written",
+            );
+        }
+
+        CompilationOutput::EmitMIR => unreachable!("handled above"),
+    }
 }
