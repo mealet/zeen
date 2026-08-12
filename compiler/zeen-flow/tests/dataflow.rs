@@ -111,6 +111,7 @@ fn compile(src: &str) -> Result<Compiled, Vec<String>> {
         &mut typecheck_result,
         &resolution_result,
         &hir_module,
+        CompilationMode::Debug,
     );
 
     Ok(Compiled {

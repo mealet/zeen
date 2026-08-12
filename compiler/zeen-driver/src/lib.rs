@@ -36,7 +36,7 @@ pub struct CompilationContext {
     pub output: CompilationOutput,
 }
 
-#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum CompilationMode {
     #[value(name = "Debug")]
     #[default]
