@@ -19,9 +19,6 @@
 //! main.ret(copy_of(ret));
 //! main.finish();
 //! ```
-//!
-//! This is a DSL: helpers that no current test uses yet are allowed to stay
-//! (dead code is expected in a fixture library).
 
 #![allow(dead_code)]
 
@@ -43,7 +40,6 @@ use zeen_resolve::{DefId, DefInfo, DefKind, ResolutionResult};
 use zeen_typecheck::{format_str::FormatChunk, result::TypeCheckResult};
 use zeen_types::{Type, TypeId};
 
-/// Everything codegen needs to run on a hand-built program.
 pub struct Fixture {
     pub typecheck: TypeCheckResult,
     pub resolution: ResolutionResult,
@@ -69,8 +65,6 @@ impl Fixture {
             main_fn: None,
         }
     }
-
-    // ----- types ---------------------------------------------------------
 
     pub fn ty(&mut self, ty: Type) -> TypeId {
         self.typecheck.interner.intern(ty)
@@ -140,8 +134,6 @@ impl Fixture {
         })
     }
 
-    // ----- definitions ---------------------------------------------------
-
     pub fn intern(&mut self, value: &str) -> Spur {
         self.rodeo.borrow_mut().get_or_intern(value)
     }
@@ -169,8 +161,6 @@ impl Fixture {
         id
     }
 
-    // ----- externs -------------------------------------------------------
-
     pub fn add_extern_fn(
         &mut self,
         symbol_name: &str,
@@ -189,8 +179,6 @@ impl Fixture {
     pub fn add_struct_layout(&mut self, ty: TypeId, layout: zeen_mir::StructLayout) {
         self.program.struct_layouts.insert(ty, layout);
     }
-
-    // ----- functions -----------------------------------------------------
 
     pub fn fn_builder(&mut self, name: &str, source_def: DefId, ret_ty: TypeId) -> FnBuilder<'_> {
         FnBuilder {
@@ -225,8 +213,6 @@ pub struct FnBuilder<'f> {
 }
 
 impl<'f> FnBuilder<'f> {
-    // ----- locals --------------------------------------------------------
-
     fn new_local(
         &mut self,
         name: Option<&str>,
@@ -270,8 +256,6 @@ impl<'f> FnBuilder<'f> {
         self.name_to_local[name]
     }
 
-    // ----- blocks --------------------------------------------------------
-
     pub fn entry(&mut self, name: &str) -> BlockId {
         assert!(
             self.func.blocks.is_empty(),
@@ -294,8 +278,6 @@ impl<'f> FnBuilder<'f> {
     pub fn set_current(&mut self, name: &str) {
         self.current = self.block_by(name);
     }
-
-    // ----- statements ----------------------------------------------------
 
     fn stmt(&mut self, statement: MirStatement) {
         self.func.block_mut(self.current).statements.push(statement);
@@ -324,8 +306,6 @@ impl<'f> FnBuilder<'f> {
     pub fn discard(&mut self, operand: Operand) {
         self.stmt(MirStatement::Discard(operand));
     }
-
-    // ----- terminators ---------------------------------------------------
 
     pub fn ret(&mut self, operand: Operand) {
         self.set_terminator(Terminator::Return(operand));
@@ -408,8 +388,6 @@ impl<'f> FnBuilder<'f> {
         self.set_terminator(terminator);
     }
 
-    // ----- finish --------------------------------------------------------
-
     pub fn finish(mut self) -> MirFunctionId {
         assert!(
             !self.func.blocks.is_empty(),
@@ -430,10 +408,6 @@ impl<'f> FnBuilder<'f> {
         id
     }
 }
-
-// ---------------------------------------------------------------------------
-// Operand / rvalue helpers
-// ---------------------------------------------------------------------------
 
 pub fn const_int(n: i128) -> Operand {
     Operand::Constant(ConstValue::Int(n), None)
