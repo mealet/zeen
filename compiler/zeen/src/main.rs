@@ -8,8 +8,6 @@ mod cli;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
 
-/// Appends `ext` to `path` if the file name doesn't already end with it
-/// (case-insensitive). Used to give `--emit` outputs their default extension.
 fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
     if path
         .extension()
