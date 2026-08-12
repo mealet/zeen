@@ -8,6 +8,22 @@ mod cli;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
 
+/// Appends `ext` to `path` if the file name doesn't already end with it
+/// (case-insensitive). Used to give `--emit` outputs their default extension.
+fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
+    if path
+        .extension()
+        .is_some_and(|existing| existing.to_string_lossy().eq_ignore_ascii_case(ext))
+    {
+        return path.to_path_buf();
+    }
+
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".");
+    name.push(ext);
+    std::path::PathBuf::from(name)
+}
+
 fn main() {
     let args = cli::Args::try_parse().unwrap_or_else(|err| {
         let mut command = cli::Args::command();
@@ -242,8 +258,7 @@ fn main() {
             &rodeo,
         );
 
-        let mut output_path = args.path.clone();
-        output_path.add_extension("mir");
+        let output_path = with_default_extension(&args.output, "mir");
 
         let mut output_file = std::fs::File::create(&output_path).unwrap_or_else(|_| {
             cli::println_warn("Unable to write MIR to file, printing to stdout...");
@@ -311,7 +326,9 @@ fn main() {
 
     match args.emit {
         CompilationOutput::EmitIR => {
-            if let Err(err) = codegen.emit_ir(&args.output) {
+            let output_path = with_default_extension(&args.output, "ll");
+
+            if let Err(err) = codegen.emit_ir(&output_path) {
                 let report_string = driver.report(&err).unwrap();
                 eprintln!("{}", report_string);
                 cli::println_error("Codegen failed");
@@ -320,12 +337,14 @@ fn main() {
 
             cli::println_info(
                 "Emitted",
-                format!("LLVM IR to the file ({})", args.output.display()),
+                format!("LLVM IR to the file ({})", output_path.display()),
             );
         }
 
         CompilationOutput::Object => {
-            if let Err(err) = codegen.emit_object(&args.output) {
+            let output_path = with_default_extension(&args.output, "o");
+
+            if let Err(err) = codegen.emit_object(&output_path) {
                 let report_string = driver.report(&err).unwrap();
                 eprintln!("{}", report_string);
                 cli::println_error("Codegen failed");
@@ -334,7 +353,7 @@ fn main() {
 
             cli::println_info(
                 "Emitted",
-                format!("object file to the file ({})", args.output.display()),
+                format!("object file to the file ({})", output_path.display()),
             );
         }
 
