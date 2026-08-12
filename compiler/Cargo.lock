@@ -703,7 +703,16 @@ name = "zeen-codegen-llvm"
 version = "0.0.0"
 dependencies = [
  "inkwell",
+ "lasso",
+ "miette",
+ "thiserror",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-hir",
  "zeen-mir",
+ "zeen-resolve",
+ "zeen-typecheck",
+ "zeen-types",
 ]
 
 [[package]]
