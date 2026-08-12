@@ -682,6 +682,7 @@ dependencies = [
  "zeen-flow",
  "zeen-hir",
  "zeen-lexer",
+ "zeen-linker",
  "zeen-mir",
  "zeen-parser",
  "zeen-resolve",
@@ -767,6 +768,10 @@ dependencies = [
  "thiserror",
  "zeen-driver",
 ]
+
+[[package]]
+name = "zeen-linker"
+version = "0.0.0"
 
 [[package]]
 name = "zeen-mir"

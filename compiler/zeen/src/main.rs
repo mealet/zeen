@@ -356,9 +356,45 @@ fn main() {
         }
 
         CompilationOutput::Binary => {
-            cli::println_warn(
-                "Binary emission requires a linker which is not implemented yet; nothing was written",
+            let linker =
+                zeen_linker::linker::ObjectLinker::detect_compiler().unwrap_or_else(|| {
+                    cli::println_error(
+                        "No supported C compilers found in system. Recommended: gcc/clang",
+                    );
+                    exit(1);
+                });
+
+            let object_path = std::env::temp_dir().join(format!("zeen-{}.o", std::process::id()));
+
+            if let Err(err) = codegen.emit_object(&object_path) {
+                let report_string = driver.report(&err).unwrap();
+                eprintln!("{}", report_string);
+                cli::println_error("Codegen failed");
+                exit(1);
+            }
+
+            let output_path = &args.output;
+            let result = zeen_linker::linker::ObjectLinker::link(
+                std::slice::from_ref(&object_path),
+                output_path,
+                &[],
             );
+
+            std::fs::remove_file(&object_path).ok();
+
+            match result {
+                Ok(_) => cli::println_info(
+                    "Emitted",
+                    format!(
+                        "binary to the file (with `{linker}`)",
+                    ),
+                ),
+                Err(err) => {
+                    cli::println_error(format!("Linker failed (object linker: `{linker}`)"));
+                    eprintln!("\n{err}\n");
+                    exit(1);
+                }
+            }
         }
 
         CompilationOutput::EmitMIR => unreachable!("handled above"),

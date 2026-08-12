@@ -26,3 +26,4 @@ zeen-typecheck = { path = "../zeen-typecheck" }
 zeen-mir = { path = "../zeen-mir" }
 zeen-flow = { path = "../zeen-flow" }
 zeen-codegen-llvm = { path = "../zeen-codegen-llvm" }
+zeen-linker = { path = "../zeen-linker" }
