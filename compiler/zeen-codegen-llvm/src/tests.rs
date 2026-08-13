@@ -12,6 +12,7 @@ use zeen_ast::expressions::BinaryOp;
 use zeen_driver::CompilationMode;
 use zeen_mir::{CallTarget, Operand, StructFieldLayout, StructLayout};
 use zeen_resolve::DefKind;
+use zeen_typecheck::format_str::{FormatChunk, FormatSpec};
 use zeen_types::Type;
 
 use crate::codegen::{CodeGen, CodegenOptions};
@@ -155,6 +156,64 @@ fn print_emits_printf_call() {
 
     assert!(ir.contains("@printf"), "{ir}");
     assert!(ir.contains("hello, zeen"), "{ir}");
+}
+
+#[test]
+fn format_returns_a_slice() {
+    let mut fx = Fixture::new();
+    let fmt_def = fx.def("fmt", DefKind::Function);
+    let void = fx.void();
+
+    let char = fx.char();
+    let slice = fx.slice(char);
+
+    // Register the synthetic `[]T` layout: `{ ptr: [*]T, len: usize }`.
+    let ptr_ty = fx.ty(Type::ManyPointer {
+        inner: char,
+        is_const: false,
+    });
+    let usize_ty = fx.usize();
+    fx.add_struct_layout(
+        slice,
+        StructLayout {
+            def_id: zeen_types::SLICE_STRUCT_DEF,
+            generic_args: vec![char],
+            fields: vec![
+                StructFieldLayout {
+                    def_id: zeen_types::SLICE_PTR_FIELD,
+                    ty: ptr_ty,
+                },
+                StructFieldLayout {
+                    def_id: zeen_types::SLICE_LEN_FIELD,
+                    ty: usize_ty,
+                },
+            ],
+        },
+    );
+
+    let mut f = fx.fn_builder("fmt", fmt_def, void);
+    let dest = f.temp(slice);
+    f.entry("bb0");
+    f.block("bb1");
+    f.set_current("bb0");
+    f.format(
+        vec![
+            FormatChunk::Literal("value is ".to_string()),
+            FormatChunk::Arg(FormatSpec::Display),
+        ],
+        vec![const_int(42)],
+        dest,
+        Some("bb1"),
+    );
+    f.set_current("bb1");
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("@snprintf"), "{ir}");
+    assert!(ir.contains("@sprintf"), "{ir}");
+    assert!(ir.contains("%slice.char"), "{ir}");
 }
 
 #[test]

@@ -1573,7 +1573,24 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
                 let dest_ty = self.place_type(destination, func);
                 if !self.is_void_ty(dest_ty) {
-                    self.store_place(destination, buffer.into(), func);
+                    // The macro result is `[]const char`: build the
+                    // `{ ptr, len }` fat pointer over the stack buffer.
+                    let slice_ty = self.map_basic_type(dest_ty);
+                    let slice_alloca = self.builder.build_alloca(slice_ty, "fmt_slice").unwrap();
+                    let ptr_field = self
+                        .builder
+                        .build_struct_gep(slice_ty, slice_alloca, 0, "")
+                        .unwrap();
+                    self.builder.build_store(ptr_field, buffer).unwrap();
+                    let len_field = self
+                        .builder
+                        .build_struct_gep(slice_ty, slice_alloca, 1, "")
+                        .unwrap();
+                    let len_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+                    let needed_len = self.builder.build_int_z_extend(needed, len_ty, "").unwrap();
+                    self.builder.build_store(len_field, needed_len).unwrap();
+                    let slice_value = self.builder.build_load(slice_ty, slice_alloca, "").unwrap();
+                    self.store_place(destination, slice_value, func);
                 }
                 if let Some(next) = target {
                     let block = self.blocks[&next];
@@ -1642,7 +1659,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
             Operand::Copy(place, _) | Operand::Move(place, _) => {
                 let ty = self.place_type(place, func);
-                let value = self.load_place(place, func);
+                let mut value = self.load_place(place, func);
+                if matches!(self.typecheck.interner.get(ty).clone(), Type::Slice { .. }) {
+                    value = self
+                        .builder
+                        .build_extract_value(value.into_struct_value(), 0, "slice.ptr")
+                        .unwrap();
+                }
                 (self.display_specifier(ty), value)
             }
         }
@@ -1709,6 +1732,19 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         _ => {
                             let ty = self.operand_type(operand, func).expect("typed format arg");
                             let value = self.operand_value(operand, Some(ty), func);
+                            // A slice-typed value is a `{ ptr, len }` fat
+                            // pointer; printf's `%s` needs just the data
+                            // pointer.
+                            let value = if matches!(
+                                self.typecheck.interner.get(ty).clone(),
+                                Type::Slice { .. }
+                            ) {
+                                self.builder
+                                    .build_extract_value(value.into_struct_value(), 0, "slice.ptr")
+                                    .unwrap()
+                            } else {
+                                value
+                            };
                             let specifier = match spec {
                                 FormatSpec::Display | FormatSpec::Debug => {
                                     self.display_specifier(ty)

@@ -1383,8 +1383,8 @@ impl<'res> TypeChecker<'res> {
                 self.check_format_macro(call_id, args, source);
 
                 let char_ty = self.result.interner.builtin(BuiltinType::char);
-                self.result.interner.intern(Type::Pointer {
-                    inner: char_ty,
+                self.result.interner.intern(Type::Slice {
+                    element: char_ty,
                     is_const: true,
                 })
             }
