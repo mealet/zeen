@@ -18,20 +18,6 @@
 
 <br/>
 
-## Todo List
-List to-do before release first stable ready-to-use version:
-- [ ] Get language to working basic codegen (fn calls, macros, non-generic structs and functions definitions, includes).
-- [ ] Have working move-semantics with RAII (auto drops when release).
-- [ ] Get to stable working interfaces and generic types.
-- [ ] Figure out and add C-like union declaration with generics.
-- [ ] Implement `switch` expression
-- [ ] Add ranges expressions for slices and etc.
-- [ ] Add basic raw standard library elements (`Option[T]`, `List[T]`, `String` and etc, only basics).
-- [ ] Add `Iterator` interface in `core` library for iterator loop _`for`_.
-- [ ] Add `Write` interface in core with receiving `[]const T` as an argument, and add @write(dest, value) macro to it.
-- [ ] Add support for global "let" and "const" cars (explicit type and initialized rules)
-- [ ] Write at least basic language documentation (minimum is GitHub Wiki, better is a static website)
-
 ## Ideas
 Ideas for the future language ecosystem:
 > ### Preprocessor:
