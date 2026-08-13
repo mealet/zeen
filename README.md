@@ -16,8 +16,6 @@
 
 <b>⚠️ Project is currently under active development and not ready to use.</b>
 
-<br/>
-
 ## Ideas
 Ideas for the future language ecosystem:
 > ### Preprocessor:
