@@ -24,8 +24,8 @@ use zeen_ast::{
 use zeen_driver::CompilationMode;
 use zeen_hir::HirMacroKind;
 use zeen_mir::{
-    BlockId, CallTarget, ConstValue, LocalId, MirFunction, MirFunctionId, MirProgram, MirStatement,
-    Operand, Place, PlaceElem, Rvalue, Terminator,
+    AggregateKind, BlockId, CallTarget, ConstValue, LocalId, MirFunction, MirFunctionId,
+    MirProgram, MirStatement, Operand, Place, PlaceElem, Rvalue, Terminator,
 };
 use zeen_resolve::{DefId, ResolutionResult};
 use zeen_typecheck::{
@@ -60,6 +60,19 @@ impl Default for CodegenOptions {
             source_file_name: "test.zn".to_string(),
         }
     }
+}
+
+/// Size of the `@format` output buffer. A `@format` result is `*const char`,
+/// so codegen formats into a static buffer rather than heap-allocating.
+const FORMAT_BUFFER_SIZE: u32 = 4096;
+
+/// Computes the 1-based line number of the byte `offset` inside `source`.
+fn source_line(source: &str, offset: usize) -> usize {
+    1 + source
+        .as_bytes()
+        .get(..offset)
+        .map(|prefix| prefix.iter().filter(|&&b| b == b'\n').count())
+        .unwrap_or(0)
 }
 
 pub struct CodeGen<'ctx, 'prog> {
@@ -559,6 +572,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         match stmt {
             MirStatement::Assign { place, rvalue, .. } => {
                 let place_ty = self.place_type(place, func);
+                if self.is_void_ty(place_ty) {
+                    return;
+                }
                 let value = self.rvalue_value(rvalue, place_ty, func);
                 self.store_place(place, value, func);
             }
@@ -575,11 +591,69 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 }
             }
 
-            MirStatement::Drop(_) => {
-                unimplemented!("RAII/drop is not implemented in codegen yet")
+            MirStatement::Drop(place) => {
+                if !self.place_needs_drop(place, func) {
+                    return;
+                }
+                let ty = self.place_type(place, func);
+                let ptr = self.place_ptr(place, func);
+                self.emit_drop_ptr(ptr, ty);
             }
 
             MirStatement::StorageLive(_) | MirStatement::StorageDead(_) | MirStatement::Nop => {}
+        }
+    }
+
+    /// Drops the value stored at `ptr`: either calls the monomorphized `drop`
+    /// function of a struct with an explicit `Drop` implementation, or tears
+    /// down an aggregate element-by-element (recursively).
+    fn emit_drop_ptr(&mut self, ptr: PointerValue<'ctx>, ty: TypeId) {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Struct { .. } => {
+                let drop_id = self.program.drop_functions[&ty];
+                let callee = self.functions[&drop_id];
+                let value = self
+                    .builder
+                    .build_load(self.map_basic_type(ty), ptr, "")
+                    .unwrap();
+                self.builder
+                    .build_call(callee, &[value.into()], "")
+                    .unwrap();
+            }
+
+            Type::Array { element, len } => {
+                let Some(len) = len else { return };
+                let elem_ty = self.map_basic_type(element);
+                let index_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+                for i in 0..len {
+                    let index = index_ty.const_int(i, false);
+                    let elem_ptr = unsafe {
+                        self.builder
+                            .build_in_bounds_gep(elem_ty, ptr, &[index], "")
+                            .unwrap()
+                    };
+                    self.emit_drop_ptr(elem_ptr, element);
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    fn place_needs_drop(&self, place: &Place, func: &MirFunction) -> bool {
+        let ty = self.place_type(place, func);
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Struct { .. } => self.program.drop_functions.contains_key(&ty),
+            Type::Array { element, .. } => self.place_elem_needs_drop(element),
+            _ => false,
+        }
+    }
+
+    fn place_elem_needs_drop(&self, ty: TypeId) -> bool {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Struct { .. } => self.program.drop_functions.contains_key(&ty),
+            Type::Array { element, .. } => self.place_elem_needs_drop(element),
+            _ => false,
         }
     }
 
@@ -604,13 +678,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             Rvalue::AlignOf(ty) => self.align_of(*ty),
 
-            Rvalue::Aggregate { .. } => {
-                unimplemented!("struct/array/slice aggregates are not implemented in codegen yet")
+            Rvalue::Aggregate { kind, operands } => {
+                self.aggregate_value(*kind, operands, expected_ty, func)
             }
 
-            Rvalue::Discriminant(_) => {
-                unimplemented!("enum discriminants are not implemented in codegen yet")
-            }
+            Rvalue::Discriminant(place) => self.load_place(place, func),
         }
     }
 
@@ -666,8 +738,47 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .const_null()
                 .into(),
 
-            ConstValue::Void => unimplemented!("void constants are not value-typed"),
+            // A void value is only ever produced as the placeholder result of
+            // an expression with no value (e.g. an `if` without an `else`).
+            // Valid programs never store it, so a throwaway zero is enough.
+            ConstValue::Void => self.context.i8_type().const_zero().into(),
         }
+    }
+
+    /// Builds a struct/array/slice literal: stores each operand into a fresh
+    /// temporary aggregate, then loads the whole value back out.
+    fn aggregate_value(
+        &mut self,
+        kind: AggregateKind,
+        operands: &[Operand],
+        expected_ty: TypeId,
+        func: &MirFunction,
+    ) -> BasicValueEnum<'ctx> {
+        let agg_ty = self.map_basic_type(expected_ty);
+        let alloca = self.builder.build_alloca(agg_ty, "aggregate").unwrap();
+
+        for (i, operand) in operands.iter().enumerate() {
+            let value = self.operand_value(operand, None, func);
+            let elem_ptr = match kind {
+                AggregateKind::Struct(_) | AggregateKind::Slice => self
+                    .builder
+                    .build_struct_gep(agg_ty, alloca, i as u32, "")
+                    .unwrap(),
+                AggregateKind::Array => unsafe {
+                    let elem_ty = self.index_element_type(expected_ty);
+                    let index = self
+                        .context
+                        .ptr_sized_int_type(&self.target_data, None)
+                        .const_int(i as u64, false);
+                    self.builder
+                        .build_in_bounds_gep(self.map_basic_type(elem_ty), alloca, &[index], "")
+                        .unwrap()
+                },
+            };
+            self.builder.build_store(elem_ptr, value).unwrap();
+        }
+
+        self.builder.build_load(agg_ty, alloca, "").unwrap()
     }
 
     fn binary_op(
@@ -678,13 +789,30 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         ty: TypeId,
         func: &MirFunction,
     ) -> BasicValueEnum<'ctx> {
-        let is_float = matches!(
-            self.typecheck.interner.get(ty),
-            Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral
-        );
+        // The result type only matches the operand type for arithmetic
+        // operations: comparisons yield `bool` and shifts take a `usize`
+        // count. Derive the operand types separately so integer constants are
+        // promoted to the other operand's width and signedness is read from
+        // the real operand type instead of the `bool` result.
+        let lhs_ty = self.operand_type(lhs, func);
+        let rhs_ty = self.operand_type(rhs, func);
+        let operand_ty = lhs_ty.or(rhs_ty).unwrap_or(ty);
 
-        let lhs_v = self.operand_value(lhs, Some(ty), func);
-        let rhs_v = self.operand_value(rhs, Some(ty), func);
+        let is_float = matches!(lhs, Operand::Constant(ConstValue::Float(_), _))
+            || matches!(rhs, Operand::Constant(ConstValue::Float(_), _))
+            || matches!(
+                self.typecheck.interner.get(operand_ty),
+                Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral
+            );
+
+        let lhs_v = match lhs {
+            Operand::Constant(_, _) => self.operand_value(lhs, rhs_ty, func),
+            _ => self.operand_value(lhs, Some(operand_ty), func),
+        };
+        let rhs_v = match rhs {
+            Operand::Constant(_, _) => self.operand_value(rhs, lhs_ty, func),
+            _ => self.operand_value(rhs, Some(operand_ty), func),
+        };
 
         if is_float {
             let l = lhs_v.into_float_value();
@@ -720,13 +848,14 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .build_float_compare(FloatPredicate::OGE, l, r, "")
                     .unwrap()
                     .into(),
-                _ => unimplemented!("float binary op {op:?}"),
+                // Bitwise/shift/logical operators never apply to floats.
+                _ => unreachable!("binary op {op:?} on a float operand"),
             };
         }
 
         let l = lhs_v.into_int_value();
         let r = rhs_v.into_int_value();
-        let signed = self.is_signed(ty);
+        let signed = self.is_signed(operand_ty);
         let b = &self.builder;
 
         match op {
@@ -856,9 +985,22 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let ones = v.get_type().const_int(u64::MAX, false);
                 self.builder.build_xor(v, ones, "").unwrap().into()
             }
-            UnaryOp::Deref | UnaryOp::AddrOf => {
-                unimplemented!("unary deref/addrof are not implemented in codegen yet")
+            UnaryOp::Deref => {
+                let v = self.operand_value(operand, Some(expected_ty), func);
+                self.builder
+                    .build_load(self.map_basic_type(expected_ty), v.into_pointer_value(), "")
+                    .unwrap()
             }
+            UnaryOp::AddrOf => match operand {
+                // MIR normally lowers `&place` to `Rvalue::Ref`; this arm is a
+                // safety net that takes the address of the underlying place.
+                Operand::Copy(place, _) | Operand::Move(place, _) => {
+                    self.place_ptr(place, func).into()
+                }
+                Operand::Constant(_, _) => {
+                    unreachable!("cannot take the address of a constant operand")
+                }
+            },
         }
     }
 
@@ -907,11 +1049,17 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     ConstValue::Float(_) => Type::Builtin(BuiltinType::f64),
                     ConstValue::Bool(_) => Type::Builtin(BuiltinType::bool),
                     ConstValue::Char(_) => Type::Builtin(BuiltinType::char),
+                    // String constants lower to a pointer to a null-terminated
+                    // global, so treat them as `*const char` for casting.
+                    ConstValue::Str(_) => Type::Pointer {
+                        inner: TypeId(0),
+                        is_const: true,
+                    },
                     ConstValue::NullPtr => Type::Pointer {
                         inner: TypeId(0),
                         is_const: false,
                     },
-                    _ => unimplemented!("cast of an unsupported constant"),
+                    ConstValue::Void => unreachable!("cannot cast a void constant"),
                 };
                 let value = self.const_value(c, None, func);
                 self.cast_value(value, &src_ty, target)
@@ -920,6 +1068,22 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let src_ty = self
                     .operand_type(operand, func)
                     .expect("typed cast operand");
+
+                // `[N]T -> [*]T`: the operand is a loaded array value, so use
+                // the address of its storage instead of a value cast.
+                if matches!(
+                    self.typecheck.interner.get(src_ty).clone(),
+                    Type::Array { .. }
+                ) && matches!(
+                    self.typecheck.interner.get(target).clone(),
+                    Type::Pointer { .. } | Type::ManyPointer { .. }
+                ) {
+                    let (Operand::Copy(place, _) | Operand::Move(place, _)) = operand else {
+                        unreachable!("array-to-pointer cast must come from a place");
+                    };
+                    return self.place_ptr(place, func).into();
+                }
+
                 let value = self.operand_value(operand, Some(src_ty), func);
                 let src = self.typecheck.interner.get(src_ty).clone();
                 self.cast_value(value, &src, target)
@@ -1047,14 +1211,98 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .into()
             }
 
+            (Builtin(BuiltinType::bool), Builtin(b)) if builtin_is_integer(b) => {
+                let int = value.into_int_value();
+                let dst_int = self.map_basic_type(dst).into_int_type();
+                if dst_int.get_bit_width() > 1 {
+                    self.builder
+                        .build_int_z_extend(int, dst_int, "")
+                        .unwrap()
+                        .into()
+                } else {
+                    int.into()
+                }
+            }
+
+            (Builtin(a), Builtin(b))
+                if (a == BuiltinType::char && builtin_is_integer(b))
+                    || (builtin_is_integer(a) && b == BuiltinType::char) =>
+            {
+                let int = value.into_int_value();
+                let dst_int = self.map_basic_type(dst).into_int_type();
+                let src_w = int.get_type().get_bit_width();
+                let dst_w = dst_int.get_bit_width();
+                if src_w == dst_w {
+                    self.builder.build_bit_cast(int, dst_int, "").unwrap()
+                } else if src_w < dst_w {
+                    if self.is_signed_type(src) {
+                        self.builder
+                            .build_int_s_extend(int, dst_int, "")
+                            .unwrap()
+                            .into()
+                    } else {
+                        self.builder
+                            .build_int_z_extend(int, dst_int, "")
+                            .unwrap()
+                            .into()
+                    }
+                } else {
+                    self.builder
+                        .build_int_truncate(int, dst_int, "")
+                        .unwrap()
+                        .into()
+                }
+            }
+
+            (Enum { .. }, Builtin(b)) if builtin_is_integer(b) => {
+                let int = value.into_int_value();
+                let dst_int = self.map_basic_type(dst).into_int_type();
+                let src_w = int.get_type().get_bit_width();
+                let dst_w = dst_int.get_bit_width();
+                if src_w == dst_w {
+                    int.into()
+                } else if src_w < dst_w {
+                    self.builder
+                        .build_int_z_extend(int, dst_int, "")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_int_truncate(int, dst_int, "")
+                        .unwrap()
+                        .into()
+                }
+            }
+
+            (Builtin(b), Enum { .. }) if builtin_is_integer(b) => {
+                let int = value.into_int_value();
+                let dst_int = self.map_basic_type(dst).into_int_type();
+                let src_w = int.get_type().get_bit_width();
+                let dst_w = dst_int.get_bit_width();
+                if src_w == dst_w {
+                    int.into()
+                } else if src_w < dst_w {
+                    self.builder
+                        .build_int_z_extend(int, dst_int, "")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_int_truncate(int, dst_int, "")
+                        .unwrap()
+                        .into()
+                }
+            }
+
+            (Enum { .. }, Enum { .. }) => value,
+
             _ => {
-                unimplemented!("cast from {src:?} to {dst_ty:?} is not implemented in codegen yet")
+                unreachable!("cast from {src:?} to {dst_ty:?} reached codegen")
             }
         }
     }
 
     fn emit_terminator(&mut self, term: &Terminator, func: &MirFunction, fn_id: MirFunctionId) {
-        let _ = fn_id;
         match term {
             Terminator::Goto(block) => {
                 let target = self.blocks[block];
@@ -1107,6 +1355,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     destination,
                     *target,
                     func,
+                    fn_id,
                 );
             }
 
@@ -1183,10 +1432,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .collect();
                 self.make_fn_type(self.map_ret_type(ret), &params, false)
             }
-            _ => unimplemented!("indirect call through a non-fn value"),
+            _ => unreachable!("indirect call through a non-fn value"),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_macro_call(
         &mut self,
         kind: HirMacroKind,
@@ -1195,8 +1445,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         destination: &Place,
         target: Option<BlockId>,
         func: &MirFunction,
+        fn_id: MirFunctionId,
     ) {
-        let _ = destination;
         match kind {
             HirMacroKind::Print | HirMacroKind::Println => {
                 let (format, values) = self.build_format(chunks.unwrap_or(&[]), args, func);
@@ -1230,23 +1480,186 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let chunks = chunks.unwrap_or(&default_chunks);
                 let (format, values) = self.build_format(chunks, args, func);
 
-                let panic_fn = self.get_or_declare_runtime_fn(
-                    "zeen.panic_message",
-                    self.context.void_type().into(),
+                let printf = self.get_or_declare_runtime_fn(
+                    "printf",
+                    self.context.i32_type().into(),
                     &[self.context.ptr_type(AddressSpace::default()).into()],
                     true,
                 );
+                let exit = self.get_or_declare_runtime_fn(
+                    "exit",
+                    self.context.void_type().into(),
+                    &[self.context.i32_type().into()],
+                    false,
+                );
 
-                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
-                    vec![self.get_str_global(&format).as_pointer_value().into()];
-                call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
+                let location = self.panic_location(func, fn_id);
+                let call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                    if self.options.mode == CompilationMode::Debug {
+                        let format = format!("{location}: {format}\n");
+                        let mut args = vec![self.get_str_global(&format).as_pointer_value().into()];
+                        args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
+                        args
+                    } else {
+                        let msg = self.get_str_global(&format!("{location}\n"));
+                        vec![msg.as_pointer_value().into()]
+                    };
 
-                self.builder.build_call(panic_fn, &call_args, "").unwrap();
+                self.builder.build_call(printf, &call_args, "").unwrap();
+                self.builder
+                    .build_call(
+                        exit,
+                        &[self.context.i32_type().const_int(1, false).into()],
+                        "",
+                    )
+                    .unwrap();
                 self.builder.build_unreachable().unwrap();
             }
 
-            _ => unimplemented!("macro {kind:?} is not implemented in codegen yet"),
+            HirMacroKind::Format => {
+                let (format, values) = self.build_format(chunks.unwrap_or(&[]), args, func);
+
+                let buffer = self.get_or_create_format_buffer();
+                let snprintf = self.get_or_declare_runtime_fn(
+                    "snprintf",
+                    self.context.i32_type().into(),
+                    &[
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                        self.context
+                            .ptr_sized_int_type(&self.target_data, None)
+                            .into(),
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                    ],
+                    true,
+                );
+
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                    buffer.into(),
+                    self.context
+                        .ptr_sized_int_type(&self.target_data, None)
+                        .const_int(FORMAT_BUFFER_SIZE as u64, false)
+                        .into(),
+                    self.get_str_global(&format).as_pointer_value().into(),
+                ];
+                call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
+
+                self.builder.build_call(snprintf, &call_args, "").unwrap();
+
+                let dest_ty = self.place_type(destination, func);
+                if !self.is_void_ty(dest_ty) {
+                    self.store_place(destination, buffer.into(), func);
+                }
+                if let Some(next) = target {
+                    let block = self.blocks[&next];
+                    self.builder.build_unconditional_branch(block).unwrap();
+                }
+            }
+
+            HirMacroKind::Dbg => {
+                let Some(arg) = args.first() else {
+                    unreachable!("@dbg always has exactly one argument");
+                };
+                let (specifier, value) = self.debug_operand(arg, func);
+
+                let printf = self.get_or_declare_runtime_fn(
+                    "printf",
+                    self.context.i32_type().into(),
+                    &[self.context.ptr_type(AddressSpace::default()).into()],
+                    true,
+                );
+                let format = format!("{specifier}\n");
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                    vec![self.get_str_global(&format).as_pointer_value().into()];
+                call_args.push(value.into());
+                self.builder.build_call(printf, &call_args, "").unwrap();
+
+                let dest_ty = self.place_type(destination, func);
+                if !self.is_void_ty(dest_ty) {
+                    self.store_place(destination, value, func);
+                }
+                if let Some(next) = target {
+                    let block = self.blocks[&next];
+                    self.builder.build_unconditional_branch(block).unwrap();
+                }
+            }
+
+            HirMacroKind::Unreachable | HirMacroKind::Todo => {
+                self.builder.build_unreachable().unwrap();
+            }
+
+            // `@as`, `@sizeof`, `@alignof` never reach codegen: MIR lowers them
+            // to plain rvalues before the macro terminator is emitted.
+            _ => unreachable!("macro {kind:?} is lowered to a plain rvalue by MIR"),
         }
+    }
+
+    /// Returns `(printf specifier, value)` for a `@dbg` operand. Constants are
+    /// handled here because `operand_type` only describes place operands.
+    fn debug_operand(
+        &mut self,
+        operand: &Operand,
+        func: &MirFunction,
+    ) -> (String, BasicValueEnum<'ctx>) {
+        match operand {
+            Operand::Constant(c, _) => {
+                let value = self.const_value(c, None, func);
+                let specifier = match c {
+                    ConstValue::Float(_) => "%f".to_string(),
+                    ConstValue::Str(_) => "%s".to_string(),
+                    ConstValue::Char(_) => "%c".to_string(),
+                    ConstValue::Bool(_) => "%d".to_string(),
+                    ConstValue::NullPtr => "%s".to_string(),
+                    ConstValue::Void => unreachable!("cannot @dbg a void constant"),
+                    ConstValue::Int(_) => "%d".to_string(),
+                };
+                (specifier, value)
+            }
+            Operand::Copy(place, _) | Operand::Move(place, _) => {
+                let ty = self.place_type(place, func);
+                let value = self.load_place(place, func);
+                (self.display_specifier(ty), value)
+            }
+        }
+    }
+
+    /// Builds a `module:line "function"` location string for the current panic
+    /// site, used in both debug and release panic messages.
+    fn panic_location(&self, func: &MirFunction, fn_id: MirFunctionId) -> String {
+        let fn_name = self
+            .program
+            .function_names
+            .get(&fn_id)
+            .cloned()
+            .unwrap_or_else(|| format!("fn{}", fn_id.0));
+
+        let Some(info) = self.resolution.defs.get(&func.source_def) else {
+            return format!("? \"{fn_name}\"");
+        };
+
+        let source = &info.span;
+        let module = source.src().name().to_string();
+        let line = source_line(source.src().inner(), source.span.offset());
+        format!("{module}:{line} \"{fn_name}\"")
+    }
+
+    /// Creates a fresh global byte buffer used as the `@format` output.
+    fn get_or_create_format_buffer(&mut self) -> PointerValue<'ctx> {
+        let name = format!("fmtbuf.{}", self.str_counter);
+        self.str_counter += 1;
+        let buffer = self.module.add_global(
+            self.context.i8_type().array_type(FORMAT_BUFFER_SIZE),
+            None,
+            &name,
+        );
+        buffer.set_linkage(inkwell::module::Linkage::Private);
+        buffer.set_initializer(
+            &self
+                .context
+                .i8_type()
+                .array_type(FORMAT_BUFFER_SIZE)
+                .const_zero(),
+        );
+        buffer.as_pointer_value()
     }
 
     /// Builds a printf-style format string and the converted argument values
@@ -1351,6 +1764,20 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 }
 
                 PlaceElem::Index(index_local) => {
+                    // A pointer base (or a slice's pointer field) must be
+                    // loaded first: the elements live behind the pointer, not
+                    // in the local's own storage.
+                    if matches!(
+                        self.typecheck.interner.get(cur_ty).clone(),
+                        Type::Pointer { .. } | Type::ManyPointer { .. }
+                    ) {
+                        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                        ptr = self
+                            .builder
+                            .build_load(ptr_ty, ptr, "")
+                            .unwrap()
+                            .into_pointer_value();
+                    }
                     let usize_ty = self.context.ptr_sized_int_type(&self.target_data, None);
                     let index = self
                         .builder

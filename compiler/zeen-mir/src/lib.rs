@@ -35,6 +35,11 @@ pub struct MirProgram {
     pub function_names: HashMap<MirFunctionId, String>,
     pub struct_layouts: HashMap<TypeId, StructLayout>,
 
+    /// Maps a concrete struct `TypeId` that implements `Drop` to the
+    /// monomorphized drop function that codegen must call to drop a value of
+    /// that type.
+    pub drop_functions: HashMap<TypeId, MirFunctionId>,
+
     pub extern_fns: Vec<ExternFnDecl>,
     pub extern_exports: HashMap<MirFunctionId, String>,
     pub extern_vars: Vec<ExternVarDecl>,

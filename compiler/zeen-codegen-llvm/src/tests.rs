@@ -130,7 +130,9 @@ fn panic_emits_runtime_call_and_unreachable() {
 
     let ir = compile(&fx, CompilationMode::Debug);
 
-    assert!(ir.contains("@zeen.panic_message"), "{ir}");
+    assert!(ir.contains("@printf"), "{ir}");
+    assert!(ir.contains("@exit"), "{ir}");
+    assert!(ir.contains("boom"), "{ir}");
     assert!(ir.contains("unreachable"), "{ir}");
 }
 

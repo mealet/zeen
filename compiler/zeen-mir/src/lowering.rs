@@ -240,7 +240,7 @@ impl<'ctx> MirLowering<'ctx> {
             return;
         };
 
-        let candidate_types: Vec<(DefId, Vec<TypeId>)> = self
+        let candidate_types: Vec<(TypeId, DefId, Vec<TypeId>)> = self
             .program
             .functions
             .values()
@@ -249,13 +249,13 @@ impl<'ctx> MirLowering<'ctx> {
                 Type::Struct {
                     def_id,
                     generic_args,
-                } => Some((def_id, generic_args)),
+                } => Some((ty, def_id, generic_args)),
                 _ => None,
             })
             .collect();
 
         let mut seen: HashSet<(DefId, Vec<TypeId>)> = HashSet::new();
-        for (struct_def, generic_args) in candidate_types {
+        for (ty, struct_def, generic_args) in candidate_types {
             let is_new = seen.insert((struct_def, generic_args.clone()));
             if !is_new {
                 continue;
@@ -284,6 +284,7 @@ impl<'ctx> MirLowering<'ctx> {
             if let Some(func) = self.program.functions.get_mut(&mono_id) {
                 func.is_drop_impl = true;
             }
+            self.program.drop_functions.insert(ty, mono_id);
         }
     }
 

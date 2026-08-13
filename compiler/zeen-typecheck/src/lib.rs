@@ -1513,6 +1513,14 @@ impl<'res> TypeChecker<'res> {
             Type::Never | Type::Error => true,
             Type::Enum { .. } => true,
 
+            // String pointers (`*const char` / `[*]char`) are printable.
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+                matches!(
+                    self.result.interner.get(inner).clone(),
+                    Type::Builtin(BuiltinType::char)
+                )
+            }
+
             Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.type_implements_display(element)
             }
@@ -1543,6 +1551,14 @@ impl<'res> TypeChecker<'res> {
             Type::Never | Type::Error => true,
             Type::Enum { .. } => true,
 
+            // String pointers (`*const char` / `[*]char`) are printable.
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+                matches!(
+                    self.result.interner.get(inner).clone(),
+                    Type::Builtin(BuiltinType::char)
+                )
+            }
+
             Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.type_implements_debug(element)
             }
@@ -1561,7 +1577,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             Type::Builtin(_) => true,
-            Type::Pointer { .. } => true,
 
             _ => false,
         }
