@@ -1378,9 +1378,32 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         next: Option<BlockId>,
         func: &MirFunction,
     ) {
+        // Coerce each argument to the callee's declared parameter type: a
+        // constant like `123` defaults to `i32`, but the parameter may be
+        // `usize`/`i64`, so the value must be widened before the call.
+        let param_types: Vec<TypeId> = match target {
+            CallTarget::Direct(id) => self.program.functions[id]
+                .params
+                .iter()
+                .map(|&local| self.program.functions[id].local(local).ty)
+                .collect(),
+            CallTarget::Extern(idx) => self.program.extern_fns[*idx].param_types.clone(),
+            CallTarget::Indirect(_) => Vec::new(),
+        };
+
         let arg_values: Vec<BasicMetadataValueEnum<'ctx>> = args
             .iter()
-            .map(|arg| {
+            .enumerate()
+            .map(|(i, arg)| {
+                if let Some(param_ty) = param_types.get(i) {
+                    let arg_ty = self.operand_type(arg, func);
+                    let needs_cast = arg_ty.is_none() || arg_ty != Some(*param_ty);
+                    if needs_cast {
+                        return self.cast_op(arg, *param_ty, func).into();
+                    }
+                    let value = self.operand_value(arg, Some(*param_ty), func);
+                    return value.into();
+                }
                 let ty = self.operand_type(arg, func);
                 self.operand_value(arg, ty, func).into()
             })
