@@ -1496,7 +1496,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let location = self.panic_location(func, fn_id);
                 let call_args: Vec<BasicMetadataValueEnum<'ctx>> =
                     if self.options.mode == CompilationMode::Debug {
-                        let format = format!("{location}: {format}\n");
+                        let format = format!("*> thread panicked at {location}:\n{format}\n");
                         let mut args = vec![self.get_str_global(&format).as_pointer_value().into()];
                         args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
                         args
