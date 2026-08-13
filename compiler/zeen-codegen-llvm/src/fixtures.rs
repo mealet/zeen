@@ -388,6 +388,24 @@ impl<'f> FnBuilder<'f> {
         self.set_terminator(terminator);
     }
 
+    pub fn format(
+        &mut self,
+        chunks: Vec<FormatChunk>,
+        args: Vec<Operand>,
+        destination: LocalId,
+        next: Option<&str>,
+    ) {
+        let terminator = Terminator::MacroCall {
+            kind: HirMacroKind::Format,
+            format_chunks: Some(chunks),
+            args,
+            destination: Place::from_local(destination),
+            target: next.map(|name| self.block_by(name)),
+            source: None,
+        };
+        self.set_terminator(terminator);
+    }
+
     pub fn finish(mut self) -> MirFunctionId {
         assert!(
             !self.func.blocks.is_empty(),
