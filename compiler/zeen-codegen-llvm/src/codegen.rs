@@ -62,10 +62,6 @@ impl Default for CodegenOptions {
     }
 }
 
-/// Size of the `@format` output buffer. A `@format` result is `*const char`,
-/// so codegen formats into a static buffer rather than heap-allocating.
-const FORMAT_BUFFER_SIZE: u32 = 4096;
-
 /// Computes the 1-based line number of the byte `offset` inside `source`.
 fn source_line(source: &str, offset: usize) -> usize {
     1 + source
@@ -1519,31 +1515,61 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             HirMacroKind::Format => {
                 let (format, values) = self.build_format(chunks.unwrap_or(&[]), args, func);
 
-                let buffer = self.get_or_create_format_buffer();
+                let fmt_ptr = self.get_str_global(&format).as_pointer_value();
+                let null_ptr = self.context.ptr_type(AddressSpace::default()).const_null();
+                let size_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+
                 let snprintf = self.get_or_declare_runtime_fn(
                     "snprintf",
                     self.context.i32_type().into(),
                     &[
                         self.context.ptr_type(AddressSpace::default()).into(),
-                        self.context
-                            .ptr_sized_int_type(&self.target_data, None)
-                            .into(),
+                        size_ty.into(),
                         self.context.ptr_type(AddressSpace::default()).into(),
                     ],
                     true,
                 );
 
-                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
-                    buffer.into(),
-                    self.context
-                        .ptr_sized_int_type(&self.target_data, None)
-                        .const_int(FORMAT_BUFFER_SIZE as u64, false)
-                        .into(),
-                    self.get_str_global(&format).as_pointer_value().into(),
-                ];
+                // First call: measure how many bytes the formatted string
+                // needs (`snprintf(NULL, 0, ...)` returns the required size).
+                let mut measure_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                    vec![null_ptr.into(), size_ty.const_zero().into(), fmt_ptr.into()];
+                measure_args.extend(values.iter().map(|v| BasicMetadataValueEnum::from(*v)));
+
+                let needed = self
+                    .builder
+                    .build_call(snprintf, &measure_args, "")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+
+                // Allocate exactly `needed + 1` bytes for the string.
+                let buffer_size = self
+                    .builder
+                    .build_int_add(needed, self.context.i32_type().const_int(1, false), "")
+                    .unwrap();
+                let buffer = self
+                    .builder
+                    .build_array_alloca(self.context.i8_type(), buffer_size, "")
+                    .unwrap();
+
+                // Second call: write the formatted string into the buffer.
+                let sprintf = self.get_or_declare_runtime_fn(
+                    "sprintf",
+                    self.context.i32_type().into(),
+                    &[
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                    ],
+                    true,
+                );
+
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                    vec![buffer.into(), fmt_ptr.into()];
                 call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
 
-                self.builder.build_call(snprintf, &call_args, "").unwrap();
+                self.builder.build_call(sprintf, &call_args, "").unwrap();
 
                 let dest_ty = self.place_type(destination, func);
                 if !self.is_void_ty(dest_ty) {
@@ -1640,26 +1666,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let module = source.src().name().to_string();
         let line = source_line(source.src().inner(), source.span.offset());
         format!("{module}:{line} \"{fn_name}\"")
-    }
-
-    /// Creates a fresh global byte buffer used as the `@format` output.
-    fn get_or_create_format_buffer(&mut self) -> PointerValue<'ctx> {
-        let name = format!("fmtbuf.{}", self.str_counter);
-        self.str_counter += 1;
-        let buffer = self.module.add_global(
-            self.context.i8_type().array_type(FORMAT_BUFFER_SIZE),
-            None,
-            &name,
-        );
-        buffer.set_linkage(inkwell::module::Linkage::Private);
-        buffer.set_initializer(
-            &self
-                .context
-                .i8_type()
-                .array_type(FORMAT_BUFFER_SIZE)
-                .const_zero(),
-        );
-        buffer.as_pointer_value()
     }
 
     /// Builds a printf-style format string and the converted argument values
