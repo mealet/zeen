@@ -576,7 +576,6 @@ impl<'ctx> MirLowering<'ctx> {
                 expr: inner,
                 op: UnaryOp::AddrOf,
             } => {
-                let (block, inner_place) = self.lower_expr_to_place(fb, inner, block);
                 let result_ty = self.expr_type(fb, expr);
 
                 // `&array` lowers to a slice: build the `{ ptr, len }` fat
@@ -596,6 +595,26 @@ impl<'ctx> MirLowering<'ctx> {
                         is_const,
                     });
                     let ptr_temp = fb.new_temp(ptr_ty);
+
+                    // `&` needs a place to point at. When the operand is not an
+                    // lvalue (e.g. an array literal), materialize it into a temp
+                    // local first so we can take its address instead of panicking.
+                    let (block, inner_place) = if self.expr_is_place(inner) {
+                        self.lower_expr_to_place(fb, inner, block)
+                    } else {
+                        let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
+                        let temp = fb.new_temp(inner_ty);
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::Use(inner_op),
+                                source: Some(inner.source.clone()),
+                            },
+                        );
+                        (block, Place::from_local(temp))
+                    };
+
                     fb.push_stmt(
                         block,
                         MirStatement::Assign {
@@ -635,6 +654,34 @@ impl<'ctx> MirLowering<'ctx> {
                 let is_const = match self.typecheck.interner.get(result_ty).clone() {
                     Type::Pointer { is_const, .. } => is_const,
                     _ => false,
+                };
+
+                // Type of the pointee. Use the pointer's own inner type so a
+                // literal operand is pinned to the concrete pointee (`&123`
+                // in a `*i64` context materializes an `i64` temp, not an `i32`
+                // defaulted one).
+                let inner_ty = match self.typecheck.interner.get(result_ty).clone() {
+                    Type::Pointer { inner, .. } => inner,
+                    _ => self.expr_type(fb, inner),
+                };
+
+                // `&` needs a place to point at. When the operand is not an
+                // lvalue (e.g. `&123`, `&(a + b)`), materialize it into a temp
+                // local first so we can take its address instead of panicking.
+                let (block, inner_place) = if self.expr_is_place(inner) {
+                    self.lower_expr_to_place(fb, inner, block)
+                } else {
+                    let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
+                    let temp = fb.new_temp(inner_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Use(inner_op),
+                            source: Some(inner.source.clone()),
+                        },
+                    );
+                    (block, Place::from_local(temp))
                 };
 
                 let temp = fb.new_temp(result_ty);
@@ -1121,6 +1168,21 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::GenericParamRef(_) => unreachable!(),
             HirExprKind::Type(_) => unreachable!(),
             HirExprKind::Error => unreachable!(),
+        }
+    }
+
+    /// Whether `expr` can be lowered to a place by [`Self::lower_expr_to_place`].
+    /// Mirrors the dispatch in that method.
+    fn expr_is_place(&self, expr: &HirExpr) -> bool {
+        match &expr.kind {
+            HirExprKind::VarRef(_) | HirExprKind::SelfValue(_) => true,
+            HirExprKind::FieldAccess { object, .. } => self.expr_is_place(object),
+            HirExprKind::SliceAccess { object, .. } => self.expr_is_place(object),
+            HirExprKind::Unary {
+                expr: inner,
+                op: UnaryOp::Deref,
+            } => self.expr_is_place(inner),
+            _ => false,
         }
     }
 
