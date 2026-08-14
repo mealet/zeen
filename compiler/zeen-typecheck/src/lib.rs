@@ -4338,4 +4338,279 @@ mod tests {
             "mismatch should cover just the signature"
         );
     }
+
+    // > Generic inference through wrapped types
+
+    #[test]
+    fn generic_infers_through_pointer_wrapper_in_associated_call() {
+        let result = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+
+              pub fn new(value: *T) Self {
+                Self { .inner = value }
+              }
+            }
+
+            fn main() {
+              let value = 123;
+              let box: Box[i32] = Box.new(&value);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred as i32 through `*T`: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_through_slice_wrapper() {
+        let result = typecheck(
+            r#"
+            fn first[T](items: []T) T {
+              return items[0];
+            }
+
+            fn main() {
+              let arr = [1, 2, 3];
+              let first: i32 = first(&arr);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred as i32 through `[]T`: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_through_array_wrapper() {
+        let result = typecheck(
+            r#"
+            fn max[T](items: [4]T) T {
+              return items[0];
+            }
+
+            fn main() {
+              let arr = [1, 2, 3, 4];
+              let max: i32 = max(arr);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred as i32 through `[4]T`: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_through_many_pointer_wrapper() {
+        let result = typecheck(
+            r#"
+            fn total[T](items: [*]T) T {
+              return items[0];
+            }
+
+            fn main() {
+              let arr = [1, 2, 3];
+              let slice = &arr;
+              let total: i32 = total(slice.ptr);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred as i32 through `[*]T`: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_through_nested_structs() {
+        let result = typecheck(
+            r#"
+            struct Inner[T] {
+              pub value: T,
+            }
+
+            struct Outer[T] {
+              pub inner: Inner[T],
+            }
+
+            fn deep[T](o: Outer[Outer[T]]) Outer[T] {
+              return o.inner.value;
+            }
+
+            fn main() {
+              let inner: Inner[i32] = Inner { .value = 1 };
+              let outer: Outer[i32] = Outer { .inner = inner };
+              let wrapped: Outer[Outer[i32]] = Outer { .inner = Inner { .value = outer } };
+              let result: Outer[i32] = deep(wrapped);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred through nested generic structs: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_from_struct_init_fields() {
+        let result = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+            }
+
+            fn main() {
+              let value = 123;
+              let box = Box { .inner = &value };
+              let box2: Box[i32] = box;
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "struct init should infer T from `*T` field: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_across_multiple_function_generics() {
+        let result = typecheck(
+            r#"
+            struct Pair[A, B] {
+              pub first: A,
+              pub second: B,
+            }
+
+            fn swap[K, V](p: Pair[K, V]) Pair[V, K] {
+              return Pair { .first = p.second, .second = p.first };
+            }
+
+            fn main() {
+              let p: Pair[i32, f64] = Pair { .first = 1, .second = 2.5 };
+              let swapped: Pair[f64, i32] = swap(p);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "multiple generics should be inferred through a struct: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn self_construction_reports_real_field_mismatch_not_infer_error() {
+        let errors = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+
+              pub fn new(value: T) Self {
+                Self { .inner = value }
+              }
+            }
+
+            fn main() {
+              let box: Box[i32] = Box.new(123);
+            }
+            "#,
+        )
+        .expect_err("giving `T` instead of `*T` to a pointer field must fail");
+
+        assert!(
+            errors.iter().any(|err| {
+                matches!(err, TypeError::Mismatch { expected, found, .. }
+                if expected.as_str() == "*T" && found.as_str() == "T")
+            }),
+            "expected a Mismatch(*T, T), got: {errors:?}"
+        );
+
+        assert!(
+            !errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CannotInferGeneric { .. })),
+            "`Self` construction must not report `cannot infer`, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn associated_call_reports_pointer_mismatch_not_bogus_box_mismatch() {
+        let errors = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+
+              pub fn new(value: *T) Self {
+                Self { .inner = value }
+              }
+            }
+
+            fn main() {
+              let box: Box[i32] = Box.new(123);
+            }
+            "#,
+        )
+        .expect_err("passing a non-pointer to `*T` must fail");
+
+        assert!(
+            errors.iter().any(|err| {
+                matches!(err, TypeError::Mismatch { expected, found, .. }
+                if expected.as_str() == "*T" && found.as_str() == "i32")
+            }),
+            "expected a Mismatch(*T, i32), got: {errors:?}"
+        );
+
+        assert!(
+            !errors.iter().any(|err| matches!(err, TypeError::CannotInferGeneric { .. })),
+            "should not report `cannot infer` for a structural mismatch: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn struct_init_mismatch_reports_cannot_infer_not_cascade() {
+        let errors = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+            }
+
+            fn main() {
+              let box = Box { .inner = 123 };
+            }
+            "#,
+        )
+        .expect_err("int cannot initialize a `*T` field");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CannotInferGeneric { .. })),
+            "expected CannotInferGeneric, got: {errors:?}"
+        );
+
+        // The cascading `*error` mismatch should be suppressed by recovery.
+        assert!(
+            !errors.iter().any(|err| matches!(err, TypeError::Mismatch { found, .. }
+            if found.as_str().contains("error"))),
+            "expected no cascade mismatch mentioning `error`, got: {errors:?}"
+        );
+    }
 }
