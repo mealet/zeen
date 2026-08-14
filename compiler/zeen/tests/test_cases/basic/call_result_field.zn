@@ -1,0 +1,44 @@
+extern fn malloc(usize) *void;
+extern fn free(*void);
+
+struct Box[T] {
+  inner: *T,
+
+  pub fn new(value: T) Self {
+    let ptr: *T = malloc(@sizeof(T));
+    *ptr = value;
+
+    Self { .inner = ptr }
+  }
+
+  pub fn get(*const self) T {
+    *self.inner
+  }
+}
+
+implement[T] Drop : Box[T] {
+  fn drop(self) {
+    free(self.inner);
+  }
+}
+
+struct Foo {
+  pub a: i32,
+
+  pub fn double(*self) i32 {
+    self.a * 2
+  }
+}
+
+fn make_foo(a: i32) Foo {
+  Foo { .a = a }
+}
+
+fn main() {
+  let box: Box[Foo] = Box.new(Foo { .a = 123 });
+  @println("{}", box.get().a);
+  @println("{}", box.get().double());
+
+  @println("{}", make_foo(10).a);
+  @println("{}", make_foo(20).double());
+}
