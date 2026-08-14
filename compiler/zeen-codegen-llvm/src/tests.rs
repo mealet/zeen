@@ -10,7 +10,7 @@ use std::rc::Rc;
 use inkwell::context::Context;
 use zeen_ast::expressions::BinaryOp;
 use zeen_driver::CompilationMode;
-use zeen_mir::{CallTarget, Operand, StructFieldLayout, StructLayout};
+use zeen_mir::{CallTarget, ConstValue, Operand, Rvalue, StructFieldLayout, StructLayout};
 use zeen_resolve::DefKind;
 use zeen_typecheck::format_str::{FormatChunk, FormatSpec};
 use zeen_types::Type;
@@ -309,4 +309,43 @@ fn const_string_global_is_deduplicated() {
 
     assert!(ir.contains("@str.0"), "{ir}");
     assert!(!ir.contains("@str.1"), "{ir}");
+}
+
+fn const_null() -> Operand {
+    Operand::Constant(ConstValue::NullPtr, None)
+}
+
+#[test]
+fn pointer_equality_and_inequality_compare_as_integers() {
+    let mut fx = Fixture::new();
+    let main_def = fx.def("main", DefKind::Function);
+    let i32 = fx.i32();
+    let bool_ty = fx.bool();
+    let ptr_ty = fx.ptr(i32);
+
+    let mut main = fx.fn_builder("main", main_def, i32);
+    let p = main.local("p", ptr_ty);
+    let eq = main.temp(bool_ty);
+    let ne = main.temp(bool_ty);
+    let ret = main.temp(i32);
+
+    main.entry("bb0");
+    main.assign(place(p), use_const(const_null()));
+    main.assign(place(eq), binary(BinaryOp::Eq, copy_of(p), const_null()));
+    main.assign(place(ne), binary(BinaryOp::Ne, copy_of(p), const_null()));
+    main.assign(
+        place(ret),
+        Rvalue::Cast {
+            operand: Operand::Copy(place(eq), None),
+            target: i32,
+        },
+    );
+    main.ret(copy_of(ret));
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("ptrtoint"), "{ir}");
+    assert!(ir.contains("icmp eq"), "{ir}");
+    assert!(ir.contains("icmp ne"), "{ir}");
 }
