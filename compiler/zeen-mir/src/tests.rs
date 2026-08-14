@@ -142,3 +142,27 @@ fn generic_drop_impl_is_registered_per_concrete_type() {
         "expected a registered `Box[i32].drop` in MIR function names, got {names:?}"
     );
 }
+
+#[test]
+fn address_of_literal_materializes_temp() {
+    compile_mir_ok("fn main() { let p: *i32 = &123; let q: i32 = *p; }");
+}
+
+#[test]
+fn address_of_non_lvalue_expression_materializes_temp() {
+    compile_mir_ok("fn main() { let a = 1; let p: *i32 = &(a + 1); let q: i32 = *p; }");
+}
+
+#[test]
+fn address_of_array_literal_builds_slice() {
+    compile_mir_ok("fn main() { let s: []i32 = &[1, 2, 3]; }");
+}
+
+#[test]
+fn generic_pointer_param_accepts_literal_address() {
+    compile_mir_ok(
+        "struct Box[T] { pub inner: *T } \
+         fn make[T](value: *T) Box[T] { Box { .inner = value } } \
+         fn main() { let b = make(&123); }",
+    );
+}
