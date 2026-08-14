@@ -166,3 +166,39 @@ fn generic_pointer_param_accepts_literal_address() {
          fn main() { let b = make(&123); }",
     );
 }
+
+#[test]
+fn auto_deref_field_access_inserts_deref_projection() {
+    let mir = compile_mir_ok(
+        "struct Foo { pub x: i32 } \
+         fn main() { let f = Foo { .x = 1 }; let sf: *Foo = &f; let v: i32 = sf.x; }",
+    );
+
+    let has_deref_field = mir.program.functions.values().any(|func| {
+        func.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                if let crate::MirStatement::Assign {
+                    rvalue: crate::Rvalue::Use(operand),
+                    ..
+                } = stmt
+                {
+                    let place = match operand {
+                        crate::Operand::Copy(p, _) | crate::Operand::Move(p, _) => p,
+                        crate::Operand::Constant(_, _) => return false,
+                    };
+                    matches!(
+                        place.projection.as_slice(),
+                        [crate::PlaceElem::Deref, crate::PlaceElem::Field(_)]
+                    )
+                } else {
+                    false
+                }
+            })
+        })
+    });
+
+    assert!(
+        has_deref_field,
+        "expected a `[Deref, Field]` place for the auto-deref read `sf.x`"
+    );
+}
