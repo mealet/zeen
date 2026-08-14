@@ -349,3 +349,43 @@ fn pointer_equality_and_inequality_compare_as_integers() {
     assert!(ir.contains("icmp eq"), "{ir}");
     assert!(ir.contains("icmp ne"), "{ir}");
 }
+
+#[test]
+fn pointer_arithmetic_scales_offsets_by_element_size() {
+    let mut fx = Fixture::new();
+    let main_def = fx.def("main", DefKind::Function);
+    let i32 = fx.i32();
+    let isize_ty = fx.isize();
+    let ptr_ty = fx.ptr(i32);
+
+    let mut main = fx.fn_builder("main", main_def, i32);
+    let p = main.local("p", ptr_ty);
+    let p2 = main.local("p2", ptr_ty);
+    let sum = main.temp(ptr_ty);
+    let diff = main.temp(isize_ty);
+    let diff_i32 = main.temp(i32);
+    let ret = main.temp(i32);
+
+    main.entry("bb0");
+    // p2 = p + 2, scaled by sizeof(i32) = 4.
+    main.assign(place(sum), binary(BinaryOp::Add, copy_of(p), const_int(2)));
+    main.assign(place(p2), use_const(Operand::Copy(place(sum), None)));
+    // diff = p2 - p, the element count (also scaled by 4).
+    main.assign(place(diff), binary(BinaryOp::Sub, copy_of(p2), copy_of(p)));
+    main.assign(
+        place(diff_i32),
+        Rvalue::Cast {
+            operand: Operand::Copy(place(diff), None),
+            target: i32,
+        },
+    );
+    main.assign(place(ret), use_const(Operand::Copy(place(diff_i32), None)));
+    main.ret(copy_of(ret));
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("ptrtoint"), "{ir}");
+    assert!(ir.contains("sdiv"), "{ir}");
+    assert!(ir.contains("inttoptr"), "{ir}");
+}
