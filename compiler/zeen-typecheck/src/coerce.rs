@@ -74,6 +74,12 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
         return CoerceResult::NeverCoercion;
     }
 
+    // Literals are allowed inside wrapped types too: `let p: *i64 = &123;`
+    // pins the pointee to `i64`, mirroring the top-level `IntLiteral` rule.
+    if nested_literal_pins(interner, from, to) {
+        return CoerceResult::PinLiteral;
+    }
+
     match (from_ty, to_ty) {
         (Type::IntLiteral, Type::Builtin(b)) if builtin_is_integer(b) => CoerceResult::PinLiteral,
         (Type::FloatLiteral, Type::Builtin(b)) if builtin_is_float(b) => CoerceResult::PinLiteral,
@@ -178,12 +184,49 @@ pub fn type_contains_error(interner: &TypeInterner, ty: TypeId) -> bool {
         Type::Array { element, .. } | Type::Slice { element, .. } => {
             type_contains_error(interner, *element)
         }
-        Type::Struct { generic_args, .. } => {
-            generic_args.iter().any(|a| type_contains_error(interner, *a))
-        }
+        Type::Struct { generic_args, .. } => generic_args
+            .iter()
+            .any(|a| type_contains_error(interner, *a)),
         Type::Fn { params, ret } => {
             params.iter().any(|p| type_contains_error(interner, *p))
                 || type_contains_error(interner, *ret)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `from` and `to` share structure and differ only in literal leaves
+/// that can be pinned to matching builtins (e.g. `*IntLiteral` vs `*i64`).
+fn nested_literal_pins(interner: &TypeInterner, from: TypeId, to: TypeId) -> bool {
+    match (interner.get(from), interner.get(to)) {
+        (Type::IntLiteral, Type::Builtin(b)) => builtin_is_integer(*b),
+        (Type::FloatLiteral, Type::Builtin(b)) => builtin_is_float(*b),
+        (Type::Pointer { inner: fi, .. }, Type::Pointer { inner: ti, .. })
+        | (Type::ManyPointer { inner: fi, .. }, Type::ManyPointer { inner: ti, .. }) => {
+            nested_literal_pins(interner, *fi, *ti)
+        }
+        (Type::Slice { element: fi, .. }, Type::Slice { element: ti, .. })
+        | (Type::Array { element: fi, .. }, Type::Array { element: ti, .. }) => {
+            nested_literal_pins(interner, *fi, *ti)
+        }
+        (
+            Type::Struct {
+                def_id: fd,
+                generic_args: fa,
+                ..
+            },
+            Type::Struct {
+                def_id: td,
+                generic_args: ta,
+                ..
+            },
+        ) => {
+            fd == td
+                && fa.len() == ta.len()
+                && fa
+                    .iter()
+                    .zip(ta)
+                    .all(|(f, t)| nested_literal_pins(interner, *f, *t))
         }
         _ => false,
     }
