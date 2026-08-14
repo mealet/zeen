@@ -801,12 +801,22 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral
             );
 
+        // Integer constants must never be coerced to a pointer operand type
+        // (`ptr + 1` would otherwise map the constant to `*u8` and panic):
+        // fall back to the default `i32` width, which the pointer-arithmetic
+        // branch widens to the pointer-sized integer later.
+        let const_expected =
+            |other_ty: Option<TypeId>| match other_ty.map(|t| self.typecheck.interner.get(t)) {
+                Some(Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Fn { .. }) => None,
+                _ => other_ty,
+            };
+
         let lhs_v = match lhs {
-            Operand::Constant(_, _) => self.operand_value(lhs, rhs_ty, func),
+            Operand::Constant(_, _) => self.operand_value(lhs, const_expected(rhs_ty), func),
             _ => self.operand_value(lhs, Some(operand_ty), func),
         };
         let rhs_v = match rhs {
-            Operand::Constant(_, _) => self.operand_value(rhs, lhs_ty, func),
+            Operand::Constant(_, _) => self.operand_value(rhs, const_expected(lhs_ty), func),
             _ => self.operand_value(rhs, Some(operand_ty), func),
         };
 
@@ -853,11 +863,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         // on pointers, so cast both to the pointer-size integer and compare as
         // integers. The `operand_ty` check covers pointer-typed operands; the
         // `NullPtr` checks cover the all-constant `nullptr == nullptr` case.
-        let is_pointer_cmp = matches!(
-            self.typecheck.interner.get(operand_ty),
-            Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Fn { .. }
-        ) || matches!(lhs, Operand::Constant(ConstValue::NullPtr, _))
-            || matches!(rhs, Operand::Constant(ConstValue::NullPtr, _));
+        let is_pointer_cmp = matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+            && (matches!(
+                self.typecheck.interner.get(operand_ty),
+                Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Fn { .. }
+            ) || matches!(lhs, Operand::Constant(ConstValue::NullPtr, _))
+                || matches!(rhs, Operand::Constant(ConstValue::NullPtr, _)));
 
         if is_pointer_cmp {
             let int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
@@ -885,6 +896,70 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .into(),
                 _ => unreachable!("non-equality binary op on pointer operands"),
             };
+        }
+
+        // Pointer arithmetic: `ptr + n` / `ptr - n` scale the offset by the
+        // element size and yield the pointer type; `ptr - ptr` yields the
+        // element count as `isize`.
+        let is_pointer_arith = matches!(op, BinaryOp::Add | BinaryOp::Sub)
+            && matches!(
+                self.typecheck.interner.get(operand_ty),
+                Type::Pointer { .. } | Type::ManyPointer { .. }
+            );
+
+        if is_pointer_arith {
+            let ptr_int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+            let is_ptr = |v: &BasicValueEnum| matches!(v, BasicValueEnum::PointerValue(_));
+            let to_int = |v: BasicValueEnum<'ctx>| -> IntValue<'ctx> {
+                match v {
+                    BasicValueEnum::PointerValue(p) => {
+                        self.builder.build_ptr_to_int(p, ptr_int_ty, "").unwrap()
+                    }
+                    v => self
+                        .builder
+                        .build_int_cast(v.into_int_value(), ptr_int_ty, "")
+                        .unwrap(),
+                }
+            };
+
+            let inner = match self.typecheck.interner.get(operand_ty).clone() {
+                Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+                _ => unreachable!("pointer arithmetic on non-pointer operand"),
+            };
+            let elem_size = self.target_data.get_abi_size(&self.map_type(inner));
+
+            // `ptr - ptr`: subtract the addresses, then divide by the element
+            // size to get the element count.
+            if op == BinaryOp::Sub && is_ptr(&lhs_v) && is_ptr(&rhs_v) {
+                let l = to_int(lhs_v);
+                let r = to_int(rhs_v);
+                let diff = self.builder.build_int_sub(l, r, "").unwrap();
+                let size = ptr_int_ty.const_int(elem_size as u64, false);
+                let count = self.builder.build_int_signed_div(diff, size, "").unwrap();
+                return count.into();
+            }
+
+            // `ptr + n` / `ptr - n`: scale the integer offset by the element
+            // size and apply it to the pointer.
+            let (ptr_v, offset_v) = if is_ptr(&lhs_v) {
+                (lhs_v, rhs_v)
+            } else {
+                (rhs_v, lhs_v)
+            };
+            let p = to_int(ptr_v);
+            let n = to_int(offset_v);
+            let size = ptr_int_ty.const_int(elem_size as u64, false);
+            let scaled = self.builder.build_int_mul(n, size, "").unwrap();
+            let result = match op {
+                BinaryOp::Add => self.builder.build_int_add(p, scaled, "").unwrap(),
+                BinaryOp::Sub => self.builder.build_int_sub(p, scaled, "").unwrap(),
+                _ => unreachable!("pointer arithmetic op must be add or sub"),
+            };
+            return self
+                .builder
+                .build_int_to_ptr(result, self.context.ptr_type(AddressSpace::default()), "")
+                .unwrap()
+                .into();
         }
 
         let l = lhs_v.into_int_value();
