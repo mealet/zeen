@@ -58,25 +58,25 @@ fn discover_test_cases_recursive(
                     test_cases,
                     &new_relative_path,
                 );
-            } else if path.extension().and_then(|os_str| os_str.to_str()) == Some("zn") {
-                if let Some(stem) = path.file_stem().and_then(|os_str| os_str.to_str()) {
-                    let expected_path = path.with_extension("expected");
+            } else if path.extension().and_then(|os_str| os_str.to_str()) == Some("zn")
+                && let Some(stem) = path.file_stem().and_then(|os_str| os_str.to_str())
+            {
+                let expected_path = path.with_extension("expected");
 
-                    if expected_path.exists() {
-                        let test_name = if relative_path.is_empty() {
-                            stem.to_string()
-                        } else {
-                            format!("{relative_path}/{stem}")
-                        };
+                if expected_path.exists() {
+                    let test_name = if relative_path.is_empty() {
+                        stem.to_string()
+                    } else {
+                        format!("{relative_path}/{stem}")
+                    };
 
-                        let test_path = if relative_path.is_empty() {
-                            stem.to_string()
-                        } else {
-                            format!("{relative_path}/{stem}")
-                        };
+                    let test_path = if relative_path.is_empty() {
+                        stem.to_string()
+                    } else {
+                        format!("{relative_path}/{stem}")
+                    };
 
-                        test_cases.push((test_name, test_path));
-                    }
+                    test_cases.push((test_name, test_path));
                 }
             }
         }
@@ -169,13 +169,11 @@ fn golden_system_tests() -> anyhow::Result<()> {
 
         let mut errors = Vec::new();
 
-        if !expected.free_output {
-            if actual_stdout != expected.output {
-                errors.push(format!(
-                    "Output mismatch:\n--- expected ---\n{}\n--- actual ---\n{}",
-                    expected.output, actual_stdout
-                ));
-            }
+        if !expected.free_output && actual_stdout != expected.output {
+            errors.push(format!(
+                "Output mismatch:\n--- expected ---\n{}\n--- actual ---\n{}",
+                expected.output, actual_stdout
+            ));
         }
 
         if let Some(expected_exit) = expected.exit_code {
@@ -216,7 +214,11 @@ fn golden_system_tests() -> anyhow::Result<()> {
         println!();
     }
 
-    println!("successful/everything: {}/{}", passed_tests.len(), tests_count);
+    println!(
+        "successful/everything: {}/{}",
+        passed_tests.len(),
+        tests_count
+    );
 
     if failed_tests.is_empty() {
         return Ok(());
