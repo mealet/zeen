@@ -1,0 +1,30 @@
+extern fn malloc(usize) *void;
+
+fn main() {
+  let a = 123;
+  let ptr = &a;
+  let null_ptr: *i32 = nullptr;
+
+  if (ptr != nullptr) {
+    @println("ptr is not null");
+  }
+  if (ptr == nullptr) {
+    @println("bug: ptr is null");
+  }
+
+  if (null_ptr == nullptr) {
+    @println("null_ptr is null");
+  }
+  if (null_ptr != nullptr) {
+    @println("bug: null_ptr is not null");
+  }
+
+  let p1 = malloc(4);
+  let p2 = malloc(4);
+  if (p1 != p2) {
+    @println("p1 != p2");
+  }
+  if (p1 == p1) {
+    @println("p1 == p1");
+  }
+}
