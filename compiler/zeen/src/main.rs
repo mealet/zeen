@@ -386,7 +386,8 @@ fn main() {
                 Ok(_) => cli::println_info(
                     "Emitted",
                     format!(
-                        "binary to the file (with `{linker}`)",
+                        "binary (with {linker}): `{}`",
+                        output_path.display(),
                     ),
                 ),
                 Err(err) => {
