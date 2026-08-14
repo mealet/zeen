@@ -202,3 +202,38 @@ fn auto_deref_field_access_inserts_deref_projection() {
         "expected a `[Deref, Field]` place for the auto-deref read `sf.x`"
     );
 }
+
+#[test]
+fn field_access_on_call_result_materializes_temp() {
+    compile_mir_ok(
+        "struct Foo { pub a: i32 } \
+         fn make() Foo { Foo { .a = 1 } } \
+         fn main() { let v: i32 = make().a; }",
+    );
+}
+
+#[test]
+fn method_call_on_call_result_materializes_receiver() {
+    compile_mir_ok(
+        "struct Foo { pub a: i32 } \
+         fn make() Foo { Foo { .a = 1 } } \
+         fn main() { let v: i32 = make().a; }",
+    );
+}
+
+#[test]
+fn deref_of_call_result_is_lvalue() {
+    compile_mir_ok(
+        "extern fn malloc(usize) *void; \
+         fn make_ptr() *i32 { let p: *i32 = malloc(4); *p = 5; p } \
+         fn main() { let v: i32 = *make_ptr(); *make_ptr() = 7; }",
+    );
+}
+
+#[test]
+fn slice_index_on_call_result_materializes_slice() {
+    compile_mir_ok(
+        "fn get_slice() []i32 { let arr = [1, 2, 3]; return &arr; } \
+         fn main() { let v: i32 = get_slice()[1]; }",
+    );
+}
