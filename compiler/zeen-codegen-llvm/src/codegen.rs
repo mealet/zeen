@@ -660,7 +660,31 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         func: &MirFunction,
     ) -> BasicValueEnum<'ctx> {
         match rvalue {
-            Rvalue::Use(operand) => self.operand_value(operand, Some(expected_ty), func),
+            Rvalue::Use(operand) => {
+                let value = self.operand_value(operand, Some(expected_ty), func);
+
+                // Copy/move operands keep their own width, so a plain store
+                // would overflow a narrower slot (e.g. the `usize` range
+                // counter copied into an `i32` loop variable) and clobber
+                // adjacent stack slots. Narrow/widen integer copies instead.
+                match self.operand_type(operand, func) {
+                    Some(src_ty)
+                        if src_ty != expected_ty
+                            && matches!(
+                                self.typecheck.interner.get(src_ty),
+                                Type::Builtin(s) if builtin_is_integer(*s)
+                            )
+                            && matches!(
+                                self.typecheck.interner.get(expected_ty),
+                                Type::Builtin(d) if builtin_is_integer(*d)
+                            ) =>
+                    {
+                        let src = self.typecheck.interner.get(src_ty).clone();
+                        self.cast_value(value, &src, expected_ty)
+                    }
+                    _ => value,
+                }
+            }
 
             Rvalue::BinaryOp { op, lhs, rhs } => self.binary_op(*op, lhs, rhs, expected_ty, func),
 

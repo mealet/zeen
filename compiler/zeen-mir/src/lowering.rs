@@ -205,6 +205,22 @@ impl FnBuilder {
     fn set_terminator(&mut self, block: BlockId, term: Terminator) {
         self.func.block_mut(block).terminator = term;
     }
+
+    /// Appends a fallthrough `Goto` only when the block does not already end
+    /// with a terminator (e.g. `break`/`continue`/`return` inside an `if`
+    /// branch). Overwriting those would silently swallow the early exit.
+    fn join_if_open(&mut self, block: BlockId, join: BlockId) {
+        if self.block_is_open(block) {
+            self.set_terminator(block, Terminator::Goto(join));
+        }
+    }
+
+    fn block_is_open(&self, block: BlockId) -> bool {
+        matches!(
+            self.func.block(block).terminator,
+            Terminator::Unreachable // placeholder for a block that still needs a terminator
+        )
+    }
 }
 
 impl<'ctx> MirLowering<'ctx> {
@@ -935,8 +951,8 @@ impl<'ctx> MirLowering<'ctx> {
 
                 if !has_else {
                     let join = fb.new_block();
-                    fb.set_terminator(then_end, Terminator::Goto(join));
-                    fb.set_terminator(else_bb, Terminator::Goto(join));
+                    fb.join_if_open(then_end, join);
+                    fb.join_if_open(else_bb, join);
                     return (join, Operand::Constant(ConstValue::Void, None));
                 }
 
@@ -946,25 +962,29 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let result_local = fb.new_temp(result_ty);
 
-                fb.push_stmt(
-                    then_end,
-                    MirStatement::Assign {
-                        place: Place::from_local(result_local),
-                        rvalue: Rvalue::Use(then_operand),
-                        source: Some(expr.source.clone()),
-                    },
-                );
-                fb.set_terminator(then_end, Terminator::Goto(join));
+                if fb.block_is_open(then_end) {
+                    fb.push_stmt(
+                        then_end,
+                        MirStatement::Assign {
+                            place: Place::from_local(result_local),
+                            rvalue: Rvalue::Use(then_operand),
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    fb.set_terminator(then_end, Terminator::Goto(join));
+                }
 
-                fb.push_stmt(
-                    else_end,
-                    MirStatement::Assign {
-                        place: Place::from_local(result_local),
-                        rvalue: Rvalue::Use(else_operand),
-                        source: Some(expr.source.clone()),
-                    },
-                );
-                fb.set_terminator(else_end, Terminator::Goto(join));
+                if fb.block_is_open(else_end) {
+                    fb.push_stmt(
+                        else_end,
+                        MirStatement::Assign {
+                            place: Place::from_local(result_local),
+                            rvalue: Rvalue::Use(else_operand),
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    fb.set_terminator(else_end, Terminator::Goto(join));
+                }
 
                 (
                     join,
@@ -1968,7 +1988,18 @@ impl<'ctx> MirLowering<'ctx> {
             .typecheck
             .interner
             .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
-        let counter = fb.new_local(usize_ty, LocalKind::Temporary, Mutability::Mut, None, None);
+
+        // The counter must share the loop variable's type (which always
+        // matches the count's type): a `usize`-typed counter compared against
+        // an `i32` bound (or copied into an `i32` loop var) would emit
+        // mismatched IR and corrupt the stack slot via an oversized store.
+        let loop_var_ty = self
+            .typecheck
+            .def_types
+            .get(def_id)
+            .copied()
+            .unwrap_or(usize_ty);
+        let counter = fb.new_local(loop_var_ty, LocalKind::Temporary, Mutability::Mut, None, None);
         fb.push_stmt(
             block,
             MirStatement::Assign {
@@ -1981,12 +2012,6 @@ impl<'ctx> MirLowering<'ctx> {
         let header = fb.new_block();
         fb.set_terminator(block, Terminator::Goto(header));
 
-        let loop_var_ty = self
-            .typecheck
-            .def_types
-            .get(def_id)
-            .copied()
-            .unwrap_or(usize_ty);
         let loop_var = fb.new_local(
             loop_var_ty,
             LocalKind::UserVariable,
@@ -2025,6 +2050,7 @@ impl<'ctx> MirLowering<'ctx> {
 
         let body_bb = fb.new_block();
         let exit_bb = fb.new_block();
+        let continue_bb = fb.new_block();
 
         fb.set_terminator(
             header,
@@ -2035,16 +2061,18 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
+        // `continue` must run the increment before re-checking the condition,
+        // so it targets the dedicated increment block instead of the header.
         fb.loop_stack.push(LoopTargets {
             break_target: exit_bb,
-            continue_target: header,
+            continue_target: continue_bb,
         });
         let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
         fb.loop_stack.pop();
 
-        let incremented = fb.new_temp(usize_ty);
+        let incremented = fb.new_temp(loop_var_ty);
         fb.push_stmt(
-            body_end,
+            continue_bb,
             MirStatement::Assign {
                 place: Place::from_local(incremented),
                 rvalue: Rvalue::BinaryOp {
@@ -2056,14 +2084,15 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
         fb.push_stmt(
-            body_end,
+            continue_bb,
             MirStatement::Assign {
                 place: Place::from_local(counter),
                 rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented), None)),
                 source: None,
             },
         );
-        fb.set_terminator(body_end, Terminator::Goto(header));
+        fb.set_terminator(continue_bb, Terminator::Goto(header));
+        fb.join_if_open(body_end, continue_bb);
 
         exit_bb
     }
@@ -2149,6 +2178,7 @@ impl<'ctx> MirLowering<'ctx> {
 
         let body_bb = fb.new_block();
         let exit_bb = fb.new_block();
+        let continue_bb = fb.new_block();
 
         fb.set_terminator(
             header,
@@ -2194,7 +2224,7 @@ impl<'ctx> MirLowering<'ctx> {
 
         fb.loop_stack.push(LoopTargets {
             break_target: exit_bb,
-            continue_target: header,
+            continue_target: continue_bb,
         });
 
         let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
@@ -2204,7 +2234,7 @@ impl<'ctx> MirLowering<'ctx> {
         let incremented = fb.new_temp(usize_ty);
 
         fb.push_stmt(
-            body_end,
+            continue_bb,
             MirStatement::Assign {
                 place: Place::from_local(incremented),
                 rvalue: Rvalue::BinaryOp {
@@ -2217,7 +2247,7 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         fb.push_stmt(
-            body_end,
+            continue_bb,
             MirStatement::Assign {
                 place: Place::from_local(counter),
                 rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented), None)),
@@ -2225,7 +2255,8 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        fb.set_terminator(body_end, Terminator::Goto(header));
+        fb.set_terminator(continue_bb, Terminator::Goto(header));
+        fb.join_if_open(body_end, continue_bb);
 
         exit_bb
     }
