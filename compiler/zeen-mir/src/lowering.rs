@@ -1204,8 +1204,19 @@ impl<'ctx> MirLowering<'ctx> {
                     .field_resolutions
                     .get(&expr.id)
                     .expect("unresolved shit");
+                let obj_ty = self.expr_type(fb, object);
                 let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
-                (block, obj_place.field(field_def))
+
+                // Field access through a pointer auto-derefs (`sf.x` where
+                // `sf: *Foo`): the typechecker allows it, so insert the deref
+                // projection explicitly instead of projecting into the pointer.
+                let place = if matches!(self.typecheck.interner.get(obj_ty), Type::Pointer { .. }) {
+                    obj_place.deref().field(field_def)
+                } else {
+                    obj_place.field(field_def)
+                };
+
+                (block, place)
             }
 
             HirExprKind::SliceAccess { object, index } => {
