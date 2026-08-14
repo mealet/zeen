@@ -748,7 +748,7 @@ impl<'ctx> MirLowering<'ctx> {
                 }
 
                 let obj_ty = self.expr_type(fb, object);
-                let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
+                let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
 
                 let index_local = {
@@ -1186,6 +1186,34 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    /// Lower `expr` to a place, materializing it into a temp local first when
+    /// it is not an lvalue (e.g. `get_obj().field` or `*get_ptr()`). The temp
+    /// is a fresh storage cell that lives for the rest of the function, so the
+    /// returned place is valid to read, write or take the address of.
+    fn lower_expr_to_place_or_temp(
+        &mut self,
+        fb: &mut FnBuilder,
+        expr: &HirExpr,
+        block: BlockId,
+    ) -> (BlockId, Place) {
+        if self.expr_is_place(expr) {
+            self.lower_expr_to_place(fb, expr, block)
+        } else {
+            let ty = self.expr_type(fb, expr);
+            let (block, operand) = self.lower_expr_to_operand(fb, expr, block);
+            let temp = fb.new_temp(ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(temp),
+                    rvalue: Rvalue::Use(operand),
+                    source: Some(expr.source.clone()),
+                },
+            );
+            (block, Place::from_local(temp))
+        }
+    }
+
     fn lower_expr_to_place(
         &mut self,
         fb: &mut FnBuilder,
@@ -1205,7 +1233,7 @@ impl<'ctx> MirLowering<'ctx> {
                     .get(&expr.id)
                     .expect("unresolved shit");
                 let obj_ty = self.expr_type(fb, object);
-                let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
+                let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
 
                 // Field access through a pointer auto-derefs (`sf.x` where
                 // `sf: *Foo`): the typechecker allows it, so insert the deref
@@ -1221,7 +1249,7 @@ impl<'ctx> MirLowering<'ctx> {
 
             HirExprKind::SliceAccess { object, index } => {
                 let obj_ty = self.expr_type(fb, object);
-                let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
+                let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
 
                 let index_local = match index_operand {
@@ -1263,7 +1291,7 @@ impl<'ctx> MirLowering<'ctx> {
                 expr: inner,
                 op: UnaryOp::Deref,
             } => {
-                let (block, inner_place) = self.lower_expr_to_place(fb, inner, block);
+                let (block, inner_place) = self.lower_expr_to_place_or_temp(fb, inner, block);
                 (block, inner_place.deref())
             }
 
@@ -1302,7 +1330,7 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> (BlockId, Operand) {
         let obj_ty = self.expr_type(fb, object);
-        let (block, place) = self.lower_expr_to_place(fb, object, block);
+        let (block, place) = self.lower_expr_to_place_or_temp(fb, object, block);
 
         self.lower_place_receiver_operand(
             fb,
