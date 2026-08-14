@@ -1,0 +1,7 @@
+fn main() {
+  let array = [123, 321, 333, 444] ;
+
+  for (element : array) {
+    @println("{}", element);
+  }
+}
