@@ -63,6 +63,13 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
         return CoerceResult::ErrorRecovery;
     }
 
+    // Once a diagnostic has been emitted, generics are often pinned to `error`
+    // which can sit nested inside pointers/arrays/structs. Treat any error
+    // occurrence as recovery so we don't cascade more diagnostics.
+    if type_contains_error(interner, from) || type_contains_error(interner, to) {
+        return CoerceResult::ErrorRecovery;
+    }
+
     if matches!(from_ty, Type::Never) {
         return CoerceResult::NeverCoercion;
     }
@@ -159,6 +166,26 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
         }
 
         _ => CoerceResult::Fail,
+    }
+}
+
+pub fn type_contains_error(interner: &TypeInterner, ty: TypeId) -> bool {
+    match interner.get(ty) {
+        Type::Error => true,
+        Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+            type_contains_error(interner, *inner)
+        }
+        Type::Array { element, .. } | Type::Slice { element, .. } => {
+            type_contains_error(interner, *element)
+        }
+        Type::Struct { generic_args, .. } => {
+            generic_args.iter().any(|a| type_contains_error(interner, *a))
+        }
+        Type::Fn { params, ret } => {
+            params.iter().any(|p| type_contains_error(interner, *p))
+                || type_contains_error(interner, *ret)
+        }
+        _ => false,
     }
 }
 

@@ -911,6 +911,19 @@ impl<'res> TypeChecker<'res> {
             generic_bindings.insert(*generic, ty);
         }
 
+        // Methods declared inside a generic struct may reference the struct's
+        // generic parameters (e.g. `Self { .. }` or `value: T`) without listing
+        // them on the method itself. Seed those so the body sees them bound and
+        // `Self` construction keeps the struct's own instantiation.
+        if let Some(sd) = struct_def {
+            let struct_generics = self.struct_generics.get(&sd).cloned().unwrap_or_default();
+            for generic in struct_generics {
+                generic_bindings
+                    .entry(generic)
+                    .or_insert_with(|| self.result.interner.intern(Type::GenericParam(generic)));
+            }
+        }
+
         for (g, bounds) in &sig.generic_bounds {
             generic_bounds.insert(*g, bounds.clone());
         }
@@ -1896,6 +1909,17 @@ impl<'res> TypeChecker<'res> {
             .unwrap_or_default();
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+
+        // When the struct being built is the enclosing struct (`Self { .. }`),
+        // its generic parameters are already bound to the current instantiation
+        // (e.g. `Box[T]` inside a method of `Box[T]`). Seed them so field
+        // checking reports real mismatches instead of "cannot infer generic".
+        for g in &struct_generics {
+            if let Some(bound) = self.ctx.generic_binding(*g) {
+                bindings.insert(*g, bound);
+            }
+        }
+
         if !ty_generic_args.is_empty() {
             if ty_generic_args.len() != struct_generics.len() {
                 let interner = self.interner.borrow();
@@ -2206,9 +2230,74 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn default_literal(&mut self, ty: TypeId) -> TypeId {
-        match self.result.interner.get(ty) {
+        match self.result.interner.get(ty).clone() {
             Type::IntLiteral => self.result.interner.builtin(DEFAULT_INT_LITERAL),
             Type::FloatLiteral => self.result.interner.builtin(DEFAULT_FLOAT_LITERAL),
+
+            Type::Pointer { inner, is_const } => {
+                let new_inner = self.default_literal(inner);
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::ManyPointer { inner, is_const } => {
+                let new_inner = self.default_literal(inner);
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::ManyPointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Array { element, len } => {
+                let new_element = self.default_literal(element);
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Array {
+                        element: new_element,
+                        len,
+                    })
+                }
+            }
+
+            Type::Slice { element, is_const } => {
+                let new_element = self.default_literal(element);
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Slice {
+                        element: new_element,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> =
+                    generic_args.iter().map(|a| self.default_literal(*a)).collect();
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
             _ => ty,
         }
     }
@@ -2762,6 +2851,23 @@ impl<'res> TypeChecker<'res> {
             .get(&struct_def)
             .cloned()
             .unwrap_or_default();
+
+        for g in &struct_generics {
+            if !bindings.contains_key(g) {
+                let interner = self.interner.borrow();
+                let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                drop(interner);
+
+                self.report(TypeError::CannotInferGeneric {
+                    generic_name,
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                bindings.insert(*g, self.result.interner.error());
+            }
+        }
+
         let resolved_struct_args: Vec<TypeId> = struct_generics
             .iter()
             .map(|g| {
@@ -2835,9 +2941,75 @@ impl<'res> TypeChecker<'res> {
             let arg_ty = self.default_literal(arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
             self.unify_for_inference(param_ty, arg_ty, bindings, source);
+
+            // If the argument doesn't structurally match the parameter after
+            // inference (e.g. `123` for a `*T` parameter), report a real
+            // mismatch instead of silently leaving the generic unresolved and
+            // cascading into bogus errors downstream.
+            let substituted = self.substitute_generics(param_ty, bindings);
+            if !try_coerce(&mut self.result.interner, arg_ty, substituted).is_ok() {
+                self.bind_unresolved_generics(param_ty, bindings);
+                self.report(TypeError::Mismatch {
+                    expected: self.display_type(substituted).into(),
+                    found: self.display_type(arg_ty).into(),
+                    src: arg.source.src(),
+                    span: arg.source.span,
+                });
+            }
         } else {
             let substituted = self.substitute_generics(param_ty, bindings);
             self.check_expr(arg, substituted, false);
+        }
+    }
+
+    fn bind_unresolved_generics(
+        &mut self,
+        ty: TypeId,
+        bindings: &mut HashMap<DefId, TypeId>,
+    ) {
+        let mut unresolved = Vec::new();
+        self.collect_unresolved_generics(ty, bindings, &mut unresolved);
+
+        for g in unresolved {
+            bindings.insert(g, self.result.interner.error());
+        }
+    }
+
+    fn collect_unresolved_generics(
+        &self,
+        ty: TypeId,
+        bindings: &HashMap<DefId, TypeId>,
+        out: &mut Vec<DefId>,
+    ) {
+        match self.result.interner.get(ty).clone() {
+            Type::GenericParam(g) => {
+                if !bindings.contains_key(&g) {
+                    out.push(g);
+                }
+            }
+
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+                self.collect_unresolved_generics(inner, bindings, out)
+            }
+
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                self.collect_unresolved_generics(element, bindings, out)
+            }
+
+            Type::Struct { generic_args, .. } => {
+                for a in generic_args {
+                    self.collect_unresolved_generics(a, bindings, out);
+                }
+            }
+
+            Type::Fn { params, ret } => {
+                for p in params {
+                    self.collect_unresolved_generics(p, bindings, out);
+                }
+                self.collect_unresolved_generics(ret, bindings, out);
+            }
+
+            _ => {}
         }
     }
 
