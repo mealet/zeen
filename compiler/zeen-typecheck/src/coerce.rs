@@ -276,6 +276,9 @@ pub fn verify_cast(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> boo
         // [N]T -> [*]T
         (Type::Array { .. }, Type::ManyPointer { .. }) => true,
 
+        // [N]T -> *T
+        (Type::Array { .. }, Type::Pointer { .. }) => true,
+
         _ => false,
     }
 }
