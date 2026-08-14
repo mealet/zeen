@@ -849,6 +849,44 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             };
         }
 
+        // Pointer equality (`ptr == nullptr`, `p1 != p2`): LLVM's `icmp` works
+        // on pointers, so cast both to the pointer-size integer and compare as
+        // integers. The `operand_ty` check covers pointer-typed operands; the
+        // `NullPtr` checks cover the all-constant `nullptr == nullptr` case.
+        let is_pointer_cmp = matches!(
+            self.typecheck.interner.get(operand_ty),
+            Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Fn { .. }
+        ) || matches!(lhs, Operand::Constant(ConstValue::NullPtr, _))
+            || matches!(rhs, Operand::Constant(ConstValue::NullPtr, _));
+
+        if is_pointer_cmp {
+            let int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+            let l = match lhs_v {
+                BasicValueEnum::PointerValue(p) => {
+                    self.builder.build_ptr_to_int(p, int_ty, "").unwrap()
+                }
+                v => v.into_int_value(),
+            };
+            let r = match rhs_v {
+                BasicValueEnum::PointerValue(p) => {
+                    self.builder.build_ptr_to_int(p, int_ty, "").unwrap()
+                }
+                v => v.into_int_value(),
+            };
+            let b = &self.builder;
+            return match op {
+                BinaryOp::Eq => b
+                    .build_int_compare(IntPredicate::EQ, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Ne => b
+                    .build_int_compare(IntPredicate::NE, l, r, "")
+                    .unwrap()
+                    .into(),
+                _ => unreachable!("non-equality binary op on pointer operands"),
+            };
+        }
+
         let l = lhs_v.into_int_value();
         let r = rhs_v.into_int_value();
         let signed = self.is_signed(operand_ty);
