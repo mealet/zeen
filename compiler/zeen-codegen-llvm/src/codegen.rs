@@ -1911,7 +1911,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                                 }
                                 FormatSpec::Hex => "%x".to_string(),
                                 FormatSpec::Oct => "%o".to_string(),
-                                FormatSpec::Bin => "%x".to_string(),
+                                FormatSpec::Bin => "%x".to_string(), // FIXME: Use hexadecimal specifier, currently not supported
                                 FormatSpec::Float { precision } => format!("%.{precision}f"),
                             };
                             (specifier, value)
