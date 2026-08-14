@@ -3609,6 +3609,17 @@ impl<'res> TypeChecker<'res> {
         rhs: TypeId,
         source: &Source,
     ) -> TypeId {
+        use BinaryOp::*;
+
+        // Pointer arithmetic: `ptr + n` / `ptr - n` keep the pointer type
+        // (codegen scales the offset by the element size); `ptr - ptr`
+        // yields the element count as `isize`.
+        if matches!(op, Add | Sub)
+            && let Some(result_ty) = self.pointer_arith_operand(op, lhs, rhs)
+        {
+            return result_ty;
+        }
+
         let unified = if lhs == rhs {
             Some(lhs)
         } else if let Type::Pointer { .. } = self.result.interner.get(lhs)
@@ -3634,8 +3645,6 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         };
 
-        use BinaryOp::*;
-
         match op {
             Add | Sub | Mul | Div | Mod | BitAnd | BitOr | BitXor | Shl | Shr => {
                 if self.is_numeric_or_literal(operand_ty) {
@@ -3655,6 +3664,44 @@ impl<'res> TypeChecker<'res> {
             Eq | Ne => self.result.interner.builtin(BuiltinType::bool),
 
             _ => unreachable!("others must be handled before this fn"),
+        }
+    }
+
+    fn pointer_arith_operand(&mut self, op: BinaryOp, lhs: TypeId, rhs: TypeId) -> Option<TypeId> {
+        let isize = self.result.interner.builtin(BuiltinType::isize);
+
+        let is_ptr = |ty: TypeId| {
+            matches!(
+                self.result.interner.get(ty),
+                Type::Pointer { .. } | Type::ManyPointer { .. }
+            )
+        };
+        let is_int = |ty: TypeId| match self.result.interner.get(ty) {
+            Type::IntLiteral => true,
+            Type::Builtin(b) => coerce::builtin_is_integer(*b),
+            _ => false,
+        };
+
+        match op {
+            BinaryOp::Add => {
+                if is_ptr(lhs) && is_int(rhs) {
+                    Some(lhs)
+                } else if is_int(lhs) && is_ptr(rhs) {
+                    Some(rhs)
+                } else {
+                    None
+                }
+            }
+            BinaryOp::Sub => {
+                if is_ptr(lhs) && is_int(rhs) {
+                    Some(lhs)
+                } else if is_ptr(lhs) && is_ptr(rhs) {
+                    Some(isize)
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
