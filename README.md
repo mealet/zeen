@@ -12,7 +12,7 @@
   </div>
 </div>
 
-<br/><br/>
+<br/>
 
 <b>⚠️ Project is currently under active development and not ready to use.</b>
 
