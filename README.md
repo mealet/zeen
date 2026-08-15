@@ -15,7 +15,8 @@
 
 <br/>
 
-<b>⚠️ Project is currently under active development and not ready to use.</b>
+> [!WARNING]
+> **Project is currently under active development and not ready to use**
 
 ## Ideas
 Ideas for the future language ecosystem:
