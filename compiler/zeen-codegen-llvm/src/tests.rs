@@ -176,9 +176,75 @@ fn panic_emits_runtime_call_and_unreachable() {
     let ir = compile(&fx, CompilationMode::Debug);
 
     assert!(ir.contains("@printf"), "{ir}");
-    assert!(ir.contains("@exit"), "{ir}");
+    assert!(ir.contains("call void @zeen.panic_stack()"), "{ir}");
+    assert!(ir.contains("@zeen.panic.frames"), "{ir}");
+    assert!(ir.contains("@zeen.panic.depth"), "{ir}");
+    assert!(ir.contains("  at %s"), "{ir}");
+    assert!(ir.contains("thread \\22boom\\22 panicked"), "{ir}");
     assert!(ir.contains("boom"), "{ir}");
     assert!(ir.contains("unreachable"), "{ir}");
+}
+
+#[test]
+fn panic_release_prints_location_without_stack() {
+    let mut fx = Fixture::new();
+    let panic_def = fx.def("boom", DefKind::Function);
+    let void = fx.void();
+    let mut f = fx.fn_builder("boom", panic_def, void);
+    let dest = f.temp(void);
+    f.entry("bb0");
+    f.panic("boom", vec![], dest);
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Release);
+
+    assert!(!ir.contains("zeen.panic_stack"), "{ir}");
+    assert!(!ir.contains("@zeen.panic.frames"), "{ir}");
+    assert!(ir.contains("@exit"), "{ir}");
+    assert!(
+        ir.contains("thread \\22boom\\22 panicked at test.zn:1"),
+        "{ir}"
+    );
+    assert!(ir.contains("boom"), "{ir}");
+}
+
+#[test]
+fn debug_panic_prologue_pushes_frame_into_shadow_stack() {
+    let mut fx = Fixture::new();
+    let foo_def = fx.def("foo", DefKind::Function);
+    let void = fx.void();
+    let mut f = fx.fn_builder("foo", foo_def, void);
+    let dest = f.temp(void);
+    f.entry("bb0");
+    f.panic("boom", vec![], dest);
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(
+        ir.contains("getelementptr inbounds [256 x ptr], ptr @zeen.panic.frames"),
+        "{ir}"
+    );
+    assert!(ir.contains("store ptr @str."), "{ir}");
+    assert!(ir.contains("add i32 %panic.depth, 1"), "{ir}");
+}
+
+#[test]
+fn debug_drop_impl_skips_panic_frame() {
+    let mut fx = Fixture::new();
+    let drop_def = fx.def("drop", DefKind::Function);
+    let void = fx.void();
+    let mut f = fx.fn_builder("drop", drop_def, void);
+    f.func_mut().is_drop_impl = true;
+    let dest = f.temp(void);
+    f.entry("bb0");
+    f.panic("boom", vec![], dest);
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(!ir.contains("add i32 %panic.depth, 1"), "{ir}");
+    assert!(ir.contains("@zeen.panic.frames"), "{ir}");
 }
 
 #[test]
@@ -425,8 +491,8 @@ fn const_string_global_is_deduplicated() {
 
     let ir = compile(&fx, CompilationMode::Debug);
 
-    assert!(ir.contains("@str.0"), "{ir}");
-    assert!(!ir.contains("@str.1"), "{ir}");
+    // The `same` string must be emitted as exactly one global.
+    assert_eq!(ir.matches("c\"same\\00\"").count(), 1, "{ir}");
 }
 
 fn const_null() -> Operand {

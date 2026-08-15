@@ -413,6 +413,10 @@ impl<'f> FnBuilder<'f> {
         self.set_terminator(terminator);
     }
 
+    pub fn func_mut(&mut self) -> &mut MirFunction {
+        &mut self.func
+    }
+
     pub fn finish(mut self) -> MirFunctionId {
         assert!(
             !self.func.blocks.is_empty(),
