@@ -1545,6 +1545,7 @@ impl<'ctx> MirLowering<'ctx> {
                     len_operand,
                     Operand::Copy(Place::from_local(index_local), None),
                 ],
+                arg_types: vec![usize_ty, usize_ty],
                 destination: Place::from_local(dest),
                 target: None,
                 source,
@@ -1573,10 +1574,12 @@ impl<'ctx> MirLowering<'ctx> {
 
         let mut block = block;
         let mut operands = Vec::with_capacity(value_exprs.len());
+        let mut arg_types = Vec::with_capacity(value_exprs.len());
         for arg in value_exprs {
             let (b, op) = self.lower_expr_to_operand(fb, arg, block);
             block = b;
             operands.push(op);
+            arg_types.push(self.expr_type(fb, arg));
         }
 
         let result_ty = self
@@ -1597,6 +1600,7 @@ impl<'ctx> MirLowering<'ctx> {
                 kind,
                 format_chunks,
                 args: operands,
+                arg_types,
                 destination: Place::from_local(dest),
                 target: if is_diverging { None } else { Some(next) },
                 source: None,
@@ -1630,6 +1634,7 @@ impl<'ctx> MirLowering<'ctx> {
                 kind,
                 format_chunks: None,
                 args: Vec::new(),
+                arg_types: Vec::new(),
                 destination: Place::from_local(dest),
                 target: None,
                 source: None,

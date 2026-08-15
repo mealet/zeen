@@ -191,7 +191,7 @@ fn print_emits_printf_call() {
     f.entry("bb0");
     f.block("bb1");
     f.set_current("bb0");
-    f.println("hello, zeen", vec![], dest, Some("bb1"));
+    f.println("hello, zeen", vec![], Vec::new(), dest, Some("bb1"));
     f.set_current("bb1");
     f.ret_void();
     f.finish();
@@ -203,6 +203,78 @@ fn print_emits_printf_call() {
 }
 
 #[test]
+fn enum_display_and_debug() {
+    let mut fx = Fixture::new();
+    let color_def = fx.def("Color", DefKind::Enum);
+    let red = fx.def("Red", DefKind::EnumVariant);
+    let green = fx.def("Green", DefKind::EnumVariant);
+    let blue = fx.def("Blue", DefKind::EnumVariant);
+    fx.typecheck
+        .enum_variants
+        .insert(color_def, vec![red, green, blue]);
+    let color_ty = fx.ty(Type::Enum { def_id: color_def });
+
+    let print_def = fx.def("print", DefKind::Function);
+    let void = fx.void();
+    let mut f = fx.fn_builder("print", print_def, void);
+    let dest = f.temp(void);
+    f.entry("bb0");
+    f.block("bb1");
+    f.set_current("bb0");
+    f.format(
+        vec![FormatChunk::Arg(FormatSpec::Display)],
+        vec![const_int(0)],
+        vec![color_ty],
+        dest,
+        Some("bb1"),
+    );
+    f.set_current("bb1");
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("enum.tbl.0"), "{ir}");
+    assert!(ir.contains("@str."), "{ir}");
+    assert!(ir.contains("Red"), "{ir}");
+    assert!(ir.contains("Green"), "{ir}");
+    assert!(ir.contains("Blue"), "{ir}");
+    assert!(ir.contains("%s"), "{ir}");
+}
+
+#[test]
+fn enum_debug_prints_enum_name() {
+    let mut fx = Fixture::new();
+    let color_def = fx.def("Color", DefKind::Enum);
+    let red = fx.def("Red", DefKind::EnumVariant);
+    fx.typecheck.enum_variants.insert(color_def, vec![red]);
+    let color_ty = fx.ty(Type::Enum { def_id: color_def });
+
+    let print_def = fx.def("print", DefKind::Function);
+    let void = fx.void();
+    let mut f = fx.fn_builder("print", print_def, void);
+    let dest = f.temp(void);
+    f.entry("bb0");
+    f.block("bb1");
+    f.set_current("bb0");
+    f.format(
+        vec![FormatChunk::Arg(FormatSpec::Debug)],
+        vec![const_int(0)],
+        vec![color_ty],
+        dest,
+        Some("bb1"),
+    );
+    f.set_current("bb1");
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("Color.%s"), "{ir}");
+    assert!(ir.contains("Red"), "{ir}");
+}
+
+#[test]
 fn format_returns_a_slice() {
     let mut fx = Fixture::new();
     let fmt_def = fx.def("fmt", DefKind::Function);
@@ -210,6 +282,7 @@ fn format_returns_a_slice() {
 
     let char = fx.char();
     let slice = fx.slice(char);
+    let i32 = fx.i32();
 
     // Register the synthetic `[]T` layout: `{ ptr: [*]T, len: usize }`.
     let ptr_ty = fx.ty(Type::ManyPointer {
@@ -246,6 +319,7 @@ fn format_returns_a_slice() {
             FormatChunk::Arg(FormatSpec::Display),
         ],
         vec![const_int(42)],
+        vec![i32],
         dest,
         Some("bb1"),
     );

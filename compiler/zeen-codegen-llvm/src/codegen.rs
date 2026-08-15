@@ -90,6 +90,8 @@ pub struct CodeGen<'ctx, 'prog> {
     struct_types: HashMap<TypeId, inkwell::types::StructType<'ctx>>,
     strings: HashMap<String, GlobalValue<'ctx>>,
     str_counter: u32,
+    enum_tables: HashMap<DefId, GlobalValue<'ctx>>,
+    enum_table_counter: u32,
 
     // per-function state
     locals: HashMap<LocalId, PointerValue<'ctx>>,
@@ -164,6 +166,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             struct_types: HashMap::new(),
             strings: HashMap::new(),
             str_counter: 0,
+            enum_tables: HashMap::new(),
+            enum_table_counter: 0,
             locals: HashMap::new(),
             blocks: HashMap::new(),
         })
@@ -1486,6 +1490,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 kind,
                 format_chunks,
                 args,
+                arg_types,
                 destination,
                 target,
                 ..
@@ -1494,6 +1499,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     *kind,
                     format_chunks.as_deref(),
                     args,
+                    arg_types,
                     destination,
                     *target,
                     func,
@@ -1607,6 +1613,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         kind: HirMacroKind,
         chunks: Option<&[FormatChunk]>,
         args: &[Operand],
+        arg_types: &[TypeId],
         destination: &Place,
         target: Option<BlockId>,
         func: &MirFunction,
@@ -1614,7 +1621,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     ) {
         match kind {
             HirMacroKind::Print | HirMacroKind::Println => {
-                let (format, values) = self.build_format(chunks.unwrap_or(&[]), args, func);
+                let (format, values) =
+                    self.build_format(chunks.unwrap_or(&[]), args, arg_types, func);
                 let format = if kind == HirMacroKind::Println {
                     format!("{format}\n")
                 } else {
@@ -1643,7 +1651,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             HirMacroKind::Panic => {
                 let default_chunks = [FormatChunk::Literal("panic".to_string())];
                 let chunks = chunks.unwrap_or(&default_chunks);
-                let (format, values) = self.build_format(chunks, args, func);
+                let (format, values) = self.build_format(chunks, args, arg_types, func);
 
                 let printf = self.get_or_declare_runtime_fn(
                     "printf",
@@ -1682,7 +1690,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
 
             HirMacroKind::Format => {
-                let (format, values) = self.build_format(chunks.unwrap_or(&[]), args, func);
+                let (format, values) =
+                    self.build_format(chunks.unwrap_or(&[]), args, arg_types, func);
 
                 let fmt_ptr = self.get_str_global(&format).as_pointer_value();
                 let null_ptr = self.context.ptr_type(AddressSpace::default()).const_null();
@@ -1867,11 +1876,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         &mut self,
         chunks: &[FormatChunk],
         args: &[Operand],
+        arg_types: &[TypeId],
         func: &MirFunction,
     ) -> (String, Vec<BasicValueEnum<'ctx>>) {
         let mut format = String::new();
         let mut values: Vec<BasicValueEnum<'ctx>> = Vec::new();
         let mut arg_iter = args.iter();
+        let mut ty_iter = arg_types.iter();
 
         for chunk in chunks {
             match chunk {
@@ -1880,53 +1891,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     let Some(operand) = arg_iter.next() else {
                         break;
                     };
+                    let arg_ty = ty_iter.next().copied();
 
-                    let (specifier, value) = match (operand, spec) {
-                        (Operand::Constant(c, _), _) => {
-                            let value = self.const_value(c, None, func);
-                            let specifier = match (c, spec) {
-                                (ConstValue::Float(_), FormatSpec::Float { precision }) => {
-                                    format!("%.{precision}f")
-                                }
-                                (ConstValue::Float(_), _) => "%f".to_string(),
-                                (ConstValue::Str(_), _) => "%s".to_string(),
-                                (ConstValue::Char(_), _) => "%c".to_string(),
-                                (ConstValue::Bool(_), _) => "%d".to_string(),
-                                (ConstValue::Int(_), FormatSpec::Hex) => "%x".to_string(),
-                                (ConstValue::Int(_), FormatSpec::Oct) => "%o".to_string(),
-                                (ConstValue::Int(_), FormatSpec::Bin) => "%x".to_string(),
-                                _ => "%d".to_string(),
-                            };
-                            (specifier, value)
-                        }
-                        _ => {
-                            let ty = self.operand_type(operand, func).expect("typed format arg");
-                            let value = self.operand_value(operand, Some(ty), func);
-                            // A slice-typed value is a `{ ptr, len }` fat
-                            // pointer; printf's `%s` needs just the data
-                            // pointer.
-                            let value = if matches!(
-                                self.typecheck.interner.get(ty).clone(),
-                                Type::Slice { .. }
-                            ) {
-                                self.builder
-                                    .build_extract_value(value.into_struct_value(), 0, "slice.ptr")
-                                    .unwrap()
-                            } else {
-                                value
-                            };
-                            let specifier = match spec {
-                                FormatSpec::Display | FormatSpec::Debug => {
-                                    self.display_specifier(ty)
-                                }
-                                FormatSpec::Hex => "%x".to_string(),
-                                FormatSpec::Oct => "%o".to_string(),
-                                FormatSpec::Bin => "%x".to_string(), // FIXME: Use hexadecimal specifier, currently not supported
-                                FormatSpec::Float { precision } => format!("%.{precision}f"),
-                            };
-                            (specifier, value)
-                        }
-                    };
+                    let (specifier, value) = self.format_arg_value(operand, arg_ty, *spec, func);
 
                     format.push_str(&specifier);
                     values.push(value);
@@ -1937,6 +1904,81 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         (format, values)
     }
 
+    /// Renders a single format argument into a printf specifier + value.
+    ///
+    /// Enum-typed args print their variant name (Display) or `EnumName.Variant`
+    /// (Debug) by indexing a per-enum table of variant-name strings with the
+    /// discriminant, instead of dumping the raw discriminant integer.
+    fn format_arg_value(
+        &mut self,
+        operand: &Operand,
+        arg_ty: Option<TypeId>,
+        spec: FormatSpec,
+        func: &MirFunction,
+    ) -> (String, BasicValueEnum<'ctx>) {
+        if let Some(Type::Enum { def_id }) =
+            arg_ty.map(|ty| self.typecheck.interner.get(ty).clone())
+        {
+            let disc = match operand {
+                Operand::Constant(ConstValue::Int(n), _) => {
+                    self.context.i32_type().const_int(*n as u64, false)
+                }
+                _ => self.operand_value(operand, arg_ty, func).into_int_value(),
+            };
+            let name_ptr = self.enum_variant_name_ptr(def_id, disc);
+            let specifier = match spec {
+                FormatSpec::Debug => format!("{}.%s", self.enum_name(def_id)),
+                _ => "%s".to_string(),
+            };
+            return (specifier, name_ptr.into());
+        }
+
+        let (specifier, value) = match (operand, spec) {
+            (Operand::Constant(c, _), _) => {
+                let value = self.const_value(c, None, func);
+                let specifier = match (c, spec) {
+                    (ConstValue::Float(_), FormatSpec::Float { precision }) => {
+                        format!("%.{precision}f")
+                    }
+                    (ConstValue::Float(_), _) => "%f".to_string(),
+                    (ConstValue::Str(_), _) => "%s".to_string(),
+                    (ConstValue::Char(_), _) => "%c".to_string(),
+                    (ConstValue::Bool(_), _) => "%d".to_string(),
+                    (ConstValue::Int(_), FormatSpec::Hex) => "%x".to_string(),
+                    (ConstValue::Int(_), FormatSpec::Oct) => "%o".to_string(),
+                    (ConstValue::Int(_), FormatSpec::Bin) => "%x".to_string(),
+                    _ => "%d".to_string(),
+                };
+                (specifier, value)
+            }
+            _ => {
+                let ty = self.operand_type(operand, func).expect("typed format arg");
+                let value = self.operand_value(operand, Some(ty), func);
+                // A slice-typed value is a `{ ptr, len }` fat
+                // pointer; printf's `%s` needs just the data
+                // pointer.
+                let value = if matches!(self.typecheck.interner.get(ty).clone(), Type::Slice { .. })
+                {
+                    self.builder
+                        .build_extract_value(value.into_struct_value(), 0, "slice.ptr")
+                        .unwrap()
+                } else {
+                    value
+                };
+                let specifier = match spec {
+                    FormatSpec::Display | FormatSpec::Debug => self.display_specifier(ty),
+                    FormatSpec::Hex => "%x".to_string(),
+                    FormatSpec::Oct => "%o".to_string(),
+                    FormatSpec::Bin => "%x".to_string(), // FIXME: Use hexadecimal specifier, currently not supported
+                    FormatSpec::Float { precision } => format!("%.{precision}f"),
+                };
+                (specifier, value)
+            }
+        };
+
+        (specifier, value)
+    }
+
     fn display_specifier(&self, ty: TypeId) -> String {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral => "%f".into(),
@@ -1944,6 +1986,74 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Slice { .. } => "%s".into(),
             _ => "%d".into(),
         }
+    }
+
+    fn enum_name(&self, enum_def: DefId) -> String {
+        self.resolution
+            .defs
+            .get(&enum_def)
+            .map(|info| self.resolve_spur(info.name))
+            .unwrap_or_default()
+    }
+
+    fn enum_variant_name_ptr(
+        &mut self,
+        enum_def: DefId,
+        disc: IntValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let table = self.enum_table_global(enum_def);
+        let table_ty = match table.get_value_type() {
+            AnyTypeEnum::ArrayType(t) => t,
+            _ => unreachable!("enum table must be an array global"),
+        };
+        let size_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+        let idx = self.builder.build_int_s_extend(disc, size_ty, "").unwrap();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    table_ty,
+                    table.as_pointer_value(),
+                    &[self.context.i32_type().const_zero(), idx],
+                    "",
+                )
+                .unwrap()
+        };
+        self.builder
+            .build_load(self.context.ptr_type(AddressSpace::default()), elem_ptr, "")
+            .unwrap()
+            .into_pointer_value()
+    }
+
+    fn enum_table_global(&mut self, enum_def: DefId) -> GlobalValue<'ctx> {
+        if let Some(table) = self.enum_tables.get(&enum_def) {
+            return *table;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let variants = self.typecheck.enum_variants.get(&enum_def).cloned();
+        let names: Vec<PointerValue<'ctx>> = variants
+            .into_iter()
+            .flatten()
+            .map(|variant_def| {
+                let name = self
+                    .resolution
+                    .defs
+                    .get(&variant_def)
+                    .map(|info| self.resolve_spur(info.name))
+                    .unwrap_or_default();
+                self.get_str_global(&name).as_pointer_value()
+            })
+            .collect();
+
+        let arr_ty = ptr_ty.array_type(names.len() as u32);
+        let name = format!("enum.tbl.{}", self.enum_table_counter);
+        self.enum_table_counter += 1;
+        let table = self.module.add_global(arr_ty, None, &name);
+        table.set_linkage(inkwell::module::Linkage::Internal);
+        table.set_initializer(&ptr_ty.const_array(&names));
+
+        self.enum_tables.insert(enum_def, table);
+        table
     }
 
     fn store_place(&mut self, place: &Place, value: BasicValueEnum<'ctx>, func: &MirFunction) {
