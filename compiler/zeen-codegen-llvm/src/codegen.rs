@@ -758,6 +758,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .const_null()
                 .into(),
 
+            ConstValue::Fn(id) => self.functions[id]
+                .as_global_value()
+                .as_pointer_value()
+                .into(),
+
             // A void value is only ever produced as the placeholder result of
             // an expression with no value (e.g. an `if` without an `else`).
             // Valid programs never store it, so a throwaway zero is enough.
@@ -1189,6 +1194,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         is_const: true,
                     },
                     ConstValue::NullPtr => Type::Pointer {
+                        inner: TypeId(0),
+                        is_const: false,
+                    },
+                    ConstValue::Fn(_) => Type::Pointer {
                         inner: TypeId(0),
                         is_const: false,
                     },
@@ -1812,6 +1821,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     ConstValue::Char(_) => "%c".to_string(),
                     ConstValue::Bool(_) => "%d".to_string(),
                     ConstValue::NullPtr => "%s".to_string(),
+                    ConstValue::Fn(_) => "%s".to_string(),
                     ConstValue::Void => unreachable!("cannot @dbg a void constant"),
                     ConstValue::Int(_) => "%d".to_string(),
                 };

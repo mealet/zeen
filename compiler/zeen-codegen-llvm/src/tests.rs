@@ -119,6 +119,50 @@ fn no_main_produces_no_wrapper() {
 }
 
 #[test]
+fn indirect_call_through_fn_local_with_fn_constant() {
+    let mut fx = Fixture::new();
+    let foo_def = fx.def("foo", DefKind::Function);
+    let i32 = fx.i32();
+    let fn_ty = fx.ty(Type::Fn {
+        params: Vec::new(),
+        ret: i32,
+    });
+
+    let mut foo = fx.fn_builder("foo", foo_def, i32);
+    let ret = foo.temp(i32);
+    foo.entry("bb0");
+    foo.assign(place(ret), use_const(const_int(7)));
+    foo.ret(copy_of(ret));
+    let foo_id = foo.finish();
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut main = fx.fn_builder("main", main_def, i32);
+    let indirect = main.local("indirect", fn_ty);
+    let result = main.temp(i32);
+    main.entry("bb0");
+    main.assign(
+        place(indirect),
+        Rvalue::Use(Operand::Constant(ConstValue::Fn(foo_id), None)),
+    );
+    main.block("bb1");
+    main.set_current("bb0");
+    main.call(
+        CallTarget::Indirect(copy_of(indirect)),
+        vec![],
+        result,
+        Some("bb1"),
+    );
+    main.set_current("bb1");
+    main.ret(copy_of(result));
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("define i32 @foo()"), "{ir}");
+    assert!(ir.contains("call i32 %"), "{ir}");
+}
+
+#[test]
 fn panic_emits_runtime_call_and_unreachable() {
     let mut fx = Fixture::new();
     let panic_def = fx.def("boom", DefKind::Function);
