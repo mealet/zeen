@@ -71,6 +71,11 @@ fn source_line(source: &str, offset: usize) -> usize {
         .unwrap_or(0)
 }
 
+/// Depth of the fixed shadow-stack buffer used to record the call stack for
+/// Debug panics. Each active function holds one `ptr` slot pointing at its
+/// pre-formatted `module:line "function"` string.
+const PANIC_STACK_DEPTH: u32 = 256;
+
 pub struct CodeGen<'ctx, 'prog> {
     context: &'ctx Context,
     builder: Builder<'ctx>,
@@ -194,11 +199,17 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     /// Generates IR for the whole MIR program
     pub fn generate(&mut self) -> Result<(), CodegenError> {
+        if self.options.mode == CompilationMode::Debug {
+            self.emit_panic_stack_globals();
+        }
         self.register_struct_layouts();
         self.declare_externs();
         self.declare_functions();
         self.emit_function_bodies();
         self.emit_main_wrapper();
+        if self.options.mode == CompilationMode::Debug {
+            self.emit_panic_runtime();
+        }
 
         if self.options.mode == CompilationMode::Release {
             self.run_optimization_passes()?;
@@ -342,6 +353,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         self.locals.clear();
         self.blocks.clear();
         self.builder.position_at_end(entry);
+
+        self.emit_panic_prologue(func, id);
 
         for (idx, decl) in func.locals.iter().enumerate() {
             if self.is_void_ty(decl.ty) {
@@ -1508,6 +1521,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
 
             Terminator::Return(operand) => {
+                self.emit_panic_epilogue(func);
                 if matches!(operand, Operand::Constant(ConstValue::Void, _)) {
                     self.builder.build_return(None).unwrap();
                 } else {
@@ -1666,26 +1680,44 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     false,
                 );
 
-                let location = self.panic_location(func, fn_id);
-                let call_args: Vec<BasicMetadataValueEnum<'ctx>> =
-                    if self.options.mode == CompilationMode::Debug {
-                        let format = format!("*> thread panicked at {location}:\n{format}\n");
-                        let mut args = vec![self.get_str_global(&format).as_pointer_value().into()];
-                        args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
-                        args
-                    } else {
-                        let msg = self.get_str_global(&format!("{location}\n"));
-                        vec![msg.as_pointer_value().into()]
-                    };
+                if self.options.mode == CompilationMode::Debug {
+                    // Print the panic header (with the panicking function's
+                    // name) and message, then dump the shadow-stack call frames
+                    // (see `emit_panic_runtime`) and abort. The panicking
+                    // function's own frame is still on the stack because the
+                    // prologue frame is only popped by a `Return`.
+                    let (fn_name, ..) = self.panic_parts(func, fn_id);
+                    let message = format!("*> thread \"{fn_name}\" panicked:\n{format}\n");
+                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                        vec![self.get_str_global(&message).as_pointer_value().into()];
+                    call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
+                    self.builder.build_call(printf, &call_args, "").unwrap();
 
-                self.builder.build_call(printf, &call_args, "").unwrap();
-                self.builder
-                    .build_call(
-                        exit,
-                        &[self.context.i32_type().const_int(1, false).into()],
-                        "",
-                    )
-                    .unwrap();
+                    let panic_stack = self.get_or_declare_runtime_fn(
+                        "zeen.panic_stack",
+                        self.context.void_type().into(),
+                        &[],
+                        false,
+                    );
+                    self.builder.build_call(panic_stack, &[], "").unwrap();
+                } else {
+                    // Release: the panic site is known at compile time, so
+                    // print `module:line` inline with the message and exit.
+                    let (fn_name, module, line) = self.panic_parts(func, fn_id);
+                    let message =
+                        format!("*> thread \"{fn_name}\" panicked at {module}:{line}:\n{format}\n");
+                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                        vec![self.get_str_global(&message).as_pointer_value().into()];
+                    call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
+                    self.builder.build_call(printf, &call_args, "").unwrap();
+                    self.builder
+                        .build_call(
+                            exit,
+                            &[self.context.i32_type().const_int(1, false).into()],
+                            "",
+                        )
+                        .unwrap();
+                }
                 self.builder.build_unreachable().unwrap();
             }
 
@@ -1850,9 +1882,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Builds a `module:line "function"` location string for the current panic
-    /// site, used in both debug and release panic messages.
-    fn panic_location(&self, func: &MirFunction, fn_id: MirFunctionId) -> String {
+    /// Returns the function name, module and definition line of `func`, used
+    /// to build panic headers and shadow-stack frame strings.
+    fn panic_parts(&self, func: &MirFunction, fn_id: MirFunctionId) -> (String, String, usize) {
         let fn_name = self
             .program
             .function_names
@@ -1860,14 +1892,237 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .cloned()
             .unwrap_or_else(|| format!("fn{}", fn_id.0));
 
-        let Some(info) = self.resolution.defs.get(&func.source_def) else {
-            return format!("? \"{fn_name}\"");
+        let (module, line) = match self.resolution.defs.get(&func.source_def) {
+            Some(info) => {
+                let source = &info.span;
+                (
+                    source.src().name().to_string(),
+                    source_line(source.src().inner(), source.span.offset()),
+                )
+            }
+            None => ("?".to_string(), 0),
         };
 
-        let source = &info.span;
-        let module = source.src().name().to_string();
-        let line = source_line(source.src().inner(), source.span.offset());
+        (fn_name, module, line)
+    }
+
+    /// Builds a `module:line "function"` location string for the current panic
+    /// site, used in both debug and release panic messages.
+    fn panic_location(&self, func: &MirFunction, fn_id: MirFunctionId) -> String {
+        let (fn_name, module, line) = self.panic_parts(func, fn_id);
         format!("{module}:{line} \"{fn_name}\"")
+    }
+
+    /// Creates the shadow-stack globals used by Debug panics: a fixed buffer of
+    /// frame slots and a depth counter. Emitted eagerly in Debug so that every
+    /// function prologue can reference them.
+    fn emit_panic_stack_globals(&mut self) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let arr_ty = ptr_ty.array_type(PANIC_STACK_DEPTH);
+
+        let frames = self.module.add_global(arr_ty, None, "zeen.panic.frames");
+        frames.set_linkage(inkwell::module::Linkage::Internal);
+        frames.set_initializer(&arr_ty.const_zero());
+
+        let depth = self
+            .module
+            .add_global(self.context.i32_type(), None, "zeen.panic.depth");
+        depth.set_linkage(inkwell::module::Linkage::Internal);
+        depth.set_initializer(&self.context.i32_type().const_zero());
+    }
+
+    /// Pushes the current function's `module:line "function"` frame onto the
+    /// shadow stack. Skipped for generated `drop` functions (their frame would
+    /// only add noise) and outside Debug mode.
+    fn emit_panic_prologue(&mut self, func: &MirFunction, fn_id: MirFunctionId) {
+        if self.options.mode != CompilationMode::Debug || func.is_drop_impl {
+            return;
+        }
+        let Some(frames) = self.module.get_global("zeen.panic.frames") else {
+            return;
+        };
+        let depth = self.module.get_global("zeen.panic.depth").unwrap();
+
+        let i32_ty = self.context.i32_type();
+        let size_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+        let arr_ty = match frames.get_value_type() {
+            AnyTypeEnum::ArrayType(t) => t,
+            _ => unreachable!("panic frames must be an array global"),
+        };
+
+        let cur = self
+            .builder
+            .build_load(i32_ty, depth.as_pointer_value(), "panic.depth")
+            .unwrap()
+            .into_int_value();
+        let idx = self.builder.build_int_s_extend(cur, size_ty, "").unwrap();
+        let frame_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    arr_ty,
+                    frames.as_pointer_value(),
+                    &[size_ty.const_zero(), idx],
+                    "",
+                )
+                .unwrap()
+        };
+
+        let frame_str = self
+            .get_str_global(&self.panic_location(func, fn_id))
+            .as_pointer_value();
+        self.builder.build_store(frame_ptr, frame_str).unwrap();
+
+        let next = self
+            .builder
+            .build_int_add(cur, i32_ty.const_int(1, false), "")
+            .unwrap();
+        self.builder
+            .build_store(depth.as_pointer_value(), next)
+            .unwrap();
+    }
+
+    /// Pops the current function's shadow-stack frame (undoes the prologue).
+    fn emit_panic_epilogue(&mut self, func: &MirFunction) {
+        if self.options.mode != CompilationMode::Debug || func.is_drop_impl {
+            return;
+        }
+        let Some(depth) = self.module.get_global("zeen.panic.depth") else {
+            return;
+        };
+
+        let i32_ty = self.context.i32_type();
+        let cur = self
+            .builder
+            .build_load(i32_ty, depth.as_pointer_value(), "panic.depth")
+            .unwrap()
+            .into_int_value();
+        let prev = self
+            .builder
+            .build_int_sub(cur, i32_ty.const_int(1, false), "")
+            .unwrap();
+        self.builder
+            .build_store(depth.as_pointer_value(), prev)
+            .unwrap();
+    }
+
+    /// Emits the `zeen.panic_stack` runtime: prints each recorded frame
+    /// (`  at module:line "function"`, innermost first) and aborts. Called after
+    /// the panic message has been printed. Self-contained in the module so the
+    /// binary only links against libc.
+    fn emit_panic_runtime(&mut self) {
+        let Some(frames) = self.module.get_global("zeen.panic.frames") else {
+            return;
+        };
+        let depth_global = self.module.get_global("zeen.panic.depth").unwrap();
+
+        let i32_ty = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let size_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+        let arr_ty = match frames.get_value_type() {
+            AnyTypeEnum::ArrayType(t) => t,
+            _ => unreachable!("panic frames must be an array global"),
+        };
+
+        let printf = self.get_or_declare_runtime_fn(
+            "printf",
+            self.context.i32_type().into(),
+            &[ptr_ty.into()],
+            true,
+        );
+        let exit = self.get_or_declare_runtime_fn(
+            "exit",
+            self.context.void_type().into(),
+            &[i32_ty.into()],
+            false,
+        );
+        let frame_fmt = self.get_str_global("  at %s\n").as_pointer_value();
+
+        let fn_type = self.context.void_type().fn_type(&[], false);
+        // Reuse the `zeen.panic_stack` declaration created at panic sites so
+        // the call and the definition resolve to the same symbol.
+        let f = match self.module.get_function("zeen.panic_stack") {
+            Some(f) => f,
+            None => self.module.add_function(
+                "zeen.panic_stack",
+                fn_type,
+                Some(inkwell::module::Linkage::Internal),
+            ),
+        };
+
+        let entry = self.context.append_basic_block(f, "entry");
+        let header = self.context.append_basic_block(f, "header");
+        let body = self.context.append_basic_block(f, "body");
+        let done = self.context.append_basic_block(f, "done");
+
+        self.builder.position_at_end(entry);
+        let depth = self
+            .builder
+            .build_load(i32_ty, depth_global.as_pointer_value(), "panic.depth")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_unconditional_branch(header).unwrap();
+
+        self.builder.position_at_end(header);
+        let i = self.builder.build_phi(i32_ty, "frame").unwrap();
+        let zero = i32_ty.const_zero();
+        let one = i32_ty.const_int(1, false);
+        let cond = self
+            .builder
+            .build_int_compare(
+                IntPredicate::SLT,
+                i.as_basic_value().into_int_value(),
+                depth,
+                "",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body, done)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let rev = self
+            .builder
+            .build_int_sub(
+                self.builder.build_int_sub(depth, one, "").unwrap(),
+                i.as_basic_value().into_int_value(),
+                "",
+            )
+            .unwrap();
+        let idx = self.builder.build_int_s_extend(rev, size_ty, "").unwrap();
+        let frame_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    arr_ty,
+                    frames.as_pointer_value(),
+                    &[size_ty.const_zero(), idx],
+                    "",
+                )
+                .unwrap()
+        };
+        let frame_str = self
+            .builder
+            .build_load(ptr_ty, frame_ptr, "panic.frame")
+            .unwrap()
+            .into_pointer_value();
+        self.builder
+            .build_call(printf, &[frame_fmt.into(), frame_str.into()], "")
+            .unwrap();
+        let next = self
+            .builder
+            .build_int_add(i.as_basic_value().into_int_value(), one, "")
+            .unwrap();
+        self.builder.build_unconditional_branch(header).unwrap();
+        i.add_incoming(&[(&zero, entry), (&next, body)]);
+
+        self.builder.position_at_end(done);
+        self.builder.build_call(exit, &[one.into()], "").unwrap();
+        self.builder.build_unreachable().unwrap();
+
+        assert!(
+            f.verify(false),
+            "LLVM failed to verify panic stack runtime:\n{}",
+            self.print_ir()
+        );
     }
 
     /// Builds a printf-style format string and the converted argument values
