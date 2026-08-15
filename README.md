@@ -13,9 +13,10 @@
   </div>
 </div>
 
-<br/><br/>
+<br/>
 
-<b>⚠️ Project is currently under active development and not ready to use.</b>
+> [!WARNING]
+> **Project is currently under active development and not ready to use**
 
 ## License
 Project is licensed under the Apache 2.0 license. See LICENSE file for more information.
