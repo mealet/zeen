@@ -298,6 +298,9 @@ pub enum Terminator {
         kind: HirMacroKind,
         format_chunks: Option<Vec<FormatChunk>>,
         args: Vec<Operand>,
+        /// Types of the macro arguments, needed by codegen to pick the right
+        /// rendering for format args (e.g. enum variant names).
+        arg_types: Vec<TypeId>,
         destination: Place,
         target: Option<BlockId>,
         /// Source of the macro call expression, used for diagnostics on arg reads.
