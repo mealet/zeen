@@ -9,8 +9,8 @@ use miette::{Diagnostic, Severity};
 use smol_str::SmolStr;
 use zeen_ast::Source;
 use zeen_mir::{
-    BasicBlock, BlockId, LocalId, LocalKind, MirFunctionId, MirProgram, MirStatement, Operand,
-    Place, PlaceElem, Rvalue, Terminator,
+    BasicBlock, BlockId, CallTarget, LocalId, LocalKind, MirFunctionId, MirProgram, MirStatement,
+    Operand, Place, PlaceElem, Rvalue, Terminator,
 };
 use zeen_resolve::{DefId, ResolutionResult};
 use zeen_typecheck::result::TypeCheckResult;
@@ -268,12 +268,22 @@ impl<'ctx> DataFlow<'ctx> {
                 self.current_source = None;
             }
             Terminator::Call {
+                func,
                 args,
                 destination,
                 source,
                 ..
+            } => {
+                self.current_source = source.clone();
+                if let CallTarget::Indirect(callee) = func {
+                    self.consume_operand(callee);
+                }
+                for arg in args {
+                    self.consume_operand(arg);
+                }
+                self.write_destination(destination);
             }
-            | Terminator::MacroCall {
+            Terminator::MacroCall {
                 args,
                 destination,
                 source,

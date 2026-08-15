@@ -540,6 +540,21 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
+                // A function name used as a value (`let f = foo;`) lowers to a
+                // function-pointer constant, not a local place read.
+                if matches!(&expr.kind, HirExprKind::VarRef(_))
+                    && matches!(
+                        self.resolution.defs.get(def_id).map(|info| &info.kind),
+                        Some(DefKind::Function)
+                    )
+                {
+                    let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None);
+                    return (
+                        block,
+                        Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
+                    );
+                }
+
                 let local = *fb.locals_by_def.get(def_id).unwrap_or_else(|| {
                     panic!("HIR DefId {:?} has no MIR local", def_id);
                 });

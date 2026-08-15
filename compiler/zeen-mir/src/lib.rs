@@ -228,6 +228,8 @@ pub enum ConstValue {
     Str(Spur),
     NullPtr,
     Void,
+    /// A function value: pointer to the monomorphized function.
+    Fn(MirFunctionId),
 }
 
 #[derive(Debug, Clone)]

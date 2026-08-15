@@ -252,3 +252,42 @@ fn for_loop_over_rvalue_slice_materializes_iterator() {
          fn main() { for (element : get_slice()) { @println(\"{}\", element); } }",
     );
 }
+
+#[test]
+fn function_name_used_as_value_lowers_to_fn_constant() {
+    let mir = compile_mir_ok(
+        "fn foo() i32 { 123 } \
+         fn main() { let f = foo; let r = f(); @println(\"{}\", r); }",
+    );
+
+    let has_fn_const = mir.program.functions.values().any(|func| {
+        func.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    crate::MirStatement::Assign {
+                        rvalue: crate::Rvalue::Use(crate::Operand::Constant(
+                            crate::ConstValue::Fn(_),
+                            _
+                        )),
+                        ..
+                    }
+                )
+            })
+        })
+    });
+
+    assert!(
+        has_fn_const,
+        "expected a `ConstValue::Fn` assignment for `let f = foo;`"
+    );
+}
+
+#[test]
+fn fn_typed_param_is_called_indirectly() {
+    compile_mir_ok(
+        "fn apply(f: fn(i32) i32, x: i32) i32 { f(x) } \
+         fn inc(x: i32) i32 { x + 1 } \
+         fn main() { let r = apply(inc, 1); @println(\"{}\", r); }",
+    );
+}
