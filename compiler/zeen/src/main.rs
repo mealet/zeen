@@ -225,15 +225,18 @@ fn main() {
 
     match flow_result {
         Ok(result) => {
-            for warning in &result.warnings {
-                let report_string = driver.report(warning).unwrap();
-                eprintln!("{}", report_string);
-            }
-            if !result.warnings.is_empty() {
-                cli::println_warn(format!(
-                    "Compiler reported {} warning(s)",
-                    result.warnings.len()
-                ));
+            if !args.no_warns {
+                for warning in &result.warnings {
+                    let report_string = driver.report(warning).unwrap();
+                    eprintln!("{}", report_string);
+                }
+
+                if !result.warnings.is_empty() {
+                    cli::println_warn(format!(
+                        "Compiler reported {} warning(s)",
+                        result.warnings.len()
+                    ));
+                }
             }
         }
         Err(errors) => {
