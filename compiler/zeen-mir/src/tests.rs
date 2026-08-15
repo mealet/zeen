@@ -237,3 +237,18 @@ fn slice_index_on_call_result_materializes_slice() {
          fn main() { let v: i32 = get_slice()[1]; }",
     );
 }
+
+#[test]
+fn for_loop_over_array_literal_materializes_iterator() {
+    compile_mir_ok(
+        "fn main() { for (element : [123, 321, 333]) { @println(\"{}\", element); } }",
+    );
+}
+
+#[test]
+fn for_loop_over_rvalue_slice_materializes_iterator() {
+    compile_mir_ok(
+        "fn get_slice() []i32 { let arr = [1, 2, 3]; return &arr; } \
+         fn main() { for (element : get_slice()) { @println(\"{}\", element); } }",
+    );
+}

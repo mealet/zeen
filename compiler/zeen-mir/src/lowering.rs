@@ -2106,7 +2106,7 @@ impl<'ctx> MirLowering<'ctx> {
         body: &HirStmt,
         block: BlockId,
     ) -> BlockId {
-        let (block, iter_place) = self.lower_expr_to_place(fb, iterator, block);
+        let (block, iter_place) = self.lower_expr_to_place_or_temp(fb, iterator, block);
 
         let usize_ty = self
             .typecheck
