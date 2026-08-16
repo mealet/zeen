@@ -371,6 +371,13 @@ impl<'ctx> MirLowering<'ctx> {
         self.program.function_names.insert(id, name.as_ref().into());
     }
 
+    fn is_float_ty(&self, ty: TypeId) -> bool {
+        matches!(
+            self.typecheck.interner.get(ty),
+            Type::Builtin(zeen_ast::types::BuiltinType::f32 | zeen_ast::types::BuiltinType::f64)
+        )
+    }
+
     fn mir_type_is_copy(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(_)
@@ -598,6 +605,32 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
 
                 let result_ty = self.expr_type(fb, expr);
+
+                let rhs_ty = self.expr_type(fb, rhs);
+                let is_float_div = self.is_float_ty(rhs_ty);
+
+                // `/` and `%` panic on a zero divisor in Debug builds; the
+                // divisor is materialized into a local so the guard can read it
+                // without moving the value the division itself uses. Floats are
+                // excluded: IEEE-754 division by zero yields inf/nan.
+                let (block, rhs_op) =
+                    if matches!(op, BinaryOp::Div | BinaryOp::Mod) && !is_float_div {
+                        let rhs_local = self.operand_to_local(fb, rhs_op, rhs_ty, block);
+                        let block = self.lower_div_zero_check(
+                            fb,
+                            block,
+                            rhs_local,
+                            rhs_ty,
+                            Some(expr.source.clone()),
+                        );
+                        (
+                            block,
+                            Operand::Copy(Place::from_local(rhs_local), Some(expr.source.clone())),
+                        )
+                    } else {
+                        (block, rhs_op)
+                    };
+
                 let temp = fb.new_temp(result_ty);
 
                 fb.push_stmt(
@@ -1562,6 +1595,80 @@ impl<'ctx> MirLowering<'ctx> {
                     Operand::Copy(Place::from_local(index_local), None),
                 ],
                 arg_types: vec![usize_ty, usize_ty],
+                destination: Place::from_local(dest),
+                target: None,
+                source,
+            },
+        );
+        fb.set_terminator(panic_next, Terminator::Unreachable);
+
+        ok_block
+    }
+
+    /// Inserts a `divisor != 0` guard in front of `/` and `%` on builtin
+    /// numerics when compiling in Debug mode. A zero divisor diverges into a
+    /// `@panic` call. Returns the block the division must be lowered into.
+    ///
+    /// `rhs_local` must be a plain local holding the divisor; it is only read
+    /// here by Copy, so the division rvalue can use it again.
+    fn lower_div_zero_check(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        rhs_local: LocalId,
+        rhs_ty: TypeId,
+        source: Option<Source>,
+    ) -> BlockId {
+        if self.mode != CompilationMode::Debug {
+            return block;
+        }
+
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let zero = Operand::Constant(ConstValue::Int(0), None);
+
+        let cmp_result = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(cmp_result),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Ne,
+                    lhs: Operand::Copy(Place::from_local(rhs_local), None),
+                    rhs: zero,
+                },
+                source: source.clone(),
+            },
+        );
+
+        let ok_block = fb.new_block();
+        let panic_block = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(cmp_result), None),
+                targets: vec![(1, ok_block)],
+                otherwise: panic_block,
+            },
+        );
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let dest = fb.new_temp(void_ty);
+        let panic_next = fb.new_block();
+
+        fb.set_terminator(
+            panic_block,
+            Terminator::MacroCall {
+                kind: HirMacroKind::Panic,
+                format_chunks: Some(vec![FormatChunk::Literal(
+                    "attempt to divide by zero".into(),
+                )]),
+                args: vec![],
+                arg_types: vec![],
                 destination: Place::from_local(dest),
                 target: None,
                 source,
