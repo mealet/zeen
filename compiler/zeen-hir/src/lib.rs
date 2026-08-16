@@ -370,6 +370,9 @@ impl<'res> HirLowering<'res> {
             None
         };
 
+        let def_id = self.def_id_of_decl(decl).unwrap_or(DefId(u32::MAX));
+        let parent_fn = self.resolution.nested_fn_parents.get(&def_id).copied();
+
         HirFn {
             name,
             generics: self.lower_generics(generics),
@@ -379,6 +382,7 @@ impl<'res> HirLowering<'res> {
             is_pub,
             is_extern,
             self_param,
+            parent_fn,
         }
     }
 
@@ -492,6 +496,13 @@ impl<'res> HirLowering<'res> {
             }
 
             StatementKind::Expr(expr) => HirStmtKind::Expr(Rc::new(self.lower_expr(expr))),
+
+            StatementKind::FnDecl(decl) => {
+                let hir_decl = self
+                    .lower_decl(decl)
+                    .expect("nested fn declaration must lower to HIR");
+                HirStmtKind::FnDecl(hir_decl)
+            }
 
             StatementKind::TrailingExpr(_) => unreachable!(),
         };

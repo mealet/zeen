@@ -2,7 +2,7 @@ use lasso::{Rodeo, Spur};
 use miette::{NamedSource, SourceSpan};
 use smol_str::SmolStr;
 
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
 
 use zeen_ast::{
     declarations::{Declaration, DeclarationKind, GenericType},
@@ -24,6 +24,14 @@ pub struct NameResolver {
 
     table: SymbolTable,
     result: ResolutionResult,
+
+    /// DefIds of enclosing-function params/locals a nested function is not
+    /// allowed to reference (no closures). One entry per active nested fn body.
+    capture_stack: Vec<HashSet<DefId>>,
+
+    /// The `DefId` of the function whose body is currently being resolved,
+    /// used to record the parent of nested function declarations.
+    current_fn_def: Option<DefId>,
 
     next_def_id: u32,
     current_src: NamedSource<Arc<String>>,
@@ -50,6 +58,9 @@ impl<'ctx> NameResolver {
 
             table: SymbolTable::new(),
             result: ResolutionResult::default(),
+
+            capture_stack: Vec::new(),
+            current_fn_def: None,
 
             next_def_id: 0,
             current_src: NamedSource::new(filename.as_str(), src.clone()),
@@ -273,44 +284,17 @@ impl<'ctx> NameResolver {
         self.current_src = decl.source.src();
 
         match decl.kind {
-            DeclarationKind::FnDecl {
-                generics,
-                params,
-                return_type,
-                body,
-                ..
-            } => {
-                self.table.push(ScopeKind::Function);
-                self.declare_generics(generics, &decl.source.src);
+            DeclarationKind::FnDecl { .. } => {
+                let prev_fn = self.current_fn_def;
+                self.current_fn_def = self
+                    .result
+                    .binding_sites
+                    .get(&NodeKey::from_decl(decl))
+                    .copied();
 
-                for param in params {
-                    self.resolve_type(param.ty);
+                self.resolve_fn_body(decl);
 
-                    if let Some(name) = param.name {
-                        let def_id = self.define_at(
-                            NodeKey::from_param(param),
-                            DefInfo {
-                                name,
-                                kind: DefKind::Param,
-                                span: (param.span, decl.source.src()).into(),
-                                decl: None,
-                                is_pub: false,
-                            },
-                        );
-
-                        self.table.declare_value(name, def_id);
-                    }
-                }
-
-                if let Some(ret) = return_type {
-                    self.resolve_type(ret);
-                }
-
-                if let Some(body) = body {
-                    self.resolve_stmt(body);
-                }
-
-                self.table.pop();
+                self.current_fn_def = prev_fn;
             }
 
             DeclarationKind::StructDecl {
@@ -470,6 +454,51 @@ impl<'ctx> NameResolver {
         }
     }
 
+    fn resolve_fn_body(&mut self, decl: &'ctx Declaration<'ctx>) {
+        let DeclarationKind::FnDecl {
+            generics,
+            params,
+            return_type,
+            body,
+            ..
+        } = decl.kind
+        else {
+            unreachable!("resolve_fn_body called on non-FnDecl")
+        };
+
+        self.table.push(ScopeKind::Function);
+        self.declare_generics(generics, &decl.source.src);
+
+        for param in params {
+            self.resolve_type(param.ty);
+
+            if let Some(name) = param.name {
+                let def_id = self.define_at(
+                    NodeKey::from_param(param),
+                    DefInfo {
+                        name,
+                        kind: DefKind::Param,
+                        span: (param.span, decl.source.src()).into(),
+                        decl: None,
+                        is_pub: false,
+                    },
+                );
+
+                self.table.declare_value(name, def_id);
+            }
+        }
+
+        if let Some(ret) = return_type {
+            self.resolve_type(ret);
+        }
+
+        if let Some(body) = body {
+            self.resolve_stmt(body);
+        }
+
+        self.table.pop();
+    }
+
     fn resolve_method(&mut self, method: &'ctx Declaration<'ctx>, self_def: DefId) -> DefId {
         let DeclarationKind::FnDecl {
             name,
@@ -546,9 +575,14 @@ impl<'ctx> NameResolver {
             self.resolve_type(ret);
         }
 
+        let prev_fn = self.current_fn_def;
+        self.current_fn_def = Some(method_id);
+
         if let Some(body) = body {
             self.resolve_stmt(body);
         }
+
+        self.current_fn_def = prev_fn;
 
         self.table.pop();
 
@@ -767,6 +801,42 @@ impl<'ctx> NameResolver {
                 self.table.pop();
             }
 
+            StatementKind::FnDecl(decl) => {
+                self.current_src = decl.source.src();
+
+                let DeclarationKind::FnDecl { name, is_pub, .. } = &decl.kind else {
+                    unreachable!("nested fn statement must be FnDecl")
+                };
+
+                let def_id = self.define_at(
+                    NodeKey::from_decl(decl),
+                    DefInfo {
+                        name: name.0,
+                        kind: DefKind::Function,
+                        span: (name.1, decl.source.src()).into(),
+                        decl: Some(NodeKey::from_decl(decl)),
+                        is_pub: *is_pub,
+                    },
+                );
+
+                self.table.declare_value(name.0, def_id);
+
+                if let Some(parent) = self.current_fn_def {
+                    self.result.nested_fn_parents.insert(def_id, parent);
+                }
+
+                let prev_fn = self.current_fn_def;
+                self.current_fn_def = Some(def_id);
+
+                // Nested functions may not capture the enclosing function's
+                // params/locals/generics (no closures): hide them for the body.
+                self.capture_stack.push(self.table.enclosing_defs());
+                self.resolve_fn_body(decl);
+                self.capture_stack.pop();
+
+                self.current_fn_def = prev_fn;
+            }
+
             StatementKind::Expr(expr) => {
                 self.resolve_expr(expr);
             }
@@ -923,11 +993,31 @@ impl<'ctx> NameResolver {
         }
 
         if let Some(def_id) = self.table.lookup_value(name) {
+            if self.capture_stack.iter().any(|set| set.contains(&def_id)) {
+                let captured = self.interner_resolve(&name);
+                self.report(ResolveError::NestedFnCapture {
+                    name: captured,
+                    src: self.named_src(),
+                    span,
+                });
+                return Resolution::Error;
+            }
+
             self.check_visibility(def_id, &(self.current_src.clone(), span).into());
             return Resolution::Def(def_id);
         }
 
         if let Some(def_id) = self.table.lookup_type(name) {
+            if self.capture_stack.iter().any(|set| set.contains(&def_id)) {
+                let captured = self.interner_resolve(&name);
+                self.report(ResolveError::NestedFnCapture {
+                    name: captured,
+                    src: self.named_src(),
+                    span,
+                });
+                return Resolution::Error;
+            }
+
             self.check_visibility(def_id, &(self.current_src.clone(), span).into());
             return Resolution::Def(def_id);
         }
@@ -969,7 +1059,20 @@ impl<'ctx> NameResolver {
 
             TypeKind::Named { name, generic_args } => {
                 let resolution = match self.table.lookup_type(name) {
-                    Some(def_id) => Resolution::Def(def_id),
+                    Some(def_id) => {
+                        if self.capture_stack.iter().any(|set| set.contains(&def_id)) {
+                            let captured = self.interner_resolve(&name);
+                            self.errors.push(ResolveError::NestedFnCapture {
+                                name: captured,
+                                src: self.named_src(),
+                                span: ty.span,
+                            });
+
+                            Resolution::Error
+                        } else {
+                            Resolution::Def(def_id)
+                        }
+                    }
                     None => {
                         let name = self.interner_resolve(&name);
 

@@ -1117,8 +1117,28 @@ impl<'res> TypeChecker<'res> {
                 self.synth_expr(expr);
             }
 
+            HirStmtKind::FnDecl(decl) => self.check_nested_fn(decl),
+
             HirStmtKind::Error => {}
         }
+    }
+
+    /// Checks a nested function declaration: rejects `pub`, then declares and
+    /// checks it like a regular function. It is not the entry point, so the
+    /// `main` detection in `declare_signature` must be skipped.
+    fn check_nested_fn(&mut self, decl: &HirDecl) {
+        if let HirDeclKind::Fn(f) = &decl.kind {
+            if f.is_pub {
+                self.report(TypeError::NestedFnPub {
+                    src: decl.source.src(),
+                    span: f.name.1,
+                });
+            }
+
+            self.declare_fn_signature(decl.def_id, f);
+        }
+
+        self.check_decl_body(decl);
     }
 
     fn check_stmt_as_block_value(&mut self, stmt: &HirStmt, expected: Option<TypeId>) -> TypeId {

@@ -9,8 +9,8 @@ pub struct DeclParser<'tok, 'ctx, 'pr> {
     p: &'pr mut Parser<'tok, 'ctx>,
 }
 
-struct IsPub(bool);
-struct IsExtern(bool);
+pub(crate) struct IsPub(pub bool);
+pub(crate) struct IsExtern(pub bool);
 
 /// ==@ Declarations Parser @==
 impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
@@ -89,7 +89,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 }
 
 impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
-    fn parse_fn(
+    pub(crate) fn parse_fn(
         &mut self,
         _start_span: miette::SourceSpan,
         is_pub: IsPub,

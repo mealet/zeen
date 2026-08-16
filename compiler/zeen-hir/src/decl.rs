@@ -54,6 +54,10 @@ pub struct HirFn {
     pub is_extern: bool,
 
     pub self_param: Option<DefId>,
+
+    /// For nested functions: `DefId` of the enclosing function. Used to build
+    /// `<parent>-><name>` MIR/LLVM symbols.
+    pub parent_fn: Option<DefId>,
 }
 
 #[derive(Debug, Clone)]
