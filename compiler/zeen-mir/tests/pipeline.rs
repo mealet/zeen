@@ -606,6 +606,66 @@ fn main() {
 }
 
 #[test]
+fn nested_fn_can_recurse() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn fib(n: i32) i32 {
+        if (n < 2) { return n; }
+        return fib(n - 1) + fib(n - 2);
+    }
+    let a = fib(10);
+    @println("{}", a);
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main->fib(%0: i32)"),
+        "recursive nested fn must be registered under the parent prefix: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn nested_fn_can_call_sibling() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn helper(x: i32) i32 { return x * 2; }
+    fn caller(x: i32) i32 { return helper(x); }
+    let a = caller(21);
+    @println("{}", a);
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main->helper(%0: i32)"),
+        "sibling nested fn must be registered: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("fn main->caller(%0: i32)"),
+        "caller nested fn must be registered: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn float_literal_division_by_zero_compiles_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: f64 = 10.0;
+    let c = a / 2.0;
+    let d = a / 0.0;
+    @println("{} {}", c, d);
+}
+"#,
+    );
+    assert!(
+        !mir.contains("@panic"),
+        "float literal division must not be guarded (IEEE-754 inf/nan): MIR:\n{mir}"
+    );
+}
+
+#[test]
 fn void_function_ending_in_call_returns_void_constant() {
     let mir = compile_ok(
         r#"
