@@ -373,6 +373,7 @@ impl<'ctx> MirLowering<'ctx> {
         matches!(
             self.typecheck.interner.get(ty),
             Type::Builtin(zeen_ast::types::BuiltinType::f32 | zeen_ast::types::BuiltinType::f64)
+                | Type::FloatLiteral
         )
     }
 
