@@ -1955,7 +1955,23 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .build_load(i32_ty, depth.as_pointer_value(), "panic.depth")
             .unwrap()
             .into_int_value();
-        let idx = self.builder.build_int_s_extend(cur, size_ty, "").unwrap();
+
+        // Circular buffer: the slot is `depth % PANIC_STACK_DEPTH` (a power of
+        // two, so this is an AND). The depth itself keeps counting, so a panic
+        // stack overflowing with deep recursion never writes out of bounds;
+        // the runtime then prints the most recent frames. When recursion runs
+        // deeper than the buffer and then unwinds, reused slots may hold stale
+        // frames from the deeper calls — this only affects Debug diagnostics,
+        // never memory safety.
+        let slot = self
+            .builder
+            .build_and(
+                cur,
+                i32_ty.const_int((PANIC_STACK_DEPTH - 1) as u64, false),
+                "panic.slot",
+            )
+            .unwrap();
+        let idx = self.builder.build_int_s_extend(slot, size_ty, "").unwrap();
         let frame_ptr = unsafe {
             self.builder
                 .build_in_bounds_gep(
@@ -2060,6 +2076,18 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .build_load(i32_ty, depth_global.as_pointer_value(), "panic.depth")
             .unwrap()
             .into_int_value();
+        // The buffer holds at most PANIC_STACK_DEPTH frames, so at most that
+        // many are printed even when recursion overflowed the shadow stack.
+        let cap = i32_ty.const_int(PANIC_STACK_DEPTH as u64, false);
+        let under_cap = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, depth, cap, "")
+            .unwrap();
+        let count = self
+            .builder
+            .build_select(under_cap, depth, cap, "panic.count")
+            .unwrap()
+            .into_int_value();
         self.builder.build_unconditional_branch(header).unwrap();
 
         self.builder.position_at_end(header);
@@ -2071,7 +2099,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .build_int_compare(
                 IntPredicate::SLT,
                 i.as_basic_value().into_int_value(),
-                depth,
+                count,
                 "",
             )
             .unwrap();
@@ -2088,7 +2116,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 "",
             )
             .unwrap();
-        let idx = self.builder.build_int_s_extend(rev, size_ty, "").unwrap();
+        let slot = self
+            .builder
+            .build_and(
+                rev,
+                i32_ty.const_int((PANIC_STACK_DEPTH - 1) as u64, false),
+                "panic.slot",
+            )
+            .unwrap();
+        let idx = self.builder.build_int_s_extend(slot, size_ty, "").unwrap();
         let frame_ptr = unsafe {
             self.builder
                 .build_in_bounds_gep(
