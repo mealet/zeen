@@ -830,7 +830,20 @@ impl<'ctx> NameResolver {
 
                 // Nested functions may not capture the enclosing function's
                 // params/locals/generics (no closures): hide them for the body.
-                self.capture_stack.push(self.table.enclosing_defs());
+                // Function definitions are not closure captures, so they stay
+                // visible — a nested fn can recurse and call sibling fns.
+                let capture_blocked: HashSet<DefId> = self
+                    .table
+                    .enclosing_defs()
+                    .into_iter()
+                    .filter(|def_id| {
+                        !matches!(
+                            self.result.defs.get(def_id).map(|info| &info.kind),
+                            Some(DefKind::Function)
+                        )
+                    })
+                    .collect();
+                self.capture_stack.push(capture_blocked);
                 self.resolve_fn_body(decl);
                 self.capture_stack.pop();
 
