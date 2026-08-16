@@ -465,3 +465,142 @@ fn main() {
         "out-of-bounds slice access must diverge into a panic: MIR:\n{mir}"
     );
 }
+
+#[test]
+fn nested_fn_is_printed_with_parent_prefixed_name() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn foo() void {
+        @println("hi");
+    }
+    foo();
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main->foo() void"),
+        "nested fn must be printed with its parent prefix: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn deeply_nested_fn_is_printed_with_full_parent_chain() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn inner() void {
+        fn deepest() void {
+            @println("deep");
+        }
+        deepest();
+    }
+    inner();
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main->inner->deepest() void"),
+        "nested fn must be printed with the full parent chain: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn nested_fn_is_visible_from_declaration_point_onwards() {
+    compile_ok(
+        r#"
+fn main() {
+    fn foo() void { @println("hi"); }
+    foo();
+}
+"#,
+    );
+}
+
+#[test]
+fn nested_fn_is_not_visible_before_its_declaration() {
+    compile_err_contains(
+        r#"
+fn main() {
+    foo();
+    fn foo() void { @println("hi"); }
+}
+"#,
+        "unresolved identifier",
+    );
+}
+
+#[test]
+fn nested_fn_is_not_visible_outside_parent() {
+    compile_err_contains(
+        r#"
+fn main() {
+    fn foo() void { @println("hi"); }
+}
+fn bar() void {
+    foo();
+}
+"#,
+        "unresolved identifier",
+    );
+}
+
+#[test]
+fn nested_fn_cannot_capture_enclosing_local() {
+    compile_err_contains(
+        r#"
+fn main() {
+    let x: i32 = 5;
+fn foo() void { @println(x); }
+    foo();
+}
+"#,
+        "nested function cannot capture",
+    );
+}
+
+#[test]
+fn nested_fn_cannot_capture_enclosing_generic() {
+    compile_err_contains(
+        r#"
+fn wrapper[T](x: T) T {
+    fn inner(y: T) T { return y; }
+    return inner(x);
+}
+"#,
+        "nested function cannot capture",
+    );
+}
+
+#[test]
+fn nested_fn_cannot_be_pub() {
+    compile_err_contains(
+        r#"
+fn main() {
+    pub fn foo() void { @println("hi"); }
+    foo();
+}
+"#,
+        "nested functions cannot be `public`",
+    );
+}
+
+#[test]
+fn nested_fn_named_main_is_not_the_entry_point() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn main() void { @println("inner"); }
+    main();
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main() void"),
+        "the top-level entry point must still exist: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("fn main->main() void"),
+        "nested `main` must be parent-prefixed, not replace the entry point: MIR:\n{mir}"
+    );
+}
