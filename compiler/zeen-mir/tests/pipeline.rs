@@ -604,3 +604,39 @@ fn main() {
         "nested `main` must be parent-prefixed, not replace the entry point: MIR:\n{mir}"
     );
 }
+
+#[test]
+fn void_function_ending_in_call_returns_void_constant() {
+    let mir = compile_ok(
+        r#"
+fn bar() void { @println("b"); }
+fn main() { bar() }
+"#,
+    );
+    assert!(
+        mir.contains("return void;"),
+        "a void fn ending in a call must return `void`, not a void temp: MIR:\n{mir}"
+    );
+    assert!(
+        !mir.contains("return %0;"),
+        "no void temporary may be returned (codegen allocates none): MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn void_function_with_explicit_void_return_call_lowers() {
+    let mir = compile_ok(
+        r#"
+fn bar() void { @println("b"); }
+fn main() void { return bar(); }
+"#,
+    );
+    assert!(
+        mir.contains("return void;"),
+        "explicit `return bar();` must return `void`: MIR:\n{mir}"
+    );
+    assert!(
+        !mir.contains("return %0;"),
+        "no void temporary may be returned: MIR:\n{mir}"
+    );
+}
