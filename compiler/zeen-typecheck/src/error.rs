@@ -44,6 +44,19 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("nested functions cannot be `public`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::nested_fn_pub),
+        help("remove the `pub` modifier: nested functions are only visible from their parent")
+    )]
+    NestedFnPub {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("invalid variadic arguments in function")]
     #[diagnostic(
         severity(Error),

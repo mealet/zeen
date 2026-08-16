@@ -2485,6 +2485,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 ']' => mangled.push('$'),
                 ',' => mangled.push('_'),
                 ' ' => mangled.push('_'),
+                // nested functions: `<parent>-><child>` mangles to a dot
+                '-' | '>' => mangled.push('.'),
                 c => mangled.push(c),
             }
         }

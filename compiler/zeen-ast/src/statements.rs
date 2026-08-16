@@ -2,6 +2,7 @@ use lasso::Spur;
 use miette::SourceSpan;
 
 use crate::{
+    declarations::Declaration,
     expressions::{self, Expression},
     types::TypeExpr,
 };
@@ -61,4 +62,9 @@ pub enum StatementKind<'arena> {
 
     Expr(&'arena Expression<'arena>),
     TrailingExpr(&'arena Expression<'arena>), // tech node, converts to Expr
+
+    /// Nested function declaration (`fn foo() { .. }` inside a function body).
+    /// Only visible from the enclosing function; MIR lowers it as a standalone
+    /// function named `<parent>-><name>`.
+    FnDecl(&'arena Declaration<'arena>),
 }

@@ -5,7 +5,7 @@ use lasso::Spur;
 use miette::SourceSpan;
 use std::rc::Rc;
 
-use crate::{HirId, expr::HirExpr, types::HirTypeExpr};
+use crate::{HirId, decl::HirDecl, expr::HirExpr, types::HirTypeExpr};
 
 #[derive(Debug, Clone)]
 pub struct HirStmt {
@@ -55,5 +55,10 @@ pub enum HirStmtKind {
     },
 
     Expr(Rc<HirExpr>),
+
+    /// Nested function declaration. The function itself is collected and
+    /// lowered like any other, but it is only nameable from its parent.
+    FnDecl(Rc<HirDecl>),
+
     Error,
 }

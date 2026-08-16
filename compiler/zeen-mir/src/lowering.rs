@@ -47,8 +47,11 @@ pub fn lower_program<'ctx>(
     let main_def = typecheck.main_fn_def;
 
     let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
+    // Only top-level (non-nested) functions are eagerly lowered; nested ones
+    // are registered when the enclosing function actually calls them.
     let fns_with_owners: Vec<(DefId, Rc<HirFn>, Option<DefId>)> = hir_fns_by_def
         .iter()
+        .filter(|(_, f)| f.parent_fn.is_none())
         .map(|f| {
             (
                 *f.0,
@@ -110,7 +113,19 @@ pub struct MirLowering<'ctx> {
     program: MirProgram,
     mono_cache: MonoCache,
 
+    /// Stack of functions currently being lowered. Used to resolve the parent
+    /// of a nested function so its MIR name becomes `<parent>-><name>`.
+    fn_stack: Vec<FnContext>,
+
     mode: CompilationMode,
+}
+
+/// The enclosing function of the one being lowered, used to prefix nested
+/// function names with their parent.
+#[derive(Debug, Clone)]
+pub struct FnContext {
+    pub def_id: DefId,
+    pub readable_name: String,
 }
 
 #[derive(Default)]
@@ -239,6 +254,7 @@ impl<'ctx> MirLowering<'ctx> {
             program: MirProgram::default(),
             mono_cache: MonoCache::new(),
             hir_fns_by_def,
+            fn_stack: Vec::new(),
             mode,
         }
     }
@@ -1990,6 +2006,10 @@ impl<'ctx> MirLowering<'ctx> {
                 block
             }
 
+            // Nested function declarations produce no runtime code at their
+            // site; the function is lowered on demand when it is called.
+            HirStmtKind::FnDecl(_) => block,
+
             HirStmtKind::Error => panic!("Error Statement kind passed in MIR lowering stage"),
         }
     }
@@ -2299,6 +2319,20 @@ impl<'ctx> MirLowering<'ctx> {
         let id = self.mono_cache.fresh_id();
         self.mono_cache.cache.insert(key, id);
 
+        let display_name = self.compute_fn_readable_name(&hir_fn, &generic_args, owner_struct);
+
+        if hir_fn.is_extern {
+            self.set_function_name(id, display_name.clone());
+            self.program.extern_exports.insert(id, display_name.clone());
+        } else {
+            self.set_function_name(id, display_name.clone());
+        }
+
+        self.fn_stack.push(FnContext {
+            def_id,
+            readable_name: display_name,
+        });
+
         let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args, owner_struct);
         for local in &mir_func.locals {
             if matches!(self.typecheck.interner.get(local.ty), Type::Slice { .. }) {
@@ -2307,59 +2341,74 @@ impl<'ctx> MirLowering<'ctx> {
         }
         self.program.functions.insert(id, mir_func);
 
+        self.fn_stack.pop();
+
+        id
+    }
+
+    /// Computes the readable MIR name of a function. Methods are
+    /// `Struct.method`, nested functions are `<parent>-><name>`, everything
+    /// else is the plain name (with generic args where present).
+    fn compute_fn_readable_name(
+        &self,
+        hir_fn: &HirFn,
+        generic_args: &[TypeId],
+        owner_struct: Option<DefId>,
+    ) -> String {
         let interner = self.rodeo.borrow();
         let base_name = interner.resolve(&hir_fn.name.0).to_string();
         drop(interner);
 
-        if hir_fn.is_extern {
-            self.set_function_name(id, base_name.clone());
-            self.program.extern_exports.insert(id, base_name);
+        let base = if generic_args.is_empty() {
+            base_name.clone()
         } else {
-            let display_name = match owner_struct {
-                Some(struct_def) => {
-                    let struct_name = self
-                        .rodeo
-                        .borrow()
-                        .resolve(&self.resolution.defs[&struct_def].name)
-                        .to_string();
+            let arg_names: Vec<String> = generic_args
+                .iter()
+                .map(|&t| self.display_type_name(t))
+                .collect();
+            format!("{}[{}]", base_name, arg_names.join(", "))
+        };
 
-                    let struct_generics = self
-                        .typecheck
-                        .struct_generics
-                        .get(&struct_def)
-                        .cloned()
-                        .unwrap_or_default();
+        if let Some(struct_def) = owner_struct {
+            let struct_name = self
+                .rodeo
+                .borrow()
+                .resolve(&self.resolution.defs[&struct_def].name)
+                .to_string();
 
-                    let struct_part = if struct_generics.is_empty() {
-                        struct_name
-                    } else {
-                        let arg_names: Vec<String> = generic_args
-                            .iter()
-                            .map(|&t| self.display_type_name(t))
-                            .collect();
-                        format!("{}[{}]", struct_name, arg_names.join(", "))
-                    };
+            let struct_generics = self
+                .typecheck
+                .struct_generics
+                .get(&struct_def)
+                .cloned()
+                .unwrap_or_default();
 
-                    format!("{}.{}", struct_part, base_name)
-                }
-
-                None => {
-                    if generic_args.is_empty() {
-                        base_name
-                    } else {
-                        let arg_names: Vec<String> = generic_args
-                            .iter()
-                            .map(|&t| self.display_type_name(t))
-                            .collect();
-                        format!("{}[{}]", base_name, arg_names.join(", "))
-                    }
-                }
+            let struct_part = if struct_generics.is_empty() {
+                struct_name
+            } else {
+                let arg_names: Vec<String> = generic_args
+                    .iter()
+                    .take(struct_generics.len())
+                    .map(|&t| self.display_type_name(t))
+                    .collect();
+                format!("{}[{}]", struct_name, arg_names.join(", "))
             };
 
-            self.set_function_name(id, display_name);
+            return format!("{}.{}", struct_part, base_name);
         }
 
-        id
+        if let Some(parent_def) = hir_fn.parent_fn
+            && let Some(parent_name) = self
+                .fn_stack
+                .iter()
+                .rev()
+                .find(|ctx| ctx.def_id == parent_def)
+                .map(|ctx| ctx.readable_name.clone())
+        {
+            return format!("{}->{}", parent_name, base);
+        }
+
+        base
     }
 
     fn lower_fn_body(
