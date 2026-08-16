@@ -1972,7 +1972,10 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(v) => {
                         let (b, op) = self.lower_expr_to_operand(fb, v, block);
                         let block = b;
-                        fb.set_terminator(block, Terminator::Return(op));
+                        fb.set_terminator(
+                            block,
+                            Terminator::Return(self.normalize_return_operand(fb, op)),
+                        );
                         return block;
                     }
                     None => Operand::Constant(ConstValue::Void, None),
@@ -2411,6 +2414,22 @@ impl<'ctx> MirLowering<'ctx> {
         base
     }
 
+    /// Replaces a void-typed place operand with a plain `void` constant so
+    /// codegen never tries to load an un-allocated void temporary.
+    fn normalize_return_operand(&mut self, fb: &FnBuilder, operand: Operand) -> Operand {
+        match &operand {
+            Operand::Copy(place, _) | Operand::Move(place, _) => {
+                let ty = fb.func.local(place.local).ty;
+                if matches!(self.typecheck.interner.get(ty), Type::Void) {
+                    Operand::Constant(ConstValue::Void, None)
+                } else {
+                    operand
+                }
+            }
+            _ => operand,
+        }
+    }
+
     fn lower_fn_body(
         &mut self,
         def_id: DefId,
@@ -2507,6 +2526,7 @@ impl<'ctx> MirLowering<'ctx> {
                             let (block, operand) = self.lower_expr_to_operand(&mut fb, t, cur);
 
                             if matches!(fb.func.block(block).terminator, Terminator::Unreachable) {
+                                let operand = self.normalize_return_operand(&fb, operand);
                                 fb.set_terminator(block, Terminator::Return(operand));
                             };
                             block
