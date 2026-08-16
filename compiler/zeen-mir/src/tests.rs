@@ -291,3 +291,75 @@ fn fn_typed_param_is_called_indirectly() {
          fn main() { let r = apply(inc, 1); @println(\"{}\", r); }",
     );
 }
+
+#[test]
+fn nested_fn_is_registered_with_parent_prefixed_name() {
+    let mir = compile_mir_ok("fn main() { fn foo() void { @println(\"hi\"); } foo(); }");
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+
+    assert!(
+        names.iter().any(|n| n == "main->foo"),
+        "expected a registered `main->foo` in MIR function names, got {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n == "foo"),
+        "bare `foo` name must not be used for a nested function, got {names:?}"
+    );
+}
+
+#[test]
+fn nested_fn_is_lowered_only_when_called() {
+    let mir = compile_mir_ok("fn main() { fn unused() void { @println(\"nope\"); } }");
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+
+    assert!(
+        !names.iter().any(|n| n == "main->unused"),
+        "uncalled nested function must not be eagerly lowered, got {names:?}"
+    );
+}
+
+#[test]
+fn deeply_nested_fn_uses_full_parent_chain() {
+    let mir = compile_mir_ok(
+        "fn main() { \
+             fn inner() void { \
+                 fn deepest() void { @println(\"deep\"); } \
+                 deepest(); \
+             } \
+             inner(); \
+         }",
+    );
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+
+    assert!(
+        names.iter().any(|n| n == "main->inner->deepest"),
+        "expected `main->inner->deepest` in MIR function names, got {names:?}"
+    );
+}
+
+#[test]
+fn generic_nested_fn_includes_concrete_args() {
+    let mir = compile_mir_ok(
+        "fn main() { \
+             fn id[T](x: T) T { x } \
+             let a = id(123); \
+             let b = id(1.5); \
+             @println(\"{}\", a); \
+             @println(\"{}\", b); \
+         }",
+    );
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+
+    assert!(
+        names.iter().any(|n| n == "main->id[i32]"),
+        "expected `main->id[i32]` in MIR function names, got {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "main->id[f64]"),
+        "expected `main->id[f64]` in MIR function names, got {names:?}"
+    );
+}
