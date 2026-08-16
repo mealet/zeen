@@ -640,3 +640,88 @@ fn main() void { return bar(); }
         "no void temporary may be returned: MIR:\n{mir}"
     );
 }
+
+#[test]
+fn integer_division_by_zero_is_checked_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: i32 = 10;
+    let b: i32 = 0;
+    let c = a / b;
+    @println("{}", c);
+}
+"#,
+    );
+    assert!(
+        mir.contains("switchInt"),
+        "integer division must be guarded in Debug mode: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("@panic"),
+        "zero divisor must diverge into a panic in Debug mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn integer_modulo_by_zero_is_checked_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: i32 = 10;
+    let b: i32 = 0;
+    let c = a % b;
+    @println("{}", c);
+}
+"#,
+    );
+    assert!(
+        mir.contains("switchInt"),
+        "integer modulo must be guarded in Debug mode: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("@panic"),
+        "zero divisor must diverge into a panic in Debug mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn integer_division_is_not_checked_in_release_mode() {
+    let mir = compile_mode_ok(
+        r#"
+fn main() {
+    let a: i32 = 10;
+    let b: i32 = 0;
+    let c = a / b;
+    @println("{}", c);
+}
+"#,
+        CompilationMode::Release,
+    );
+    assert!(
+        !mir.contains("switchInt"),
+        "integer division must not be guarded in Release mode: MIR:\n{mir}"
+    );
+    assert!(
+        !mir.contains("@panic"),
+        "no panic must be emitted for division in Release mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn float_division_by_zero_is_not_checked() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: f64 = 10.0;
+    let b: f64 = 0.0;
+    let c = a / b;
+    @println("{}", c);
+}
+"#,
+    );
+    assert!(
+        !mir.contains("@panic"),
+        "float division by zero must not panic (IEEE-754 inf/nan): MIR:\n{mir}"
+    );
+}
