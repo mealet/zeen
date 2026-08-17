@@ -3187,6 +3187,21 @@ impl<'res> TypeChecker<'res> {
                 None => false,
             },
 
+            // `[N]char` / `[]char` strings implement `Display` and `Debug`
+            // like the `char` builtin (Debug prints as a quoted string).
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                let Some(name) = self.def_name(iface_def) else {
+                    return false;
+                };
+                if !matches!(name.as_str(), "Display" | "Debug") {
+                    return false;
+                }
+                matches!(
+                    self.result.interner.get(element).clone(),
+                    Type::Builtin(BuiltinType::char)
+                )
+            }
+
             Type::Struct { def_id, .. } => self.resolution.impls.contains_key(&(def_id, iface_def)),
 
             _ => false,
@@ -4678,6 +4693,41 @@ mod tests {
             !errors.iter().any(|err| matches!(err, TypeError::Mismatch { found, .. }
             if found.as_str().contains("error"))),
             "expected no cascade mismatch mentioning `error`, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn string_literals_satisfy_display_and_debug_bounds() {
+        let result = typecheck(
+            r#"
+            pub interface Display {
+              fn display(*const self) []const char;
+            }
+
+            pub interface Debug {
+              fn debug(*const self) []const char;
+            }
+
+            fn print_this[T: Display](value: T) {
+              @println("{}", value);
+            }
+
+            fn dbg_this[T: Debug](value: T) {
+              @println("{:?}", value);
+            }
+
+            fn main() {
+              print_this(123);
+              print_this("hello!");
+              dbg_this("hello!");
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "string literals should satisfy Display/Debug bounds: {:?}",
+            result.err()
         );
     }
 }

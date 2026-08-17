@@ -1199,19 +1199,38 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     ) -> BasicValueEnum<'ctx> {
         match operand {
             Operand::Constant(c, _) => {
-                // A string literal coerces to a slice: build the `{ ptr, len }`
-                // fat pointer directly, using the compile-time string length
-                // (the null terminator is not part of the slice).
-                if let ConstValue::Str(spur) = c
-                    && matches!(
-                        self.typecheck.interner.get(target).clone(),
-                        Type::Slice { .. }
-                    )
-                {
-                    let content = self.resolve_spur(*spur);
-                    let ptr = self.get_str_global(&content).as_pointer_value();
-                    let slice_ty = self.map_basic_type(target);
-                    return self.make_slice_value(slice_ty, ptr, content.len() as u64);
+                // A string literal coerces to a slice or a `[N]char` array.
+                if let ConstValue::Str(spur) = c {
+                    match self.typecheck.interner.get(target).clone() {
+                        // `-> []T`: build the `{ ptr, len }` fat pointer
+                        // directly, using the compile-time string length
+                        // (the null terminator is not part of the slice).
+                        Type::Slice { .. } => {
+                            let content = self.resolve_spur(*spur);
+                            let ptr = self.get_str_global(&content).as_pointer_value();
+                            let slice_ty = self.map_basic_type(target);
+                            return self.make_slice_value(slice_ty, ptr, content.len() as u64);
+                        }
+                        // `-> [N]char`: load the null-terminated global's
+                        // array value.
+                        Type::Array { element, len } => {
+                            debug_assert!(
+                                matches!(
+                                    self.typecheck.interner.get(element).clone(),
+                                    Type::Builtin(BuiltinType::char)
+                                ) && len == Some(self.resolve_spur(*spur).len() as u64 + 1),
+                                "string literal array cast must match its type"
+                            );
+                            let content = self.resolve_spur(*spur);
+                            let arr_ty = self.map_basic_type(target);
+                            let global = self.get_str_global(&content);
+                            return self
+                                .builder
+                                .build_load(arr_ty, global.as_pointer_value(), "")
+                                .unwrap();
+                        }
+                        _ => {}
+                    }
                 }
 
                 let src_ty = match c {
@@ -1421,6 +1440,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     int.into()
                 }
             }
+
+            (Builtin(BuiltinType::char), Builtin(BuiltinType::char)) => value,
 
             (Builtin(a), Builtin(b))
                 if (a == BuiltinType::char && builtin_is_integer(b))
@@ -1909,6 +1930,18 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
             Operand::Copy(place, _) | Operand::Move(place, _) => {
                 let ty = self.place_type(place, func);
+                // A `[N]char` array prints as a C string, so pass its address.
+                if let Type::Array { element, .. } = self.typecheck.interner.get(ty).clone()
+                    && matches!(
+                        self.typecheck.interner.get(element).clone(),
+                        Type::Builtin(BuiltinType::char)
+                    )
+                {
+                    return (
+                        self.display_specifier(ty),
+                        self.place_ptr(place, func).into(),
+                    );
+                }
                 let mut value = self.load_place(place, func);
                 if matches!(self.typecheck.interner.get(ty).clone(), Type::Slice { .. }) {
                     value = self
@@ -2271,6 +2304,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         format!("%.{precision}f")
                     }
                     (ConstValue::Float(_), _) => "%f".to_string(),
+                    (ConstValue::Str(_), FormatSpec::Debug) => "\"%s\"".to_string(),
                     (ConstValue::Str(_), _) => "%s".to_string(),
                     (ConstValue::Char(_), _) => "%c".to_string(),
                     (ConstValue::Bool(_), _) => "%d".to_string(),
@@ -2283,6 +2317,27 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
             _ => {
                 let ty = self.operand_type(operand, func).expect("typed format arg");
+
+                // `[N]char` string arrays print as C strings: `%s` (Display)
+                // or `"%s"` (Debug, wrapped in double quotes) over the
+                // array's address instead of its loaded value.
+                if let Type::Array { element, .. } = self.typecheck.interner.get(ty).clone()
+                    && matches!(
+                        self.typecheck.interner.get(element).clone(),
+                        Type::Builtin(BuiltinType::char)
+                    )
+                {
+                    let (Operand::Copy(place, _) | Operand::Move(place, _)) = operand else {
+                        unreachable!("string array format arg must come from a place");
+                    };
+                    let ptr = self.place_ptr(place, func);
+                    let specifier = match spec {
+                        FormatSpec::Debug => "\"%s\"".to_string(),
+                        _ => "%s".to_string(),
+                    };
+                    return (specifier, ptr.into());
+                }
+
                 let value = self.operand_value(operand, Some(ty), func);
                 // A slice-typed value is a `{ ptr, len }` fat
                 // pointer; printf's `%s` needs just the data
@@ -2296,7 +2351,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     value
                 };
                 let specifier = match spec {
-                    FormatSpec::Display | FormatSpec::Debug => self.display_specifier(ty),
+                    FormatSpec::Display => self.display_specifier(ty),
+                    FormatSpec::Debug => {
+                        let base = self.display_specifier(ty);
+                        if base == "%s" {
+                            "\"%s\"".to_string()
+                        } else {
+                            base
+                        }
+                    }
                     FormatSpec::Hex => "%x".to_string(),
                     FormatSpec::Oct => "%o".to_string(),
                     FormatSpec::Bin => "%x".to_string(), // FIXME: Use hexadecimal specifier, currently not supported
@@ -2313,7 +2376,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral => "%f".into(),
             Type::Builtin(b) if builtin_is_integer(b) => "%d".into(),
-            Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Slice { .. } => "%s".into(),
+            Type::Pointer { inner, .. }
+            | Type::ManyPointer { inner, .. }
+            | Type::Slice { element: inner, .. }
+            | Type::Array { element: inner, .. } => {
+                match self.typecheck.interner.get(inner).clone() {
+                    Type::Builtin(BuiltinType::char) => "%s".into(),
+                    _ => "%d".into(),
+                }
+            }
             _ => "%d".into(),
         }
     }
