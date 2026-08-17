@@ -2033,13 +2033,20 @@ impl<'res> TypeChecker<'res> {
                 .copied()
                 .unwrap_or(expected_ty);
 
-            self.coerce_or_error(
-                actual_ty,
-                expected_ty,
-                f.value.source.clone(),
-                f.value.id,
-                false,
-            );
+            if matches!(f.value.kind, HirExprKind::ArrayInit { .. }) {
+                // Let `check_expr` check each element against the expected
+                // array element type (string literals coerce to slices), and
+                // record the coerced array type for MIR lowering.
+                self.check_expr(&f.value, expected_ty, false);
+            } else {
+                self.coerce_or_error(
+                    actual_ty,
+                    expected_ty,
+                    f.value.source.clone(),
+                    f.value.id,
+                    false,
+                );
+            }
         }
 
         let missing: Vec<Spur> = expected_names
@@ -2074,6 +2081,27 @@ impl<'res> TypeChecker<'res> {
                 if let Type::Array { .. } = self.result.interner.get(expected).clone() {
                     self.result.record_expr_type(expr.id, expected);
                     return expected;
+                }
+                self.synth_expr(expr)
+            }
+
+            HirExprKind::ArrayInit { elements } => {
+                // When the expected type is a fixed-size array, check each
+                // element against its element type directly (so e.g. string
+                // literals coerce to `[]const char` inside `[N][]const char`).
+                if let Type::Array {
+                    element,
+                    len: Some(n),
+                    ..
+                } = self.result.interner.get(expected).clone()
+                {
+                    if n == elements.len() as u64 {
+                        for el in elements {
+                            self.check_expr(el, element, false);
+                        }
+                        self.result.record_expr_type(expr.id, expected);
+                        return expected;
+                    }
                 }
                 self.synth_expr(expr)
             }

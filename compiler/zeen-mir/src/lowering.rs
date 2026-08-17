@@ -554,8 +554,8 @@ impl<'ctx> MirLowering<'ctx> {
     /// static string data) used to crash codegen.
     fn register_reachable_slice_layouts(&mut self) {
         let mut visited: HashSet<TypeId> = HashSet::new();
-        let keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
-        for layout_ty in keys {
+        let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
+        for layout_ty in struct_keys {
             let fields: Vec<TypeId> = self.program.struct_layouts[&layout_ty]
                 .fields
                 .iter()
@@ -564,6 +564,19 @@ impl<'ctx> MirLowering<'ctx> {
             for field_ty in fields {
                 self.register_slice_layouts_in_type(field_ty, &mut visited);
             }
+        }
+
+        // Array-typed locals (e.g. `[N][]const char`) never hit
+        // `register_slice_layout` directly, but their element slices need a
+        // layout all the same.
+        let local_tys: Vec<TypeId> = self
+            .program
+            .functions
+            .values()
+            .flat_map(|f| f.locals.iter().map(|l| l.ty))
+            .collect();
+        for ty in local_tys {
+            self.register_slice_layouts_in_type(ty, &mut visited);
         }
     }
 
