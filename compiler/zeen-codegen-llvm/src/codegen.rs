@@ -1584,6 +1584,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 self.emit_panic_epilogue(func);
                 if matches!(operand, Operand::Constant(ConstValue::Void, _)) {
                     self.builder.build_return(None).unwrap();
+                } else if matches!(operand, Operand::Constant(ConstValue::Str(_), _)) {
+                    // String literals coerce to slices / `[N]char` arrays in
+                    // return position just like they do in argument position.
+                    let value = self.cast_op(operand, func.ret_ty, func);
+                    self.builder.build_return(Some(&value)).unwrap();
                 } else {
                     let value = self.operand_value(operand, Some(func.ret_ty), func);
                     self.builder.build_return(Some(&value)).unwrap();

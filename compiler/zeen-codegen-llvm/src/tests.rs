@@ -467,6 +467,66 @@ fn string_constant_coerces_to_slice_argument() {
 }
 
 #[test]
+fn string_literal_coerces_to_slice_return_value() {
+    let mut fx = Fixture::new();
+    let char = fx.char();
+    let slice = fx.slice(char);
+    let void = fx.void();
+
+    // Register the synthetic `[]T` layout: `{ ptr: [*]T, len: usize }`.
+    let ptr_ty = fx.ty(Type::ManyPointer {
+        inner: char,
+        is_const: false,
+    });
+    let usize_ty = fx.usize();
+    fx.add_struct_layout(
+        slice,
+        StructLayout {
+            def_id: zeen_types::SLICE_STRUCT_DEF,
+            generic_args: vec![char],
+            fields: vec![
+                StructFieldLayout {
+                    def_id: zeen_types::SLICE_PTR_FIELD,
+                    ty: ptr_ty,
+                },
+                StructFieldLayout {
+                    def_id: zeen_types::SLICE_LEN_FIELD,
+                    ty: usize_ty,
+                },
+            ],
+        },
+    );
+
+    // `fn hello() []const char { return "hello!"; }` — a string literal
+    // returned from a function must lower to a `{ ptr, len }` slice.
+    let hello_str = const_str(&mut fx, "hello!");
+    let hello_def = fx.def("hello", DefKind::Function);
+    let mut hello = fx.fn_builder("hello", hello_def, slice);
+    hello.entry("bb0");
+    hello.ret(hello_str);
+    let hello_id = hello.finish();
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut main = fx.fn_builder("main", main_def, void);
+    let dest = main.temp(slice);
+    main.entry("bb0");
+    main.block("bb1");
+    main.set_current("bb0");
+    main.call(CallTarget::Direct(hello_id), vec![], dest, Some("bb1"));
+    main.set_current("bb1");
+    main.ret_void();
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("@str.0"), "{ir}");
+    // The returned slice stores the length of the string (without the NUL).
+    assert!(ir.contains("store i64 6"), "{ir}");
+    assert!(ir.contains("ret %slice.char"), "{ir}");
+    assert!(ir.contains("%slice.char"), "{ir}");
+}
+
+#[test]
 fn string_literal_coerces_to_char_array_param_and_formats() {
     let mut fx = Fixture::new();
     let char = fx.char();
