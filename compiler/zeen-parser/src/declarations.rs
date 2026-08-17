@@ -504,7 +504,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
             let span_start = self.p.current().span;
-            let is_pub = IsPub(false);
+            let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
             let is_extern = IsExtern(false);
 
             let decl = self.parse_fn(span_start, is_pub, is_extern)?;
@@ -592,7 +592,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
             let span_start = self.p.current().span;
-            let is_pub = IsPub(false);
+            let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
             let is_extern = IsExtern(false);
 
             let decl = self.parse_fn(span_start, is_pub, is_extern)?;
@@ -1322,6 +1322,76 @@ mod tests {
                             ..
                         }
                     ],
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn interface_methods_support_pub() {
+        const SRC: &str = "interface Display {
+            pub fn display(*const self) []const char;
+            fn hidden(*const self) []const char;
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::InterfaceDecl {
+                    name: _,
+                    is_pub: false,
+
+                    generics: None,
+                    methods: [
+                        Declaration {
+                            kind: DeclarationKind::FnDecl {
+                                name: _,
+                                is_pub: true,
+                                ..
+                            },
+                            ..
+                        },
+                        Declaration {
+                            kind: DeclarationKind::FnDecl {
+                                name: _,
+                                is_pub: false,
+                                ..
+                            },
+                            ..
+                        }
+                    ],
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn implement_methods_support_pub() {
+        const SRC: &str = "implement Display : Foo {
+            pub fn display(*const self) []const char;
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ImplementDecl {
+                    interface: _,
+                    object: _,
+                    generics: None,
+                    methods: [Declaration {
+                        kind: DeclarationKind::FnDecl {
+                            name: _,
+                            is_pub: true,
+                            ..
+                        },
+                        ..
+                    }],
                 },
                 ..
             }])

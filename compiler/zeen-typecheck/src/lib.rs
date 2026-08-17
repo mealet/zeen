@@ -3560,9 +3560,15 @@ impl<'res> TypeChecker<'res> {
                         source,
                     );
 
-                    // implement methods fulfilling an interface are implicitly public
+                    // implement methods fulfilling an interface take their
+                    // visibility from the interface method declaration
+                    let iface_is_pub = self
+                        .fn_sigs
+                        .get(&iface_method_def)
+                        .map(|iface_sig| iface_sig.is_pub)
+                        .unwrap_or(false);
                     if let Some(sig) = self.fn_sigs.get_mut(&impl_method_def) {
-                        sig.is_pub = true;
+                        sig.is_pub = iface_is_pub;
                     }
                 }
             }
@@ -4257,11 +4263,41 @@ mod tests {
     }
 
     #[test]
-    fn implement_method_is_implicitly_public() {
-        let result = typecheck(
+    fn non_pub_interface_method_is_private() {
+        let errors = typecheck(
             r#"
             interface Asd {
                 fn asd();
+            }
+
+            struct Foo {
+            }
+
+            implement Asd : Foo {
+                fn asd() {}
+            }
+
+            fn main() {
+                let foo = Foo.asd();
+            }
+            "#,
+        )
+        .expect_err("non-pub interface method must not be callable from outside");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::PrivateItemNotAccessible { .. })),
+            "expected PrivateItemNotAccessible error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn pub_interface_method_is_callable_from_outside() {
+        let result = typecheck(
+            r#"
+            interface Asd {
+                pub fn asd();
             }
 
             struct Foo {
@@ -4279,7 +4315,7 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "implement method fulfilling an interface is public"
+            "interface method declared pub must be publicly callable"
         );
     }
 
