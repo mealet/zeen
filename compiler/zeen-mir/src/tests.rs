@@ -426,3 +426,25 @@ fn struct_format_arg_is_lowered_to_display_call() {
         "println must receive a single display-result argument"
     );
 }
+
+#[test]
+fn slice_struct_field_registers_slice_layout() {
+    let mir = compile_mir_ok(
+        "struct S { pub slc: []const char } \
+         fn make() S { S { .slc = \"hi\" } } \
+         fn main() { let s = make(); @println(\"{}\", s.slc); }",
+    );
+
+    // A slice field must get a synthetic `{ ptr, len }` layout; without it
+    // codegen panics even when the slice points at static string data.
+    let has_slice_layout = mir
+        .program
+        .struct_layouts
+        .values()
+        .any(|layout| layout.def_id == zeen_types::SLICE_STRUCT_DEF);
+
+    assert!(
+        has_slice_layout,
+        "expected a registered slice layout for the struct field"
+    );
+}

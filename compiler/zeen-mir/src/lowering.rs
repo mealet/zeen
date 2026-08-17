@@ -259,7 +259,8 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    pub fn finish(self) -> MirProgram {
+    pub fn finish(mut self) -> MirProgram {
+        self.register_reachable_slice_layouts();
         self.program
     }
 
@@ -544,6 +545,51 @@ impl<'ctx> MirLowering<'ctx> {
                 ],
             },
         );
+    }
+
+    /// Registers slice layouts for every `Slice[T]` reachable from a struct
+    /// field. Codegen needs a `{ ptr, len }` body for any slice type that
+    /// shows up as a struct field — `register_slice_layout` alone only sees
+    /// slice-typed locals, so a struct holding a slice (even one pointing at
+    /// static string data) used to crash codegen.
+    fn register_reachable_slice_layouts(&mut self) {
+        let mut visited: HashSet<TypeId> = HashSet::new();
+        let keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
+        for layout_ty in keys {
+            let fields: Vec<TypeId> = self.program.struct_layouts[&layout_ty]
+                .fields
+                .iter()
+                .map(|f| f.ty)
+                .collect();
+            for field_ty in fields {
+                self.register_slice_layouts_in_type(field_ty, &mut visited);
+            }
+        }
+    }
+
+    fn register_slice_layouts_in_type(&mut self, ty: TypeId, visited: &mut HashSet<TypeId>) {
+        if !visited.insert(ty) {
+            return;
+        }
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Slice { element, .. } => {
+                self.register_slice_layout(ty);
+                self.register_slice_layouts_in_type(element, visited);
+            }
+            Type::Array { element, .. } => self.register_slice_layouts_in_type(element, visited),
+            Type::Struct { .. } => {
+                let fields: Vec<TypeId> = self
+                    .program
+                    .struct_layouts
+                    .get(&ty)
+                    .map(|layout| layout.fields.iter().map(|f| f.ty).collect())
+                    .unwrap_or_default();
+                for field_ty in fields {
+                    self.register_slice_layouts_in_type(field_ty, visited);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
