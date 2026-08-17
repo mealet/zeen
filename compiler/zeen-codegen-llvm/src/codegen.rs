@@ -1199,6 +1199,21 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     ) -> BasicValueEnum<'ctx> {
         match operand {
             Operand::Constant(c, _) => {
+                // A string literal coerces to a slice: build the `{ ptr, len }`
+                // fat pointer directly, using the compile-time string length
+                // (the null terminator is not part of the slice).
+                if let ConstValue::Str(spur) = c
+                    && matches!(
+                        self.typecheck.interner.get(target).clone(),
+                        Type::Slice { .. }
+                    )
+                {
+                    let content = self.resolve_spur(*spur);
+                    let ptr = self.get_str_global(&content).as_pointer_value();
+                    let slice_ty = self.map_basic_type(target);
+                    return self.make_slice_value(slice_ty, ptr, content.len() as u64);
+                }
+
                 let src_ty = match c {
                     ConstValue::Int(_) => Type::Builtin(BuiltinType::i32),
                     ConstValue::Float(_) => Type::Builtin(BuiltinType::f64),
@@ -1248,6 +1263,30 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 self.cast_value(value, &src, target)
             }
         }
+    }
+
+    /// Builds a `{ ptr, len }` slice value from a raw pointer and a length.
+    fn make_slice_value(
+        &mut self,
+        slice_ty: BasicTypeEnum<'ctx>,
+        ptr: PointerValue<'ctx>,
+        len: u64,
+    ) -> BasicValueEnum<'ctx> {
+        let alloca = self.builder.build_alloca(slice_ty, "slice").unwrap();
+        let ptr_field = self
+            .builder
+            .build_struct_gep(slice_ty, alloca, 0, "")
+            .unwrap();
+        self.builder.build_store(ptr_field, ptr).unwrap();
+        let len_field = self
+            .builder
+            .build_struct_gep(slice_ty, alloca, 1, "")
+            .unwrap();
+        let len_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+        self.builder
+            .build_store(len_field, len_ty.const_int(len, false))
+            .unwrap();
+        self.builder.build_load(slice_ty, alloca, "").unwrap()
     }
 
     fn cast_value(
