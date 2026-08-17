@@ -527,6 +527,58 @@ fn string_literal_coerces_to_slice_return_value() {
 }
 
 #[test]
+fn string_literal_in_struct_array_field_is_stored_inline() {
+    let mut fx = Fixture::new();
+    let char = fx.char();
+    let arr6 = fx.array(char, 6);
+    let str_def = fx.def("Str", DefKind::Struct);
+    let field_def = fx.def("inner", DefKind::Field);
+    let str_ty = fx.ty(Type::Struct {
+        def_id: str_def,
+        generic_args: vec![],
+    });
+    fx.add_struct_layout(
+        str_ty,
+        StructLayout {
+            def_id: str_def,
+            generic_args: vec![],
+            fields: vec![StructFieldLayout {
+                def_id: field_def,
+                ty: arr6,
+            }],
+        },
+    );
+
+    // `let s: Str = Str { .inner = "hello" };` — the string literal fills the
+    // `[6]char` field, so its bytes must be copied into the array field, not
+    // stored as a raw pointer to the literal global.
+    let hello = const_str(&mut fx, "hello");
+    let main_def = fx.def("main", DefKind::Function);
+    let void = fx.void();
+    let mut main = fx.fn_builder("main", main_def, void);
+    let s = main.local("s", str_ty);
+    main.entry("bb0");
+    main.storage_live(s);
+    main.assign(
+        place(s),
+        Rvalue::Aggregate {
+            kind: zeen_mir::AggregateKind::Struct(str_def),
+            operands: vec![hello],
+        },
+    );
+    main.ret_void();
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("store [6 x i8]"), "{ir}");
+    assert!(
+        !ir.contains("store ptr @str.1"),
+        "string literal must not be stored as a raw pointer into an array field, got:\n{ir}"
+    );
+}
+
+#[test]
 fn string_literal_coerces_to_char_array_param_and_formats() {
     let mut fx = Fixture::new();
     let char = fx.char();
