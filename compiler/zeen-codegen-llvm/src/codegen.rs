@@ -800,7 +800,19 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let alloca = self.builder.build_alloca(agg_ty, "aggregate").unwrap();
 
         for (i, operand) in operands.iter().enumerate() {
-            let value = self.operand_value(operand, None, func);
+            // A string literal stored into an array/slice field must be
+            // coerced to the field's value type (bytes for `[N]char`,
+            // `{ ptr, len }` for slices) instead of being stored as a raw
+            // pointer to the global literal.
+            let elem_ty = match kind {
+                AggregateKind::Struct(_) => self.program.struct_layouts[&expected_ty].fields[i].ty,
+                _ => self.index_element_type(expected_ty),
+            };
+            let value = if matches!(operand, Operand::Constant(ConstValue::Str(_), _)) {
+                self.cast_op(operand, elem_ty, func)
+            } else {
+                self.operand_value(operand, None, func)
+            };
             let elem_ptr = match kind {
                 AggregateKind::Struct(_) | AggregateKind::Slice => self
                     .builder
