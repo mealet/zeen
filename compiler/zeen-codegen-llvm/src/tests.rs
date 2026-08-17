@@ -467,6 +467,56 @@ fn string_constant_coerces_to_slice_argument() {
 }
 
 #[test]
+fn string_literal_coerces_to_char_array_param_and_formats() {
+    let mut fx = Fixture::new();
+    let char = fx.char();
+    let arr7 = fx.array(char, 7);
+    let void = fx.void();
+
+    let hello = const_str(&mut fx, "hello!");
+
+    let greet_def = fx.def("greet", DefKind::Function);
+    let mut greet = fx.fn_builder("greet", greet_def, void);
+    let name = greet.param("name", arr7);
+    let dest = greet.temp(void);
+    greet.entry("bb0");
+    greet.block("bb1");
+    greet.set_current("bb0");
+    greet.format(
+        vec![
+            FormatChunk::Literal("value is ".to_string()),
+            FormatChunk::Arg(FormatSpec::Display),
+        ],
+        vec![copy_of(name)],
+        vec![arr7],
+        dest,
+        Some("bb1"),
+    );
+    greet.set_current("bb1");
+    greet.ret_void();
+    let greet_id = greet.finish();
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut main = fx.fn_builder("main", main_def, void);
+    let dest = main.temp(void);
+    main.entry("bb0");
+    main.block("bb1");
+    main.set_current("bb0");
+    main.call(CallTarget::Direct(greet_id), vec![hello], dest, Some("bb1"));
+    main.set_current("bb1");
+    main.ret_void();
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    // The string literal coerces to a `[7 x i8]` array argument.
+    assert!(ir.contains("[7 x i8]"), "{ir}");
+    // The `[N]char` param is printed through `%s` over its address.
+    assert!(ir.contains("@printf"), "{ir}");
+    assert!(ir.contains("value is %s"), "{ir}");
+}
+
+#[test]
 fn extern_fn_call_uses_declared_symbol() {
     let mut fx = Fixture::new();
     let void = fx.void();
