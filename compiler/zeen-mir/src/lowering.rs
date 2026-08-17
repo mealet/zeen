@@ -19,7 +19,7 @@ use zeen_hir::{
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_typecheck::{
     coerce::builtin_is_integer,
-    format_str::{FormatChunk, FormatSpec},
+    format_str::{FormatChunk, FormatSpec, arg_specs},
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use zeen_types::{
@@ -1689,6 +1689,7 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> (BlockId, Operand) {
         let format_chunks = self.typecheck.format_specs.get(&hir_id).cloned();
+        let specs = format_chunks.as_deref().map(arg_specs);
 
         let value_exprs: &[Rc<HirExpr>] = if format_chunks.is_some() {
             &args[1..]
@@ -1699,11 +1700,30 @@ impl<'ctx> MirLowering<'ctx> {
         let mut block = block;
         let mut operands = Vec::with_capacity(value_exprs.len());
         let mut arg_types = Vec::with_capacity(value_exprs.len());
-        for arg in value_exprs {
-            let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+        for (i, arg) in value_exprs.iter().enumerate() {
+            let ty = self.expr_type(fb, arg);
+            let spec = specs.as_deref().and_then(|s| s.get(i)).copied();
+
+            // Struct operands with a `{}` / `{:?}` spec are lowered to a call
+            // to their `display`/`debug` interface method; the returned
+            // `[]const char` slice becomes the format argument.
+            let (b, op, arg_ty) = match (spec, self.typecheck.interner.get(ty).clone()) {
+                (Some(FormatSpec::Display | FormatSpec::Debug), Type::Struct { .. }) => {
+                    let iface = match spec {
+                        Some(FormatSpec::Display) => ("Display", "display"),
+                        _ => ("Debug", "debug"),
+                    };
+                    self.lower_display_format_arg(fb, arg, ty, iface, block)
+                }
+                _ => {
+                    let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                    (b, op, ty)
+                }
+            };
+
             block = b;
             operands.push(op);
-            arg_types.push(self.expr_type(fb, arg));
+            arg_types.push(arg_ty);
         }
 
         let result_ty = self
@@ -1740,6 +1760,106 @@ impl<'ctx> MirLowering<'ctx> {
                 self.place_to_operand(Place::from_local(dest), result_ty, None),
             )
         }
+    }
+
+    /// Lowers a `Display`/`Debug` format argument into a call to the struct's
+    /// interface method. The method is resolved from the concrete struct type
+    /// and monomorphized like any other method call; the returned
+    /// `[]const char` slice is passed on to the format macro.
+    fn lower_display_format_arg(
+        &mut self,
+        fb: &mut FnBuilder,
+        arg: &HirExpr,
+        obj_ty: TypeId,
+        iface: (&str, &str),
+        block: BlockId,
+    ) -> (BlockId, Operand, TypeId) {
+        let (iface_name, method_name) = iface;
+        let Type::Struct {
+            def_id: struct_def,
+            generic_args,
+        } = self.typecheck.interner.get(obj_ty).clone()
+        else {
+            return {
+                let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                (b, op, obj_ty)
+            };
+        };
+
+        let Some(method_def) = self.resolve_interface_method(struct_def, iface_name, method_name)
+        else {
+            return {
+                let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                (b, op, obj_ty)
+            };
+        };
+
+        let (block, place) = self.lower_expr_to_place_or_temp(fb, arg, block);
+        let (block, self_operand) = self.lower_place_receiver_operand(
+            fb,
+            place,
+            obj_ty,
+            method_def,
+            Some(arg.source.clone()),
+            block,
+        );
+
+        let mono_args = self.substitute_generic_args(fb, &generic_args);
+        let owner = self.typecheck.method_owner.get(&method_def).copied();
+        let mir_fn_id = self.monomorphize_fn(method_def, mono_args, owner);
+
+        let ret_ty = match self.typecheck.def_types.get(&method_def) {
+            Some(ty) => match self.typecheck.interner.get(*ty).clone() {
+                Type::Fn { ret, .. } => self.substitute_fn_type(fb, ret),
+                _ => self.typecheck.interner.intern(Type::Void),
+            },
+            None => self.typecheck.interner.intern(Type::Void),
+        };
+
+        let dest = fb.new_temp(ret_ty);
+        let next = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::Call {
+                func: CallTarget::Direct(mir_fn_id),
+                args: vec![self_operand],
+                destination: Place::from_local(dest),
+                target: Some(next),
+                source: None,
+            },
+        );
+
+        let op = self.place_to_operand(Place::from_local(dest), ret_ty, None);
+        (next, op, ret_ty)
+    }
+
+    /// Resolves the `DefId` of the method with `method_name` that implements
+    /// `iface_name` for `struct_def`, mirroring the typechecker's
+    /// interface-call resolution.
+    fn resolve_interface_method(
+        &self,
+        struct_def: DefId,
+        iface_name: &str,
+        method_name: &str,
+    ) -> Option<DefId> {
+        let iface_def = self
+            .resolution
+            .defs
+            .iter()
+            .find(|(_, info)| {
+                matches!(info.kind, DefKind::Interface)
+                    && self.rodeo.borrow().resolve(&info.name) == iface_name
+            })
+            .map(|(def, _)| *def)?;
+
+        let methods = self.resolution.impls.get(&(struct_def, iface_def))?;
+        methods.iter().copied().find(|&def| {
+            let Some(info) = self.resolution.defs.get(&def) else {
+                return false;
+            };
+            self.rodeo.borrow().resolve(&info.name) == method_name
+        })
     }
 
     fn lower_diverging_macro(

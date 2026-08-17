@@ -363,3 +363,66 @@ fn generic_nested_fn_includes_concrete_args() {
         "expected `main->id[f64]` in MIR function names, got {names:?}"
     );
 }
+
+#[test]
+fn struct_format_arg_is_lowered_to_display_call() {
+    let mir = compile_mir_ok(
+        "struct Foo {} \
+         implement Display : Foo { fn display(*const self) []const char { return \"foo\"; } } \
+         fn main() { let f = Foo {}; @println(\"{}\", f); }",
+    );
+
+    // The display method must be monomorphized: before the fix the format
+    // machinery never invoked it, so no `Foo.display` was emitted.
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+    assert!(
+        names.iter().any(|n| n == "Foo.display"),
+        "expected `Foo.display` in MIR function names, got {names:?}"
+    );
+
+    let display_id = mir
+        .program
+        .function_names
+        .iter()
+        .find(|(_, n)| n.as_str() == "Foo.display")
+        .map(|(id, _)| *id)
+        .expect("Foo.display id");
+
+    let main_id = mir
+        .program
+        .function_names
+        .iter()
+        .find(|(_, n)| n.as_str() == "main")
+        .map(|(id, _)| *id)
+        .expect("main id");
+    let main = &mir.program.functions[&main_id];
+
+    // The format argument is produced by a direct call to `Foo.display`
+    // right before the println macro call.
+    let calls_display = main.blocks.iter().any(|b| {
+        matches!(
+            b.terminator,
+            crate::Terminator::Call {
+                func: crate::CallTarget::Direct(id),
+                ..
+            } if id == display_id
+        )
+    });
+    assert!(calls_display, "expected a call to `Foo.display` in main");
+
+    // println must receive exactly one argument (the display result).
+    let println_has_single_arg = main.blocks.iter().any(|b| {
+        matches!(
+            b.terminator,
+            crate::Terminator::MacroCall {
+                kind: zeen_hir::HirMacroKind::Println,
+                ref arg_types,
+                ..
+            } if arg_types.len() == 1
+        )
+    });
+    assert!(
+        println_has_single_arg,
+        "println must receive a single display-result argument"
+    );
+}
