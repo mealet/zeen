@@ -401,6 +401,72 @@ fn format_returns_a_slice() {
 }
 
 #[test]
+fn string_constant_coerces_to_slice_argument() {
+    let mut fx = Fixture::new();
+    let char = fx.char();
+    let slice = fx.slice(char);
+    let void = fx.void();
+
+    // Register the synthetic `[]T` layout: `{ ptr: [*]T, len: usize }`.
+    let ptr_ty = fx.ty(Type::ManyPointer {
+        inner: char,
+        is_const: false,
+    });
+    let usize_ty = fx.usize();
+    fx.add_struct_layout(
+        slice,
+        StructLayout {
+            def_id: zeen_types::SLICE_STRUCT_DEF,
+            generic_args: vec![char],
+            fields: vec![
+                StructFieldLayout {
+                    def_id: zeen_types::SLICE_PTR_FIELD,
+                    ty: ptr_ty,
+                },
+                StructFieldLayout {
+                    def_id: zeen_types::SLICE_LEN_FIELD,
+                    ty: usize_ty,
+                },
+            ],
+        },
+    );
+
+    let greet_def = fx.def("greet", DefKind::Function);
+    let mut greet = fx.fn_builder("greet", greet_def, slice);
+    let name = greet.param("name", slice);
+    greet.entry("bb0");
+    greet.block("bb1");
+    greet.set_current("bb0");
+    greet.ret(copy_of(name));
+    let greet_id = greet.finish();
+
+    let mealet = const_str(&mut fx, "mealet");
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut main = fx.fn_builder("main", main_def, void);
+    let dest = main.temp(slice);
+    main.entry("bb0");
+    main.block("bb1");
+    main.set_current("bb0");
+    main.call(
+        CallTarget::Direct(greet_id),
+        vec![mealet],
+        dest,
+        Some("bb1"),
+    );
+    main.set_current("bb1");
+    main.ret_void();
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("@str.0"), "{ir}");
+    assert!(ir.contains("store i64 6"), "{ir}");
+    assert!(ir.contains("%slice.char"), "{ir}");
+    assert!(ir.contains("call void @zeen_main"), "{ir}");
+}
+
+#[test]
 fn extern_fn_call_uses_declared_symbol() {
     let mut fx = Fixture::new();
     let void = fx.void();
