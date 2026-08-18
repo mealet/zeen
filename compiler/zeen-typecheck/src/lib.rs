@@ -307,6 +307,7 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {}
+            HirDeclKind::GlobalVar { .. } => {}
         };
     }
 
@@ -830,6 +831,7 @@ impl<'res> TypeChecker<'res> {
 
             HirDeclKind::Enum(_)
             | HirDeclKind::ExternVar { .. }
+            | HirDeclKind::GlobalVar { .. }
             | HirDeclKind::ExternLink
             | HirDeclKind::ExternInclude => {}
         }
