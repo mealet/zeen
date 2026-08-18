@@ -162,6 +162,21 @@ pub enum ResolveError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("cyclic dependency between global variables: `{chain}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::resolver::global_var_cycle),
+        help("global variable initializers cannot depend on each other in a cycle")
+    )]
+    GlobalVarCycle {
+        chain: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Error, Diagnostic, Clone)]
