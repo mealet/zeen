@@ -2329,7 +2329,13 @@ impl<'ctx> MirLowering<'ctx> {
             .get(def_id)
             .copied()
             .unwrap_or(usize_ty);
-        let counter = fb.new_local(loop_var_ty, LocalKind::Temporary, Mutability::Mut, None, None);
+        let counter = fb.new_local(
+            loop_var_ty,
+            LocalKind::Temporary,
+            Mutability::Mut,
+            None,
+            None,
+        );
         fb.push_stmt(
             block,
             MirStatement::Assign {

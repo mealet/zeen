@@ -240,9 +240,7 @@ fn slice_index_on_call_result_materializes_slice() {
 
 #[test]
 fn for_loop_over_array_literal_materializes_iterator() {
-    compile_mir_ok(
-        "fn main() { for (element : [123, 321, 333]) { @println(\"{}\", element); } }",
-    );
+    compile_mir_ok("fn main() { for (element : [123, 321, 333]) { @println(\"{}\", element); } }");
 }
 
 #[test]
