@@ -273,6 +273,7 @@ impl<'ctx> NameResolver {
             }
 
             DeclarationKind::ExternLink { .. } => {}
+            DeclarationKind::GlobalVar { .. } => {}
             DeclarationKind::ImplementDecl { .. } => {}
             DeclarationKind::Use { .. } => {}
         }
@@ -450,6 +451,7 @@ impl<'ctx> NameResolver {
             }
 
             DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => {}
+            DeclarationKind::GlobalVar { .. } => {}
             DeclarationKind::Use { .. } => {}
         }
     }
