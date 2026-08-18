@@ -2089,19 +2089,20 @@ impl<'res> TypeChecker<'res> {
                 // When the expected type is a fixed-size array, check each
                 // element against its element type directly (so e.g. string
                 // literals coerce to `[]const char` inside `[N][]const char`).
-                if let Type::Array {
-                    element,
-                    len: Some(n),
-                    ..
-                } = self.result.interner.get(expected).clone()
-                {
-                    if n == elements.len() as u64 {
-                        for el in elements {
-                            self.check_expr(el, element, false);
-                        }
-                        self.result.record_expr_type(expr.id, expected);
-                        return expected;
+                let element_ty = match self.result.interner.get(expected).clone() {
+                    Type::Array {
+                        element,
+                        len: Some(n),
+                        ..
+                    } if n == elements.len() as u64 => Some(element),
+                    _ => None,
+                };
+                if let Some(element) = element_ty {
+                    for el in elements {
+                        self.check_expr(el, element, false);
                     }
+                    self.result.record_expr_type(expr.id, expected);
+                    return expected;
                 }
                 self.synth_expr(expr)
             }
@@ -4791,6 +4792,30 @@ mod tests {
         assert!(
             result.is_ok(),
             "string literals should satisfy Display/Debug bounds: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn array_literal_strings_coerce_to_slices() {
+        let result = typecheck(
+            r#"
+            struct S {
+              pub list: [2][]const char,
+            }
+
+            fn main() {
+              let o = S { .list = ["aa", "bb"] };
+              let m: [2][2][]const char = [["m00", "m01"], ["m10", "m11"]];
+              @println("{}", o.list[0]);
+              @println("{}", m[1][0]);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "string literals inside array literals should coerce to slices: {:?}",
             result.err()
         );
     }
