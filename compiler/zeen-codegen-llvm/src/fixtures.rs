@@ -446,6 +446,10 @@ pub fn const_bool(b: bool) -> Operand {
     Operand::Constant(ConstValue::Bool(b), None)
 }
 
+pub fn const_float(f: f64) -> Operand {
+    Operand::Constant(ConstValue::Float(f), None)
+}
+
 pub fn const_str(fixture: &mut Fixture, value: &str) -> Operand {
     Operand::Constant(ConstValue::Str(fixture.intern(value)), None)
 }
