@@ -257,4 +257,62 @@ mod tests {
                 .any(|e| matches!(e, ResolveError::CoreReserved { .. }))
         );
     }
+
+    #[test]
+    fn registers_global_var_defs() {
+        let fx = resolve_ok("let g: i32 = 0; pub const c: i32 = 1;");
+
+        let g = fx.find_def("g").expect("global g must be defined");
+        assert!(matches!(g.kind, DefKind::GlobalVar { is_const: false }));
+        assert!(!g.is_pub);
+
+        let c = fx.find_def("c").expect("global c must be defined");
+        assert!(matches!(c.kind, DefKind::GlobalVar { is_const: true }));
+        assert!(c.is_pub);
+    }
+
+    #[test]
+    fn global_var_forward_reference_resolves() {
+        resolve_ok("let a: i32 = b; let b: i32 = 0;");
+    }
+
+    #[test]
+    fn global_var_visible_from_function() {
+        resolve_ok("let g: i32 = 0; fn main() i32 { return g; }");
+    }
+
+    #[test]
+    fn global_var_unresolved_ident_is_reported() {
+        let errs = resolve_full("let a: i32 = missing;").unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ResolveError::UnresolvedIdent { name, .. } if name.as_str() == "missing"))
+        );
+    }
+
+    #[test]
+    fn global_var_cycle_is_reported() {
+        let errs = resolve_full("let a: i32 = b; let b: i32 = a;").unwrap_err();
+
+        assert!(errs.iter().any(|e| matches!(
+            e,
+            ResolveError::GlobalVarCycle { chain, .. } if chain.as_str() == "a -> b -> a"
+        )));
+    }
+
+    #[test]
+    fn self_referencing_global_var_cycle_is_reported() {
+        let errs = resolve_full("let a: i32 = a;").unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ResolveError::GlobalVarCycle { chain, .. } if chain.as_str() == "a -> a"))
+        );
+    }
+
+    #[test]
+    fn global_var_dependencies_chain_is_ok() {
+        resolve_ok("let a: i32 = 0; let b: i32 = a; let c: i32 = b;");
+    }
 }
