@@ -446,3 +446,34 @@ fn slice_struct_field_registers_slice_layout() {
         "expected a registered slice layout for the struct field"
     );
 }
+
+#[test]
+fn discarded_expression_results_warn() {
+    let mir = compile_mir_ok(
+        "fn foo() i32 { 123 } \
+         fn bar() { @println(\"hi\"); } \
+         fn main() { foo(); let _ = foo(); let x = foo(); x + 1; bar(); @println(\"ok\"); }",
+    );
+
+    assert_eq!(
+        mir.warnings.len(),
+        2,
+        "expected warnings for `foo();` and `x + 1;` only, got {:?}",
+        mir.warnings
+    );
+}
+
+#[test]
+fn explicit_discard_and_void_statements_do_not_warn() {
+    let mir = compile_mir_ok(
+        "fn foo() i32 { 123 } \
+         fn bar() { @println(\"hi\"); } \
+         fn main() { let _ = foo(); bar(); @println(\"ok\"); let x = foo(); x = x + 1; }",
+    );
+
+    assert!(
+        mir.warnings.is_empty(),
+        "explicit discards and void statements must not warn, got {:?}",
+        mir.warnings
+    );
+}

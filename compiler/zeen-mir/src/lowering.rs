@@ -5,6 +5,7 @@ use std::{
 };
 
 use lasso::{Rodeo, Spur};
+use smol_str::SmolStr;
 use zeen_ast::{
     Source,
     expressions::{BinaryOp, Literal, UnaryOp},
@@ -26,6 +27,7 @@ use zeen_types::{
     SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
 };
 
+use crate::error::MirWarning;
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
     LocalKind, MirFunction, MirFunctionId, MirProgram, MirStatement, Mutability, Operand, Place,
@@ -35,6 +37,7 @@ use crate::{
 pub struct MirLoweringResult {
     pub program: MirProgram,
     pub main_fn: Option<MirFunctionId>,
+    pub warnings: Vec<MirWarning>,
 }
 
 pub fn lower_program<'ctx>(
@@ -95,12 +98,17 @@ pub fn lower_program<'ctx>(
 
     lowering.register_drop_functions();
 
+    let warnings = std::mem::take(&mut lowering.warnings);
     let mut program = lowering.finish();
     let extern_vars = crate::collecter::collect_extern_vars(module, typecheck, &rodeo);
 
     program.extern_vars = extern_vars;
 
-    MirLoweringResult { program, main_fn }
+    MirLoweringResult {
+        program,
+        main_fn,
+        warnings,
+    }
 }
 
 pub struct MirLowering<'ctx> {
@@ -112,6 +120,8 @@ pub struct MirLowering<'ctx> {
 
     program: MirProgram,
     mono_cache: MonoCache,
+
+    warnings: Vec<MirWarning>,
 
     /// Stack of functions currently being lowered. Used to resolve the parent
     /// of a nested function so its MIR name becomes `<parent>-><name>`.
@@ -255,6 +265,7 @@ impl<'ctx> MirLowering<'ctx> {
             mono_cache: MonoCache::new(),
             hir_fns_by_def,
             fn_stack: Vec::new(),
+            warnings: Vec::new(),
             mode,
         }
     }
@@ -2292,6 +2303,40 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirStmtKind::Expr(expr) => {
+                // A statement-position expression whose value is discarded
+                // (`foo();`): warn unless the value is void/never (`@println`,
+                // `@panic`, ...).
+                if !matches!(
+                    self.typecheck
+                        .expr_types
+                        .get(&expr.id)
+                        .map(|ty| self.typecheck.interner.get(*ty)),
+                    Some(Type::Void | Type::Never)
+                ) {
+                    let what = match &expr.kind {
+                        HirExprKind::Call { callee, .. } => {
+                            match &callee.kind {
+                                HirExprKind::VarRef(def_id) => {
+                                    let name = self
+                                        .resolution
+                                        .defs
+                                        .get(def_id)
+                                        .map(|info| self.rodeo.borrow().resolve(&info.name).to_string())
+                                        .unwrap_or_default();
+                                    SmolStr::from(format!("function call `{name}`"))
+                                }
+                                _ => SmolStr::from("expression"),
+                            }
+                        }
+                        _ => SmolStr::from("expression"),
+                    };
+                    self.warnings.push(MirWarning::UnusedExpressionResult {
+                        what,
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+                }
+
                 let (block, _operand) = self.lower_expr_to_operand(fb, expr, block);
                 block
             }

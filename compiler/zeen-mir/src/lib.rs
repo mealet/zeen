@@ -14,6 +14,7 @@ use zeen_typecheck::format_str::FormatChunk;
 use zeen_types::TypeId;
 
 pub mod collecter;
+pub mod error;
 pub mod lowering;
 pub mod printer;
 
