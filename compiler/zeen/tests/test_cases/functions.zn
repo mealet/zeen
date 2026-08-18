@@ -1,0 +1,15 @@
+fn add(a: i32, b: i32) i32 {
+  return a + b;
+}
+
+fn greet() {
+  @println("hi");
+}
+
+fn main() i32 {
+  let x = add(10, 20);
+  @println("{}", x);
+  @println("{}", add(1, 2));
+  greet();
+  return 0;
+}

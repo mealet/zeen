@@ -1,0 +1,24 @@
+fn main() {
+  let a: i32 = 123;
+  let ptr = @as(*u8, &a);
+
+  @println("before: {}", a);
+  *ptr = 5;
+  @println("after byte0: {}", @as(i32, *ptr));
+  *(ptr + 1) = 123;
+  @println("after byte1: {}", @as(i32, *(ptr + 1)));
+
+  let pi = @as(*i32, &a);
+  let pi2 = pi + 2;
+  @println("i32 diff: {}", @as(usize, pi2 - pi));
+
+  let n: usize = 3;
+  let pn = pi + n;
+  @println("usize diff: {}", @as(usize, pn - pi));
+
+  let pi3 = 4 + pi;
+  @println("int+ptr diff: {}", @as(usize, pi3 - pi));
+
+  let pi4 = pi2 - 1;
+  @println("ptr-int diff: {}", @as(usize, pi4 - pi));
+}

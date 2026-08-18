@@ -5,10 +5,12 @@ use std::{
 };
 
 use lasso::{Rodeo, Spur};
+use smol_str::SmolStr;
 use zeen_ast::{
     Source,
     expressions::{BinaryOp, Literal, UnaryOp},
 };
+use zeen_driver::CompilationMode;
 use zeen_hir::{
     HirId, HirMacroKind, HirModule, HirTypeExpr,
     decl::HirFn,
@@ -18,12 +20,14 @@ use zeen_hir::{
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_typecheck::{
     coerce::builtin_is_integer,
+    format_str::{FormatChunk, FormatSpec, arg_specs},
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use zeen_types::{
     SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
 };
 
+use crate::error::MirWarning;
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
     LocalKind, MirFunction, MirFunctionId, MirProgram, MirStatement, Mutability, Operand, Place,
@@ -33,6 +37,7 @@ use crate::{
 pub struct MirLoweringResult {
     pub program: MirProgram,
     pub main_fn: Option<MirFunctionId>,
+    pub warnings: Vec<MirWarning>,
 }
 
 pub fn lower_program<'ctx>(
@@ -40,12 +45,16 @@ pub fn lower_program<'ctx>(
     typecheck: &'ctx mut TypeCheckResult,
     resolution: &'ctx ResolutionResult,
     module: &HirModule,
+    mode: CompilationMode,
 ) -> MirLoweringResult {
     let main_def = typecheck.main_fn_def;
 
     let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
+    // Only top-level (non-nested) functions are eagerly lowered; nested ones
+    // are registered when the enclosing function actually calls them.
     let fns_with_owners: Vec<(DefId, Rc<HirFn>, Option<DefId>)> = hir_fns_by_def
         .iter()
+        .filter(|(_, f)| f.parent_fn.is_none())
         .map(|f| {
             (
                 *f.0,
@@ -61,6 +70,7 @@ pub fn lower_program<'ctx>(
         resolution,
         module,
         &hir_fns_by_def,
+        mode,
     );
 
     let mut main_fn: Option<MirFunctionId> = None;
@@ -88,12 +98,17 @@ pub fn lower_program<'ctx>(
 
     lowering.register_drop_functions();
 
+    let warnings = std::mem::take(&mut lowering.warnings);
     let mut program = lowering.finish();
     let extern_vars = crate::collecter::collect_extern_vars(module, typecheck, &rodeo);
 
     program.extern_vars = extern_vars;
 
-    MirLoweringResult { program, main_fn }
+    MirLoweringResult {
+        program,
+        main_fn,
+        warnings,
+    }
 }
 
 pub struct MirLowering<'ctx> {
@@ -105,6 +120,22 @@ pub struct MirLowering<'ctx> {
 
     program: MirProgram,
     mono_cache: MonoCache,
+
+    warnings: Vec<MirWarning>,
+
+    /// Stack of functions currently being lowered. Used to resolve the parent
+    /// of a nested function so its MIR name becomes `<parent>-><name>`.
+    fn_stack: Vec<FnContext>,
+
+    mode: CompilationMode,
+}
+
+/// The enclosing function of the one being lowered, used to prefix nested
+/// function names with their parent.
+#[derive(Debug, Clone)]
+pub struct FnContext {
+    pub def_id: DefId,
+    pub readable_name: String,
 }
 
 #[derive(Default)]
@@ -199,6 +230,22 @@ impl FnBuilder {
     fn set_terminator(&mut self, block: BlockId, term: Terminator) {
         self.func.block_mut(block).terminator = term;
     }
+
+    /// Appends a fallthrough `Goto` only when the block does not already end
+    /// with a terminator (e.g. `break`/`continue`/`return` inside an `if`
+    /// branch). Overwriting those would silently swallow the early exit.
+    fn join_if_open(&mut self, block: BlockId, join: BlockId) {
+        if self.block_is_open(block) {
+            self.set_terminator(block, Terminator::Goto(join));
+        }
+    }
+
+    fn block_is_open(&self, block: BlockId) -> bool {
+        matches!(
+            self.func.block(block).terminator,
+            Terminator::Unreachable // placeholder for a block that still needs a terminator
+        )
+    }
 }
 
 impl<'ctx> MirLowering<'ctx> {
@@ -208,6 +255,7 @@ impl<'ctx> MirLowering<'ctx> {
         resolution: &'ctx ResolutionResult,
         module: &HirModule,
         hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
+        mode: CompilationMode,
     ) -> Self {
         Self {
             rodeo,
@@ -216,10 +264,14 @@ impl<'ctx> MirLowering<'ctx> {
             program: MirProgram::default(),
             mono_cache: MonoCache::new(),
             hir_fns_by_def,
+            fn_stack: Vec::new(),
+            warnings: Vec::new(),
+            mode,
         }
     }
 
-    pub fn finish(self) -> MirProgram {
+    pub fn finish(mut self) -> MirProgram {
+        self.register_reachable_slice_layouts();
         self.program
     }
 
@@ -232,7 +284,7 @@ impl<'ctx> MirLowering<'ctx> {
             return;
         };
 
-        let candidate_types: Vec<(DefId, Vec<TypeId>)> = self
+        let candidate_types: Vec<(TypeId, DefId, Vec<TypeId>)> = self
             .program
             .functions
             .values()
@@ -241,13 +293,13 @@ impl<'ctx> MirLowering<'ctx> {
                 Type::Struct {
                     def_id,
                     generic_args,
-                } => Some((def_id, generic_args)),
+                } => Some((ty, def_id, generic_args)),
                 _ => None,
             })
             .collect();
 
         let mut seen: HashSet<(DefId, Vec<TypeId>)> = HashSet::new();
-        for (struct_def, generic_args) in candidate_types {
+        for (ty, struct_def, generic_args) in candidate_types {
             let is_new = seen.insert((struct_def, generic_args.clone()));
             if !is_new {
                 continue;
@@ -276,6 +328,7 @@ impl<'ctx> MirLowering<'ctx> {
             if let Some(func) = self.program.functions.get_mut(&mono_id) {
                 func.is_drop_impl = true;
             }
+            self.program.drop_functions.insert(ty, mono_id);
         }
     }
 
@@ -328,6 +381,14 @@ impl<'ctx> MirLowering<'ctx> {
 
     fn set_function_name(&mut self, id: MirFunctionId, name: impl AsRef<str>) {
         self.program.function_names.insert(id, name.as_ref().into());
+    }
+
+    fn is_float_ty(&self, ty: TypeId) -> bool {
+        matches!(
+            self.typecheck.interner.get(ty),
+            Type::Builtin(zeen_ast::types::BuiltinType::f32 | zeen_ast::types::BuiltinType::f64)
+                | Type::FloatLiteral
+        )
     }
 
     fn mir_type_is_copy(&self, ty: TypeId) -> bool {
@@ -496,6 +557,64 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
     }
+
+    /// Registers slice layouts for every `Slice[T]` reachable from a struct
+    /// field. Codegen needs a `{ ptr, len }` body for any slice type that
+    /// shows up as a struct field — `register_slice_layout` alone only sees
+    /// slice-typed locals, so a struct holding a slice (even one pointing at
+    /// static string data) used to crash codegen.
+    fn register_reachable_slice_layouts(&mut self) {
+        let mut visited: HashSet<TypeId> = HashSet::new();
+        let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
+        for layout_ty in struct_keys {
+            let fields: Vec<TypeId> = self.program.struct_layouts[&layout_ty]
+                .fields
+                .iter()
+                .map(|f| f.ty)
+                .collect();
+            for field_ty in fields {
+                self.register_slice_layouts_in_type(field_ty, &mut visited);
+            }
+        }
+
+        // Array-typed locals (e.g. `[N][]const char`) never hit
+        // `register_slice_layout` directly, but their element slices need a
+        // layout all the same.
+        let local_tys: Vec<TypeId> = self
+            .program
+            .functions
+            .values()
+            .flat_map(|f| f.locals.iter().map(|l| l.ty))
+            .collect();
+        for ty in local_tys {
+            self.register_slice_layouts_in_type(ty, &mut visited);
+        }
+    }
+
+    fn register_slice_layouts_in_type(&mut self, ty: TypeId, visited: &mut HashSet<TypeId>) {
+        if !visited.insert(ty) {
+            return;
+        }
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Slice { element, .. } => {
+                self.register_slice_layout(ty);
+                self.register_slice_layouts_in_type(element, visited);
+            }
+            Type::Array { element, .. } => self.register_slice_layouts_in_type(element, visited),
+            Type::Struct { .. } => {
+                let fields: Vec<TypeId> = self
+                    .program
+                    .struct_layouts
+                    .get(&ty)
+                    .map(|layout| layout.fields.iter().map(|f| f.ty).collect())
+                    .unwrap_or_default();
+                for field_ty in fields {
+                    self.register_slice_layouts_in_type(field_ty, visited);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 impl<'ctx> MirLowering<'ctx> {
@@ -515,6 +634,21 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
+                // A function name used as a value (`let f = foo;`) lowers to a
+                // function-pointer constant, not a local place read.
+                if matches!(&expr.kind, HirExprKind::VarRef(_))
+                    && matches!(
+                        self.resolution.defs.get(def_id).map(|info| &info.kind),
+                        Some(DefKind::Function)
+                    )
+                {
+                    let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None);
+                    return (
+                        block,
+                        Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
+                    );
+                }
+
                 let local = *fb.locals_by_def.get(def_id).unwrap_or_else(|| {
                     panic!("HIR DefId {:?} has no MIR local", def_id);
                 });
@@ -542,6 +676,32 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
 
                 let result_ty = self.expr_type(fb, expr);
+
+                let rhs_ty = self.expr_type(fb, rhs);
+                let is_float_div = self.is_float_ty(rhs_ty);
+
+                // `/` and `%` panic on a zero divisor in Debug builds; the
+                // divisor is materialized into a local so the guard can read it
+                // without moving the value the division itself uses. Floats are
+                // excluded: IEEE-754 division by zero yields inf/nan.
+                let (block, rhs_op) =
+                    if matches!(op, BinaryOp::Div | BinaryOp::Mod) && !is_float_div {
+                        let rhs_local = self.operand_to_local(fb, rhs_op, rhs_ty, block);
+                        let block = self.lower_div_zero_check(
+                            fb,
+                            block,
+                            rhs_local,
+                            rhs_ty,
+                            Some(expr.source.clone()),
+                        );
+                        (
+                            block,
+                            Operand::Copy(Place::from_local(rhs_local), Some(expr.source.clone())),
+                        )
+                    } else {
+                        (block, rhs_op)
+                    };
+
                 let temp = fb.new_temp(result_ty);
 
                 fb.push_stmt(
@@ -567,7 +727,6 @@ impl<'ctx> MirLowering<'ctx> {
                 expr: inner,
                 op: UnaryOp::AddrOf,
             } => {
-                let (block, inner_place) = self.lower_expr_to_place(fb, inner, block);
                 let result_ty = self.expr_type(fb, expr);
 
                 // `&array` lowers to a slice: build the `{ ptr, len }` fat
@@ -587,6 +746,26 @@ impl<'ctx> MirLowering<'ctx> {
                         is_const,
                     });
                     let ptr_temp = fb.new_temp(ptr_ty);
+
+                    // `&` needs a place to point at. When the operand is not an
+                    // lvalue (e.g. an array literal), materialize it into a temp
+                    // local first so we can take its address instead of panicking.
+                    let (block, inner_place) = if self.expr_is_place(inner) {
+                        self.lower_expr_to_place(fb, inner, block)
+                    } else {
+                        let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
+                        let temp = fb.new_temp(inner_ty);
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::Use(inner_op),
+                                source: Some(inner.source.clone()),
+                            },
+                        );
+                        (block, Place::from_local(temp))
+                    };
+
                     fb.push_stmt(
                         block,
                         MirStatement::Assign {
@@ -626,6 +805,34 @@ impl<'ctx> MirLowering<'ctx> {
                 let is_const = match self.typecheck.interner.get(result_ty).clone() {
                     Type::Pointer { is_const, .. } => is_const,
                     _ => false,
+                };
+
+                // Type of the pointee. Use the pointer's own inner type so a
+                // literal operand is pinned to the concrete pointee (`&123`
+                // in a `*i64` context materializes an `i64` temp, not an `i32`
+                // defaulted one).
+                let inner_ty = match self.typecheck.interner.get(result_ty).clone() {
+                    Type::Pointer { inner, .. } => inner,
+                    _ => self.expr_type(fb, inner),
+                };
+
+                // `&` needs a place to point at. When the operand is not an
+                // lvalue (e.g. `&123`, `&(a + b)`), materialize it into a temp
+                // local first so we can take its address instead of panicking.
+                let (block, inner_place) = if self.expr_is_place(inner) {
+                    self.lower_expr_to_place(fb, inner, block)
+                } else {
+                    let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
+                    let temp = fb.new_temp(inner_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Use(inner_op),
+                            source: Some(inner.source.clone()),
+                        },
+                    );
+                    (block, Place::from_local(temp))
                 };
 
                 let temp = fb.new_temp(result_ty);
@@ -692,13 +899,22 @@ impl<'ctx> MirLowering<'ctx> {
                 }
 
                 let obj_ty = self.expr_type(fb, object);
-                let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
+                let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
 
                 let index_local = {
                     let idx_ty = self.expr_type(fb, index);
                     self.operand_to_local(fb, index_operand, idx_ty, block)
                 };
+
+                let block = self.lower_bounds_check(
+                    fb,
+                    block,
+                    &obj_place,
+                    obj_ty,
+                    index_local,
+                    Some(expr.source.clone()),
+                );
 
                 let elem_place = match self.typecheck.interner.get(obj_ty).clone() {
                     Type::Array { .. } | Type::ManyPointer { .. } => obj_place.index(index_local),
@@ -870,8 +1086,8 @@ impl<'ctx> MirLowering<'ctx> {
 
                 if !has_else {
                     let join = fb.new_block();
-                    fb.set_terminator(then_end, Terminator::Goto(join));
-                    fb.set_terminator(else_bb, Terminator::Goto(join));
+                    fb.join_if_open(then_end, join);
+                    fb.join_if_open(else_bb, join);
                     return (join, Operand::Constant(ConstValue::Void, None));
                 }
 
@@ -881,25 +1097,29 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let result_local = fb.new_temp(result_ty);
 
-                fb.push_stmt(
-                    then_end,
-                    MirStatement::Assign {
-                        place: Place::from_local(result_local),
-                        rvalue: Rvalue::Use(then_operand),
-                        source: Some(expr.source.clone()),
-                    },
-                );
-                fb.set_terminator(then_end, Terminator::Goto(join));
+                if fb.block_is_open(then_end) {
+                    fb.push_stmt(
+                        then_end,
+                        MirStatement::Assign {
+                            place: Place::from_local(result_local),
+                            rvalue: Rvalue::Use(then_operand),
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    fb.set_terminator(then_end, Terminator::Goto(join));
+                }
 
-                fb.push_stmt(
-                    else_end,
-                    MirStatement::Assign {
-                        place: Place::from_local(result_local),
-                        rvalue: Rvalue::Use(else_operand),
-                        source: Some(expr.source.clone()),
-                    },
-                );
-                fb.set_terminator(else_end, Terminator::Goto(join));
+                if fb.block_is_open(else_end) {
+                    fb.push_stmt(
+                        else_end,
+                        MirStatement::Assign {
+                            place: Place::from_local(result_local),
+                            rvalue: Rvalue::Use(else_operand),
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    fb.set_terminator(else_end, Terminator::Goto(join));
+                }
 
                 (
                     join,
@@ -1032,6 +1252,13 @@ impl<'ctx> MirLowering<'ctx> {
                     )
                 }
 
+                HirMacroKind::Dbg if self.mode == CompilationMode::Release => {
+                    let value = args
+                        .first()
+                        .expect("typechecker requires @dbg to have exactly one argument");
+                    self.lower_expr_to_operand(fb, value, block)
+                }
+
                 HirMacroKind::Print
                 | HirMacroKind::Println
                 | HirMacroKind::Format
@@ -1099,6 +1326,49 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    /// Whether `expr` can be lowered to a place by [`Self::lower_expr_to_place`].
+    /// Mirrors the dispatch in that method.
+    fn expr_is_place(&self, expr: &HirExpr) -> bool {
+        match &expr.kind {
+            HirExprKind::VarRef(_) | HirExprKind::SelfValue(_) => true,
+            HirExprKind::FieldAccess { object, .. } => self.expr_is_place(object),
+            HirExprKind::SliceAccess { object, .. } => self.expr_is_place(object),
+            HirExprKind::Unary {
+                expr: inner,
+                op: UnaryOp::Deref,
+            } => self.expr_is_place(inner),
+            _ => false,
+        }
+    }
+
+    /// Lower `expr` to a place, materializing it into a temp local first when
+    /// it is not an lvalue (e.g. `get_obj().field` or `*get_ptr()`). The temp
+    /// is a fresh storage cell that lives for the rest of the function, so the
+    /// returned place is valid to read, write or take the address of.
+    fn lower_expr_to_place_or_temp(
+        &mut self,
+        fb: &mut FnBuilder,
+        expr: &HirExpr,
+        block: BlockId,
+    ) -> (BlockId, Place) {
+        if self.expr_is_place(expr) {
+            self.lower_expr_to_place(fb, expr, block)
+        } else {
+            let ty = self.expr_type(fb, expr);
+            let (block, operand) = self.lower_expr_to_operand(fb, expr, block);
+            let temp = fb.new_temp(ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(temp),
+                    rvalue: Rvalue::Use(operand),
+                    source: Some(expr.source.clone()),
+                },
+            );
+            (block, Place::from_local(temp))
+        }
+    }
+
     fn lower_expr_to_place(
         &mut self,
         fb: &mut FnBuilder,
@@ -1117,12 +1387,24 @@ impl<'ctx> MirLowering<'ctx> {
                     .field_resolutions
                     .get(&expr.id)
                     .expect("unresolved shit");
-                let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
-                (block, obj_place.field(field_def))
+                let obj_ty = self.expr_type(fb, object);
+                let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
+
+                // Field access through a pointer auto-derefs (`sf.x` where
+                // `sf: *Foo`): the typechecker allows it, so insert the deref
+                // projection explicitly instead of projecting into the pointer.
+                let place = if matches!(self.typecheck.interner.get(obj_ty), Type::Pointer { .. }) {
+                    obj_place.deref().field(field_def)
+                } else {
+                    obj_place.field(field_def)
+                };
+
+                (block, place)
             }
 
             HirExprKind::SliceAccess { object, index } => {
-                let (block, obj_place) = self.lower_expr_to_place(fb, object, block);
+                let obj_ty = self.expr_type(fb, object);
+                let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
 
                 let index_local = match index_operand {
@@ -1148,6 +1430,15 @@ impl<'ctx> MirLowering<'ctx> {
                     }
                 };
 
+                let block = self.lower_bounds_check(
+                    fb,
+                    block,
+                    &obj_place,
+                    obj_ty,
+                    index_local,
+                    Some(expr.source.clone()),
+                );
+
                 (block, obj_place.index(index_local))
             }
 
@@ -1155,7 +1446,7 @@ impl<'ctx> MirLowering<'ctx> {
                 expr: inner,
                 op: UnaryOp::Deref,
             } => {
-                let (block, inner_place) = self.lower_expr_to_place(fb, inner, block);
+                let (block, inner_place) = self.lower_expr_to_place_or_temp(fb, inner, block);
                 (block, inner_place.deref())
             }
 
@@ -1194,7 +1485,7 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> (BlockId, Operand) {
         let obj_ty = self.expr_type(fb, object);
-        let (block, place) = self.lower_expr_to_place(fb, object, block);
+        let (block, place) = self.lower_expr_to_place_or_temp(fb, object, block);
 
         self.lower_place_receiver_operand(
             fb,
@@ -1286,6 +1577,179 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    /// Inserts a `index < len` guard in front of an array/slice indexing
+    /// access when compiling in Debug mode. An out-of-bounds index diverges
+    /// into a `@panic` call that formats the bounds message. Raw pointers
+    /// carry no length and are never checked. Returns the block the actual
+    /// element access must be lowered into.
+    ///
+    /// `index_local` must be a plain local holding the (copyable) index value;
+    /// it is only read here, never moved, so the element projection can use it
+    /// again.
+    fn lower_bounds_check(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        obj_place: &Place,
+        obj_ty: TypeId,
+        index_local: LocalId,
+        source: Option<Source>,
+    ) -> BlockId {
+        if self.mode != CompilationMode::Debug {
+            return block;
+        }
+
+        let usize_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+
+        let len_operand = match self.typecheck.interner.get(obj_ty).clone() {
+            Type::Array { len: Some(len), .. } => {
+                Operand::Constant(ConstValue::Int(len as i128), None)
+            }
+            Type::Slice { .. } => {
+                let mut len_place = obj_place.clone();
+                len_place.projection.push(PlaceElem::Field(SLICE_LEN_FIELD));
+                self.place_to_operand(len_place, usize_ty, None)
+            }
+            _ => return block,
+        };
+
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let cmp_result = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(cmp_result),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Lt,
+                    lhs: Operand::Copy(Place::from_local(index_local), None),
+                    rhs: len_operand.clone(),
+                },
+                source: source.clone(),
+            },
+        );
+
+        let ok_block = fb.new_block();
+        let panic_block = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(cmp_result), None),
+                targets: vec![(1, ok_block)],
+                otherwise: panic_block,
+            },
+        );
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let dest = fb.new_temp(void_ty);
+        let panic_next = fb.new_block();
+
+        fb.set_terminator(
+            panic_block,
+            Terminator::MacroCall {
+                kind: HirMacroKind::Panic,
+                format_chunks: Some(vec![
+                    FormatChunk::Literal("index out of bounds: the len is ".into()),
+                    FormatChunk::Arg(FormatSpec::Display),
+                    FormatChunk::Literal(" but the index is ".into()),
+                    FormatChunk::Arg(FormatSpec::Display),
+                ]),
+                args: vec![
+                    len_operand,
+                    Operand::Copy(Place::from_local(index_local), None),
+                ],
+                arg_types: vec![usize_ty, usize_ty],
+                destination: Place::from_local(dest),
+                target: None,
+                source,
+            },
+        );
+        fb.set_terminator(panic_next, Terminator::Unreachable);
+
+        ok_block
+    }
+
+    /// Inserts a `divisor != 0` guard in front of `/` and `%` on builtin
+    /// numerics when compiling in Debug mode. A zero divisor diverges into a
+    /// `@panic` call. Returns the block the division must be lowered into.
+    ///
+    /// `rhs_local` must be a plain local holding the divisor; it is only read
+    /// here by Copy, so the division rvalue can use it again.
+    fn lower_div_zero_check(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        rhs_local: LocalId,
+        rhs_ty: TypeId,
+        source: Option<Source>,
+    ) -> BlockId {
+        if self.mode != CompilationMode::Debug {
+            return block;
+        }
+
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let zero = Operand::Constant(ConstValue::Int(0), None);
+
+        let cmp_result = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(cmp_result),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Ne,
+                    lhs: Operand::Copy(Place::from_local(rhs_local), None),
+                    rhs: zero,
+                },
+                source: source.clone(),
+            },
+        );
+
+        let ok_block = fb.new_block();
+        let panic_block = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(cmp_result), None),
+                targets: vec![(1, ok_block)],
+                otherwise: panic_block,
+            },
+        );
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let dest = fb.new_temp(void_ty);
+        let panic_next = fb.new_block();
+
+        fb.set_terminator(
+            panic_block,
+            Terminator::MacroCall {
+                kind: HirMacroKind::Panic,
+                format_chunks: Some(vec![FormatChunk::Literal(
+                    "attempt to divide by zero".into(),
+                )]),
+                args: vec![],
+                arg_types: vec![],
+                destination: Place::from_local(dest),
+                target: None,
+                source,
+            },
+        );
+        fb.set_terminator(panic_next, Terminator::Unreachable);
+
+        ok_block
+    }
+
     fn lower_macro_call(
         &mut self,
         fb: &mut FnBuilder,
@@ -1295,6 +1759,7 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> (BlockId, Operand) {
         let format_chunks = self.typecheck.format_specs.get(&hir_id).cloned();
+        let specs = format_chunks.as_deref().map(arg_specs);
 
         let value_exprs: &[Rc<HirExpr>] = if format_chunks.is_some() {
             &args[1..]
@@ -1304,10 +1769,31 @@ impl<'ctx> MirLowering<'ctx> {
 
         let mut block = block;
         let mut operands = Vec::with_capacity(value_exprs.len());
-        for arg in value_exprs {
-            let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+        let mut arg_types = Vec::with_capacity(value_exprs.len());
+        for (i, arg) in value_exprs.iter().enumerate() {
+            let ty = self.expr_type(fb, arg);
+            let spec = specs.as_deref().and_then(|s| s.get(i)).copied();
+
+            // Struct operands with a `{}` / `{:?}` spec are lowered to a call
+            // to their `display`/`debug` interface method; the returned
+            // `[]const char` slice becomes the format argument.
+            let (b, op, arg_ty) = match (spec, self.typecheck.interner.get(ty).clone()) {
+                (Some(FormatSpec::Display | FormatSpec::Debug), Type::Struct { .. }) => {
+                    let iface = match spec {
+                        Some(FormatSpec::Display) => ("Display", "display"),
+                        _ => ("Debug", "debug"),
+                    };
+                    self.lower_display_format_arg(fb, arg, ty, iface, block)
+                }
+                _ => {
+                    let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                    (b, op, ty)
+                }
+            };
+
             block = b;
             operands.push(op);
+            arg_types.push(arg_ty);
         }
 
         let result_ty = self
@@ -1328,6 +1814,7 @@ impl<'ctx> MirLowering<'ctx> {
                 kind,
                 format_chunks,
                 args: operands,
+                arg_types,
                 destination: Place::from_local(dest),
                 target: if is_diverging { None } else { Some(next) },
                 source: None,
@@ -1343,6 +1830,106 @@ impl<'ctx> MirLowering<'ctx> {
                 self.place_to_operand(Place::from_local(dest), result_ty, None),
             )
         }
+    }
+
+    /// Lowers a `Display`/`Debug` format argument into a call to the struct's
+    /// interface method. The method is resolved from the concrete struct type
+    /// and monomorphized like any other method call; the returned
+    /// `[]const char` slice is passed on to the format macro.
+    fn lower_display_format_arg(
+        &mut self,
+        fb: &mut FnBuilder,
+        arg: &HirExpr,
+        obj_ty: TypeId,
+        iface: (&str, &str),
+        block: BlockId,
+    ) -> (BlockId, Operand, TypeId) {
+        let (iface_name, method_name) = iface;
+        let Type::Struct {
+            def_id: struct_def,
+            generic_args,
+        } = self.typecheck.interner.get(obj_ty).clone()
+        else {
+            return {
+                let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                (b, op, obj_ty)
+            };
+        };
+
+        let Some(method_def) = self.resolve_interface_method(struct_def, iface_name, method_name)
+        else {
+            return {
+                let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                (b, op, obj_ty)
+            };
+        };
+
+        let (block, place) = self.lower_expr_to_place_or_temp(fb, arg, block);
+        let (block, self_operand) = self.lower_place_receiver_operand(
+            fb,
+            place,
+            obj_ty,
+            method_def,
+            Some(arg.source.clone()),
+            block,
+        );
+
+        let mono_args = self.substitute_generic_args(fb, &generic_args);
+        let owner = self.typecheck.method_owner.get(&method_def).copied();
+        let mir_fn_id = self.monomorphize_fn(method_def, mono_args, owner);
+
+        let ret_ty = match self.typecheck.def_types.get(&method_def) {
+            Some(ty) => match self.typecheck.interner.get(*ty).clone() {
+                Type::Fn { ret, .. } => self.substitute_fn_type(fb, ret),
+                _ => self.typecheck.interner.intern(Type::Void),
+            },
+            None => self.typecheck.interner.intern(Type::Void),
+        };
+
+        let dest = fb.new_temp(ret_ty);
+        let next = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::Call {
+                func: CallTarget::Direct(mir_fn_id),
+                args: vec![self_operand],
+                destination: Place::from_local(dest),
+                target: Some(next),
+                source: None,
+            },
+        );
+
+        let op = self.place_to_operand(Place::from_local(dest), ret_ty, None);
+        (next, op, ret_ty)
+    }
+
+    /// Resolves the `DefId` of the method with `method_name` that implements
+    /// `iface_name` for `struct_def`, mirroring the typechecker's
+    /// interface-call resolution.
+    fn resolve_interface_method(
+        &self,
+        struct_def: DefId,
+        iface_name: &str,
+        method_name: &str,
+    ) -> Option<DefId> {
+        let iface_def = self
+            .resolution
+            .defs
+            .iter()
+            .find(|(_, info)| {
+                matches!(info.kind, DefKind::Interface)
+                    && self.rodeo.borrow().resolve(&info.name) == iface_name
+            })
+            .map(|(def, _)| *def)?;
+
+        let methods = self.resolution.impls.get(&(struct_def, iface_def))?;
+        methods.iter().copied().find(|&def| {
+            let Some(info) = self.resolution.defs.get(&def) else {
+                return false;
+            };
+            self.rodeo.borrow().resolve(&info.name) == method_name
+        })
     }
 
     fn lower_diverging_macro(
@@ -1361,6 +1948,7 @@ impl<'ctx> MirLowering<'ctx> {
                 kind,
                 format_chunks: None,
                 args: Vec::new(),
+                arg_types: Vec::new(),
                 destination: Place::from_local(dest),
                 target: None,
                 source: None,
@@ -1682,7 +2270,10 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(v) => {
                         let (b, op) = self.lower_expr_to_operand(fb, v, block);
                         let block = b;
-                        fb.set_terminator(block, Terminator::Return(op));
+                        fb.set_terminator(
+                            block,
+                            Terminator::Return(self.normalize_return_operand(fb, op)),
+                        );
                         return block;
                     }
                     None => Operand::Constant(ConstValue::Void, None),
@@ -1712,9 +2303,45 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirStmtKind::Expr(expr) => {
+                // A statement-position expression whose value is discarded
+                // (`foo();`): warn unless the value is void/never (`@println`,
+                // `@panic`, ...).
+                if !matches!(
+                    self.typecheck
+                        .expr_types
+                        .get(&expr.id)
+                        .map(|ty| self.typecheck.interner.get(*ty)),
+                    Some(Type::Void | Type::Never)
+                ) {
+                    let what = match &expr.kind {
+                        HirExprKind::Call { callee, .. } => match &callee.kind {
+                            HirExprKind::VarRef(def_id) => {
+                                let name = self
+                                    .resolution
+                                    .defs
+                                    .get(def_id)
+                                    .map(|info| self.rodeo.borrow().resolve(&info.name).to_string())
+                                    .unwrap_or_default();
+                                SmolStr::from(format!("function call `{name}`"))
+                            }
+                            _ => SmolStr::from("expression"),
+                        },
+                        _ => SmolStr::from("expression"),
+                    };
+                    self.warnings.push(MirWarning::UnusedExpressionResult {
+                        what,
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+                }
+
                 let (block, _operand) = self.lower_expr_to_operand(fb, expr, block);
                 block
             }
+
+            // Nested function declarations produce no runtime code at their
+            // site; the function is lowered on demand when it is called.
+            HirStmtKind::FnDecl(_) => block,
 
             HirStmtKind::Error => panic!("Error Statement kind passed in MIR lowering stage"),
         }
@@ -1734,7 +2361,24 @@ impl<'ctx> MirLowering<'ctx> {
             .typecheck
             .interner
             .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
-        let counter = fb.new_local(usize_ty, LocalKind::Temporary, Mutability::Mut, None, None);
+
+        // The counter must share the loop variable's type (which always
+        // matches the count's type): a `usize`-typed counter compared against
+        // an `i32` bound (or copied into an `i32` loop var) would emit
+        // mismatched IR and corrupt the stack slot via an oversized store.
+        let loop_var_ty = self
+            .typecheck
+            .def_types
+            .get(def_id)
+            .copied()
+            .unwrap_or(usize_ty);
+        let counter = fb.new_local(
+            loop_var_ty,
+            LocalKind::Temporary,
+            Mutability::Mut,
+            None,
+            None,
+        );
         fb.push_stmt(
             block,
             MirStatement::Assign {
@@ -1747,12 +2391,6 @@ impl<'ctx> MirLowering<'ctx> {
         let header = fb.new_block();
         fb.set_terminator(block, Terminator::Goto(header));
 
-        let loop_var_ty = self
-            .typecheck
-            .def_types
-            .get(def_id)
-            .copied()
-            .unwrap_or(usize_ty);
         let loop_var = fb.new_local(
             loop_var_ty,
             LocalKind::UserVariable,
@@ -1791,6 +2429,7 @@ impl<'ctx> MirLowering<'ctx> {
 
         let body_bb = fb.new_block();
         let exit_bb = fb.new_block();
+        let continue_bb = fb.new_block();
 
         fb.set_terminator(
             header,
@@ -1801,16 +2440,18 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
+        // `continue` must run the increment before re-checking the condition,
+        // so it targets the dedicated increment block instead of the header.
         fb.loop_stack.push(LoopTargets {
             break_target: exit_bb,
-            continue_target: header,
+            continue_target: continue_bb,
         });
         let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
         fb.loop_stack.pop();
 
-        let incremented = fb.new_temp(usize_ty);
+        let incremented = fb.new_temp(loop_var_ty);
         fb.push_stmt(
-            body_end,
+            continue_bb,
             MirStatement::Assign {
                 place: Place::from_local(incremented),
                 rvalue: Rvalue::BinaryOp {
@@ -1822,14 +2463,15 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
         fb.push_stmt(
-            body_end,
+            continue_bb,
             MirStatement::Assign {
                 place: Place::from_local(counter),
                 rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented), None)),
                 source: None,
             },
         );
-        fb.set_terminator(body_end, Terminator::Goto(header));
+        fb.set_terminator(continue_bb, Terminator::Goto(header));
+        fb.join_if_open(body_end, continue_bb);
 
         exit_bb
     }
@@ -1843,7 +2485,7 @@ impl<'ctx> MirLowering<'ctx> {
         body: &HirStmt,
         block: BlockId,
     ) -> BlockId {
-        let (block, iter_place) = self.lower_expr_to_place(fb, iterator, block);
+        let (block, iter_place) = self.lower_expr_to_place_or_temp(fb, iterator, block);
 
         let usize_ty = self
             .typecheck
@@ -1915,6 +2557,7 @@ impl<'ctx> MirLowering<'ctx> {
 
         let body_bb = fb.new_block();
         let exit_bb = fb.new_block();
+        let continue_bb = fb.new_block();
 
         fb.set_terminator(
             header,
@@ -1960,7 +2603,7 @@ impl<'ctx> MirLowering<'ctx> {
 
         fb.loop_stack.push(LoopTargets {
             break_target: exit_bb,
-            continue_target: header,
+            continue_target: continue_bb,
         });
 
         let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
@@ -1970,7 +2613,7 @@ impl<'ctx> MirLowering<'ctx> {
         let incremented = fb.new_temp(usize_ty);
 
         fb.push_stmt(
-            body_end,
+            continue_bb,
             MirStatement::Assign {
                 place: Place::from_local(incremented),
                 rvalue: Rvalue::BinaryOp {
@@ -1983,7 +2626,7 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         fb.push_stmt(
-            body_end,
+            continue_bb,
             MirStatement::Assign {
                 place: Place::from_local(counter),
                 rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented), None)),
@@ -1991,7 +2634,8 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        fb.set_terminator(body_end, Terminator::Goto(header));
+        fb.set_terminator(continue_bb, Terminator::Goto(header));
+        fb.join_if_open(body_end, continue_bb);
 
         exit_bb
     }
@@ -2014,6 +2658,20 @@ impl<'ctx> MirLowering<'ctx> {
         let id = self.mono_cache.fresh_id();
         self.mono_cache.cache.insert(key, id);
 
+        let display_name = self.compute_fn_readable_name(&hir_fn, &generic_args, owner_struct);
+
+        if hir_fn.is_extern {
+            self.set_function_name(id, display_name.clone());
+            self.program.extern_exports.insert(id, display_name.clone());
+        } else {
+            self.set_function_name(id, display_name.clone());
+        }
+
+        self.fn_stack.push(FnContext {
+            def_id,
+            readable_name: display_name,
+        });
+
         let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args, owner_struct);
         for local in &mir_func.locals {
             if matches!(self.typecheck.interner.get(local.ty), Type::Slice { .. }) {
@@ -2022,59 +2680,90 @@ impl<'ctx> MirLowering<'ctx> {
         }
         self.program.functions.insert(id, mir_func);
 
+        self.fn_stack.pop();
+
+        id
+    }
+
+    /// Computes the readable MIR name of a function. Methods are
+    /// `Struct.method`, nested functions are `<parent>-><name>`, everything
+    /// else is the plain name (with generic args where present).
+    fn compute_fn_readable_name(
+        &self,
+        hir_fn: &HirFn,
+        generic_args: &[TypeId],
+        owner_struct: Option<DefId>,
+    ) -> String {
         let interner = self.rodeo.borrow();
         let base_name = interner.resolve(&hir_fn.name.0).to_string();
         drop(interner);
 
-        if hir_fn.is_extern {
-            self.set_function_name(id, base_name.clone());
-            self.program.extern_exports.insert(id, base_name);
+        let base = if generic_args.is_empty() {
+            base_name.clone()
         } else {
-            let display_name = match owner_struct {
-                Some(struct_def) => {
-                    let struct_name = self
-                        .rodeo
-                        .borrow()
-                        .resolve(&self.resolution.defs[&struct_def].name)
-                        .to_string();
+            let arg_names: Vec<String> = generic_args
+                .iter()
+                .map(|&t| self.display_type_name(t))
+                .collect();
+            format!("{}[{}]", base_name, arg_names.join(", "))
+        };
 
-                    let struct_generics = self
-                        .typecheck
-                        .struct_generics
-                        .get(&struct_def)
-                        .cloned()
-                        .unwrap_or_default();
+        if let Some(struct_def) = owner_struct {
+            let struct_name = self
+                .rodeo
+                .borrow()
+                .resolve(&self.resolution.defs[&struct_def].name)
+                .to_string();
 
-                    let struct_part = if struct_generics.is_empty() {
-                        struct_name
-                    } else {
-                        let arg_names: Vec<String> = generic_args
-                            .iter()
-                            .map(|&t| self.display_type_name(t))
-                            .collect();
-                        format!("{}[{}]", struct_name, arg_names.join(", "))
-                    };
+            let struct_generics = self
+                .typecheck
+                .struct_generics
+                .get(&struct_def)
+                .cloned()
+                .unwrap_or_default();
 
-                    format!("{}.{}", struct_part, base_name)
-                }
-
-                None => {
-                    if generic_args.is_empty() {
-                        base_name
-                    } else {
-                        let arg_names: Vec<String> = generic_args
-                            .iter()
-                            .map(|&t| self.display_type_name(t))
-                            .collect();
-                        format!("{}[{}]", base_name, arg_names.join(", "))
-                    }
-                }
+            let struct_part = if struct_generics.is_empty() {
+                struct_name
+            } else {
+                let arg_names: Vec<String> = generic_args
+                    .iter()
+                    .take(struct_generics.len())
+                    .map(|&t| self.display_type_name(t))
+                    .collect();
+                format!("{}[{}]", struct_name, arg_names.join(", "))
             };
 
-            self.set_function_name(id, display_name);
+            return format!("{}.{}", struct_part, base_name);
         }
 
-        id
+        if let Some(parent_def) = hir_fn.parent_fn
+            && let Some(parent_name) = self
+                .fn_stack
+                .iter()
+                .rev()
+                .find(|ctx| ctx.def_id == parent_def)
+                .map(|ctx| ctx.readable_name.clone())
+        {
+            return format!("{}->{}", parent_name, base);
+        }
+
+        base
+    }
+
+    /// Replaces a void-typed place operand with a plain `void` constant so
+    /// codegen never tries to load an un-allocated void temporary.
+    fn normalize_return_operand(&mut self, fb: &FnBuilder, operand: Operand) -> Operand {
+        match &operand {
+            Operand::Copy(place, _) | Operand::Move(place, _) => {
+                let ty = fb.func.local(place.local).ty;
+                if matches!(self.typecheck.interner.get(ty), Type::Void) {
+                    Operand::Constant(ConstValue::Void, None)
+                } else {
+                    operand
+                }
+            }
+            _ => operand,
+        }
     }
 
     fn lower_fn_body(
@@ -2173,6 +2862,7 @@ impl<'ctx> MirLowering<'ctx> {
                             let (block, operand) = self.lower_expr_to_operand(&mut fb, t, cur);
 
                             if matches!(fb.func.block(block).terminator, Terminator::Unreachable) {
+                                let operand = self.normalize_return_operand(&fb, operand);
                                 fb.set_terminator(block, Terminator::Return(operand));
                             };
                             block

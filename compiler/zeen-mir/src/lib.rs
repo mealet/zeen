@@ -14,6 +14,7 @@ use zeen_typecheck::format_str::FormatChunk;
 use zeen_types::TypeId;
 
 pub mod collecter;
+pub mod error;
 pub mod lowering;
 pub mod printer;
 
@@ -34,6 +35,11 @@ pub struct MirProgram {
     pub functions: HashMap<MirFunctionId, MirFunction>,
     pub function_names: HashMap<MirFunctionId, String>,
     pub struct_layouts: HashMap<TypeId, StructLayout>,
+
+    /// Maps a concrete struct `TypeId` that implements `Drop` to the
+    /// monomorphized drop function that codegen must call to drop a value of
+    /// that type.
+    pub drop_functions: HashMap<TypeId, MirFunctionId>,
 
     pub extern_fns: Vec<ExternFnDecl>,
     pub extern_exports: HashMap<MirFunctionId, String>,
@@ -223,6 +229,8 @@ pub enum ConstValue {
     Str(Spur),
     NullPtr,
     Void,
+    /// A function value: pointer to the monomorphized function.
+    Fn(MirFunctionId),
 }
 
 #[derive(Debug, Clone)]
@@ -291,6 +299,9 @@ pub enum Terminator {
         kind: HirMacroKind,
         format_chunks: Option<Vec<FormatChunk>>,
         args: Vec<Operand>,
+        /// Types of the macro arguments, needed by codegen to pick the right
+        /// rendering for format args (e.g. enum variant names).
+        arg_types: Vec<TypeId>,
         destination: Place,
         target: Option<BlockId>,
         /// Source of the macro call expression, used for diagnostics on arg reads.

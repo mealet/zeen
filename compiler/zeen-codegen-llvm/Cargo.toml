@@ -1,0 +1,22 @@
+[package]
+name = "zeen-codegen-llvm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+inkwell = { version = "0.10.0", features = ["llvm22-1"] }
+lasso = "0.7.3"
+miette = { version = "7.6.0", features = ["fancy"] }
+thiserror = "2.0.18"
+
+zeen-ast = { path = "../zeen-ast" }
+zeen-driver = { path = "../zeen-driver" }
+zeen-hir = { path = "../zeen-hir" }
+zeen-mir = { path = "../zeen-mir" }
+zeen-resolve = { path = "../zeen-resolve" }
+zeen-typecheck = { path = "../zeen-typecheck" }
+zeen-types = { path = "../zeen-types" }

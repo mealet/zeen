@@ -911,6 +911,19 @@ impl<'res> TypeChecker<'res> {
             generic_bindings.insert(*generic, ty);
         }
 
+        // Methods declared inside a generic struct may reference the struct's
+        // generic parameters (e.g. `Self { .. }` or `value: T`) without listing
+        // them on the method itself. Seed those so the body sees them bound and
+        // `Self` construction keeps the struct's own instantiation.
+        if let Some(sd) = struct_def {
+            let struct_generics = self.struct_generics.get(&sd).cloned().unwrap_or_default();
+            for generic in struct_generics {
+                generic_bindings
+                    .entry(generic)
+                    .or_insert_with(|| self.result.interner.intern(Type::GenericParam(generic)));
+            }
+        }
+
         for (g, bounds) in &sig.generic_bounds {
             generic_bounds.insert(*g, bounds.clone());
         }
@@ -1104,8 +1117,28 @@ impl<'res> TypeChecker<'res> {
                 self.synth_expr(expr);
             }
 
+            HirStmtKind::FnDecl(decl) => self.check_nested_fn(decl),
+
             HirStmtKind::Error => {}
         }
+    }
+
+    /// Checks a nested function declaration: rejects `pub`, then declares and
+    /// checks it like a regular function. It is not the entry point, so the
+    /// `main` detection in `declare_signature` must be skipped.
+    fn check_nested_fn(&mut self, decl: &HirDecl) {
+        if let HirDeclKind::Fn(f) = &decl.kind {
+            if f.is_pub {
+                self.report(TypeError::NestedFnPub {
+                    src: decl.source.src(),
+                    span: f.name.1,
+                });
+            }
+
+            self.declare_fn_signature(decl.def_id, f);
+        }
+
+        self.check_decl_body(decl);
     }
 
     fn check_stmt_as_block_value(&mut self, stmt: &HirStmt, expected: Option<TypeId>) -> TypeId {
@@ -1383,8 +1416,8 @@ impl<'res> TypeChecker<'res> {
                 self.check_format_macro(call_id, args, source);
 
                 let char_ty = self.result.interner.builtin(BuiltinType::char);
-                self.result.interner.intern(Type::Pointer {
-                    inner: char_ty,
+                self.result.interner.intern(Type::Slice {
+                    element: char_ty,
                     is_const: true,
                 })
             }
@@ -1513,6 +1546,14 @@ impl<'res> TypeChecker<'res> {
             Type::Never | Type::Error => true,
             Type::Enum { .. } => true,
 
+            // String pointers (`*const char` / `[*]char`) are printable.
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+                matches!(
+                    self.result.interner.get(inner).clone(),
+                    Type::Builtin(BuiltinType::char)
+                )
+            }
+
             Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.type_implements_display(element)
             }
@@ -1543,6 +1584,14 @@ impl<'res> TypeChecker<'res> {
             Type::Never | Type::Error => true,
             Type::Enum { .. } => true,
 
+            // String pointers (`*const char` / `[*]char`) are printable.
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+                matches!(
+                    self.result.interner.get(inner).clone(),
+                    Type::Builtin(BuiltinType::char)
+                )
+            }
+
             Type::Array { element, .. } | Type::Slice { element, .. } => {
                 self.type_implements_debug(element)
             }
@@ -1561,7 +1610,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             Type::Builtin(_) => true,
-            Type::Pointer { .. } => true,
 
             _ => false,
         }
@@ -1881,6 +1929,17 @@ impl<'res> TypeChecker<'res> {
             .unwrap_or_default();
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+
+        // When the struct being built is the enclosing struct (`Self { .. }`),
+        // its generic parameters are already bound to the current instantiation
+        // (e.g. `Box[T]` inside a method of `Box[T]`). Seed them so field
+        // checking reports real mismatches instead of "cannot infer generic".
+        for g in &struct_generics {
+            if let Some(bound) = self.ctx.generic_binding(*g) {
+                bindings.insert(*g, bound);
+            }
+        }
+
         if !ty_generic_args.is_empty() {
             if ty_generic_args.len() != struct_generics.len() {
                 let interner = self.interner.borrow();
@@ -1974,13 +2033,20 @@ impl<'res> TypeChecker<'res> {
                 .copied()
                 .unwrap_or(expected_ty);
 
-            self.coerce_or_error(
-                actual_ty,
-                expected_ty,
-                f.value.source.clone(),
-                f.value.id,
-                false,
-            );
+            if matches!(f.value.kind, HirExprKind::ArrayInit { .. }) {
+                // Let `check_expr` check each element against the expected
+                // array element type (string literals coerce to slices), and
+                // record the coerced array type for MIR lowering.
+                self.check_expr(&f.value, expected_ty, false);
+            } else {
+                self.coerce_or_error(
+                    actual_ty,
+                    expected_ty,
+                    f.value.source.clone(),
+                    f.value.id,
+                    false,
+                );
+            }
         }
 
         let missing: Vec<Spur> = expected_names
@@ -2013,6 +2079,28 @@ impl<'res> TypeChecker<'res> {
         let actual = match &expr.kind {
             HirExprKind::ArrayInit { elements } if elements.is_empty() => {
                 if let Type::Array { .. } = self.result.interner.get(expected).clone() {
+                    self.result.record_expr_type(expr.id, expected);
+                    return expected;
+                }
+                self.synth_expr(expr)
+            }
+
+            HirExprKind::ArrayInit { elements } => {
+                // When the expected type is a fixed-size array, check each
+                // element against its element type directly (so e.g. string
+                // literals coerce to `[]const char` inside `[N][]const char`).
+                let element_ty = match self.result.interner.get(expected).clone() {
+                    Type::Array {
+                        element,
+                        len: Some(n),
+                        ..
+                    } if n == elements.len() as u64 => Some(element),
+                    _ => None,
+                };
+                if let Some(element) = element_ty {
+                    for el in elements {
+                        self.check_expr(el, element, false);
+                    }
                     self.result.record_expr_type(expr.id, expected);
                     return expected;
                 }
@@ -2191,9 +2279,76 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn default_literal(&mut self, ty: TypeId) -> TypeId {
-        match self.result.interner.get(ty) {
+        match self.result.interner.get(ty).clone() {
             Type::IntLiteral => self.result.interner.builtin(DEFAULT_INT_LITERAL),
             Type::FloatLiteral => self.result.interner.builtin(DEFAULT_FLOAT_LITERAL),
+
+            Type::Pointer { inner, is_const } => {
+                let new_inner = self.default_literal(inner);
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::ManyPointer { inner, is_const } => {
+                let new_inner = self.default_literal(inner);
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::ManyPointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Array { element, len } => {
+                let new_element = self.default_literal(element);
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Array {
+                        element: new_element,
+                        len,
+                    })
+                }
+            }
+
+            Type::Slice { element, is_const } => {
+                let new_element = self.default_literal(element);
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Slice {
+                        element: new_element,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|a| self.default_literal(*a))
+                    .collect();
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
             _ => ty,
         }
     }
@@ -2747,6 +2902,23 @@ impl<'res> TypeChecker<'res> {
             .get(&struct_def)
             .cloned()
             .unwrap_or_default();
+
+        for g in &struct_generics {
+            if !bindings.contains_key(g) {
+                let interner = self.interner.borrow();
+                let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                drop(interner);
+
+                self.report(TypeError::CannotInferGeneric {
+                    generic_name,
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                bindings.insert(*g, self.result.interner.error());
+            }
+        }
+
         let resolved_struct_args: Vec<TypeId> = struct_generics
             .iter()
             .map(|g| {
@@ -2820,9 +2992,71 @@ impl<'res> TypeChecker<'res> {
             let arg_ty = self.default_literal(arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
             self.unify_for_inference(param_ty, arg_ty, bindings, source);
+
+            // If the argument doesn't structurally match the parameter after
+            // inference (e.g. `123` for a `*T` parameter), report a real
+            // mismatch instead of silently leaving the generic unresolved and
+            // cascading into bogus errors downstream.
+            let substituted = self.substitute_generics(param_ty, bindings);
+            if !try_coerce(&mut self.result.interner, arg_ty, substituted).is_ok() {
+                self.bind_unresolved_generics(param_ty, bindings);
+                self.report(TypeError::Mismatch {
+                    expected: self.display_type(substituted).into(),
+                    found: self.display_type(arg_ty).into(),
+                    src: arg.source.src(),
+                    span: arg.source.span,
+                });
+            }
         } else {
             let substituted = self.substitute_generics(param_ty, bindings);
             self.check_expr(arg, substituted, false);
+        }
+    }
+
+    fn bind_unresolved_generics(&mut self, ty: TypeId, bindings: &mut HashMap<DefId, TypeId>) {
+        let mut unresolved = Vec::new();
+        self.collect_unresolved_generics(ty, bindings, &mut unresolved);
+
+        for g in unresolved {
+            bindings.insert(g, self.result.interner.error());
+        }
+    }
+
+    fn collect_unresolved_generics(
+        &self,
+        ty: TypeId,
+        bindings: &HashMap<DefId, TypeId>,
+        out: &mut Vec<DefId>,
+    ) {
+        match self.result.interner.get(ty).clone() {
+            Type::GenericParam(g) => {
+                if !bindings.contains_key(&g) {
+                    out.push(g);
+                }
+            }
+
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+                self.collect_unresolved_generics(inner, bindings, out)
+            }
+
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                self.collect_unresolved_generics(element, bindings, out)
+            }
+
+            Type::Struct { generic_args, .. } => {
+                for a in generic_args {
+                    self.collect_unresolved_generics(a, bindings, out);
+                }
+            }
+
+            Type::Fn { params, ret } => {
+                for p in params {
+                    self.collect_unresolved_generics(p, bindings, out);
+                }
+                self.collect_unresolved_generics(ret, bindings, out);
+            }
+
+            _ => {}
         }
     }
 
@@ -2979,6 +3213,21 @@ impl<'res> TypeChecker<'res> {
                 Some(name) => Self::enum_interface_names().contains(&name.as_str()),
                 None => false,
             },
+
+            // `[N]char` / `[]char` strings implement `Display` and `Debug`
+            // like the `char` builtin (Debug prints as a quoted string).
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                let Some(name) = self.def_name(iface_def) else {
+                    return false;
+                };
+                if !matches!(name.as_str(), "Display" | "Debug") {
+                    return false;
+                }
+                matches!(
+                    self.result.interner.get(element).clone(),
+                    Type::Builtin(BuiltinType::char)
+                )
+            }
 
             Type::Struct { def_id, .. } => self.resolution.impls.contains_key(&(def_id, iface_def)),
 
@@ -3338,9 +3587,15 @@ impl<'res> TypeChecker<'res> {
                         source,
                     );
 
-                    // implement methods fulfilling an interface are implicitly public
+                    // implement methods fulfilling an interface take their
+                    // visibility from the interface method declaration
+                    let iface_is_pub = self
+                        .fn_sigs
+                        .get(&iface_method_def)
+                        .map(|iface_sig| iface_sig.is_pub)
+                        .unwrap_or(false);
                     if let Some(sig) = self.fn_sigs.get_mut(&impl_method_def) {
-                        sig.is_pub = true;
+                        sig.is_pub = iface_is_pub;
                     }
                 }
             }
@@ -3422,6 +3677,17 @@ impl<'res> TypeChecker<'res> {
         rhs: TypeId,
         source: &Source,
     ) -> TypeId {
+        use BinaryOp::*;
+
+        // Pointer arithmetic: `ptr + n` / `ptr - n` keep the pointer type
+        // (codegen scales the offset by the element size); `ptr - ptr`
+        // yields the element count as `isize`.
+        if matches!(op, Add | Sub)
+            && let Some(result_ty) = self.pointer_arith_operand(op, lhs, rhs)
+        {
+            return result_ty;
+        }
+
         let unified = if lhs == rhs {
             Some(lhs)
         } else if let Type::Pointer { .. } = self.result.interner.get(lhs)
@@ -3447,8 +3713,6 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         };
 
-        use BinaryOp::*;
-
         match op {
             Add | Sub | Mul | Div | Mod | BitAnd | BitOr | BitXor | Shl | Shr => {
                 if self.is_numeric_or_literal(operand_ty) {
@@ -3468,6 +3732,44 @@ impl<'res> TypeChecker<'res> {
             Eq | Ne => self.result.interner.builtin(BuiltinType::bool),
 
             _ => unreachable!("others must be handled before this fn"),
+        }
+    }
+
+    fn pointer_arith_operand(&mut self, op: BinaryOp, lhs: TypeId, rhs: TypeId) -> Option<TypeId> {
+        let isize = self.result.interner.builtin(BuiltinType::isize);
+
+        let is_ptr = |ty: TypeId| {
+            matches!(
+                self.result.interner.get(ty),
+                Type::Pointer { .. } | Type::ManyPointer { .. }
+            )
+        };
+        let is_int = |ty: TypeId| match self.result.interner.get(ty) {
+            Type::IntLiteral => true,
+            Type::Builtin(b) => coerce::builtin_is_integer(*b),
+            _ => false,
+        };
+
+        match op {
+            BinaryOp::Add => {
+                if is_ptr(lhs) && is_int(rhs) {
+                    Some(lhs)
+                } else if is_int(lhs) && is_ptr(rhs) {
+                    Some(rhs)
+                } else {
+                    None
+                }
+            }
+            BinaryOp::Sub => {
+                if is_ptr(lhs) && is_int(rhs) {
+                    Some(lhs)
+                } else if is_ptr(lhs) && is_ptr(rhs) {
+                    Some(isize)
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
@@ -3988,11 +4290,41 @@ mod tests {
     }
 
     #[test]
-    fn implement_method_is_implicitly_public() {
-        let result = typecheck(
+    fn non_pub_interface_method_is_private() {
+        let errors = typecheck(
             r#"
             interface Asd {
                 fn asd();
+            }
+
+            struct Foo {
+            }
+
+            implement Asd : Foo {
+                fn asd() {}
+            }
+
+            fn main() {
+                let foo = Foo.asd();
+            }
+            "#,
+        )
+        .expect_err("non-pub interface method must not be callable from outside");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::PrivateItemNotAccessible { .. })),
+            "expected PrivateItemNotAccessible error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn pub_interface_method_is_callable_from_outside() {
+        let result = typecheck(
+            r#"
+            interface Asd {
+                pub fn asd();
             }
 
             struct Foo {
@@ -4010,7 +4342,7 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "implement method fulfilling an interface is public"
+            "interface method declared pub must be publicly callable"
         );
     }
 
@@ -4149,6 +4481,344 @@ mod tests {
             span.len(),
             sig_end - sig_start,
             "mismatch should cover just the signature"
+        );
+    }
+
+    // > Generic inference through wrapped types
+
+    #[test]
+    fn generic_infers_through_pointer_wrapper_in_associated_call() {
+        let result = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+
+              pub fn new(value: *T) Self {
+                Self { .inner = value }
+              }
+            }
+
+            fn main() {
+              let value = 123;
+              let box: Box[i32] = Box.new(&value);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred as i32 through `*T`: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_through_slice_wrapper() {
+        let result = typecheck(
+            r#"
+            fn first[T](items: []T) T {
+              return items[0];
+            }
+
+            fn main() {
+              let arr = [1, 2, 3];
+              let first: i32 = first(&arr);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred as i32 through `[]T`: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_through_array_wrapper() {
+        let result = typecheck(
+            r#"
+            fn max[T](items: [4]T) T {
+              return items[0];
+            }
+
+            fn main() {
+              let arr = [1, 2, 3, 4];
+              let max: i32 = max(arr);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred as i32 through `[4]T`: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_through_many_pointer_wrapper() {
+        let result = typecheck(
+            r#"
+            fn total[T](items: [*]T) T {
+              return items[0];
+            }
+
+            fn main() {
+              let arr = [1, 2, 3];
+              let slice = &arr;
+              let total: i32 = total(slice.ptr);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred as i32 through `[*]T`: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_through_nested_structs() {
+        let result = typecheck(
+            r#"
+            struct Inner[T] {
+              pub value: T,
+            }
+
+            struct Outer[T] {
+              pub inner: Inner[T],
+            }
+
+            fn deep[T](o: Outer[Outer[T]]) Outer[T] {
+              return o.inner.value;
+            }
+
+            fn main() {
+              let inner: Inner[i32] = Inner { .value = 1 };
+              let outer: Outer[i32] = Outer { .inner = inner };
+              let wrapped: Outer[Outer[i32]] = Outer { .inner = Inner { .value = outer } };
+              let result: Outer[i32] = deep(wrapped);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "T should be inferred through nested generic structs: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_from_struct_init_fields() {
+        let result = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+            }
+
+            fn main() {
+              let value = 123;
+              let box = Box { .inner = &value };
+              let box2: Box[i32] = box;
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "struct init should infer T from `*T` field: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_infers_across_multiple_function_generics() {
+        let result = typecheck(
+            r#"
+            struct Pair[A, B] {
+              pub first: A,
+              pub second: B,
+            }
+
+            fn swap[K, V](p: Pair[K, V]) Pair[V, K] {
+              return Pair { .first = p.second, .second = p.first };
+            }
+
+            fn main() {
+              let p: Pair[i32, f64] = Pair { .first = 1, .second = 2.5 };
+              let swapped: Pair[f64, i32] = swap(p);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "multiple generics should be inferred through a struct: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn self_construction_reports_real_field_mismatch_not_infer_error() {
+        let errors = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+
+              pub fn new(value: T) Self {
+                Self { .inner = value }
+              }
+            }
+
+            fn main() {
+              let box: Box[i32] = Box.new(123);
+            }
+            "#,
+        )
+        .expect_err("giving `T` instead of `*T` to a pointer field must fail");
+
+        assert!(
+            errors.iter().any(|err| {
+                matches!(err, TypeError::Mismatch { expected, found, .. }
+                if expected.as_str() == "*T" && found.as_str() == "T")
+            }),
+            "expected a Mismatch(*T, T), got: {errors:?}"
+        );
+
+        assert!(
+            !errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CannotInferGeneric { .. })),
+            "`Self` construction must not report `cannot infer`, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn associated_call_reports_pointer_mismatch_not_bogus_box_mismatch() {
+        let errors = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+
+              pub fn new(value: *T) Self {
+                Self { .inner = value }
+              }
+            }
+
+            fn main() {
+              let box: Box[i32] = Box.new(123);
+            }
+            "#,
+        )
+        .expect_err("passing a non-pointer to `*T` must fail");
+
+        assert!(
+            errors.iter().any(|err| {
+                matches!(err, TypeError::Mismatch { expected, found, .. }
+                if expected.as_str() == "*T" && found.as_str() == "i32")
+            }),
+            "expected a Mismatch(*T, i32), got: {errors:?}"
+        );
+
+        assert!(
+            !errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CannotInferGeneric { .. })),
+            "should not report `cannot infer` for a structural mismatch: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn struct_init_mismatch_reports_cannot_infer_not_cascade() {
+        let errors = typecheck(
+            r#"
+            struct Box[T] {
+              inner: *T,
+            }
+
+            fn main() {
+              let box = Box { .inner = 123 };
+            }
+            "#,
+        )
+        .expect_err("int cannot initialize a `*T` field");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CannotInferGeneric { .. })),
+            "expected CannotInferGeneric, got: {errors:?}"
+        );
+
+        // The cascading `*error` mismatch should be suppressed by recovery.
+        assert!(
+            !errors
+                .iter()
+                .any(|err| matches!(err, TypeError::Mismatch { found, .. }
+            if found.as_str().contains("error"))),
+            "expected no cascade mismatch mentioning `error`, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn string_literals_satisfy_display_and_debug_bounds() {
+        let result = typecheck(
+            r#"
+            pub interface Display {
+              fn display(*const self) []const char;
+            }
+
+            pub interface Debug {
+              fn debug(*const self) []const char;
+            }
+
+            fn print_this[T: Display](value: T) {
+              @println("{}", value);
+            }
+
+            fn dbg_this[T: Debug](value: T) {
+              @println("{:?}", value);
+            }
+
+            fn main() {
+              print_this(123);
+              print_this("hello!");
+              dbg_this("hello!");
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "string literals should satisfy Display/Debug bounds: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn array_literal_strings_coerce_to_slices() {
+        let result = typecheck(
+            r#"
+            struct S {
+              pub list: [2][]const char,
+            }
+
+            fn main() {
+              let o = S { .list = ["aa", "bb"] };
+              let m: [2][2][]const char = [["m00", "m01"], ["m10", "m11"]];
+              @println("{}", o.list[0]);
+              @println("{}", m[1][0]);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "string literals inside array literals should coerce to slices: {:?}",
+            result.err()
         );
     }
 }

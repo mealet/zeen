@@ -1,0 +1,18 @@
+extern fn malloc(usize) *void;
+extern fn free(*void);
+
+fn main() {
+  let ptr: *u8 = malloc(4);
+
+  *(ptr) = 1;
+  *(ptr + 1) = 2;
+  *(ptr + 2) = 3;
+  *(ptr + 3) = 4;
+
+  let new_ptr: *u8 = ptr + 3;
+
+  @println("{}", *(new_ptr));
+  @println("{}", *(new_ptr - 1));
+  @println("{}", *(new_ptr - 2));
+  @println("{}", *(new_ptr - 3));
+}

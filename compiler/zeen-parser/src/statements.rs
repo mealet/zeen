@@ -1,5 +1,6 @@
 use crate::{
     Parser,
+    declarations::{DeclParser, IsExtern, IsPub},
     error::ParserError,
     expressions::{self, ExprParser},
     type_parser::TypeParser,
@@ -55,9 +56,27 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(),
             TokenKind::Keyword(CompilerKeyword::If) => self.parse_if(),
             TokenKind::OpenBrace => self.parse_block(),
+            TokenKind::Keyword(CompilerKeyword::Fn | CompilerKeyword::Public) => {
+                self.parse_fn_decl()
+            }
 
             _ => self.parse_expr_or_assign(),
         }
+    }
+
+    /// Parses a nested function declaration (`fn foo() { .. }`), optionally
+    /// prefixed with `pub` (parsed here, rejected later by the typechecker).
+    fn parse_fn_decl(&mut self) -> Option<&'ctx Statement<'ctx>> {
+        let start_span = self.p.current().span;
+        let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
+
+        let mut decl_parser = DeclParser::new(self.p);
+        let decl = decl_parser.parse_fn(start_span, is_pub, IsExtern(false))?;
+
+        Some(self.p.arena.alloc(Statement {
+            kind: StatementKind::FnDecl(decl),
+            span: decl.source.span,
+        }))
     }
 
     fn expect_semicolon(&mut self) -> Option<()> {
@@ -1101,5 +1120,54 @@ mod tests {
             );
             assert!(stmt_parser.parse().is_none());
         }
+    }
+
+    #[test]
+    fn nested_fn_declaration_parses_as_statement() {
+        const SRC: &str = "fn foo() void { @println(\"hi\"); }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        let stmt = stmt_parser.parse().unwrap();
+
+        assert_matches!(
+            stmt.kind,
+            StatementKind::FnDecl(decl) => {
+                assert_matches!(
+                    decl.kind,
+                    zeen_ast::DeclarationKind::FnDecl {
+                        generics: None,
+                        return_type: Some(_),
+                        body: Some(_),
+                        is_pub: false,
+                        is_extern: false,
+                        ..
+                    }
+                );
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn nested_pub_fn_declaration_parses_as_statement() {
+        const SRC: &str = "pub fn foo() void {}";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        let stmt = stmt_parser.parse().unwrap();
+
+        assert_matches!(
+            stmt.kind,
+            StatementKind::FnDecl(decl) => {
+                assert_matches!(
+                    decl.kind,
+                    zeen_ast::DeclarationKind::FnDecl { is_pub: true, .. }
+                );
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
     }
 }

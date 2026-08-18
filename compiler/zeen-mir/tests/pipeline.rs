@@ -35,7 +35,7 @@ fn core_files() -> Vec<(&'static str, &'static str)> {
     files
 }
 
-fn compile(src: &str) -> Result<String, Vec<String>> {
+fn compile_mode(src: &str, mode: CompilationMode) -> Result<String, Vec<String>> {
     let rodeo = Rc::new(RefCell::new(Rodeo::default()));
     let bump = Bump::default();
     let content = Arc::new(src.to_string());
@@ -48,7 +48,7 @@ fn compile(src: &str) -> Result<String, Vec<String>> {
             linked: HashSet::new(),
         },
         core_files: core_files(),
-        mode: CompilationMode::Debug,
+        mode,
         output: CompilationOutput::EmitMIR,
     };
 
@@ -102,6 +102,7 @@ fn compile(src: &str) -> Result<String, Vec<String>> {
         &mut typecheck_result,
         &resolution_result,
         &hir_module,
+        mode,
     );
 
     Ok(zeen_mir::printer::print_mir_program(
@@ -110,6 +111,20 @@ fn compile(src: &str) -> Result<String, Vec<String>> {
         &resolution_result,
         &rodeo,
     ))
+}
+
+fn compile(src: &str) -> Result<String, Vec<String>> {
+    compile_mode(src, CompilationMode::Debug)
+}
+
+fn compile_mode_ok(src: &str, mode: CompilationMode) -> String {
+    match compile_mode(src, mode) {
+        Ok(mir) => mir,
+        Err(errors) => panic!(
+            "expected compilation to succeed, got errors:\n{}",
+            errors.join("\n")
+        ),
+    }
 }
 
 fn compile_ok(src: &str) -> String {
@@ -344,5 +359,429 @@ fn main() {
     assert!(
         mir.contains("= 4;"),
         "`a.len` must lower to the constant array length: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn dbg_macro_is_kept_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let i: usize = 1;
+    let x = @dbg(a[i]);
+}
+"#,
+    );
+    assert!(
+        mir.contains("@dbg("),
+        "@dbg must stay in the MIR in Debug mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn dbg_macro_is_elided_in_release_mode() {
+    let mir = compile_mode_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let i: usize = 1;
+    let x = @dbg(a[i]);
+}
+"#,
+        CompilationMode::Release,
+    );
+    assert!(
+        !mir.contains("@dbg"),
+        "@dbg must be removed from the MIR in Release mode, leaving the plain expression: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("= %0[%2];"),
+        "the @dbg argument must still be evaluated and assigned: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn array_index_is_bounds_checked_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let i: usize = 1;
+    let x = a[i];
+}
+"#,
+    );
+    assert!(
+        mir.contains("switchInt"),
+        "array index must be bounds-checked in Debug mode: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("@panic"),
+        "out-of-bounds access must diverge into a panic in Debug mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn array_index_is_not_bounds_checked_in_release_mode() {
+    let mir = compile_mode_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let i: usize = 1;
+    let x = a[i];
+}
+"#,
+        CompilationMode::Release,
+    );
+    assert!(
+        !mir.contains("switchInt"),
+        "array index must not be bounds-checked in Release mode: MIR:\n{mir}"
+    );
+    assert!(
+        !mir.contains("@panic"),
+        "no panic must be emitted for indexing in Release mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn slice_index_is_bounds_checked_against_runtime_len_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let b: []i32 = &a;
+    let i: usize = 1;
+    let x = b[i];
+}
+"#,
+    );
+    assert!(
+        mir.contains(".len)"),
+        "slice index must be bounds-checked against the runtime `.len`: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("@panic"),
+        "out-of-bounds slice access must diverge into a panic: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn nested_fn_is_printed_with_parent_prefixed_name() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn foo() void {
+        @println("hi");
+    }
+    foo();
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main->foo() void"),
+        "nested fn must be printed with its parent prefix: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn deeply_nested_fn_is_printed_with_full_parent_chain() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn inner() void {
+        fn deepest() void {
+            @println("deep");
+        }
+        deepest();
+    }
+    inner();
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main->inner->deepest() void"),
+        "nested fn must be printed with the full parent chain: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn nested_fn_is_visible_from_declaration_point_onwards() {
+    compile_ok(
+        r#"
+fn main() {
+    fn foo() void { @println("hi"); }
+    foo();
+}
+"#,
+    );
+}
+
+#[test]
+fn nested_fn_is_not_visible_before_its_declaration() {
+    compile_err_contains(
+        r#"
+fn main() {
+    foo();
+    fn foo() void { @println("hi"); }
+}
+"#,
+        "unresolved identifier",
+    );
+}
+
+#[test]
+fn nested_fn_is_not_visible_outside_parent() {
+    compile_err_contains(
+        r#"
+fn main() {
+    fn foo() void { @println("hi"); }
+}
+fn bar() void {
+    foo();
+}
+"#,
+        "unresolved identifier",
+    );
+}
+
+#[test]
+fn nested_fn_cannot_capture_enclosing_local() {
+    compile_err_contains(
+        r#"
+fn main() {
+    let x: i32 = 5;
+fn foo() void { @println(x); }
+    foo();
+}
+"#,
+        "nested function cannot capture",
+    );
+}
+
+#[test]
+fn nested_fn_cannot_capture_enclosing_generic() {
+    compile_err_contains(
+        r#"
+fn wrapper[T](x: T) T {
+    fn inner(y: T) T { return y; }
+    return inner(x);
+}
+"#,
+        "nested function cannot capture",
+    );
+}
+
+#[test]
+fn nested_fn_cannot_be_pub() {
+    compile_err_contains(
+        r#"
+fn main() {
+    pub fn foo() void { @println("hi"); }
+    foo();
+}
+"#,
+        "nested functions cannot be `public`",
+    );
+}
+
+#[test]
+fn nested_fn_named_main_is_not_the_entry_point() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn main() void { @println("inner"); }
+    main();
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main() void"),
+        "the top-level entry point must still exist: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("fn main->main() void"),
+        "nested `main` must be parent-prefixed, not replace the entry point: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn nested_fn_can_recurse() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn fib(n: i32) i32 {
+        if (n < 2) { return n; }
+        return fib(n - 1) + fib(n - 2);
+    }
+    let a = fib(10);
+    @println("{}", a);
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main->fib(%0: i32)"),
+        "recursive nested fn must be registered under the parent prefix: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn nested_fn_can_call_sibling() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    fn helper(x: i32) i32 { return x * 2; }
+    fn caller(x: i32) i32 { return helper(x); }
+    let a = caller(21);
+    @println("{}", a);
+}
+"#,
+    );
+    assert!(
+        mir.contains("fn main->helper(%0: i32)"),
+        "sibling nested fn must be registered: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("fn main->caller(%0: i32)"),
+        "caller nested fn must be registered: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn float_literal_division_by_zero_compiles_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: f64 = 10.0;
+    let c = a / 2.0;
+    let d = a / 0.0;
+    @println("{} {}", c, d);
+}
+"#,
+    );
+    assert!(
+        !mir.contains("@panic"),
+        "float literal division must not be guarded (IEEE-754 inf/nan): MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn void_function_ending_in_call_returns_void_constant() {
+    let mir = compile_ok(
+        r#"
+fn bar() void { @println("b"); }
+fn main() { bar() }
+"#,
+    );
+    assert!(
+        mir.contains("return void;"),
+        "a void fn ending in a call must return `void`, not a void temp: MIR:\n{mir}"
+    );
+    assert!(
+        !mir.contains("return %0;"),
+        "no void temporary may be returned (codegen allocates none): MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn void_function_with_explicit_void_return_call_lowers() {
+    let mir = compile_ok(
+        r#"
+fn bar() void { @println("b"); }
+fn main() void { return bar(); }
+"#,
+    );
+    assert!(
+        mir.contains("return void;"),
+        "explicit `return bar();` must return `void`: MIR:\n{mir}"
+    );
+    assert!(
+        !mir.contains("return %0;"),
+        "no void temporary may be returned: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn integer_division_by_zero_is_checked_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: i32 = 10;
+    let b: i32 = 0;
+    let c = a / b;
+    @println("{}", c);
+}
+"#,
+    );
+    assert!(
+        mir.contains("switchInt"),
+        "integer division must be guarded in Debug mode: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("@panic"),
+        "zero divisor must diverge into a panic in Debug mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn integer_modulo_by_zero_is_checked_in_debug_mode() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: i32 = 10;
+    let b: i32 = 0;
+    let c = a % b;
+    @println("{}", c);
+}
+"#,
+    );
+    assert!(
+        mir.contains("switchInt"),
+        "integer modulo must be guarded in Debug mode: MIR:\n{mir}"
+    );
+    assert!(
+        mir.contains("@panic"),
+        "zero divisor must diverge into a panic in Debug mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn integer_division_is_not_checked_in_release_mode() {
+    let mir = compile_mode_ok(
+        r#"
+fn main() {
+    let a: i32 = 10;
+    let b: i32 = 0;
+    let c = a / b;
+    @println("{}", c);
+}
+"#,
+        CompilationMode::Release,
+    );
+    assert!(
+        !mir.contains("switchInt"),
+        "integer division must not be guarded in Release mode: MIR:\n{mir}"
+    );
+    assert!(
+        !mir.contains("@panic"),
+        "no panic must be emitted for division in Release mode: MIR:\n{mir}"
+    );
+}
+
+#[test]
+fn float_division_by_zero_is_not_checked() {
+    let mir = compile_ok(
+        r#"
+fn main() {
+    let a: f64 = 10.0;
+    let b: f64 = 0.0;
+    let c = a / b;
+    @println("{}", c);
+}
+"#,
+    );
+    assert!(
+        !mir.contains("@panic"),
+        "float division by zero must not panic (IEEE-754 inf/nan): MIR:\n{mir}"
     );
 }

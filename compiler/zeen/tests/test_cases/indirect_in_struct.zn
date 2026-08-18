@@ -1,0 +1,19 @@
+struct Funcs {
+  pub add: fn(i32, i32) i32,
+  pub sub: fn(i32, i32) i32,
+  pub print: fn(i32) void,
+}
+
+fn add(a: i32, b: i32) i32 { a + b }
+fn sub(a: i32, b: i32) i32 { a - b }
+fn print(a: i32) { @println("{}", a); }
+
+fn main() {
+  let funcs = Funcs { .add = add, .sub = sub, .print = print };
+
+  let a = funcs.add(123, 123);
+  let b = funcs.sub(123, 123);
+
+  funcs.print(a);
+  funcs.print(b);
+}

@@ -1,0 +1,39 @@
+struct Box[T] {
+  pub inner: *T,
+
+  pub fn new(value: *T) Self {
+    Self { .inner = value }
+  }
+}
+
+struct Pair[A, B] {
+  pub first: A,
+  pub second: B,
+}
+
+fn swap[K, V](p: Pair[K, V]) Pair[V, K] {
+  return Pair { .first = p.second, .second = p.first };
+}
+
+fn max[T](items: [3]T) T {
+  return items[0];
+}
+
+fn first[T](items: []T) T {
+  return items[0];
+}
+
+fn main() i32 {
+  let value = 123;
+  let box: Box[i32] = Box.new(&value);
+  @println("{}", *box.inner);
+
+  let p: Pair[i32, f64] = Pair { .first = 1, .second = 2.5 };
+  let swapped: Pair[f64, i32] = swap(p);
+  @println("{}", swapped.first);
+
+  let arr = [7, 8, 9];
+  @println("{}", max(arr));
+  @println("{}", first(&arr));
+  return 0;
+}

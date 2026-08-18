@@ -1,0 +1,29 @@
+struct Box[T] {
+  pub inner: *T,
+
+  pub fn new(value: *T) Self {
+    Self { .inner = value }
+  }
+}
+
+fn deref[T](p: *T) T {
+  return *p;
+}
+
+fn main() {
+  let value = 123;
+  let p: *i32 = &value;
+  @println("{}", *p);
+
+  let lit: *i32 = &123;
+  @println("{}", *lit);
+
+  let t: i32 = deref(&123);
+  @println("{}", t);
+
+  let sum = &(value + 1);
+  @println("{}", *sum);
+
+  let box: Box[i32] = Box.new(&123);
+  @println("{}", *box.inner);
+}
