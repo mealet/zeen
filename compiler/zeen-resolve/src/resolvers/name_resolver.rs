@@ -2,7 +2,12 @@ use lasso::{Rodeo, Spur};
 use miette::{NamedSource, SourceSpan};
 use smol_str::SmolStr;
 
-use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::Arc,
+};
 
 use zeen_ast::{
     declarations::{Declaration, DeclarationKind, GenericType},
@@ -33,6 +38,10 @@ pub struct NameResolver {
     /// used to record the parent of nested function declarations.
     current_fn_def: Option<DefId>,
 
+    /// Edges of the global variables dependency graph: a global var -> globals
+    /// referenced from its initializer expression.
+    global_deps: HashMap<DefId, Vec<DefId>>,
+
     next_def_id: u32,
     current_src: NamedSource<Arc<String>>,
 }
@@ -61,6 +70,7 @@ impl<'ctx> NameResolver {
 
             capture_stack: Vec::new(),
             current_fn_def: None,
+            global_deps: HashMap::new(),
 
             next_def_id: 0,
             current_src: NamedSource::new(filename.as_str(), src.clone()),
@@ -151,6 +161,8 @@ impl<'ctx> NameResolver {
         for decl in decls {
             self.resolve_decl(decl);
         }
+
+        self.check_global_var_cycles();
     }
 
     fn declare_toplevel(&mut self, decl: &'ctx Declaration<'ctx>) {
@@ -264,6 +276,26 @@ impl<'ctx> NameResolver {
                 self.table.declare_value(name.0, def_id);
             }
 
+            DeclarationKind::GlobalVar {
+                name,
+                is_const,
+                is_pub,
+                ..
+            } => {
+                let def_id = self.define_at(
+                    NodeKey::from_decl(decl),
+                    DefInfo {
+                        name: name.0,
+                        kind: DefKind::GlobalVar { is_const },
+                        span: (name.1, decl.source.src()).into(),
+                        decl: Some(NodeKey::from_decl(decl)),
+                        is_pub,
+                    },
+                );
+
+                self.table.declare_value(name.0, def_id);
+            }
+
             DeclarationKind::ExternInclude { .. } => {
                 self.report(ResolveError::DisabledFeature {
                     reason: "not supported yet".into(),
@@ -273,7 +305,6 @@ impl<'ctx> NameResolver {
             }
 
             DeclarationKind::ExternLink { .. } => {}
-            DeclarationKind::GlobalVar { .. } => {}
             DeclarationKind::ImplementDecl { .. } => {}
             DeclarationKind::Use { .. } => {}
         }
@@ -450,10 +481,247 @@ impl<'ctx> NameResolver {
                 self.resolve_type(ty);
             }
 
+            DeclarationKind::GlobalVar { ty, value, .. } => {
+                self.resolve_type(ty);
+                self.resolve_expr(value);
+
+                if let Some(def_id) = self
+                    .result
+                    .binding_sites
+                    .get(&NodeKey::from_decl(decl))
+                    .copied()
+                {
+                    let mut deps = Vec::new();
+                    self.collect_global_deps(value, &mut deps);
+
+                    if !deps.is_empty() {
+                        self.global_deps.insert(def_id, deps);
+                    }
+                }
+            }
+
             DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => {}
-            DeclarationKind::GlobalVar { .. } => {}
             DeclarationKind::Use { .. } => {}
         }
+    }
+
+    // --> Global variables dependency graph
+
+    fn collect_global_deps(&mut self, expr: &'ctx Expression<'ctx>, out: &mut Vec<DefId>) {
+        match expr.kind {
+            ExpressionKind::Ident { .. } => {
+                if let Some(Resolution::Def(id)) = self.result.resolution_of_expr(expr)
+                    && matches!(
+                        self.result.defs.get(&id).map(|info| &info.kind),
+                        Some(DefKind::GlobalVar { .. })
+                    )
+                    && !out.contains(&id)
+                {
+                    out.push(id);
+                }
+            }
+
+            ExpressionKind::Binary { lhs, rhs, .. } => {
+                self.collect_global_deps(lhs, out);
+                self.collect_global_deps(rhs, out);
+            }
+
+            ExpressionKind::Unary { expr: inner, .. } => self.collect_global_deps(inner, out),
+
+            ExpressionKind::Call { callee, args } => {
+                self.collect_global_deps(callee, out);
+                for arg in args {
+                    self.collect_global_deps(arg, out);
+                }
+            }
+
+            ExpressionKind::MacroCall { args, .. } => {
+                for arg in args {
+                    self.collect_global_deps(arg, out);
+                }
+            }
+
+            ExpressionKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.collect_global_deps(condition, out);
+                self.collect_global_stmt_deps(then_block, out);
+
+                if let Some(else_block) = else_block {
+                    self.collect_global_stmt_deps(else_block, out);
+                }
+            }
+
+            ExpressionKind::Switch { object, .. } => self.collect_global_deps(object, out),
+
+            ExpressionKind::FieldAccess { object, .. } => self.collect_global_deps(object, out),
+
+            ExpressionKind::SliceAccess { object, index } => {
+                self.collect_global_deps(object, out);
+                self.collect_global_deps(index, out);
+            }
+
+            ExpressionKind::StructInit { ty, fields } => {
+                self.collect_global_deps(ty, out);
+
+                if let Some(fields) = fields {
+                    for field in fields {
+                        self.collect_global_deps(field.value, out);
+                    }
+                }
+            }
+
+            ExpressionKind::ArrayInit { elements } => {
+                for elem in elements {
+                    self.collect_global_deps(elem, out);
+                }
+            }
+
+            ExpressionKind::Block { stmts, trailing } => {
+                for stmt in stmts {
+                    self.collect_global_stmt_deps(stmt, out);
+                }
+
+                if let Some(trailing) = trailing {
+                    self.collect_global_deps(trailing, out);
+                }
+            }
+
+            ExpressionKind::Type(ty) => {
+                if let TypeKind::Array { len: Some(len), .. } = ty.kind {
+                    self.collect_global_deps(len, out);
+                }
+            }
+
+            ExpressionKind::Literal(_) => {}
+        }
+    }
+
+    fn collect_global_stmt_deps(&mut self, stmt: &'ctx Statement<'ctx>, out: &mut Vec<DefId>) {
+        match stmt.kind {
+            StatementKind::Let { value, .. } => {
+                if let Some(value) = value {
+                    self.collect_global_deps(value, out);
+                }
+            }
+
+            StatementKind::Assign { object, value } => {
+                self.collect_global_deps(object, out);
+                self.collect_global_deps(value, out);
+            }
+
+            StatementKind::CompoundAssign { object, value, .. } => {
+                self.collect_global_deps(object, out);
+                self.collect_global_deps(value, out);
+            }
+
+            StatementKind::Return { value } => {
+                if let Some(value) = value {
+                    self.collect_global_deps(value, out);
+                }
+            }
+
+            StatementKind::While { condition, block } => {
+                self.collect_global_deps(condition, out);
+                self.collect_global_stmt_deps(block, out);
+            }
+
+            StatementKind::For {
+                iterator, block, ..
+            } => {
+                self.collect_global_deps(iterator, out);
+                self.collect_global_stmt_deps(block, out);
+            }
+
+            StatementKind::FnDecl(_) => {}
+
+            StatementKind::Expr(expr) => self.collect_global_deps(expr, out),
+
+            StatementKind::Break | StatementKind::Continue => {}
+            StatementKind::TrailingExpr(_) => panic!("that was not supposed to happen"),
+        }
+    }
+
+    fn check_global_var_cycles(&mut self) {
+        // 0 = unvisited, 1 = in progress, 2 = done
+        let mut state: HashMap<DefId, u8> = HashMap::new();
+        let mut stack: Vec<DefId> = Vec::new();
+
+        let mut nodes: Vec<DefId> = self.global_deps.keys().copied().collect();
+        nodes.sort();
+
+        for node in nodes {
+            if state.get(&node).copied().unwrap_or(0) != 0 {
+                continue;
+            }
+
+            if let Some(cycle) = self.visit_global(node, &mut state, &mut stack) {
+                let names: Vec<SmolStr> = cycle
+                    .iter()
+                    .filter_map(|id| {
+                        self.result
+                            .defs
+                            .get(id)
+                            .map(|info| self.interner_resolve(&info.name))
+                    })
+                    .collect();
+
+                let mut chain = String::new();
+                for name in &names {
+                    chain.push_str(name.as_str());
+                    chain.push_str(" -> ");
+                }
+                chain.push_str(names.first().map(|n| n.as_str()).unwrap_or("?"));
+
+                let info = self.result.defs.get(&cycle[0]).cloned().unwrap_or(DefInfo {
+                    name: Spur::default(),
+                    kind: DefKind::GlobalVar { is_const: false },
+                    span: (SourceSpan::new(0.into(), 0), self.named_src()).into(),
+                    decl: None,
+                    is_pub: false,
+                });
+
+                self.report(ResolveError::GlobalVarCycle {
+                    chain: chain.into(),
+                    src: info.span.src(),
+                    span: info.span.span,
+                });
+
+                return;
+            }
+        }
+    }
+
+    fn visit_global(
+        &mut self,
+        node: DefId,
+        state: &mut HashMap<DefId, u8>,
+        stack: &mut Vec<DefId>,
+    ) -> Option<Vec<DefId>> {
+        match state.get(&node).copied().unwrap_or(0) {
+            1 => {
+                let pos = stack.iter().position(|&n| n == node)?;
+                return Some(stack[pos..].to_vec());
+            }
+            2 => return None,
+            _ => {}
+        }
+
+        state.insert(node, 1);
+        stack.push(node);
+
+        let deps = self.global_deps.get(&node).cloned().unwrap_or_default();
+        for dep in deps {
+            if let Some(cycle) = self.visit_global(dep, state, stack) {
+                return Some(cycle);
+            }
+        }
+
+        stack.pop();
+        state.insert(node, 2);
+        None
     }
 
     fn resolve_fn_body(&mut self, decl: &'ctx Declaration<'ctx>) {

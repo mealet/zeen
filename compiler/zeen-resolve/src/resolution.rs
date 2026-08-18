@@ -90,6 +90,7 @@ pub enum DefKind {
     Field,
     GenericParam,
     ExternVar,
+    GlobalVar { is_const: bool },
 }
 
 /// Final output of Name Resolver
