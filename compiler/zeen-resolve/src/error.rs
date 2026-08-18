@@ -147,6 +147,21 @@ pub enum ResolveError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("nested function cannot capture `{name}` from the enclosing function")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::resolver::nested_fn_capture),
+        help("nested functions cannot close over the enclosing function's variables")
+    )]
+    NestedFnCapture {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Error, Diagnostic, Clone)]

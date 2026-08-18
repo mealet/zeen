@@ -63,8 +63,21 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
         return CoerceResult::ErrorRecovery;
     }
 
+    // Once a diagnostic has been emitted, generics are often pinned to `error`
+    // which can sit nested inside pointers/arrays/structs. Treat any error
+    // occurrence as recovery so we don't cascade more diagnostics.
+    if type_contains_error(interner, from) || type_contains_error(interner, to) {
+        return CoerceResult::ErrorRecovery;
+    }
+
     if matches!(from_ty, Type::Never) {
         return CoerceResult::NeverCoercion;
+    }
+
+    // Literals are allowed inside wrapped types too: `let p: *i64 = &123;`
+    // pins the pointee to `i64`, mirroring the top-level `IntLiteral` rule.
+    if nested_literal_pins(interner, from, to) {
+        return CoerceResult::PinLiteral;
     }
 
     match (from_ty, to_ty) {
@@ -162,6 +175,63 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
     }
 }
 
+pub fn type_contains_error(interner: &TypeInterner, ty: TypeId) -> bool {
+    match interner.get(ty) {
+        Type::Error => true,
+        Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+            type_contains_error(interner, *inner)
+        }
+        Type::Array { element, .. } | Type::Slice { element, .. } => {
+            type_contains_error(interner, *element)
+        }
+        Type::Struct { generic_args, .. } => generic_args
+            .iter()
+            .any(|a| type_contains_error(interner, *a)),
+        Type::Fn { params, ret } => {
+            params.iter().any(|p| type_contains_error(interner, *p))
+                || type_contains_error(interner, *ret)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `from` and `to` share structure and differ only in literal leaves
+/// that can be pinned to matching builtins (e.g. `*IntLiteral` vs `*i64`).
+fn nested_literal_pins(interner: &TypeInterner, from: TypeId, to: TypeId) -> bool {
+    match (interner.get(from), interner.get(to)) {
+        (Type::IntLiteral, Type::Builtin(b)) => builtin_is_integer(*b),
+        (Type::FloatLiteral, Type::Builtin(b)) => builtin_is_float(*b),
+        (Type::Pointer { inner: fi, .. }, Type::Pointer { inner: ti, .. })
+        | (Type::ManyPointer { inner: fi, .. }, Type::ManyPointer { inner: ti, .. }) => {
+            nested_literal_pins(interner, *fi, *ti)
+        }
+        (Type::Slice { element: fi, .. }, Type::Slice { element: ti, .. })
+        | (Type::Array { element: fi, .. }, Type::Array { element: ti, .. }) => {
+            nested_literal_pins(interner, *fi, *ti)
+        }
+        (
+            Type::Struct {
+                def_id: fd,
+                generic_args: fa,
+                ..
+            },
+            Type::Struct {
+                def_id: td,
+                generic_args: ta,
+                ..
+            },
+        ) => {
+            fd == td
+                && fa.len() == ta.len()
+                && fa
+                    .iter()
+                    .zip(ta)
+                    .all(|(f, t)| nested_literal_pins(interner, *f, *t))
+        }
+        _ => false,
+    }
+}
+
 pub fn is_coercible(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> bool {
     try_coerce(interner, from, to).is_ok()
 }
@@ -205,6 +275,9 @@ pub fn verify_cast(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> boo
 
         // [N]T -> [*]T
         (Type::Array { .. }, Type::ManyPointer { .. }) => true,
+
+        // [N]T -> *T
+        (Type::Array { .. }, Type::Pointer { .. }) => true,
 
         _ => false,
     }

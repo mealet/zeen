@@ -14,6 +14,7 @@ miette = { version = "7.6.0", features = ["fancy"] }
 thiserror = "2.0.18"
 clap = { version = "4.6.2", features = ["derive"] }
 colored = "3.1.1"
+inkwell = { version = "0.10.0", features = ["llvm22-1"] }
 
 zeen-driver = {path = "../zeen-driver"}
 zeen-lexer = {path = "../zeen-lexer"}
@@ -24,3 +25,9 @@ zeen-hir = { path = "../zeen-hir" }
 zeen-typecheck = { path = "../zeen-typecheck" }
 zeen-mir = { path = "../zeen-mir" }
 zeen-flow = { path = "../zeen-flow" }
+zeen-codegen-llvm = { path = "../zeen-codegen-llvm" }
+zeen-linker = { path = "../zeen-linker" }
+
+[dev-dependencies]
+anyhow = "1.0.104"
+assert_cmd = "2.2.2"

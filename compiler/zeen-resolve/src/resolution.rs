@@ -108,6 +108,10 @@ pub struct ResolutionResult {
     pub binding_sites: HashMap<NodeKey, DefId>,
     pub implement_names: HashMap<NodeKey, (Resolution, Resolution)>,
     pub interface_self_placeholders: HashMap<DefId, DefId>,
+
+    /// For nested function declarations: maps the nested fn's `DefId` to its
+    /// enclosing function's `DefId`, used to build `<parent>-><name>` symbols.
+    pub nested_fn_parents: HashMap<DefId, DefId>,
 }
 
 impl ResolutionResult {

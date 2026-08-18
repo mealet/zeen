@@ -120,6 +120,26 @@ impl SymbolTable {
     pub fn declare_type(&mut self, name: Spur, id: DefId) {
         self.current_mut().types.insert(name, id);
     }
+
+    /// Collects every `DefId` (values and types) visible in all scopes above the
+    /// module one (the enclosing function's params, locals and generics,
+    /// including the current block). Used to forbid nested functions from
+    /// capturing them.
+    pub fn enclosing_defs(&self) -> std::collections::HashSet<DefId> {
+        let mut out = std::collections::HashSet::new();
+
+        for scope in self.scopes.iter().rev() {
+            match scope.kind {
+                ScopeKind::Module => break,
+                _ => {
+                    out.extend(scope.content.values.values().copied());
+                    out.extend(scope.content.types.values().copied());
+                }
+            }
+        }
+
+        out
+    }
 }
 
 #[cfg(test)]

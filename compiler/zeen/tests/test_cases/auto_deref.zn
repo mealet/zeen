@@ -1,0 +1,36 @@
+struct Foo {
+  pub x: i32,
+}
+
+fn get_val(f: *Foo) i32 {
+  return f.x;
+}
+
+struct Box[T] {
+  pub inner: T,
+
+  pub fn get(*self) T {
+    return self.inner;
+  }
+
+  pub fn set(*self, value: T) void {
+    self.inner = value;
+  }
+}
+
+fn main() {
+  let f = Foo { .x = 7 };
+  let sf: *Foo = &f;
+  @println("{}", sf.x);
+  @println("{}", get_val(sf));
+  sf.x = 10;
+  @println("{}", sf.x);
+
+  let lit: *Foo = &Foo { .x = 9 };
+  @println("{}", lit.x);
+
+  let box: Box[i32] = Box { .inner = 123 };
+  @println("{}", box.get());
+  box.set(456);
+  @println("{}", box.inner);
+}

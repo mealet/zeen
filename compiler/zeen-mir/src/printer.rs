@@ -416,6 +416,12 @@ impl<'a> MirPrinter<'a> {
             ConstValue::Str(s) => format!("{:?}", self.resolve_spur(*s)),
             ConstValue::NullPtr => "null".to_string(),
             ConstValue::Void => "void".to_string(),
+            ConstValue::Fn(id) => self
+                .program
+                .function_names
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| format!("fn#{}", id.0)),
         }
     }
 

@@ -83,6 +83,25 @@ pub enum FlowError {
         span: SourceSpan,
     },
 
+    #[error(
+        "returning a value that borrows local `{name}`, which is dropped when this function returns"
+    )]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::dataflow::escaping_borrow),
+        help(
+            "the slice/pointer points into this function's stack frame; `{name}` is dead by the time the caller uses the value"
+        )
+    )]
+    EscapingBorrow {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("unused variable `{name}`")]
     #[diagnostic(
         severity(Warning),

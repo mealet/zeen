@@ -1,0 +1,7 @@
+fn main() i32 {
+  let msg = @format("sum is {}", 40 + 2);
+  @println("{}", msg);
+  let nested = @format("wrapped: {}", @format("inner {}", 7));
+  @println("{}", nested);
+  return 0;
+}

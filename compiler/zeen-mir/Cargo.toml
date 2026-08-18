@@ -9,12 +9,16 @@ license.workspace = true
 
 [dependencies]
 lasso = "0.7.3"
+miette = { version = "7.6.0", features = ["fancy"] }
+thiserror = "2.0.18"
+smol_str = "0.3.6"
 
 zeen-ast = {path = "../zeen-ast"}
 zeen-resolve = {path = "../zeen-resolve"}
 zeen-typecheck = {path = "../zeen-typecheck"}
 zeen-types = {path = "../zeen-types"}
 zeen-hir = {path = "../zeen-hir"}
+zeen-driver = {path = "../zeen-driver"}
 
 [dev-dependencies]
 bumpalo = "3.20.2"

@@ -8,6 +8,20 @@ mod cli;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
 
+fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
+    if path
+        .extension()
+        .is_some_and(|existing| existing.to_string_lossy().eq_ignore_ascii_case(ext))
+    {
+        return path.to_path_buf();
+    }
+
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".");
+    name.push(ext);
+    std::path::PathBuf::from(name)
+}
+
 fn main() {
     let args = cli::Args::try_parse().unwrap_or_else(|err| {
         let mut command = cli::Args::command();
@@ -199,6 +213,7 @@ fn main() {
         &mut typechecker_result,
         &resolution_result,
         &hir_module,
+        context.mode,
     );
 
     let flow_result = zeen_flow::run_dataflow(
@@ -210,15 +225,25 @@ fn main() {
 
     match flow_result {
         Ok(result) => {
-            for warning in &result.warnings {
-                let report_string = driver.report(warning).unwrap();
-                eprintln!("{}", report_string);
-            }
-            if !result.warnings.is_empty() {
-                cli::println_warn(format!(
-                    "Compiler reported {} warning(s)",
-                    result.warnings.len()
-                ));
+            if !args.no_warns {
+                let mut warnings = Vec::new();
+                warnings.extend(
+                    lowered_mir
+                        .warnings
+                        .iter()
+                        .map(|w| w as &dyn miette::Diagnostic),
+                );
+                warnings.extend(result.warnings.iter().map(|w| w as &dyn miette::Diagnostic));
+
+                let count = warnings.len();
+                for warning in warnings {
+                    let report_string = driver.report(warning).unwrap();
+                    eprintln!("{}", report_string);
+                }
+
+                if count > 0 {
+                    cli::println_warn(format!("Compiler reported {count} warning(s)"));
+                }
             }
         }
         Err(errors) => {
@@ -241,8 +266,7 @@ fn main() {
             &rodeo,
         );
 
-        let mut output_path = args.path.clone();
-        output_path.add_extension("mir");
+        let output_path = with_default_extension(&args.output, "mir");
 
         let mut output_file = std::fs::File::create(&output_path).unwrap_or_else(|_| {
             cli::println_warn("Unable to write MIR to file, printing to stdout...");
@@ -266,5 +290,121 @@ fn main() {
         );
 
         exit(0);
+    }
+
+    cli::println_info("Generating", "LLVM IR from MIR");
+
+    let codegen_options = zeen_codegen_llvm::CodegenOptions {
+        mode: context.mode,
+        target: None,
+        main_fn: lowered_mir.main_fn,
+        source_file_name: filename.to_string(),
+    };
+
+    let context = inkwell::context::Context::create();
+
+    let mut codegen = zeen_codegen_llvm::CodeGen::new(
+        &context,
+        &lowered_mir.program,
+        &typechecker_result,
+        &resolution_result,
+        Rc::clone(&rodeo),
+        codegen_options,
+    )
+    .unwrap_or_else(|err| {
+        let report_string = driver.report(&err).unwrap();
+        eprintln!("{}", report_string);
+        cli::println_error("Codegen failed");
+        exit(1);
+    });
+
+    if let Err(err) = codegen.generate() {
+        let report_string = driver.report(&err).unwrap();
+        eprintln!("{}", report_string);
+        cli::println_error("Codegen failed");
+        exit(1);
+    }
+
+    if let Err(err) = codegen.verify() {
+        let report_string = driver.report(&err).unwrap();
+        eprintln!("{}", report_string);
+        cli::println_error("Codegen failed");
+        exit(1);
+    }
+
+    match args.emit {
+        CompilationOutput::EmitIR => {
+            let output_path = with_default_extension(&args.output, "ll");
+
+            if let Err(err) = codegen.emit_ir(&output_path) {
+                let report_string = driver.report(&err).unwrap();
+                eprintln!("{}", report_string);
+                cli::println_error("Codegen failed");
+                exit(1);
+            }
+
+            cli::println_info(
+                "Emitted",
+                format!("LLVM IR to the file ({})", output_path.display()),
+            );
+        }
+
+        CompilationOutput::Object => {
+            let output_path = with_default_extension(&args.output, "o");
+
+            if let Err(err) = codegen.emit_object(&output_path) {
+                let report_string = driver.report(&err).unwrap();
+                eprintln!("{}", report_string);
+                cli::println_error("Codegen failed");
+                exit(1);
+            }
+
+            cli::println_info(
+                "Emitted",
+                format!("object file to the file ({})", output_path.display()),
+            );
+        }
+
+        CompilationOutput::Binary => {
+            let linker =
+                zeen_linker::linker::ObjectLinker::detect_compiler().unwrap_or_else(|| {
+                    cli::println_error(
+                        "No supported C compilers found in system. Recommended: gcc/clang",
+                    );
+                    exit(1);
+                });
+
+            let object_path = std::env::temp_dir().join(format!("zeen-{}.o", std::process::id()));
+
+            if let Err(err) = codegen.emit_object(&object_path) {
+                let report_string = driver.report(&err).unwrap();
+                eprintln!("{}", report_string);
+                cli::println_error("Codegen failed");
+                exit(1);
+            }
+
+            let output_path = &args.output;
+            let result = zeen_linker::linker::ObjectLinker::link(
+                std::slice::from_ref(&object_path),
+                output_path,
+                &[],
+            );
+
+            std::fs::remove_file(&object_path).ok();
+
+            match result {
+                Ok(_) => cli::println_info(
+                    "Emitted",
+                    format!("binary (with {linker}): `{}`", output_path.display(),),
+                ),
+                Err(err) => {
+                    cli::println_error(format!("Linker failed (object linker: `{linker}`)"));
+                    eprintln!("\n{err}\n");
+                    exit(1);
+                }
+            }
+        }
+
+        CompilationOutput::EmitMIR => unreachable!("handled above"),
     }
 }
