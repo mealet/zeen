@@ -269,6 +269,45 @@ fn print_emits_printf_call() {
 }
 
 #[test]
+fn f32_division_narrows_to_slot_and_promotes_for_printf() {
+    let mut fx = Fixture::new();
+    let print_def = fx.def("print", DefKind::Function);
+    let void = fx.void();
+    let f32 = fx.f32();
+    let mut f = fx.fn_builder("print", print_def, void);
+    let q = f.temp(f32);
+    let dest = f.temp(void);
+    f.entry("bb0");
+    f.block("bb1");
+    f.set_current("bb0");
+    f.assign(
+        place(q),
+        binary(BinaryOp::Div, const_float(4.0), const_float(3.0)),
+    );
+    f.format(
+        vec![FormatChunk::Arg(FormatSpec::Display)],
+        vec![copy_of(q)],
+        vec![f32],
+        dest,
+        Some("bb1"),
+    );
+    f.set_current("bb1");
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    // Float-literal operands are `f64` by default; the folded division result
+    // must be narrowed to the `f32` slot instead of being stored as a `double`
+    // (which would clobber adjacent memory and fail to verify).
+    assert!(!ir.contains("store double"), "{ir}");
+    assert!(ir.contains("store float"), "{ir}");
+    // ...and widened back to `double` for the variadic `sprintf` call.
+    assert!(ir.contains("fpext float"), "{ir}");
+    assert!(ir.contains("call i32 (ptr, ptr, ...) @sprintf"), "{ir}");
+}
+
+#[test]
 fn enum_display_and_debug() {
     let mut fx = Fixture::new();
     let color_def = fx.def("Color", DefKind::Enum);

@@ -589,6 +589,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     return;
                 }
                 let value = self.rvalue_value(rvalue, place_ty, func);
+                let value = self.coerce_float_to_slot(value, place_ty);
                 self.store_place(place, value, func);
             }
 
@@ -758,7 +759,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 int_ty.const_int(*n as u64, signed).into()
             }
 
-            ConstValue::Float(f) => self.context.f64_type().const_float(*f).into(),
+            ConstValue::Float(f) => {
+                let float_ty = match expected.map(|ty| self.typecheck.interner.get(ty)) {
+                    Some(Type::Builtin(BuiltinType::f32)) => self.context.f32_type(),
+                    _ => self.context.f64_type(),
+                };
+                float_ty.const_float(*f).into()
+            }
 
             ConstValue::Bool(b) => self.context.bool_type().const_int(*b as u64, false).into(),
 
@@ -2275,6 +2282,18 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
                     let (specifier, value) = self.format_arg_value(operand, arg_ty, *spec, func);
 
+                    // printf-family variadic calls apply default argument
+                    // promotion, so an `f32` argument must be widened to the
+                    // `f64` that `%f` reads.
+                    let value = match value.get_type() {
+                        BasicTypeEnum::FloatType(t) if t.get_bit_width() == 32 => self
+                            .builder
+                            .build_float_ext(value.into_float_value(), self.context.f64_type(), "")
+                            .unwrap()
+                            .into(),
+                        _ => value,
+                    };
+
                     format.push_str(&specifier);
                     values.push(value);
                 }
@@ -2477,6 +2496,33 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     fn store_place(&mut self, place: &Place, value: BasicValueEnum<'ctx>, func: &MirFunction) {
         let ptr = self.place_ptr(place, func);
         self.builder.build_store(ptr, value).unwrap();
+    }
+
+    /// Narrows/widens a float rvalue result to the destination slot's width.
+    /// Float-literal operands are `f64` by default, so e.g. `Div(4.0, 3.0)`
+    /// produces an `f64` even when the result lands in an `f32` slot; storing
+    /// it unchanged would clobber adjacent memory.
+    fn coerce_float_to_slot(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        slot: TypeId,
+    ) -> BasicValueEnum<'ctx> {
+        let slot_ty = self.map_basic_type(slot);
+        match (value.get_type(), slot_ty) {
+            (BasicTypeEnum::FloatType(v), BasicTypeEnum::FloatType(s)) if v != s => {
+                let b = &self.builder;
+                if s.get_bit_width() < v.get_bit_width() {
+                    b.build_float_trunc(value.into_float_value(), s, "")
+                        .unwrap()
+                        .into()
+                } else {
+                    b.build_float_ext(value.into_float_value(), s, "")
+                        .unwrap()
+                        .into()
+                }
+            }
+            _ => value,
+        }
     }
 
     fn load_place(&self, place: &Place, func: &MirFunction) -> BasicValueEnum<'ctx> {
