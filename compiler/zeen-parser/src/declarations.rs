@@ -716,7 +716,7 @@ mod tests {
 
     use std::{cell::RefCell, rc::Rc};
 
-    use zeen_ast::{TypeExpr, TypeKind};
+    use zeen_ast::{Expression, ExpressionKind, TypeExpr, TypeKind};
 
     macro_rules! make_parser {
         ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident) => {
@@ -1280,6 +1280,176 @@ mod tests {
                 },
                 ..
             }])
+        );
+    }
+
+    #[test]
+    fn global_let_decl() {
+        const SRC: &str = "let global: i32 = 0;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(0)),
+                        ..
+                    },
+                    is_const: false,
+                    is_pub: false,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_let_decl_pub() {
+        const SRC: &str = "pub let global: i32 = 0;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(0)),
+                        ..
+                    },
+                    is_const: false,
+                    is_pub: true,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_const_decl() {
+        const SRC: &str = "const global: i32 = 0;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(0)),
+                        ..
+                    },
+                    is_const: true,
+                    is_pub: false,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_const_decl_pub() {
+        const SRC: &str = "pub const global: i32 = 0;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(0)),
+                        ..
+                    },
+                    is_const: true,
+                    is_pub: true,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_var_with_expr_value() {
+        const SRC: &str = "let global: i32 = 1 + 2 * 3;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Binary { .. },
+                        ..
+                    },
+                    is_const: false,
+                    is_pub: false,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_vars_mixed_with_fn() {
+        const SRC: &str = "let a: i32 = 0; pub const b: i32 = 1; fn main() {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::GlobalVar {
+                        name: _,
+                        is_const: false,
+                        is_pub: false,
+                        ..
+                    },
+                    ..
+                },
+                Declaration {
+                    kind: DeclarationKind::GlobalVar {
+                        name: _,
+                        is_const: true,
+                        is_pub: true,
+                        ..
+                    },
+                    ..
+                },
+                Declaration {
+                    kind: DeclarationKind::FnDecl { .. },
+                    ..
+                },
+            ])
         );
     }
 
