@@ -2335,8 +2335,10 @@ impl<'res> TypeChecker<'res> {
                 def_id,
                 generic_args,
             } => {
-                let new_args: Vec<TypeId> =
-                    generic_args.iter().map(|a| self.default_literal(*a)).collect();
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|a| self.default_literal(*a))
+                    .collect();
                 if new_args == generic_args {
                     ty
                 } else {
@@ -3011,11 +3013,7 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn bind_unresolved_generics(
-        &mut self,
-        ty: TypeId,
-        bindings: &mut HashMap<DefId, TypeId>,
-    ) {
+    fn bind_unresolved_generics(&mut self, ty: TypeId, bindings: &mut HashMap<DefId, TypeId>) {
         let mut unresolved = Vec::new();
         self.collect_unresolved_generics(ty, bindings, &mut unresolved);
 
@@ -4726,7 +4724,9 @@ mod tests {
         );
 
         assert!(
-            !errors.iter().any(|err| matches!(err, TypeError::CannotInferGeneric { .. })),
+            !errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CannotInferGeneric { .. })),
             "should not report `cannot infer` for a structural mismatch: {errors:?}"
         );
     }
@@ -4755,7 +4755,9 @@ mod tests {
 
         // The cascading `*error` mismatch should be suppressed by recovery.
         assert!(
-            !errors.iter().any(|err| matches!(err, TypeError::Mismatch { found, .. }
+            !errors
+                .iter()
+                .any(|err| matches!(err, TypeError::Mismatch { found, .. }
             if found.as_str().contains("error"))),
             "expected no cascade mismatch mentioning `error`, got: {errors:?}"
         );

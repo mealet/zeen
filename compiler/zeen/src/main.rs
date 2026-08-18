@@ -388,10 +388,7 @@ fn main() {
             match result {
                 Ok(_) => cli::println_info(
                     "Emitted",
-                    format!(
-                        "binary (with {linker}): `{}`",
-                        output_path.display(),
-                    ),
+                    format!("binary (with {linker}): `{}`", output_path.display(),),
                 ),
                 Err(err) => {
                     cli::println_error(format!("Linker failed (object linker: `{linker}`)"));
