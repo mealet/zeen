@@ -307,7 +307,11 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {}
-            HirDeclKind::GlobalVar { .. } => {}
+            HirDeclKind::GlobalVar { ty, is_const, .. } => {
+                let ty_id = self.lower_hir_type(ty);
+                self.result.def_types.insert(decl.def_id, ty_id);
+                self.result.const_bindings.insert(decl.def_id, *is_const);
+            }
         };
     }
 
@@ -829,9 +833,13 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
+            HirDeclKind::GlobalVar { ty, value, .. } => {
+                let declared_ty = self.lower_hir_type(ty);
+                self.check_expr(value, declared_ty, true);
+            }
+
             HirDeclKind::Enum(_)
             | HirDeclKind::ExternVar { .. }
-            | HirDeclKind::GlobalVar { .. }
             | HirDeclKind::ExternLink
             | HirDeclKind::ExternInclude => {}
         }
