@@ -394,6 +394,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             IntBase::Decimal => {}
         };
 
+        str_value = str_value.replace("_", "");
+
         let value = i64::from_str_radix(&str_value, radix).unwrap_or_else(|err| {
             self.p.report(ParserError::InvalidLiteral {
                 message: "invalid integer literal found".into(),
