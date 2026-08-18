@@ -2314,20 +2314,18 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(Type::Void | Type::Never)
                 ) {
                     let what = match &expr.kind {
-                        HirExprKind::Call { callee, .. } => {
-                            match &callee.kind {
-                                HirExprKind::VarRef(def_id) => {
-                                    let name = self
-                                        .resolution
-                                        .defs
-                                        .get(def_id)
-                                        .map(|info| self.rodeo.borrow().resolve(&info.name).to_string())
-                                        .unwrap_or_default();
-                                    SmolStr::from(format!("function call `{name}`"))
-                                }
-                                _ => SmolStr::from("expression"),
+                        HirExprKind::Call { callee, .. } => match &callee.kind {
+                            HirExprKind::VarRef(def_id) => {
+                                let name = self
+                                    .resolution
+                                    .defs
+                                    .get(def_id)
+                                    .map(|info| self.rodeo.borrow().resolve(&info.name).to_string())
+                                    .unwrap_or_default();
+                                SmolStr::from(format!("function call `{name}`"))
                             }
-                        }
+                            _ => SmolStr::from("expression"),
+                        },
                         _ => SmolStr::from("expression"),
                     };
                     self.warnings.push(MirWarning::UnusedExpressionResult {
