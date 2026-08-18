@@ -226,16 +226,23 @@ fn main() {
     match flow_result {
         Ok(result) => {
             if !args.no_warns {
-                for warning in &result.warnings {
+                let mut warnings = Vec::new();
+                warnings.extend(
+                    lowered_mir
+                        .warnings
+                        .iter()
+                        .map(|w| w as &dyn miette::Diagnostic),
+                );
+                warnings.extend(result.warnings.iter().map(|w| w as &dyn miette::Diagnostic));
+
+                let count = warnings.len();
+                for warning in warnings {
                     let report_string = driver.report(warning).unwrap();
                     eprintln!("{}", report_string);
                 }
 
-                if !result.warnings.is_empty() {
-                    cli::println_warn(format!(
-                        "Compiler reported {} warning(s)",
-                        result.warnings.len()
-                    ));
+                if count > 0 {
+                    cli::println_warn(format!("Compiler reported {count} warning(s)"));
                 }
             }
         }
