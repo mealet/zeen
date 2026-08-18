@@ -308,7 +308,19 @@ impl<'res> HirLowering<'res> {
                 ty: Rc::new(self.lower_type(ty)),
             },
 
-            DeclarationKind::GlobalVar { .. } => return None,
+            DeclarationKind::GlobalVar {
+                name,
+                ty,
+                value,
+                is_const,
+                is_pub,
+            } => HirDeclKind::GlobalVar {
+                name,
+                ty: Rc::new(self.lower_type(ty)),
+                value: Rc::new(self.lower_expr(value)),
+                is_const,
+                is_pub,
+            },
 
             DeclarationKind::ExternLink { .. } => HirDeclKind::ExternLink,
             DeclarationKind::ExternInclude { .. } => HirDeclKind::ExternInclude,

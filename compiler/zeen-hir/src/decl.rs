@@ -31,6 +31,14 @@ pub enum HirDeclKind {
         ty: Rc<HirTypeExpr>,
     },
 
+    GlobalVar {
+        name: (Spur, SourceSpan),
+        ty: Rc<HirTypeExpr>,
+        value: Rc<crate::expr::HirExpr>,
+        is_const: bool,
+        is_pub: bool,
+    },
+
     // resolved at `zeen-resolve` stage
     ExternLink,
     ExternInclude,
