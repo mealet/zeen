@@ -22,6 +22,9 @@ pub mod error;
 pub mod result;
 pub mod state;
 
+#[cfg(test)]
+mod tests;
+
 pub use error::FlowError;
 pub use result::FlowResult;
 

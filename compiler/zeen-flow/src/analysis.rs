@@ -106,6 +106,8 @@ impl<'ctx> DataFlow<'ctx> {
         for function_id in function_ids {
             self.analyze_function(function_id);
         }
+
+        self.check_escaping_borrows();
     }
 
     /// Dataflow over a single function, ending with drop insertion
@@ -873,7 +875,178 @@ fn index_locals(place: &Place) -> Vec<LocalId> {
         .collect()
 }
 
+/// For each local that (transitively) holds a borrow, the set of frame locals
+/// its slice/pointer points into. An empty set means the value owns no borrow
+/// of this function's frame (external slice, string literal, plain data).
+type BorrowState = HashMap<LocalId, HashSet<LocalId>>;
+
+/// Transfer of a statement over the borrow state.
+fn apply_borrow_stmt(state: &mut BorrowState, stmt: &MirStatement) {
+    let MirStatement::Assign { place, rvalue, .. } = stmt else {
+        return;
+    };
+    let dest_root = place.local;
+
+    // Writes to a whole local replace its provenance; writes to a projected
+    // field/array slot merge into it.
+    let write = |state: &mut BorrowState, roots: HashSet<LocalId>| {
+        if place.projection.is_empty() {
+            state.insert(dest_root, roots);
+        } else {
+            state.entry(dest_root).or_default().extend(roots);
+        }
+    };
+
+    match rvalue {
+        Rvalue::Use(op) => match op {
+            Operand::Copy(p, _) | Operand::Move(p, _) => {
+                let roots = state.get(&p.local).cloned().unwrap_or_default();
+                write(state, roots);
+            }
+            Operand::Constant(_, _) => write(state, HashSet::new()),
+        },
+
+        Rvalue::Ref {
+            place: ref_place, ..
+        } => {
+            write(state, HashSet::from([ref_place.local]));
+        }
+
+        Rvalue::Aggregate { operands, .. } => {
+            let mut roots = HashSet::new();
+            for op in operands {
+                if let Operand::Copy(p, _) | Operand::Move(p, _) = op {
+                    roots.extend(state.get(&p.local).cloned().unwrap_or_default());
+                }
+            }
+            write(state, roots);
+        }
+
+        // Binary ops, casts, discriminants and size queries produce scalars
+        // that never borrow frame memory.
+        Rvalue::BinaryOp { .. }
+        | Rvalue::UnaryOp { .. }
+        | Rvalue::Cast { .. }
+        | Rvalue::Discriminant(_)
+        | Rvalue::SizeOf(_)
+        | Rvalue::AlignOf(_) => write(state, HashSet::new()),
+    }
+}
+
+/// Returns the borrowed frame local (and diagnostic source) when the returned
+/// operand's provenance reaches into the current function's stack.
+fn check_return_borrow(state: &BorrowState, op: &Operand) -> Option<(LocalId, Option<Source>)> {
+    match op {
+        Operand::Copy(p, src) | Operand::Move(p, src) => state
+            .get(&p.local)
+            .and_then(|roots| roots.iter().next().copied().map(|root| (root, src.clone()))),
+        Operand::Constant(_, _) => None,
+    }
+}
+
+/// Unions `incoming` borrow origins into `target`. Returns true if anything
+/// changed (so the worklist re-visits the successor). Conservative join: an
+/// origin that was overwritten on one path stays, which can only over-approximate.
+fn merge_borrow_states(target: &mut BorrowState, incoming: &BorrowState) -> bool {
+    let mut changed = false;
+    for (local, roots) in incoming {
+        let entry = target.entry(*local).or_default();
+        for root in roots {
+            changed |= entry.insert(*root);
+        }
+    }
+    changed
+}
+
 impl<'ctx> DataFlow<'ctx> {
+    /// Reports values that escape a function while still borrowing its stack
+    /// frame: returning `&local` (or a slice/struct holding such a borrow) is
+    /// always a dangling pointer once the frame is popped.
+    fn check_escaping_borrows(&mut self) {
+        let function_ids: Vec<MirFunctionId> = self.program.functions.keys().copied().collect();
+
+        for function_id in function_ids {
+            let snapshot = {
+                let function = self.program.functions.get(&function_id).unwrap();
+                FunctionSnapshot {
+                    entry_block: function.entry_block,
+                    params: function.params.clone(),
+                    locals: function
+                        .locals
+                        .iter()
+                        .map(|decl| LocalInfo {
+                            ty: decl.ty,
+                            kind: decl.kind,
+                            name: decl.name.map(|name| self.resolve_name(name)),
+                            source: decl.source.clone(),
+                        })
+                        .collect(),
+                    blocks: function.blocks.clone(),
+                }
+            };
+
+            self.check_function_escaping_borrows(&snapshot);
+        }
+    }
+
+    fn check_function_escaping_borrows(&mut self, snapshot: &FunctionSnapshot) {
+        let successors = compute_successors(snapshot);
+        let mut in_states: HashMap<BlockId, BorrowState> = HashMap::new();
+        let mut worklist = vec![snapshot.entry_block];
+        in_states.insert(snapshot.entry_block, BorrowState::new());
+
+        while let Some(block_id) = worklist.pop() {
+            let mut state = in_states.get(&block_id).cloned().unwrap_or_default();
+            let block = &snapshot.blocks[block_id.0 as usize];
+
+            for stmt in &block.statements {
+                apply_borrow_stmt(&mut state, stmt);
+            }
+
+            match &block.terminator {
+                Terminator::Return(op) => {
+                    if let Some((root, src)) = check_return_borrow(&state, op) {
+                        let info = &snapshot.locals[root.0 as usize];
+                        let name = info.name.clone().unwrap_or_else(|| SmolStr::from("value"));
+                        let (src, span) =
+                            src.as_ref().map(|s| (s.src(), s.span)).unwrap_or_else(|| {
+                                let source = info.source.as_ref().unwrap();
+                                (source.src(), source.span)
+                            });
+                        self.diagnostics
+                            .push(FlowError::EscapingBorrow { name, src, span });
+                    }
+                }
+                // A call's result cannot borrow this frame (the callee cannot
+                // produce a borrow of a local it never sees on that path).
+                Terminator::Call { destination, .. } => {
+                    state.insert(destination.local, HashSet::new());
+                }
+                Terminator::Goto(_)
+                | Terminator::SwitchInt { .. }
+                | Terminator::MacroCall { .. }
+                | Terminator::Unreachable => {}
+            }
+
+            let Some(succ_ids) = successors.get(&block_id) else {
+                continue;
+            };
+            for succ in succ_ids {
+                match in_states.entry(*succ) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(state.clone());
+                        worklist.push(*succ);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        if merge_borrow_states(entry.get_mut(), &state) {
+                            worklist.push(*succ);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Finalizes the pass, splitting diagnostics into errors and warnings.
     /// Fails (returns `Err`) if any error-severity diagnostic was emitted.
     pub fn finish(self) -> Result<FlowResult, Vec<FlowError>> {
