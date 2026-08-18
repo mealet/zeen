@@ -1,4 +1,7 @@
-use crate::{Parser, error::ParserError, statements::StmtParser, type_parser::TypeParser};
+use crate::{
+    Parser, error::ParserError, expressions::ExprParser, statements::StmtParser,
+    type_parser::TypeParser,
+};
 
 use smallvec::SmallVec;
 
@@ -64,6 +67,12 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
             TokenKind::Keyword(CompilerKeyword::Fn) => {
                 self.parse_fn(start_span, is_pub, IsExtern(false))
+            }
+            TokenKind::Keyword(CompilerKeyword::Let) => {
+                self.parse_global_var(start_span, is_pub, false)
+            }
+            TokenKind::Keyword(CompilerKeyword::Const) => {
+                self.parse_global_var(start_span, is_pub, true)
             }
             TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
@@ -616,6 +625,57 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 methods,
             },
             source: (span, self.p.named_src()).into(),
+        });
+
+        Some(decl)
+    }
+
+    fn parse_global_var(
+        &mut self,
+        start_span: miette::SourceSpan,
+        is_pub: IsPub,
+        is_const: bool,
+    ) -> Option<&'ctx Declaration<'ctx>> {
+        let kw = if is_const {
+            self.p
+                .expect(TokenKind::Keyword(CompilerKeyword::Const), "const")
+        } else {
+            self.p
+                .expect(TokenKind::Keyword(CompilerKeyword::Let), "let")
+        }?;
+
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+        let name = (self.p.get_or_intern(name_slice), name_span);
+
+        let _ = self.p.expect(TokenKind::Colon, ":")?;
+
+        let mut type_parser = TypeParser::new(self.p);
+        let ty = type_parser.parse()?;
+
+        let _ = self.p.expect(TokenKind::Eq, "=")?;
+
+        let mut expr_parser = ExprParser::new(self.p);
+        let value = expr_parser.parse()?;
+
+        let _ = self.p.expect(TokenKind::Semicolon, ";")?;
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::GlobalVar {
+                name,
+                ty,
+                value,
+                is_const,
+                is_pub: is_pub.0,
+            },
+            source: (
+                value.merge_span(kw.merge_span(start_span)),
+                self.p.named_src(),
+            )
+                .into(),
         });
 
         Some(decl)
