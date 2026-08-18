@@ -35,6 +35,12 @@ jobs:
           profile: minimal
           override: true
 
+    # Install LLVM
+    - name: Install LLVM and Clang
+      uses: ZhongRuoyu/setup-llvm@v0.1.1
+      with:
+          llvm-version: 22
+
     # Install Nextest
     - name: Install Nextest
       uses: taiki-e/install-action@nextest
