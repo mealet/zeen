@@ -23,6 +23,15 @@ List of ideas for future language infrastructure (may be implemented before v1.0
 > ```
 
 > [!NOTE]
+> ### Const functions
+> ```
+> const fn square(x: u32) u32 {
+>   x * x
+> }
+> ```
+> Requires some kind of MIR interpreter with macros comptime replacements and stack trace on const fn panic.
+
+> [!NOTE]
 > ### Formatter
 > Simple idea: parse AST -> write it back to file with specified rules
 
