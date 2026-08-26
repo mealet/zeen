@@ -13,7 +13,7 @@ use zeen_ast::{
 use zeen_driver::CompilationMode;
 use zeen_hir::{
     HirId, HirMacroKind, HirModule, HirTypeExpr,
-    decl::HirFn,
+    decl::{HirDecl, HirDeclKind, HirFn},
     expr::{HirExpr, HirExprKind},
     stmt::{HirStmt, HirStmtKind},
 };
@@ -30,8 +30,8 @@ use zeen_types::{
 use crate::error::MirWarning;
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
-    LocalKind, MirFunction, MirFunctionId, MirProgram, MirStatement, Mutability, Operand, Place,
-    PlaceElem, Rvalue, StructFieldLayout, StructLayout, Terminator,
+    LocalKind, MirFunction, MirFunctionId, MirGlobalVar, MirGlobalVarId, MirProgram, MirStatement,
+    Mutability, Operand, Place, PlaceElem, Rvalue, StructFieldLayout, StructLayout, Terminator,
 };
 
 pub struct MirLoweringResult {
@@ -73,6 +73,8 @@ pub fn lower_program<'ctx>(
         mode,
     );
 
+    lowering.register_globals();
+
     let mut main_fn: Option<MirFunctionId> = None;
 
     if let Some(main_def) = main_def {
@@ -96,6 +98,7 @@ pub fn lower_program<'ctx>(
         lowering.register_user_struct_layouts(resolution);
     }
 
+    lowering.build_init_globals();
     lowering.register_drop_functions();
 
     let warnings = std::mem::take(&mut lowering.warnings);
@@ -116,6 +119,7 @@ pub struct MirLowering<'ctx> {
 
     typecheck: &'ctx mut TypeCheckResult,
     resolution: &'ctx ResolutionResult,
+    module: &'ctx HirModule,
     hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
 
     program: MirProgram,
@@ -128,6 +132,17 @@ pub struct MirLowering<'ctx> {
     fn_stack: Vec<FnContext>,
 
     mode: CompilationMode,
+
+    globals: Vec<GlobalDecl>,
+    globals_by_def: HashMap<DefId, MirGlobalVarId>,
+}
+
+struct GlobalDecl {
+    def_id: DefId,
+    name: Spur,
+    value: Rc<HirExpr>,
+    is_const: bool,
+    is_pub: bool,
 }
 
 /// The enclosing function of the one being lowered, used to prefix nested
@@ -253,7 +268,7 @@ impl<'ctx> MirLowering<'ctx> {
         rodeo: Rc<RefCell<Rodeo>>,
         typecheck: &'ctx mut TypeCheckResult,
         resolution: &'ctx ResolutionResult,
-        module: &HirModule,
+        module: &'ctx HirModule,
         hir_fns_by_def: &'ctx HashMap<DefId, Rc<HirFn>>,
         mode: CompilationMode,
     ) -> Self {
@@ -261,18 +276,255 @@ impl<'ctx> MirLowering<'ctx> {
             rodeo,
             typecheck,
             resolution,
+            module,
             program: MirProgram::default(),
             mono_cache: MonoCache::new(),
             hir_fns_by_def,
             fn_stack: Vec::new(),
             warnings: Vec::new(),
             mode,
+            globals: Vec::new(),
+            globals_by_def: HashMap::new(),
         }
     }
 
     pub fn finish(mut self) -> MirProgram {
         self.register_reachable_slice_layouts();
         self.program
+    }
+
+    fn register_globals(&mut self) {
+        for decl in &self.module.decls {
+            let HirDeclKind::GlobalVar {
+                name,
+                value,
+                is_const,
+                is_pub,
+                ..
+            } = &decl.kind
+            else {
+                continue;
+            };
+
+            let ty = self
+                .typecheck
+                .def_types
+                .get(&decl.def_id)
+                .copied()
+                .unwrap_or_else(|| self.typecheck.interner.intern(Type::Error));
+            let symbol_name = self.rodeo.borrow().resolve(&name.0).to_string();
+
+            let id = MirGlobalVarId(self.program.global_vars.len() as u32);
+            self.globals_by_def.insert(decl.def_id, id);
+            self.globals.push(GlobalDecl {
+                def_id: decl.def_id,
+                name: name.0,
+                value: Rc::clone(value),
+                is_const: *is_const,
+                is_pub: *is_pub,
+            });
+            self.program.global_vars.push(MirGlobalVar {
+                def_id: decl.def_id,
+                symbol_name,
+                ty,
+                is_const: *is_const,
+                is_pub: *is_pub,
+            });
+        }
+    }
+
+    fn build_init_globals(&mut self) {
+        if self.globals.is_empty() {
+            return;
+        }
+
+        let ordered = self.globals_in_init_order();
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let entry = BlockId(0);
+        let mut fb = FnBuilder::new(DefId(u32::MAX), Vec::new(), entry, void_ty, HashMap::new());
+        fb.new_block();
+
+        for def_id in ordered {
+            let id = self.globals_by_def[&def_id];
+            let value = Rc::clone(
+                &self
+                    .globals
+                    .iter()
+                    .find(|g| g.def_id == def_id)
+                    .unwrap()
+                    .value,
+            );
+            let (block, operand) = self.lower_expr_to_operand(&mut fb, &value, entry);
+
+            if let Operand::Copy(place, _) | Operand::Move(place, _) = &operand
+                && matches!(
+                    self.typecheck.interner.get(fb.func.local(place.local).ty),
+                    Type::Void
+                )
+            {
+                continue;
+            }
+
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::global(id),
+                    rvalue: Rvalue::Use(operand),
+                    source: None,
+                },
+            );
+
+            fb.set_terminator(block, Terminator::Goto(entry));
+        }
+
+        fb.set_terminator(
+            entry,
+            Terminator::Return(Operand::Constant(ConstValue::Void, None)),
+        );
+
+        let id = self.mono_cache.fresh_id();
+        self.set_function_name(id, "zeen_init_globals");
+        self.program.functions.insert(id, fb.func);
+        self.program.init_globals_fn = Some(id);
+    }
+
+    fn globals_in_init_order(&self) -> Vec<DefId> {
+        let mut order = Vec::with_capacity(self.globals.len());
+        let mut visited = HashSet::new();
+        for global in &self.globals {
+            self.visit_global_init(global.def_id, &mut visited, &mut order);
+        }
+        order
+    }
+
+    fn visit_global_init(
+        &self,
+        def_id: DefId,
+        visited: &mut HashSet<DefId>,
+        order: &mut Vec<DefId>,
+    ) {
+        if !visited.insert(def_id) {
+            return;
+        }
+        if let Some(global) = self.globals.iter().find(|g| g.def_id == def_id) {
+            let mut deps: Vec<DefId> = Vec::new();
+            self.collect_global_expr_deps(&global.value, &mut deps);
+            for dep in deps {
+                self.visit_global_init(dep, visited, order);
+            }
+        }
+        order.push(def_id);
+    }
+
+    fn collect_global_expr_deps(&self, expr: &HirExpr, out: &mut Vec<DefId>) {
+        match &expr.kind {
+            HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
+                if matches!(
+                    self.resolution.defs.get(def_id).map(|info| &info.kind),
+                    Some(DefKind::GlobalVar { .. })
+                ) {
+                    out.push(*def_id);
+                }
+            }
+            HirExprKind::Binary { lhs, rhs, .. } => {
+                self.collect_global_expr_deps(lhs, out);
+                self.collect_global_expr_deps(rhs, out);
+            }
+            HirExprKind::Unary { expr: inner, .. } => {
+                self.collect_global_expr_deps(inner, out);
+            }
+            HirExprKind::Call { callee, args, .. } => {
+                self.collect_global_expr_deps(callee, out);
+                for arg in args {
+                    self.collect_global_expr_deps(arg, out);
+                }
+            }
+            HirExprKind::MacroCall { args, .. } => {
+                for arg in args {
+                    self.collect_global_expr_deps(arg, out);
+                }
+            }
+            HirExprKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.collect_global_expr_deps(condition, out);
+                self.collect_global_stmt_deps(then_block, out);
+                if let Some(else_block) = else_block {
+                    self.collect_global_stmt_deps(else_block, out);
+                }
+            }
+            HirExprKind::FieldAccess { object, .. } => {
+                self.collect_global_expr_deps(object, out);
+            }
+            HirExprKind::SliceAccess { object, index } => {
+                self.collect_global_expr_deps(object, out);
+                self.collect_global_expr_deps(index, out);
+            }
+            HirExprKind::StructInit { fields, .. } => {
+                for field in fields {
+                    self.collect_global_expr_deps(&field.value, out);
+                }
+            }
+            HirExprKind::ArrayInit { elements } => {
+                for element in elements {
+                    self.collect_global_expr_deps(element, out);
+                }
+            }
+            HirExprKind::Block { stmts, trailing } => {
+                for stmt in stmts {
+                    self.collect_global_stmt_deps(stmt, out);
+                }
+                if let Some(trailing) = trailing {
+                    self.collect_global_expr_deps(trailing, out);
+                }
+            }
+            HirExprKind::Literal(_)
+            | HirExprKind::GenericParamRef(_)
+            | HirExprKind::Switch
+            | HirExprKind::Type(_)
+            | HirExprKind::Error => {}
+        }
+    }
+
+    fn collect_global_stmt_deps(&self, stmt: &HirStmt, out: &mut Vec<DefId>) {
+        match &stmt.kind {
+            HirStmtKind::Let { value, .. } => {
+                if let Some(value) = value {
+                    self.collect_global_expr_deps(value, out);
+                }
+            }
+            HirStmtKind::Assign { object, value } => {
+                self.collect_global_expr_deps(object, out);
+                self.collect_global_expr_deps(value, out);
+            }
+            HirStmtKind::CompoundAssign { object, value, .. } => {
+                self.collect_global_expr_deps(object, out);
+                self.collect_global_expr_deps(value, out);
+            }
+            HirStmtKind::Return { value } => {
+                if let Some(value) = value {
+                    self.collect_global_expr_deps(value, out);
+                }
+            }
+            HirStmtKind::While { condition, block } => {
+                self.collect_global_expr_deps(condition, out);
+                self.collect_global_stmt_deps(block, out);
+            }
+            HirStmtKind::For {
+                iterator, block, ..
+            } => {
+                self.collect_global_expr_deps(iterator, out);
+                self.collect_global_stmt_deps(block, out);
+            }
+            HirStmtKind::Expr(expr) => self.collect_global_expr_deps(expr, out),
+            HirStmtKind::Break
+            | HirStmtKind::Continue
+            | HirStmtKind::FnDecl(_)
+            | HirStmtKind::Error => {}
+        }
     }
 
     /// Ensures a concrete `drop` MIR function exists for every struct type
@@ -634,8 +886,13 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
-                // A function name used as a value (`let f = foo;`) lowers to a
-                // function-pointer constant, not a local place read.
+                if let Some(global_id) = self.globals_by_def.get(def_id) {
+                    return (
+                        block,
+                        Operand::Copy(Place::global(*global_id), Some(expr.source.clone())),
+                    );
+                }
+
                 if matches!(&expr.kind, HirExprKind::VarRef(_))
                     && matches!(
                         self.resolution.defs.get(def_id).map(|info| &info.kind),
@@ -1377,6 +1634,9 @@ impl<'ctx> MirLowering<'ctx> {
     ) -> (BlockId, Place) {
         match &expr.kind {
             HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
+                if let Some(global_id) = self.globals_by_def.get(def_id) {
+                    return (block, Place::global(*global_id));
+                }
                 let local = *fb.locals_by_def.get(def_id).expect("undeclared local");
                 (block, Place::from_local(local))
             }

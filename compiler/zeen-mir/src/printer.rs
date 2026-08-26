@@ -55,6 +55,20 @@ impl<'a> MirPrinter<'a> {
             out.push('\n');
         }
 
+        for global in &self.program.global_vars {
+            let kw = if global.is_const { "const" } else { "let" };
+            let _ = writeln!(
+                out,
+                "global {} {}: {};",
+                kw,
+                global.symbol_name,
+                self.display_type(global.ty)
+            );
+        }
+        if !self.program.global_vars.is_empty() {
+            out.push('\n');
+        }
+
         for ext_fn in &self.program.extern_fns {
             let param_strs: Vec<String> = ext_fn
                 .param_types
@@ -426,10 +440,24 @@ impl<'a> MirPrinter<'a> {
     }
 
     fn place_ref(&self, place: &Place, func: &MirFunction) -> String {
-        let mut s = self.local_ref(place.local);
-        let mut deref_prefix = false;
+        let mut s = if let Some(PlaceElem::Global(id)) = place.projection.first() {
+            self.program
+                .global_vars
+                .get(id.0 as usize)
+                .map(|g| g.symbol_name.clone())
+                .unwrap_or_else(|| format!("global#{}", id.0))
+        } else {
+            self.local_ref(place.local)
+        };
 
-        for elem in &place.projection {
+        let skip_first = matches!(place.projection.first(), Some(PlaceElem::Global(_)));
+        let iter = if skip_first {
+            &place.projection[1..]
+        } else {
+            &place.projection
+        };
+
+        for elem in iter {
             match elem {
                 PlaceElem::Field(SLICE_LEN_FIELD) => {
                     let _ = write!(s, ".len");
@@ -448,12 +476,11 @@ impl<'a> MirPrinter<'a> {
                 }
                 PlaceElem::Deref => {
                     s = format!("(*{})", s);
-                    deref_prefix = true;
                 }
+                PlaceElem::Global(_) => unreachable!("global already consumed"),
             }
         }
 
-        let _ = deref_prefix;
         let _ = func;
         s
     }
