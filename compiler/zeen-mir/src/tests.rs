@@ -477,3 +477,78 @@ fn explicit_discard_and_void_statements_do_not_warn() {
         mir.warnings
     );
 }
+
+#[test]
+fn global_var_lowers_to_global_place() {
+    let mir = compile_mir_ok(
+        "let g: i32 = 42; \
+         fn main() { let x = g; }",
+    );
+
+    assert!(!mir.program.global_vars.is_empty(), "expected global vars");
+    assert!(
+        mir.program.init_globals_fn.is_some(),
+        "expected init_globals_fn"
+    );
+    assert!(
+        mir.program.function_names.values().any(|n| n == "zeen_init_globals"),
+        "expected zeen_init_globals function"
+    );
+}
+
+#[test]
+fn const_global_is_marked_const() {
+    let mir = compile_mir_ok(
+        "const c: i32 = 100; \
+         fn main() {}",
+    );
+
+    let global = mir.program.global_vars.first().expect("expected global");
+    assert!(global.is_const, "expected is_const true");
+}
+
+#[test]
+fn global_depends_on_another_init_order() {
+    let mir = compile_mir_ok(
+        "let a: i32 = 1; \
+         let b: i32 = a + 1; \
+         fn main() {}",
+    );
+
+    let init_id = mir.program.init_globals_fn.expect("expected init fn");
+    let init_fn = &mir.program.functions[&init_id];
+    let stmts = &init_fn.blocks[0].statements;
+
+    let a_idx = mir
+        .program
+        .global_vars
+        .iter()
+        .position(|g| g.symbol_name == "a")
+        .expect("global a");
+    let b_idx = mir
+        .program
+        .global_vars
+        .iter()
+        .position(|g| g.symbol_name == "b")
+        .expect("global b");
+
+    let a_assign_pos = stmts.iter().position(|s| {
+        matches!(
+            s,
+            crate::MirStatement::Assign { place, .. }
+            if matches!(place.projection.first(), Some(crate::PlaceElem::Global(id)) if id.0 as usize == a_idx)
+        )
+    });
+    let b_assign_pos = stmts.iter().position(|s| {
+        matches!(
+            s,
+            crate::MirStatement::Assign { place, .. }
+            if matches!(place.projection.first(), Some(crate::PlaceElem::Global(id)) if id.0 as usize == b_idx)
+        )
+    });
+
+    assert!(
+        a_assign_pos < b_assign_pos,
+        "a must be initialized before b"
+    );
+}
