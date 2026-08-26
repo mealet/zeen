@@ -25,6 +25,9 @@ mod tests;
 pub struct MirFunctionId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MirGlobalVarId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -44,6 +47,18 @@ pub struct MirProgram {
     pub extern_fns: Vec<ExternFnDecl>,
     pub extern_exports: HashMap<MirFunctionId, String>,
     pub extern_vars: Vec<ExternVarDecl>,
+
+    pub global_vars: Vec<MirGlobalVar>,
+    pub init_globals_fn: Option<MirFunctionId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MirGlobalVar {
+    pub def_id: DefId,
+    pub symbol_name: String,
+    pub ty: TypeId,
+    pub is_const: bool,
+    pub is_pub: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -182,11 +197,20 @@ pub struct Place {
     pub projection: Vec<PlaceElem>,
 }
 
+pub const GLOBAL_LOCAL: LocalId = LocalId(u32::MAX);
+
 impl Place {
     pub fn from_local(local: LocalId) -> Self {
         Self {
             local,
             projection: Vec::new(),
+        }
+    }
+
+    pub fn global(id: MirGlobalVarId) -> Self {
+        Self {
+            local: GLOBAL_LOCAL,
+            projection: vec![PlaceElem::Global(id)],
         }
     }
 
@@ -206,11 +230,16 @@ impl Place {
     }
 }
 
+pub fn place_is_global(place: &Place) -> bool {
+    matches!(place.projection.first(), Some(PlaceElem::Global(_)))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlaceElem {
     Field(DefId),
     Index(LocalId),
     Deref,
+    Global(MirGlobalVarId),
 }
 
 #[derive(Debug, Clone)]

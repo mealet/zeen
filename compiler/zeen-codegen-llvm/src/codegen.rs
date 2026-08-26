@@ -2588,6 +2588,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .into_pointer_value();
                     cur_ty = self.deref_target_type(cur_ty);
                 }
+
+                PlaceElem::Global(_) => {
+                    todo!("global variable place pointer")
+                }
             }
         }
 
@@ -2601,6 +2605,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 PlaceElem::Field(field_def) => ty = self.field_index_and_type(ty, *field_def).1,
                 PlaceElem::Index(_) => ty = self.index_element_type(ty),
                 PlaceElem::Deref => ty = self.deref_target_type(ty),
+                PlaceElem::Global(id) => {
+                    ty = self.program.global_vars[id.0 as usize].ty;
+                }
             }
         }
         ty
