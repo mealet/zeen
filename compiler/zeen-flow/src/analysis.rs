@@ -10,7 +10,7 @@ use smol_str::SmolStr;
 use zeen_ast::Source;
 use zeen_mir::{
     BasicBlock, BlockId, CallTarget, LocalId, LocalKind, MirFunctionId, MirProgram, MirStatement,
-    Operand, Place, PlaceElem, Rvalue, Terminator,
+    Operand, Place, PlaceElem, Rvalue, Terminator, place_is_global,
 };
 use zeen_resolve::{DefId, ResolutionResult};
 use zeen_typecheck::result::TypeCheckResult;
@@ -320,6 +320,12 @@ impl<'ctx> DataFlow<'ctx> {
     /// after it was moved out. Only the state transition differs from a full
     /// move.
     fn consume_copy_place(&mut self, place: &Place, source: Option<Source>) {
+        if place_is_global(place) {
+            for local in index_locals(place) {
+                self.mark_read(local);
+            }
+            return;
+        }
         for local in place_read_locals(place) {
             self.mark_read(local);
         }
@@ -331,6 +337,12 @@ impl<'ctx> DataFlow<'ctx> {
 
     /// A move of a place (ownership transfer).
     fn consume_move_place(&mut self, place: &Place, source: Option<Source>) {
+        if place_is_global(place) {
+            for local in index_locals(place) {
+                self.mark_read(local);
+            }
+            return;
+        }
         for local in place_read_locals(place) {
             self.mark_read(local);
         }
@@ -354,6 +366,9 @@ impl<'ctx> DataFlow<'ctx> {
     /// Writes into a place, supplying the struct field set when the
     /// destination is a field so reconstruction is tracked precisely.
     fn write_destination(&mut self, place: &Place) {
+        if place_is_global(place) {
+            return;
+        }
         let is_field = matches!(place.projection.first(), Some(PlaceElem::Field(_)));
         if is_field && let Some(fields) = self.struct_fields_of(place.local) {
             self.current.write_struct_place(place, &fields);
@@ -909,7 +924,11 @@ fn apply_borrow_stmt(state: &mut BorrowState, stmt: &MirStatement) {
         Rvalue::Ref {
             place: ref_place, ..
         } => {
-            write(state, HashSet::from([ref_place.local]));
+            if place_is_global(ref_place) {
+                write(state, HashSet::new());
+            } else {
+                write(state, HashSet::from([ref_place.local]));
+            }
         }
 
         Rvalue::Aggregate { operands, .. } => {

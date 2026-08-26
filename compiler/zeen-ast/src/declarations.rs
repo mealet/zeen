@@ -1,7 +1,7 @@
 use lasso::Spur;
 use miette::SourceSpan;
 
-use crate::{Source, statements::Statement, types::TypeExpr};
+use crate::{Source, expressions::Expression, statements::Statement, types::TypeExpr};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Declaration<'arena> {
@@ -68,6 +68,14 @@ pub enum DeclarationKind<'arena> {
     ExternVar {
         name: (Spur, SourceSpan),
         ty: &'arena TypeExpr<'arena>,
+    },
+
+    GlobalVar {
+        name: (Spur, SourceSpan),
+        ty: &'arena TypeExpr<'arena>,
+        value: &'arena Expression<'arena>,
+        is_const: bool,
+        is_pub: bool,
     },
 
     ExternLink {

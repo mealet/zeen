@@ -1,0 +1,11 @@
+let counter: i32 = 0;
+let base: i32 = 100;
+
+fn main() i32 {
+    @println("{}", counter);
+    @println("{}", base);
+    counter = 10;
+    @println("{}", counter);
+    @println("{}", base + counter);
+    return 0;
+}
