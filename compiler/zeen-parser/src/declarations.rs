@@ -1,4 +1,7 @@
-use crate::{Parser, error::ParserError, statements::StmtParser, type_parser::TypeParser};
+use crate::{
+    Parser, error::ParserError, expressions::ExprParser, statements::StmtParser,
+    type_parser::TypeParser,
+};
 
 use smallvec::SmallVec;
 
@@ -64,6 +67,12 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
             TokenKind::Keyword(CompilerKeyword::Fn) => {
                 self.parse_fn(start_span, is_pub, IsExtern(false))
+            }
+            TokenKind::Keyword(CompilerKeyword::Let) => {
+                self.parse_global_var(start_span, is_pub, false)
+            }
+            TokenKind::Keyword(CompilerKeyword::Const) => {
+                self.parse_global_var(start_span, is_pub, true)
             }
             TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
@@ -621,6 +630,63 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         Some(decl)
     }
 
+    fn parse_global_var(
+        &mut self,
+        start_span: miette::SourceSpan,
+        is_pub: IsPub,
+        is_const: bool,
+    ) -> Option<&'ctx Declaration<'ctx>> {
+        let kw = if is_const {
+            self.p
+                .expect(TokenKind::Keyword(CompilerKeyword::Const), "const")
+        } else {
+            self.p
+                .expect(TokenKind::Keyword(CompilerKeyword::Let), "let")
+        }?;
+
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+        let name = (self.p.get_or_intern(name_slice), name_span);
+
+        let _ = self.p.expect(
+            TokenKind::Colon,
+            "type annotation (global variables require an explicit type)",
+        )?;
+
+        let mut type_parser = TypeParser::new(self.p);
+        let ty = type_parser.parse()?;
+
+        let _ = self.p.expect(
+            TokenKind::Eq,
+            "initializer (global variables require an initial value)",
+        )?;
+
+        let mut expr_parser = ExprParser::new(self.p);
+        let value = expr_parser.parse()?;
+
+        let _ = self.p.expect(TokenKind::Semicolon, ";")?;
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::GlobalVar {
+                name,
+                ty,
+                value,
+                is_const,
+                is_pub: is_pub.0,
+            },
+            source: (
+                value.merge_span(kw.merge_span(start_span)),
+                self.p.named_src(),
+            )
+                .into(),
+        });
+
+        Some(decl)
+    }
+
     fn parse_let(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
         let _let_kw = self
             .p
@@ -656,7 +722,7 @@ mod tests {
 
     use std::{cell::RefCell, rc::Rc};
 
-    use zeen_ast::{TypeExpr, TypeKind};
+    use zeen_ast::{Expression, ExpressionKind, TypeExpr, TypeKind};
 
     macro_rules! make_parser {
         ($src:expr, $tokens:ident, $bump:ident, $rodeo:ident, $parser:ident) => {
@@ -1220,6 +1286,176 @@ mod tests {
                 },
                 ..
             }])
+        );
+    }
+
+    #[test]
+    fn global_let_decl() {
+        const SRC: &str = "let global: i32 = 0;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(0)),
+                        ..
+                    },
+                    is_const: false,
+                    is_pub: false,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_let_decl_pub() {
+        const SRC: &str = "pub let global: i32 = 0;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(0)),
+                        ..
+                    },
+                    is_const: false,
+                    is_pub: true,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_const_decl() {
+        const SRC: &str = "const global: i32 = 0;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(0)),
+                        ..
+                    },
+                    is_const: true,
+                    is_pub: false,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_const_decl_pub() {
+        const SRC: &str = "pub const global: i32 = 0;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(0)),
+                        ..
+                    },
+                    is_const: true,
+                    is_pub: true,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_var_with_expr_value() {
+        const SRC: &str = "let global: i32 = 1 + 2 * 3;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::GlobalVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    value: Expression {
+                        kind: ExpressionKind::Binary { .. },
+                        ..
+                    },
+                    is_const: false,
+                    is_pub: false,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn global_vars_mixed_with_fn() {
+        const SRC: &str = "let a: i32 = 0; pub const b: i32 = 1; fn main() {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([
+                Declaration {
+                    kind: DeclarationKind::GlobalVar {
+                        name: _,
+                        is_const: false,
+                        is_pub: false,
+                        ..
+                    },
+                    ..
+                },
+                Declaration {
+                    kind: DeclarationKind::GlobalVar {
+                        name: _,
+                        is_const: true,
+                        is_pub: true,
+                        ..
+                    },
+                    ..
+                },
+                Declaration {
+                    kind: DeclarationKind::FnDecl { .. },
+                    ..
+                },
+            ])
         );
     }
 

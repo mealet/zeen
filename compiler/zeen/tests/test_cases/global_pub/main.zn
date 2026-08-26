@@ -1,0 +1,9 @@
+use lib;
+
+fn main() i32 {
+    @println("{}", MAX);
+    @println("{}", counter);
+    counter = 50;
+    @println("{}", counter);
+    return 0;
+}

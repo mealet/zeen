@@ -381,6 +381,9 @@ impl<'ctx> IncludeResolver<'ctx> {
                 DeclarationKind::ExternVar { name, .. } => {
                     (NamespaceTag::Value, name.0, name.1, false)
                 }
+                DeclarationKind::GlobalVar { name, is_pub, .. } => {
+                    (NamespaceTag::Value, name.0, name.1, is_pub)
+                }
                 _ => continue,
             };
 

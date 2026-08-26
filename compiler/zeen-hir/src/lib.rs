@@ -308,6 +308,20 @@ impl<'res> HirLowering<'res> {
                 ty: Rc::new(self.lower_type(ty)),
             },
 
+            DeclarationKind::GlobalVar {
+                name,
+                ty,
+                value,
+                is_const,
+                is_pub,
+            } => HirDeclKind::GlobalVar {
+                name,
+                ty: Rc::new(self.lower_type(ty)),
+                value: Rc::new(self.lower_expr(value)),
+                is_const,
+                is_pub,
+            },
+
             DeclarationKind::ExternLink { .. } => HirDeclKind::ExternLink,
             DeclarationKind::ExternInclude { .. } => HirDeclKind::ExternInclude,
             DeclarationKind::Use { .. } => return None,
@@ -826,6 +840,21 @@ mod tests {
                 .expect("no implement decl in module")
         }
 
+        fn global_var(&self, name: &str) -> (Spur, Rc<HirTypeExpr>, Rc<HirExpr>, bool, bool) {
+            self.find_by_name(name)
+                .and_then(|kind| match kind {
+                    HirDeclKind::GlobalVar {
+                        name,
+                        ty,
+                        value,
+                        is_const,
+                        is_pub,
+                    } => Some((name.0, ty.clone(), value.clone(), *is_const, *is_pub)),
+                    _ => None,
+                })
+                .expect("global var not found")
+        }
+
         fn find_by_name(&self, name: &str) -> Option<&HirDeclKind> {
             self.module.decls.iter().find_map(|decl| {
                 let matches = match &decl.kind {
@@ -833,6 +862,7 @@ mod tests {
                     HirDeclKind::Struct(s) => self.name(s.name.0) == name,
                     HirDeclKind::Interface(i) => self.name(i.name.0) == name,
                     HirDeclKind::Enum(e) => self.name(e.name.0) == name,
+                    HirDeclKind::GlobalVar { name: gname, .. } => self.name(gname.0) == name,
                     _ => false,
                 };
 
@@ -1058,5 +1088,77 @@ mod tests {
         assert!(implement.interface.is_some());
         assert!(implement.object.is_some());
         assert_eq!(implement.methods.len(), 1);
+    }
+
+    #[test]
+    fn global_var_lowers_with_type_and_value() {
+        let fx = lower_ok("let g: i32 = 0; pub const c: bool = true;");
+
+        let (g_name, g_ty, g_value, g_const, g_pub) = fx.global_var("g");
+        assert_eq!(fx.name(g_name), "g");
+        assert!(matches!(g_ty.kind, HirTypeKind::Builtin(BuiltinType::i32)));
+        assert!(matches!(
+            g_value.kind,
+            HirExprKind::Literal(zeen_ast::expressions::Literal::Int(0))
+        ));
+        assert!(!g_const);
+        assert!(!g_pub);
+
+        let (c_name, c_ty, c_value, c_const, c_pub) = fx.global_var("c");
+        assert_eq!(fx.name(c_name), "c");
+        assert!(matches!(c_ty.kind, HirTypeKind::Builtin(BuiltinType::bool)));
+        assert!(matches!(
+            c_value.kind,
+            HirExprKind::Literal(zeen_ast::expressions::Literal::Bool(true))
+        ));
+        assert!(c_const);
+        assert!(c_pub);
+    }
+
+    #[test]
+    fn global_var_reference_lowers_to_var_ref() {
+        let fx = lower_ok("let a: i32 = b; let b: i32 = 5;");
+
+        let (_, _, a_value, _, _) = fx.global_var("a");
+
+        let HirExprKind::VarRef(b_id) = a_value.kind else {
+            panic!("global var initializer must lower to a VarRef")
+        };
+
+        let b_def = fx
+            .module
+            .decls
+            .iter()
+            .find(|decl| match &decl.kind {
+                HirDeclKind::GlobalVar { name, .. } => fx.name(name.0) == "b",
+                _ => false,
+            })
+            .map(|decl| decl.def_id)
+            .expect("global var b missing");
+
+        assert_eq!(b_id, b_def);
+    }
+
+    #[test]
+    fn global_var_binary_initializer_lowers_operands() {
+        let fx = lower_ok("let g: i32 = 1 + 2;");
+
+        let (_, _, value, _, _) = fx.global_var("g");
+
+        let HirExprKind::Binary {
+            ref lhs, ref rhs, ..
+        } = value.kind
+        else {
+            panic!("initializer must lower to a Binary expression")
+        };
+
+        assert!(matches!(
+            lhs.kind,
+            HirExprKind::Literal(zeen_ast::expressions::Literal::Int(1))
+        ));
+        assert!(matches!(
+            rhs.kind,
+            HirExprKind::Literal(zeen_ast::expressions::Literal::Int(2))
+        ));
     }
 }

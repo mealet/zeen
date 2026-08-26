@@ -1,0 +1,2 @@
+pub const MAX: i32 = 999;
+pub let counter: i32 = 0;

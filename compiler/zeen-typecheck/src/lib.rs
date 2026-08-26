@@ -307,6 +307,11 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {}
+            HirDeclKind::GlobalVar { ty, is_const, .. } => {
+                let ty_id = self.lower_hir_type(ty);
+                self.result.def_types.insert(decl.def_id, ty_id);
+                self.result.const_bindings.insert(decl.def_id, *is_const);
+            }
         };
     }
 
@@ -826,6 +831,11 @@ impl<'res> TypeChecker<'res> {
                         }
                     }
                 }
+            }
+
+            HirDeclKind::GlobalVar { ty, value, .. } => {
+                let declared_ty = self.lower_hir_type(ty);
+                self.check_expr(value, declared_ty, true);
             }
 
             HirDeclKind::Enum(_)
@@ -4819,6 +4829,76 @@ mod tests {
             result.is_ok(),
             "string literals inside array literals should coerce to slices: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn global_var_initializer_matches_declared_type() {
+        let result = typecheck("let g: i32 = 42; fn main() {}");
+
+        assert!(
+            result.is_ok(),
+            "global var initializer of matching type should typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn global_var_type_mismatch_is_reported() {
+        let errors = typecheck("let g: i32 = true; fn main() {}")
+            .expect_err("mismatched global var initializer must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::Mismatch { .. })),
+            "expected TypeError::Mismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn global_var_reference_typechecks() {
+        let result = typecheck("let a: i32 = 1; let b: i32 = a; fn main() i32 { return b; }");
+
+        assert!(
+            result.is_ok(),
+            "global var references should typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn literal_defaults_to_declared_global_type() {
+        let result = typecheck("let g: i64 = 5; fn main() {}");
+
+        assert!(
+            result.is_ok(),
+            "int literal should coerce to declared global type: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn mutable_global_is_assignable() {
+        let result = typecheck("let g: i32 = 1; fn main() { g = 2; }");
+
+        assert!(
+            result.is_ok(),
+            "mutable global should be assignable: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn const_global_is_not_assignable() {
+        let errors = typecheck("const g: i32 = 1; fn main() { g = 2; }")
+            .expect_err("assigning to a const global must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AssignToConst { .. })),
+            "expected TypeError::AssignToConst, got: {errors:?}"
         );
     }
 }

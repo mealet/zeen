@@ -165,3 +165,34 @@ fn returning_param_slice_is_allowed() {
         "unexpected escaping-borrow error, got {errors:?}"
     );
 }
+
+#[test]
+fn global_read_is_fine() {
+    let errors = flow_errors(
+        "let g: i32 = 42; \
+         fn main() { let x = g; }",
+    );
+    assert!(errors.is_empty(), "expected no errors, got {errors:?}");
+}
+
+#[test]
+fn global_assignment_does_not_move() {
+    let errors = flow_errors(
+        "let g: i32 = 0; \
+         fn main() { g = 10; }",
+    );
+    assert!(errors.is_empty(), "expected no errors, got {errors:?}");
+}
+
+#[test]
+fn returning_global_ref_is_allowed() {
+    let errors = flow_errors(
+        "let g: i32 = 42; \
+         fn get() *i32 { return &g; } \
+         fn main() { let _ = get(); }",
+    );
+    assert!(
+        !has_escaping_borrow(&errors),
+        "unexpected escaping-borrow error, got {errors:?}"
+    );
+}

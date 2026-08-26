@@ -1,0 +1,13 @@
+const A: i32 = 10;
+const B: i32 = 20;
+const SUM: i32 = 30;
+
+let x: i32 = 100;
+let y: i32 = 200;
+let total: i32 = 300;
+
+fn main() i32 {
+    @println("{} {} {}", A, B, SUM);
+    @println("{} {} {}", x, y, total);
+    return 0;
+}
