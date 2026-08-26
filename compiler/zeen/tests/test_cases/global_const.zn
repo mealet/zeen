@@ -1,0 +1,9 @@
+const PI: i32 = 314;
+const NAME: i32 = 100;
+
+fn main() i32 {
+    @println("{}", PI);
+    @println("{}", NAME);
+    @println("{}", PI + NAME);
+    return 0;
+}
