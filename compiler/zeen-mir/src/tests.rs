@@ -491,7 +491,10 @@ fn global_var_lowers_to_global_place() {
         "expected init_globals_fn"
     );
     assert!(
-        mir.program.function_names.values().any(|n| n == "zeen_init_globals"),
+        mir.program
+            .function_names
+            .values()
+            .any(|n| n == "zeen_init_globals"),
         "expected zeen_init_globals function"
     );
 }
