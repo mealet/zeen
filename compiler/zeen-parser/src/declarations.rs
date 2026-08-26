@@ -651,12 +651,18 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let name = (self.p.get_or_intern(name_slice), name_span);
 
-        let _ = self.p.expect(TokenKind::Colon, ":")?;
+        let _ = self.p.expect(
+            TokenKind::Colon,
+            "type annotation (global variables require an explicit type)",
+        )?;
 
         let mut type_parser = TypeParser::new(self.p);
         let ty = type_parser.parse()?;
 
-        let _ = self.p.expect(TokenKind::Eq, "=")?;
+        let _ = self.p.expect(
+            TokenKind::Eq,
+            "initializer (global variables require an initial value)",
+        )?;
 
         let mut expr_parser = ExprParser::new(self.p);
         let value = expr_parser.parse()?;
