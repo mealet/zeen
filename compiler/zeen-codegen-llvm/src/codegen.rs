@@ -25,7 +25,7 @@ use zeen_driver::CompilationMode;
 use zeen_hir::HirMacroKind;
 use zeen_mir::{
     AggregateKind, BlockId, CallTarget, ConstValue, LocalId, MirFunction, MirFunctionId,
-    MirProgram, MirStatement, Operand, Place, PlaceElem, Rvalue, Terminator,
+    MirGlobalVarId, MirProgram, MirStatement, Operand, Place, PlaceElem, Rvalue, Terminator,
 };
 use zeen_resolve::{DefId, ResolutionResult};
 use zeen_typecheck::{
@@ -97,6 +97,7 @@ pub struct CodeGen<'ctx, 'prog> {
     str_counter: u32,
     enum_tables: HashMap<DefId, GlobalValue<'ctx>>,
     enum_table_counter: u32,
+    global_vars: HashMap<MirGlobalVarId, GlobalValue<'ctx>>,
 
     // per-function state
     locals: HashMap<LocalId, PointerValue<'ctx>>,
@@ -156,6 +157,32 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
         let builder = context.create_builder();
 
+        let mut global_vars = HashMap::new();
+        for (id, gv) in program.global_vars.iter().enumerate() {
+            let llvm_ty = Self::simple_type(context, typecheck, gv.ty);
+            let global = module.add_global(llvm_ty, None, &gv.symbol_name);
+            global.set_constant(false);
+            match llvm_ty {
+                BasicTypeEnum::IntType(t) => {
+                    global.set_initializer(&t.const_zero());
+                }
+                BasicTypeEnum::FloatType(t) => {
+                    global.set_initializer(&t.const_zero());
+                }
+                BasicTypeEnum::PointerType(t) => {
+                    global.set_initializer(&t.const_null());
+                }
+                BasicTypeEnum::ArrayType(t) => {
+                    global.set_initializer(&t.const_zero());
+                }
+                BasicTypeEnum::StructType(t) => {
+                    global.set_initializer(&t.const_zero());
+                }
+                _ => {}
+            }
+            global_vars.insert(MirGlobalVarId(id as u32), global);
+        }
+
         Ok(Self {
             context,
             builder,
@@ -173,6 +200,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             str_counter: 0,
             enum_tables: HashMap::new(),
             enum_table_counter: 0,
+            global_vars,
             locals: HashMap::new(),
             blocks: HashMap::new(),
         })
@@ -411,6 +439,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let entry = self.context.append_basic_block(main, "entry");
         self.builder.position_at_end(entry);
 
+        if let Some(init_fn_id) = self.program.init_globals_fn
+            && let Some(init_fn) = self.functions.get(&init_fn_id)
+        {
+            self.builder.build_call(*init_fn, &[], "").unwrap();
+        }
+
         if self.is_integer_return(ret_ty) {
             let call = self.builder.build_call(zeen_main, &[], "").unwrap();
             let value = call.try_as_basic_value().unwrap_basic();
@@ -494,6 +528,32 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             AnyTypeEnum::VectorType(t) => t.into(),
             AnyTypeEnum::ScalableVectorType(t) => t.into(),
             AnyTypeEnum::VoidType(_) => panic!("void used as a value type"),
+        }
+    }
+
+    fn simple_type(
+        context: &'ctx Context,
+        typecheck: &TypeCheckResult,
+        ty: TypeId,
+    ) -> BasicTypeEnum<'ctx> {
+        use BuiltinType::*;
+        match typecheck.interner.get(ty).clone() {
+            Type::Builtin(b) => match b {
+                i8 | u8 | char => context.i8_type().into(),
+                i16 | u16 => context.i16_type().into(),
+                i32 | u32 => context.i32_type().into(),
+                i64 | u64 => context.i64_type().into(),
+                isize | usize => context.i64_type().into(),
+                f32 | f64 => context.f64_type().into(),
+                bool => context.bool_type().into(),
+                void => context.i32_type().into(),
+            },
+            Type::IntLiteral => context.i32_type().into(),
+            Type::FloatLiteral => context.f64_type().into(),
+            Type::Pointer { .. } | Type::ManyPointer { .. } => {
+                context.ptr_type(AddressSpace::default()).into()
+            }
+            _ => context.i32_type().into(),
         }
     }
 
@@ -2534,10 +2594,20 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn place_ptr(&self, place: &Place, func: &MirFunction) -> PointerValue<'ctx> {
-        let mut ptr = self.locals[&place.local];
-        let mut cur_ty = func.local(place.local).ty;
+        let (mut ptr, mut cur_ty) = if let Some(PlaceElem::Global(id)) = place.projection.first() {
+            let gv = &self.program.global_vars[id.0 as usize];
+            (self.global_vars[id].as_pointer_value(), gv.ty)
+        } else {
+            (self.locals[&place.local], func.local(place.local).ty)
+        };
 
-        for elem in &place.projection {
+        let start = if matches!(place.projection.first(), Some(PlaceElem::Global(_))) {
+            1
+        } else {
+            0
+        };
+
+        for elem in &place.projection[start..] {
             match elem {
                 PlaceElem::Field(field_def) => {
                     let struct_ty = self.map_basic_type(cur_ty);
@@ -2550,9 +2620,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 }
 
                 PlaceElem::Index(index_local) => {
-                    // A pointer base (or a slice's pointer field) must be
-                    // loaded first: the elements live behind the pointer, not
-                    // in the local's own storage.
                     if matches!(
                         self.typecheck.interner.get(cur_ty).clone(),
                         Type::Pointer { .. } | Type::ManyPointer { .. }
@@ -2589,9 +2656,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     cur_ty = self.deref_target_type(cur_ty);
                 }
 
-                PlaceElem::Global(_) => {
-                    todo!("global variable place pointer")
-                }
+                PlaceElem::Global(_) => unreachable!("global already consumed"),
             }
         }
 
@@ -2599,15 +2664,26 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn place_type(&self, place: &Place, func: &MirFunction) -> TypeId {
+        if let Some(PlaceElem::Global(id)) = place.projection.first() {
+            let mut ty = self.program.global_vars[id.0 as usize].ty;
+            for elem in &place.projection[1..] {
+                match elem {
+                    PlaceElem::Field(field_def) => ty = self.field_index_and_type(ty, *field_def).1,
+                    PlaceElem::Index(_) => ty = self.index_element_type(ty),
+                    PlaceElem::Deref => ty = self.deref_target_type(ty),
+                    PlaceElem::Global(_) => unreachable!(),
+                }
+            }
+            return ty;
+        }
+
         let mut ty = func.local(place.local).ty;
         for elem in &place.projection {
             match elem {
                 PlaceElem::Field(field_def) => ty = self.field_index_and_type(ty, *field_def).1,
                 PlaceElem::Index(_) => ty = self.index_element_type(ty),
                 PlaceElem::Deref => ty = self.deref_target_type(ty),
-                PlaceElem::Global(id) => {
-                    ty = self.program.global_vars[id.0 as usize].ty;
-                }
+                PlaceElem::Global(_) => unreachable!(),
             }
         }
         ty
