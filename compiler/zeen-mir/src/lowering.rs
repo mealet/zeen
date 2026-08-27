@@ -1510,7 +1510,41 @@ impl<'ctx> MirLowering<'ctx> {
                 }
 
                 HirMacroKind::TypeName => {
-                    todo!()
+                    let target_ty = match &args[0].kind {
+                        HirExprKind::Type(_) => self.expr_type(fb, &args[0]),
+                        _ => panic!("@sizeof / @alignof arg must be a type expression"),
+                    };
+
+                    let result_ty = self.expr_type(fb, expr);
+                    let temp = fb.new_temp(result_ty);
+
+                    let stringified_ty = self.typecheck.interner.display_type(
+                        target_ty,
+                        Rc::clone(&self.rodeo),
+                        self.resolution,
+                    );
+
+                    let mut rodeo = self.rodeo.borrow_mut();
+                    let stringified_spur = rodeo.get_or_intern(stringified_ty);
+                    drop(rodeo);
+
+                    let rvalue = Rvalue::Use(Operand::Constant(
+                        ConstValue::Str(stringified_spur),
+                        Some(expr.source.clone()),
+                    ));
+
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue,
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    )
                 }
 
                 HirMacroKind::Dbg if self.mode == CompilationMode::Release => {
