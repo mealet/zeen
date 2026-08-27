@@ -4,6 +4,7 @@ fn foo(i32) i32 {
 
 fn type_print[T]() {
   @println("{}", @typename(T));
+  @println("{}", @typename(typeof T));
 }
 
 fn main() {
