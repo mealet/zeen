@@ -112,7 +112,8 @@ fn compile(src: &str) -> Result<Compiled, Vec<String>> {
         &resolution_result,
         &hir_module,
         CompilationMode::Debug,
-    );
+    )
+    .unwrap();
 
     Ok(Compiled {
         program: lowered.program,
