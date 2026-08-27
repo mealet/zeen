@@ -613,6 +613,8 @@ impl<'res> TypeChecker<'res> {
 
             HirTypeKind::Const(inner) => self.lower_hir_type(inner),
 
+            HirTypeKind::TypeOf(expr) => self.synth_expr(expr),
+
             HirTypeKind::SinglePointer(inner) => {
                 let is_const = matches!(inner.kind, HirTypeKind::Const(_));
                 let inner_ty = self.lower_hir_type(inner);
