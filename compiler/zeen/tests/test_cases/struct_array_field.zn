@@ -1,0 +1,15 @@
+struct Foo {
+  pub bytes: [4]u8,
+}
+
+fn foo() Foo {
+  Foo { .bytes = [1, 2, 3, 4] }
+}
+
+fn main() {
+  let f = foo();
+
+  for (elem : f.bytes) {
+    @println("{}", elem)
+  }
+}
