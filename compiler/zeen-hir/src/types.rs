@@ -27,6 +27,10 @@ pub enum HirTypeKind {
 
     Const(Rc<HirTypeExpr>),
 
+    /// `typeof <expr>` - type inferred from the expression's type, without
+    /// evaluating it.
+    TypeOf(Rc<HirExpr>),
+
     SinglePointer(Rc<HirTypeExpr>),
     ManyPointer(Rc<HirTypeExpr>),
 

@@ -70,7 +70,8 @@ fn compile_mir_mode(
         &resolution_result,
         &hir_module,
         mode,
-    );
+    )
+    .unwrap();
 
     Ok((lowered_mir, Rc::clone(&rodeo)))
 }

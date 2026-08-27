@@ -103,7 +103,8 @@ fn compile_mode(src: &str, mode: CompilationMode) -> Result<String, Vec<String>>
         &resolution_result,
         &hir_module,
         mode,
-    );
+    )
+    .unwrap();
 
     Ok(zeen_mir::printer::print_mir_program(
         &lowered.program,

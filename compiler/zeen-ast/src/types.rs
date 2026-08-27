@@ -31,6 +31,9 @@ pub enum TypeKind<'arena> {
 
     Const(&'arena TypeExpr<'arena>),
 
+    /// `typeof <expr>` - infers the type of an expression without evaluating it.
+    TypeOf(&'arena crate::expressions::Expression<'arena>),
+
     /// `*T` - single element pointer
     SinglePointer(&'arena TypeExpr<'arena>),
     /// `[*]T` - C-style pointer to unknown number of elements.
