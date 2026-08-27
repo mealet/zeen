@@ -697,13 +697,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             Type::Array { element, len } => {
                 let Some(len) = len else { return };
-                let elem_ty = self.map_basic_type(element);
+                let arr_ty = self.map_basic_type(ty);
                 let index_ty = self.context.ptr_sized_int_type(&self.target_data, None);
                 for i in 0..len {
                     let index = index_ty.const_int(i, false);
                     let elem_ptr = unsafe {
                         self.builder
-                            .build_in_bounds_gep(elem_ty, ptr, &[index], "")
+                            .build_in_bounds_gep(arr_ty, ptr, &[index_ty.const_zero(), index], "")
                             .unwrap()
                     };
                     self.emit_drop_ptr(elem_ptr, element);
@@ -878,7 +878,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             let value = if matches!(operand, Operand::Constant(ConstValue::Str(_), _)) {
                 self.cast_op(operand, elem_ty, func)
             } else {
-                self.operand_value(operand, None, func)
+                self.operand_value(operand, Some(elem_ty), func)
             };
             let elem_ptr = match kind {
                 AggregateKind::Struct(_) | AggregateKind::Slice => self
@@ -886,13 +886,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .build_struct_gep(agg_ty, alloca, i as u32, "")
                     .unwrap(),
                 AggregateKind::Array => unsafe {
-                    let elem_ty = self.index_element_type(expected_ty);
-                    let index = self
-                        .context
-                        .ptr_sized_int_type(&self.target_data, None)
-                        .const_int(i as u64, false);
+                    let index_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+                    let index = index_ty.const_int(i as u64, false);
                     self.builder
-                        .build_in_bounds_gep(self.map_basic_type(elem_ty), alloca, &[index], "")
+                        .build_in_bounds_gep(agg_ty, alloca, &[index_ty.const_zero(), index], "")
                         .unwrap()
                 },
             };
@@ -2620,10 +2617,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 }
 
                 PlaceElem::Index(index_local) => {
-                    if matches!(
+                    let is_ptr = matches!(
                         self.typecheck.interner.get(cur_ty).clone(),
                         Type::Pointer { .. } | Type::ManyPointer { .. }
-                    ) {
+                    );
+                    if is_ptr {
                         let ptr_ty = self.context.ptr_type(AddressSpace::default());
                         ptr = self
                             .builder
@@ -2637,11 +2635,23 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .build_load(usize_ty, self.locals[index_local], "")
                         .unwrap()
                         .into_int_value();
-                    let elem_ty = self.map_basic_type(self.index_element_type(cur_ty));
                     ptr = unsafe {
-                        self.builder
-                            .build_in_bounds_gep(elem_ty, ptr, &[index], "")
-                            .unwrap()
+                        if is_ptr {
+                            let elem_ty = self.map_basic_type(self.index_element_type(cur_ty));
+                            self.builder
+                                .build_in_bounds_gep(elem_ty, ptr, &[index], "")
+                                .unwrap()
+                        } else {
+                            let arr_ty = self.map_basic_type(cur_ty);
+                            self.builder
+                                .build_in_bounds_gep(
+                                    arr_ty,
+                                    ptr,
+                                    &[usize_ty.const_zero(), index],
+                                    "",
+                                )
+                                .unwrap()
+                        }
                     };
                     cur_ty = self.index_element_type(cur_ty);
                 }
