@@ -1507,6 +1507,10 @@ impl<'ctx> MirLowering<'ctx> {
                     )
                 }
 
+                HirMacroKind::TypeName => {
+                    todo!()
+                }
+
                 HirMacroKind::Dbg if self.mode == CompilationMode::Release => {
                     let value = args
                         .first()
