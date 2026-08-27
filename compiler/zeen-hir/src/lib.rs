@@ -654,6 +654,11 @@ impl<'res> HirLowering<'res> {
                     .collect(),
             },
 
+            ExpressionKind::ArrayRepeatInit { element, len } => HirExprKind::ArrayRepeatInit {
+                element: Rc::new(self.lower_expr(element)),
+                len: Rc::new(self.lower_expr(len)),
+            },
+
             ExpressionKind::Block { stmts, trailing } => HirExprKind::Block {
                 stmts: stmts
                     .iter()

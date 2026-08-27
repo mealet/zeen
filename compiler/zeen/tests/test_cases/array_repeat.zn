@@ -1,0 +1,20 @@
+fn print_i32_arr(arr: [5]i32) {
+  for (e : arr) {
+    @println("{}", e);
+  }
+}
+
+fn main() {
+  let a = [7; 5];
+  print_i32_arr(a);
+
+  print_i32_arr([9; 5]);
+
+  let bytes: [4]u8 = [0; 4];
+  @println("{}", bytes[3]);
+
+  let floats = [1.5; 3];
+  for (e : floats) {
+    @println("{}", e);
+  }
+}

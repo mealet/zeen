@@ -981,18 +981,51 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     fn parse_array_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let open = self.p.expect(TokenKind::OpenBracket, "[")?;
 
+        if self.p.at(TokenKind::CloseBracket) {
+            let close = self.p.expect(TokenKind::CloseBracket, "]")?;
+            let elements = self
+                .p
+                .arena
+                .alloc_slice_copy(&SmallVec::<[&'ctx Expression; 0]>::new());
+
+            let expr = self.p.arena.alloc(Expression {
+                kind: ExpressionKind::ArrayInit { elements },
+                span: open.merge_span(close.span),
+            });
+
+            return Some(expr);
+        }
+
+        let first = self.parse()?;
+
+        // `[expr; N]` repeat syntax, mirrors the `[T; N]` type syntax.
+        if self.p.eat(TokenKind::Semicolon) {
+            let len = self.parse()?;
+            let close = self.p.expect(TokenKind::CloseBracket, "]")?;
+
+            let expr = self.p.arena.alloc(Expression {
+                kind: ExpressionKind::ArrayRepeatInit {
+                    element: first,
+                    len,
+                },
+                span: open.merge_span(close.span),
+            });
+
+            return Some(expr);
+        }
+
         let mut elements_buffer: SmallVec<[&'ctx Expression; 8]> = SmallVec::new();
+        elements_buffer.push(first);
 
         while !matches!(
             self.p.current.kind,
             TokenKind::CloseBracket | TokenKind::Eof
         ) {
-            let expr = self.parse()?;
-            elements_buffer.push(expr);
-
             if !self.p.at(TokenKind::CloseBracket) {
                 self.p.expect(TokenKind::Comma, ",");
             }
+            let expr = self.parse()?;
+            elements_buffer.push(expr);
         }
 
         let close = self.p.expect(TokenKind::CloseBracket, "]")?;
@@ -1915,6 +1948,26 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         assert!(expr_parser.parse().is_some());
+
+        assert!(expr_parser.parse().is_none());
+    }
+
+    #[test]
+    fn array_repeat_init() {
+        // In this case we're just assuming that it parses
+
+        const SRC: &str = "[0; 1024]";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().expect("repeat init should parse");
+
+        let ExpressionKind::ArrayRepeatInit { element, len } = parsed.kind else {
+            panic!("expected ArrayRepeatInit, got {:?}", parsed.kind);
+        };
+
+        assert!(matches!(element.kind, ExpressionKind::Literal(_)));
+        assert!(matches!(len.kind, ExpressionKind::Literal(_)));
 
         assert!(expr_parser.parse().is_none());
     }
