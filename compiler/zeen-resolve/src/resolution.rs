@@ -77,7 +77,7 @@ pub struct DefInfo {
     pub is_pub: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DefKind {
     Function,
     Struct,
