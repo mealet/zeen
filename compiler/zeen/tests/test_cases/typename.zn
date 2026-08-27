@@ -3,11 +3,14 @@ fn foo(i32) i32 {
 }
 
 fn type_print[T]() {
-  @println("{}", @typename(typeof T));
+  @println("{}", @typename(T));
 }
 
 fn main() {
+  let a: i64 = 123;
+
   @println("{}", @typename(i32));
+  @println("{}", @typename(typeof a));
   @println("{}", @typename(usize));
   @println("{}", @typename([4]*u8));
   @println("{}", @typename(typeof foo));
