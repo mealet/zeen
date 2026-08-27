@@ -821,7 +821,10 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         let _open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
         let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
 
-        if matches!(ident_slice.as_str(), "as" | "sizeof" | "alignof") {
+        if matches!(
+            ident_slice.as_str(),
+            "as" | "sizeof" | "alignof" | "typename"
+        ) {
             let mut tp = crate::type_parser::TypeParser::new(self.p);
             let parsed_type = tp.parse()?;
 

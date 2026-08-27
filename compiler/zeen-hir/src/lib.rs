@@ -121,6 +121,7 @@ impl<'res> HirLowering<'res> {
             "as" => HirMacroKind::As,
             "sizeof" => HirMacroKind::SizeOf,
             "alignof" => HirMacroKind::AlignOf,
+            "typename" => HirMacroKind::TypeName,
 
             "print" => HirMacroKind::Print,
             "println" => HirMacroKind::Println,
@@ -727,9 +728,7 @@ impl<'res> HirLowering<'res> {
 
             TypeKind::Const(inner) => HirTypeKind::Const(Rc::new(self.lower_type(inner))),
 
-            TypeKind::TypeOf(expr) => {
-                HirTypeKind::TypeOf(Rc::new(self.lower_expr(expr)))
-            }
+            TypeKind::TypeOf(expr) => HirTypeKind::TypeOf(Rc::new(self.lower_expr(expr))),
 
             TypeKind::SinglePointer(inner) => {
                 HirTypeKind::SinglePointer(Rc::new(self.lower_type(inner)))
