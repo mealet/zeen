@@ -473,6 +473,10 @@ impl<'ctx> MirLowering<'ctx> {
                     self.collect_global_expr_deps(element, out);
                 }
             }
+            HirExprKind::ArrayRepeatInit { element, len } => {
+                self.collect_global_expr_deps(element, out);
+                self.collect_global_expr_deps(len, out);
+            }
             HirExprKind::Block { stmts, trailing } => {
                 for stmt in stmts {
                     self.collect_global_stmt_deps(stmt, out);
@@ -1297,6 +1301,35 @@ impl<'ctx> MirLowering<'ctx> {
                     operands.push(op);
                 }
 
+                let temp = fb.new_temp(ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::Aggregate {
+                            kind: AggregateKind::Array,
+                            operands,
+                        },
+                        source: Some(expr.source.clone()),
+                    },
+                );
+
+                (
+                    block,
+                    self.place_to_operand(Place::from_local(temp), ty, Some(expr.source.clone())),
+                )
+            }
+
+            HirExprKind::ArrayRepeatInit { element, len: _ } => {
+                let ty = self.expr_type(fb, expr);
+                let (block, elem_op) = self.lower_expr_to_operand(fb, element, block);
+
+                let n = match self.typecheck.interner.get(ty).clone() {
+                    Type::Array { len: Some(n), .. } => n as usize,
+                    _ => 0,
+                };
+
+                let operands = vec![elem_op; n];
                 let temp = fb.new_temp(ty);
                 fb.push_stmt(
                     block,

@@ -72,6 +72,11 @@ pub enum HirExprKind {
         elements: Vec<Rc<HirExpr>>,
     },
 
+    ArrayRepeatInit {
+        element: Rc<HirExpr>,
+        len: Rc<HirExpr>,
+    },
+
     Block {
         stmts: Vec<Rc<HirStmt>>,
         trailing: Option<Rc<HirExpr>>,
