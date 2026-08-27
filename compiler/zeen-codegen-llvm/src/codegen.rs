@@ -1495,6 +1495,22 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .into()
             }
 
+            (Fn { .. }, Pointer { .. } | ManyPointer { .. }) => {
+                let dst_ptr = self.context.ptr_type(AddressSpace::default());
+                self.builder
+                    .build_pointer_cast(value.into_pointer_value(), dst_ptr, "")
+                    .unwrap()
+                    .into()
+            }
+
+            (Pointer { .. } | ManyPointer { .. }, Fn { .. }) => {
+                let dst_ptr = self.context.ptr_type(AddressSpace::default());
+                self.builder
+                    .build_pointer_cast(value.into_pointer_value(), dst_ptr, "")
+                    .unwrap()
+                    .into()
+            }
+
             (Builtin(b), Builtin(bb)) if builtin_is_integer(b) && bb == BuiltinType::bool => {
                 let int = value.into_int_value();
                 let zero = int.get_type().const_zero();
