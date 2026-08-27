@@ -1302,7 +1302,14 @@ impl<'ctx> NameResolver {
             }
 
             self.check_visibility(def_id, &(self.current_src.clone(), span).into());
-            return Resolution::Def(def_id);
+
+            let resolution = if self.result.defs[&def_id].kind == DefKind::GenericParam {
+                Resolution::GenericParam(def_id)
+            } else {
+                Resolution::Def(def_id)
+            };
+
+            return resolution;
         }
 
         let name = self.interner_resolve(&name);
