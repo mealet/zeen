@@ -3,7 +3,22 @@ use std::{fs, process::Output};
 
 struct FailedTest {
     pub test_case: String,
+    pub modes: String,
     pub error: String,
+}
+
+enum ModeName {
+    Debug,
+    Release,
+}
+
+impl ModeName {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ModeName::Debug => "Debug",
+            ModeName::Release => "Release",
+        }
+    }
 }
 
 struct Expected {
@@ -122,6 +137,71 @@ fn run_binary(binary_path: &str) -> Output {
         .expect("failed to run test binary")
 }
 
+/// Compiles and runs a single test case in the given mode, returning a list
+/// of errors (empty if the test passed for this mode).
+fn run_test_case_in_mode(
+    input_file: &str,
+    expected_file: &str,
+    mode: ModeName,
+) -> anyhow::Result<Vec<String>> {
+    let binary_name = format!(
+        "zeen-test-{}-{}",
+        input_file.replace("/", "_"),
+        mode.as_str().to_lowercase()
+    );
+    let binary_path = std::env::temp_dir().join(&binary_name);
+    let binary_path_str = binary_path.to_str().unwrap();
+
+    let mut compile_cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
+    compile_cmd
+        .arg(input_file)
+        .arg(binary_path_str)
+        .arg("-m")
+        .arg(mode.as_str());
+
+    let compilation_result = compile_cmd.assert().try_success();
+    if let Err(compilation_error) = compilation_result {
+        let _ = fs::remove_file(&binary_path);
+        return Ok(vec![format!(
+            "Compilation failed in {} mode:\n{}",
+            mode.as_str(),
+            compilation_error
+        )]);
+    }
+
+    let expected_content = fs::read_to_string(expected_file)?;
+    let expected = parse_expected(&expected_content);
+
+    let output = run_binary(binary_path_str);
+    let actual_exit_code = output.status.code().unwrap_or(-1);
+    let actual_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    let _ = fs::remove_file(&binary_path);
+
+    let mut errors = Vec::new();
+
+    if !expected.free_output && actual_stdout != expected.output {
+        errors.push(format!(
+            "Output mismatch:\n--- expected ---\n{}\n--- actual ---\n{}",
+            expected.output, actual_stdout
+        ));
+    }
+
+    if let Some(expected_exit) = expected.exit_code {
+        if actual_exit_code != expected_exit {
+            errors.push(format!(
+                "Exit code mismatch: expected {expected_exit}, got {actual_exit_code}"
+            ));
+        }
+    } else if !expected.free_output && actual_exit_code != 0 {
+        errors.push(format!(
+            "Exit code mismatch: expected 0, got {actual_exit_code}"
+        ));
+    }
+
+    Ok(errors)
+}
+
 #[test]
 fn golden_system_tests() -> anyhow::Result<()> {
     let test_cases = discover_test_cases();
@@ -144,58 +224,38 @@ fn golden_system_tests() -> anyhow::Result<()> {
         let input_file = format!("tests/test_cases/{test_path}.zn");
         let expected_file = format!("tests/test_cases/{test_path}.expected");
 
-        let binary_name = format!("zeen-test-{}", test_path.replace("/", "_"));
-        let binary_path = std::env::temp_dir().join(&binary_name);
-        let binary_path_str = binary_path.to_str().unwrap();
+        let debug_errors = run_test_case_in_mode(&input_file, &expected_file, ModeName::Debug)?;
+        let release_errors = run_test_case_in_mode(&input_file, &expected_file, ModeName::Release)?;
 
-        let mut compile_cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
-        compile_cmd.arg(&input_file).arg(binary_path_str);
+        let mut failures = Vec::new();
 
-        let compilation_result = compile_cmd.assert().try_success();
-        if let Err(compilation_error) = compilation_result {
-            failed_tests.push(FailedTest {
-                test_case: test_name.clone(),
-                error: compilation_error.to_string(),
-            });
-            continue;
+        if !debug_errors.is_empty() {
+            failures.push((ModeName::Debug, debug_errors));
+        }
+        if !release_errors.is_empty() {
+            failures.push((ModeName::Release, release_errors));
         }
 
-        let expected_content = fs::read_to_string(&expected_file)?;
-        let expected = parse_expected(&expected_content);
-
-        let output = run_binary(binary_path_str);
-        let actual_exit_code = output.status.code().unwrap_or(-1);
-        let actual_stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
-        let mut errors = Vec::new();
-
-        if !expected.free_output && actual_stdout != expected.output {
-            errors.push(format!(
-                "Output mismatch:\n--- expected ---\n{}\n--- actual ---\n{}",
-                expected.output, actual_stdout
-            ));
-        }
-
-        if let Some(expected_exit) = expected.exit_code {
-            if actual_exit_code != expected_exit {
-                errors.push(format!(
-                    "Exit code mismatch: expected {expected_exit}, got {actual_exit_code}"
-                ));
-            }
-        } else if !expected.free_output && actual_exit_code != 0 {
-            errors.push(format!(
-                "Exit code mismatch: expected 0, got {actual_exit_code}"
-            ));
-        }
-
-        let _ = fs::remove_file(&binary_path);
-
-        if errors.is_empty() {
+        if failures.is_empty() {
             passed_tests.push(test_name);
         } else {
+            let modes = if failures.len() == 2 {
+                "debug and release".to_string()
+            } else {
+                failures[0].0.as_str().to_string()
+            };
+
+            let mut error = String::new();
+            for (mode, mode_errors) in &failures {
+                error.push_str(&format!("[{}]\n", mode.as_str()));
+                error.push_str(&mode_errors.join("\n"));
+                error.push('\n');
+            }
+
             failed_tests.push(FailedTest {
                 test_case: test_name,
-                error: errors.join("\n"),
+                modes,
+                error,
             });
         }
     }
@@ -209,7 +269,10 @@ fn golden_system_tests() -> anyhow::Result<()> {
     println!();
     println!("Failed tests ({}):", failed_tests.len());
     for failed_test in &failed_tests {
-        println!("  ✗ {}", failed_test.test_case);
+        println!(
+            "  ✗ {} (failed in {})",
+            failed_test.test_case, failed_test.modes
+        );
         println!("\n{}", failed_test.error);
         println!();
     }
