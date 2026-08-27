@@ -18,8 +18,7 @@ use inkwell::{
 };
 use lasso::{Rodeo, Spur};
 use zeen_ast::{
-    expressions::{BinaryOp, UnaryOp},
-    types::BuiltinType,
+    Source, expressions::{BinaryOp, UnaryOp}, types::BuiltinType
 };
 use zeen_driver::CompilationMode;
 use zeen_hir::HirMacroKind;
@@ -1658,7 +1657,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 arg_types,
                 destination,
                 target,
-                ..
+                source,
             } => {
                 self.emit_macro_call(
                     *kind,
@@ -1669,6 +1668,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     *target,
                     func,
                     fn_id,
+                    source
                 );
             }
 
@@ -1789,6 +1789,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         target: Option<BlockId>,
         func: &MirFunction,
         fn_id: MirFunctionId,
+        source: &Option<Source>,
     ) {
         match kind {
             HirMacroKind::Print | HirMacroKind::Println => {
@@ -1971,13 +1972,23 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 };
                 let (specifier, value) = self.debug_operand(arg, func);
 
+                let source = source.clone().expect("unhandled None source");
+
+                let debug_source = &source.src.inner()[source.span.offset()..source.span.offset() + source.span.len()];
+                let debug_inner = debug_source
+                    .strip_prefix("@dbg(")
+                    .and_then(|s| s.strip_suffix(')'))
+                    .unwrap_or(debug_source);
+
+                let debug_location = format!("{}:{}", source.src.name(), source_line(source.src.inner(), source.span.offset()));
+
                 let printf = self.get_or_declare_runtime_fn(
                     "printf",
                     self.context.i32_type().into(),
                     &[self.context.ptr_type(AddressSpace::default()).into()],
                     true,
                 );
-                let format = format!("{specifier}\n");
+                let format = format!("[{debug_location}]> `{debug_inner}` = {specifier}\n");
                 let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
                     vec![self.get_str_global(&format).as_pointer_value().into()];
                 call_args.push(value.into());

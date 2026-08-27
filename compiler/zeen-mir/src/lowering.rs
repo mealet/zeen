@@ -1597,11 +1597,15 @@ impl<'ctx> MirLowering<'ctx> {
                 | HirMacroKind::Println
                 | HirMacroKind::Format
                 | HirMacroKind::Dbg
-                | HirMacroKind::Panic => self.lower_macro_call(fb, kind.0, args, expr.id, block),
+                | HirMacroKind::Panic => {
+                    self.lower_macro_call(fb, kind.0, args, expr.id, block, expr.source.clone())
+                }
 
                 HirMacroKind::Unreachable | HirMacroKind::Todo => {
                     self.lower_diverging_macro(fb, kind.0, block)
                 }
+
+                HirMacroKind::Uninit => (block, Operand::Constant(ConstValue::Void, None)),
 
                 HirMacroKind::Unknown => panic!("unknown macro reached MIR lowering"),
             },
@@ -2102,6 +2106,7 @@ impl<'ctx> MirLowering<'ctx> {
         args: &[Rc<HirExpr>],
         hir_id: HirId,
         block: BlockId,
+        source: Source,
     ) -> (BlockId, Operand) {
         let format_chunks = self.typecheck.format_specs.get(&hir_id).cloned();
         let specs = format_chunks.as_deref().map(arg_specs);
@@ -2162,7 +2167,7 @@ impl<'ctx> MirLowering<'ctx> {
                 arg_types,
                 destination: Place::from_local(dest),
                 target: if is_diverging { None } else { Some(next) },
-                source: None,
+                source: Some(source),
             },
         );
 

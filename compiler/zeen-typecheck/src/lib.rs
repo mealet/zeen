@@ -1476,7 +1476,7 @@ impl<'res> TypeChecker<'res> {
             HirMacroKind::Dbg => {
                 if args.len() != 1 {
                     self.report(TypeError::ArgCountMismatch {
-                        expected: 0,
+                        expected: 1,
                         found: args.len(),
                         src: source.src(),
                         span: source.span,
@@ -1500,6 +1500,21 @@ impl<'res> TypeChecker<'res> {
                 }
 
                 ty
+            }
+
+            HirMacroKind::Uninit => {
+                if !args.is_empty() {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                }
+
+                self.result.interner.never()
             }
 
             HirMacroKind::SizeOf | HirMacroKind::AlignOf => {
