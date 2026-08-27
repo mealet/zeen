@@ -1996,12 +1996,17 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     ) -> (String, BasicValueEnum<'ctx>) {
         match operand {
             Operand::Constant(c, _) => {
+                if let ConstValue::Bool(b) = c {
+                    let s = if *b { "true" } else { "false" };
+                    let ptr = self.get_str_global(s).as_pointer_value();
+                    return ("%s".to_string(), ptr.into());
+                }
                 let value = self.const_value(c, None, func);
                 let specifier = match c {
                     ConstValue::Float(_) => "%f".to_string(),
                     ConstValue::Str(_) => "%s".to_string(),
                     ConstValue::Char(_) => "%c".to_string(),
-                    ConstValue::Bool(_) => "%d".to_string(),
+                    ConstValue::Bool(_) => unreachable!("handled above"),
                     ConstValue::NullPtr => "%s".to_string(),
                     ConstValue::Fn(_) => "%s".to_string(),
                     ConstValue::Void => unreachable!("cannot @dbg a void constant"),
@@ -2022,6 +2027,19 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         self.display_specifier(ty),
                         self.place_ptr(place, func).into(),
                     );
+                }
+                if matches!(
+                    self.typecheck.interner.get(ty).clone(),
+                    Type::Builtin(BuiltinType::bool)
+                ) {
+                    let value = self.load_place(place, func).into_int_value();
+                    let true_ptr = self.get_str_global("true").as_pointer_value();
+                    let false_ptr = self.get_str_global("false").as_pointer_value();
+                    let ptr = self
+                        .builder
+                        .build_select(value, true_ptr, false_ptr, "bool.str")
+                        .unwrap();
+                    return ("%s".to_string(), ptr);
                 }
                 let mut value = self.load_place(place, func);
                 if matches!(self.typecheck.interner.get(ty).clone(), Type::Slice { .. }) {
@@ -2400,7 +2418,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     (ConstValue::Str(_), FormatSpec::Debug) => "\"%s\"".to_string(),
                     (ConstValue::Str(_), _) => "%s".to_string(),
                     (ConstValue::Char(_), _) => "%c".to_string(),
-                    (ConstValue::Bool(_), _) => "%d".to_string(),
+                    (ConstValue::Bool(b), _) => {
+                        let s = if *b { "true" } else { "false" };
+                        let ptr = self.get_str_global(s).as_pointer_value();
+                        return ("%s".to_string(), ptr.into());
+                    }
                     (ConstValue::Int(_), FormatSpec::Hex) => "%x".to_string(),
                     (ConstValue::Int(_), FormatSpec::Oct) => "%o".to_string(),
                     (ConstValue::Int(_), FormatSpec::Bin) => "%x".to_string(),
@@ -2431,10 +2453,21 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     return (specifier, ptr.into());
                 }
 
+                if matches!(
+                    self.typecheck.interner.get(ty).clone(),
+                    Type::Builtin(BuiltinType::bool)
+                ) {
+                    let value = self.operand_value(operand, Some(ty), func).into_int_value();
+                    let true_ptr = self.get_str_global("true").as_pointer_value();
+                    let false_ptr = self.get_str_global("false").as_pointer_value();
+                    let ptr = self
+                        .builder
+                        .build_select(value, true_ptr, false_ptr, "bool.str")
+                        .unwrap();
+                    return ("%s".to_string(), ptr);
+                }
+
                 let value = self.operand_value(operand, Some(ty), func);
-                // A slice-typed value is a `{ ptr, len }` fat
-                // pointer; printf's `%s` needs just the data
-                // pointer.
                 let value = if matches!(self.typecheck.interner.get(ty).clone(), Type::Slice { .. })
                 {
                     self.builder
@@ -2467,6 +2500,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     fn display_specifier(&self, ty: TypeId) -> String {
         match self.typecheck.interner.get(ty).clone() {
+            Type::Builtin(BuiltinType::bool) => "%s".into(),
             Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral => "%f".into(),
             Type::Builtin(b) if builtin_is_integer(b) => "%d".into(),
             Type::Pointer { inner, .. }
