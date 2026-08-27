@@ -579,6 +579,11 @@ impl<'ctx> NameResolver {
                 }
             }
 
+            ExpressionKind::ArrayRepeatInit { element, len } => {
+                self.collect_global_deps(element, out);
+                self.collect_global_deps(len, out);
+            }
+
             ExpressionKind::Block { stmts, trailing } => {
                 for stmt in stmts {
                     self.collect_global_stmt_deps(stmt, out);
@@ -1224,6 +1229,11 @@ impl<'ctx> NameResolver {
                 for elem in elements {
                     self.resolve_expr(elem);
                 }
+            }
+
+            ExpressionKind::ArrayRepeatInit { element, len } => {
+                self.resolve_expr(element);
+                self.resolve_expr(len);
             }
 
             ExpressionKind::Block { stmts, trailing } => {
