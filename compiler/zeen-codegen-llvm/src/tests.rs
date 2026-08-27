@@ -802,6 +802,90 @@ fn pointer_equality_and_inequality_compare_as_integers() {
 }
 
 #[test]
+fn array_aggregate_stores_all_elements_correctly() {
+    let mut fx = Fixture::new();
+    let u8_ty = fx.u8();
+    let arr4 = fx.array(u8_ty, 4);
+    let usize_ty = fx.usize();
+    let i32_ty = fx.i32();
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut main = fx.fn_builder("main", main_def, i32_ty);
+    let arr = main.local("arr", arr4);
+    let idx = main.local("idx", usize_ty);
+    let sum = main.local("sum", i32_ty);
+    let elem = main.temp(i32_ty);
+    let ret = main.temp(i32_ty);
+    main.entry("bb0");
+    main.storage_live(arr);
+    main.assign(
+        place(arr),
+        Rvalue::Aggregate {
+            kind: zeen_mir::AggregateKind::Array,
+            operands: vec![const_int(1), const_int(2), const_int(3), const_int(4)],
+        },
+    );
+    main.assign(place(idx), use_const(const_int(0)));
+    let first = Operand::Copy(place(arr).index(idx), None);
+    main.assign(place(elem), use_const(first));
+    main.assign(
+        place(sum),
+        binary(BinaryOp::Add, copy_of(elem), const_int(10)),
+    );
+    main.assign(place(ret), use_const(Operand::Copy(place(sum), None)));
+    main.ret(copy_of(ret));
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Release);
+
+    assert!(
+        ir.contains("ret i32 11"),
+        "array element 0 must be 1, sum with 10 = 11, got:\n{ir}"
+    );
+}
+
+#[test]
+fn array_second_element_is_not_zeroed_in_release() {
+    let mut fx = Fixture::new();
+    let u8_ty = fx.u8();
+    let arr4 = fx.array(u8_ty, 4);
+    let usize_ty = fx.usize();
+    let i32_ty = fx.i32();
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut main = fx.fn_builder("main", main_def, i32_ty);
+    let arr = main.local("arr", arr4);
+    let idx = main.local("idx", usize_ty);
+    let elem = main.temp(i32_ty);
+    let ret = main.temp(i32_ty);
+    main.entry("bb0");
+    main.storage_live(arr);
+    main.assign(
+        place(arr),
+        Rvalue::Aggregate {
+            kind: zeen_mir::AggregateKind::Array,
+            operands: vec![const_int(1), const_int(2), const_int(3), const_int(4)],
+        },
+    );
+    main.assign(place(idx), use_const(const_int(1)));
+    let second = Operand::Copy(place(arr).index(idx), None);
+    main.assign(place(elem), use_const(second));
+    main.assign(
+        place(ret),
+        binary(BinaryOp::Add, copy_of(elem), const_int(10)),
+    );
+    main.ret(copy_of(ret));
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Release);
+
+    assert!(
+        ir.contains("ret i32 12"),
+        "array element 1 must be 2 (not 0), sum with 10 = 12, got:\n{ir}"
+    );
+}
+
+#[test]
 fn pointer_arithmetic_scales_offsets_by_element_size() {
     let mut fx = Fixture::new();
     let main_def = fx.def("main", DefKind::Function);
