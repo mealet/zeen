@@ -76,6 +76,11 @@ pub enum ExpressionKind<'arena> {
         elements: &'arena [&'arena Expression<'arena>],
     },
 
+    ArrayRepeatInit {
+        element: &'arena Expression<'arena>,
+        len: &'arena Expression<'arena>,
+    },
+
     Block {
         stmts: &'arena [&'arena crate::statements::Statement<'arena>],
         trailing: Option<&'arena Expression<'arena>>,
