@@ -727,6 +727,10 @@ impl<'res> HirLowering<'res> {
 
             TypeKind::Const(inner) => HirTypeKind::Const(Rc::new(self.lower_type(inner))),
 
+            TypeKind::TypeOf(expr) => {
+                HirTypeKind::TypeOf(Rc::new(self.lower_expr(expr)))
+            }
+
             TypeKind::SinglePointer(inner) => {
                 HirTypeKind::SinglePointer(Rc::new(self.lower_type(inner)))
             }

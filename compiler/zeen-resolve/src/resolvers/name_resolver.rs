@@ -1386,6 +1386,10 @@ impl<'ctx> NameResolver {
                 self.resolve_type(inner);
             }
 
+            TypeKind::TypeOf(expr) => {
+                self.resolve_expr(expr);
+            }
+
             TypeKind::Array { element, len } => {
                 self.resolve_type(element);
 
