@@ -1,0 +1,12 @@
+fn main() {
+  // NOTE: Without @uninit() macro compiler would throw error about uninitialized variable.
+
+  let a: i32 = @uninit();
+  let b: i32 = a;
+  let c = @as(i64, a);
+
+  let _ = c;
+  let _ = b;
+
+  @println("works fine");
+}
