@@ -255,6 +255,7 @@ pub fn verify_cast(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> boo
         matches!(t, Type::IntLiteral) || matches!(t, Type::Builtin(b) if builtin_is_integer(*b))
     };
     let is_pointer = |t: &Type| matches!(t, Type::Pointer { .. } | Type::ManyPointer { .. });
+    let is_fn = |t: &Type| matches!(t, Type::Fn { .. });
 
     match (from_ty, to_ty) {
         // numeric <-> numeric
@@ -272,6 +273,10 @@ pub fn verify_cast(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> boo
 
         // ptr <-> ptr
         (a, b) if is_pointer(a) && is_pointer(b) => true,
+
+        // fn <-> ptr
+        (a, b) if is_fn(a) && is_pointer(b) => true,
+        (a, b) if is_pointer(a) && is_fn(b) => true,
 
         // [N]T -> [*]T
         (Type::Array { .. }, Type::ManyPointer { .. }) => true,
@@ -670,5 +675,60 @@ mod tests {
         assert!(!verify_cast(&mut it, bool_id, ptr));
         let void = it.void();
         assert!(!verify_cast(&mut it, void, ptr));
+    }
+
+    #[test]
+    fn verify_cast_accepts_fn_to_pointer() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let void = it.void();
+
+        let fn_ty = it.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+        let void_ptr = it.intern(Type::Pointer {
+            inner: void,
+            is_const: false,
+        });
+
+        assert!(verify_cast(&mut it, fn_ty, void_ptr));
+    }
+
+    #[test]
+    fn verify_cast_accepts_pointer_to_fn() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let void = it.void();
+
+        let fn_ty = it.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+        let void_ptr = it.intern(Type::Pointer {
+            inner: void,
+            is_const: false,
+        });
+
+        assert!(verify_cast(&mut it, void_ptr, fn_ty));
+    }
+
+    #[test]
+    fn verify_cast_accepts_fn_pointer_round_trip() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let void = it.void();
+
+        let fn_ty = it.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+        let ptr_ty = it.intern(Type::Pointer {
+            inner: void,
+            is_const: false,
+        });
+
+        assert!(verify_cast(&mut it, fn_ty, ptr_ty));
+        assert!(verify_cast(&mut it, ptr_ty, fn_ty));
     }
 }
