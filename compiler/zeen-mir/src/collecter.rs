@@ -167,6 +167,11 @@ fn collect_from_expr(expr: &zeen_hir::expr::HirExpr, map: &mut HashMap<DefId, Rc
             }
         }
 
+        HirExprKind::ArrayRepeatInit { element, len } => {
+            collect_from_expr(element, map);
+            collect_from_expr(len, map);
+        }
+
         HirExprKind::Literal(_)
         | HirExprKind::VarRef(_)
         | HirExprKind::GenericParamRef(_)

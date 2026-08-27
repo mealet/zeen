@@ -283,6 +283,15 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("repeat array init requires a Copy element type")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::repeat_init_not_copy))]
+    RepeatInitNotCopy {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("attempt to assign to const")]
     #[diagnostic(severity(Error), code(zeen::typechecker::assign_to_const))]
     AssignToConst {

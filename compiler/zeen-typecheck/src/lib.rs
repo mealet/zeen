@@ -1335,6 +1335,38 @@ impl<'res> TypeChecker<'res> {
                 })
             }
 
+            HirExprKind::ArrayRepeatInit { element, len } => {
+                let len_val = self.eval_const_u64(len);
+
+                if let Some(0) = len_val {
+                    self.report(TypeError::EmptyArrayError {
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
+                let Some(len_val) = len_val else {
+                    return self.result.interner.error();
+                };
+
+                let elem_ty = self.synth_expr(element);
+                let elem_ty = self.default_literal(elem_ty);
+
+                if !self.type_is_copy(elem_ty) {
+                    self.report(TypeError::RepeatInitNotCopy {
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
+                self.result.interner.intern(Type::Array {
+                    element: elem_ty,
+                    len: Some(len_val),
+                })
+            }
+
             HirExprKind::Type(_) => self.result.interner.error(),
             HirExprKind::Error => self.result.interner.error(),
         }
@@ -2117,6 +2149,20 @@ impl<'res> TypeChecker<'res> {
                 self.synth_expr(expr)
             }
 
+            HirExprKind::ArrayRepeatInit { element, len } => {
+                if let Type::Array {
+                    element: elem_ty, ..
+                } = self.result.interner.get(expected).clone()
+                {
+                    let int_ty = self.result.interner.builtin(DEFAULT_INT_LITERAL);
+                    self.check_expr(element, elem_ty, false);
+                    self.check_expr(len, int_ty, false);
+                    self.result.record_expr_type(expr.id, expected);
+                    return expected;
+                }
+                self.synth_expr(expr)
+            }
+
             HirExprKind::Block { stmts, trailing } => {
                 let ty = self.check_block(stmts, trailing, Some(expected), &expr.source);
                 self.result.record_expr_type(expr.id, ty);
@@ -2360,6 +2406,19 @@ impl<'res> TypeChecker<'res> {
             }
 
             _ => ty,
+        }
+    }
+
+    fn type_is_copy(&self, ty: TypeId) -> bool {
+        match self.result.interner.get(ty).clone() {
+            Type::Struct { def_id, .. } => self
+                .result
+                .struct_info
+                .get(&def_id)
+                .map(|info| info.capabalities.is_copy)
+                .unwrap_or(false),
+            Type::Array { element, .. } => self.type_is_copy(element),
+            _ => true,
         }
     }
 
