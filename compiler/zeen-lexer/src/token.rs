@@ -186,6 +186,8 @@ pub enum CompilerKeyword {
     Implement,
     Type,
 
+    TypeOf,
+
     True,
     False,
     Null,
@@ -221,6 +223,8 @@ impl CompilerKeyword {
             "interface" => Some(CompilerKeyword::Interface),
             "implement" => Some(CompilerKeyword::Implement),
             "type" => Some(CompilerKeyword::Type),
+
+            "typeof" => Some(CompilerKeyword::TypeOf),
 
             "true" => Some(CompilerKeyword::True),
             "false" => Some(CompilerKeyword::False),

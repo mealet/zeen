@@ -37,6 +37,9 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
             // const: const T
             TokenKind::Keyword(token::CompilerKeyword::Const) => self.parse_const_type(),
 
+            // typeof: typeof <expr>
+            TokenKind::Keyword(token::CompilerKeyword::TypeOf) => self.parse_typeof(),
+
             // named
             TokenKind::Ident => self.parse_named(),
 
@@ -353,6 +356,23 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
         let expr = arena.alloc(TypeExpr {
             kind: TypeKind::Const(child),
             span: kw_const.merge_span(child.span),
+        });
+
+        Some(expr)
+    }
+
+    fn parse_typeof(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
+        let kw_typeof = self.p.current_clone();
+        let _ = self.p.advance();
+
+        let arena = self.p.arena;
+
+        let mut expr_parser = crate::expressions::ExprParser::new(self.p);
+        let inner = expr_parser.parse()?;
+
+        let expr = arena.alloc(TypeExpr {
+            kind: TypeKind::TypeOf(inner),
+            span: kw_typeof.merge_span(inner.span),
         });
 
         Some(expr)
