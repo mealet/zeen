@@ -70,7 +70,8 @@ fn flow_errors(src: &str) -> Vec<FlowError> {
         &resolution_result,
         &hir_module,
         context.mode,
-    );
+    )
+    .unwrap();
 
     match run_dataflow(
         &mut lowered_mir.program,
