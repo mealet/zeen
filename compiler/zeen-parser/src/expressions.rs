@@ -1953,6 +1953,26 @@ mod tests {
     }
 
     #[test]
+    fn array_repeat_init() {
+        // In this case we're just assuming that it parses
+
+        const SRC: &str = "[0; 1024]";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().expect("repeat init should parse");
+
+        let ExpressionKind::ArrayRepeatInit { element, len } = parsed.kind else {
+            panic!("expected ArrayRepeatInit, got {:?}", parsed.kind);
+        };
+
+        assert!(matches!(element.kind, ExpressionKind::Literal(_)));
+        assert!(matches!(len.kind, ExpressionKind::Literal(_)));
+
+        assert!(expr_parser.parse().is_none());
+    }
+
+    #[test]
     fn block_expr() {
         // In this case we're just assuming that it parses
 
