@@ -4960,4 +4960,78 @@ mod tests {
             "expected TypeError::AssignToConst, got: {errors:?}"
         );
     }
+
+    #[test]
+    fn array_repeat_init_typechecks() {
+        let result = typecheck(
+            r#"
+            fn main() {
+                let a = [0; 1024];
+                let b = [7; 5];
+                @println("{}", a[0] + b[1]);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "repeat array init should typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn array_repeat_init_coerces_element_to_expected() {
+        let result = typecheck(
+            r#"
+            fn f(arr: [1024]u8) {
+                @println("{}", arr[5]);
+            }
+
+            fn main() {
+                f([0; 1024]);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "repeat init element literal should coerce to expected element type: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn array_repeat_init_requires_copy_element() {
+        let errors = typecheck(
+            r#"
+            struct Item {}
+
+            fn main() {
+                let a = [Item{}; 3];
+            }
+            "#,
+        )
+        .expect_err("repeat init with a move-only element must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::RepeatInitNotCopy { .. })),
+            "expected TypeError::RepeatInitNotCopy, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn array_repeat_init_zero_length_is_error() {
+        let errors = typecheck("fn main() { let a = [0; 0]; }")
+            .expect_err("zero-length repeat array init must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EmptyArrayError { .. })),
+            "expected TypeError::EmptyArrayError, got: {errors:?}"
+        );
+    }
 }
