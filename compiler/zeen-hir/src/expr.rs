@@ -95,9 +95,10 @@ pub struct HirFieldInit {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HirMacroKind {
-    As,      // @as(T, expr) -> T
-    SizeOf,  // @sizeof(T) -> usize
-    AlignOf, // @alignof(T) -> usize
+    As,       // @as(T, expr) -> T
+    SizeOf,   // @sizeof(T) -> usize
+    AlignOf,  // @alignof(T) -> usize
+    TypeName, // @typename(T) -> []const char
 
     Print,   // @print("format", ...) -> void
     Println, // @println("format", ...) -> void

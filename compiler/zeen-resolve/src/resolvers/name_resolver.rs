@@ -1312,7 +1312,14 @@ impl<'ctx> NameResolver {
             }
 
             self.check_visibility(def_id, &(self.current_src.clone(), span).into());
-            return Resolution::Def(def_id);
+
+            let resolution = if self.result.defs[&def_id].kind == DefKind::GenericParam {
+                Resolution::GenericParam(def_id)
+            } else {
+                Resolution::Def(def_id)
+            };
+
+            return resolution;
         }
 
         let name = self.interner_resolve(&name);
@@ -1394,6 +1401,10 @@ impl<'ctx> NameResolver {
             | TypeKind::SinglePointer(inner)
             | TypeKind::ManyPointer(inner) => {
                 self.resolve_type(inner);
+            }
+
+            TypeKind::TypeOf(expr) => {
+                self.resolve_expr(expr);
             }
 
             TypeKind::Array { element, len } => {

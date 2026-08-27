@@ -27,7 +27,7 @@ use zeen_types::{
     SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
 };
 
-use crate::error::MirWarning;
+use crate::error::{MirError, MirWarning};
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
     LocalKind, MirFunction, MirFunctionId, MirGlobalVar, MirGlobalVarId, MirProgram, MirStatement,
@@ -46,7 +46,7 @@ pub fn lower_program<'ctx>(
     resolution: &'ctx ResolutionResult,
     module: &HirModule,
     mode: CompilationMode,
-) -> MirLoweringResult {
+) -> Result<MirLoweringResult, Vec<MirError>> {
     let main_def = typecheck.main_fn_def;
 
     let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
@@ -102,16 +102,16 @@ pub fn lower_program<'ctx>(
     lowering.register_drop_functions();
 
     let warnings = std::mem::take(&mut lowering.warnings);
-    let mut program = lowering.finish();
+    let mut program = lowering.finish()?;
     let extern_vars = crate::collecter::collect_extern_vars(module, typecheck, &rodeo);
 
     program.extern_vars = extern_vars;
 
-    MirLoweringResult {
+    Ok(MirLoweringResult {
         program,
         main_fn,
         warnings,
-    }
+    })
 }
 
 pub struct MirLowering<'ctx> {
@@ -125,6 +125,7 @@ pub struct MirLowering<'ctx> {
     program: MirProgram,
     mono_cache: MonoCache,
 
+    errors: Vec<MirError>,
     warnings: Vec<MirWarning>,
 
     /// Stack of functions currently being lowered. Used to resolve the parent
@@ -281,6 +282,7 @@ impl<'ctx> MirLowering<'ctx> {
             mono_cache: MonoCache::new(),
             hir_fns_by_def,
             fn_stack: Vec::new(),
+            errors: Vec::new(),
             warnings: Vec::new(),
             mode,
             globals: Vec::new(),
@@ -288,9 +290,13 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    pub fn finish(mut self) -> MirProgram {
+    pub fn finish(mut self) -> Result<MirProgram, Vec<MirError>> {
+        if !self.errors.is_empty() {
+            return Err(self.errors);
+        }
+
         self.register_reachable_slice_layouts();
-        self.program
+        Ok(self.program)
     }
 
     fn register_globals(&mut self) {
@@ -1542,6 +1548,44 @@ impl<'ctx> MirLowering<'ctx> {
                     )
                 }
 
+                HirMacroKind::TypeName => {
+                    let target_ty = match &args[0].kind {
+                        HirExprKind::Type(_) => self.expr_type(fb, &args[0]),
+                        _ => panic!("@sizeof / @alignof arg must be a type expression"),
+                    };
+
+                    let result_ty = self.expr_type(fb, expr);
+                    let temp = fb.new_temp(result_ty);
+
+                    let stringified_ty = self.typecheck.interner.display_type(
+                        target_ty,
+                        Rc::clone(&self.rodeo),
+                        self.resolution,
+                    );
+
+                    let mut rodeo = self.rodeo.borrow_mut();
+                    let stringified_spur = rodeo.get_or_intern(stringified_ty);
+                    drop(rodeo);
+
+                    let rvalue = Rvalue::Use(Operand::Constant(
+                        ConstValue::Str(stringified_spur),
+                        Some(expr.source.clone()),
+                    ));
+
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue,
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    )
+                }
+
                 HirMacroKind::Dbg if self.mode == CompilationMode::Release => {
                     let value = args
                         .first()
@@ -1609,8 +1653,16 @@ impl<'ctx> MirLowering<'ctx> {
                 (cur, operand)
             }
 
+            HirExprKind::GenericParamRef(_) => {
+                self.errors.push(MirError::GenericParamNotValue {
+                    src: expr.source.src(),
+                    span: expr.source.span,
+                });
+
+                (block, Operand::Constant(ConstValue::NullPtr, None))
+            }
+
             HirExprKind::Switch => unreachable!("not implemented in previous stages"),
-            HirExprKind::GenericParamRef(_) => unreachable!(),
             HirExprKind::Type(_) => unreachable!(),
             HirExprKind::Error => unreachable!(),
         }

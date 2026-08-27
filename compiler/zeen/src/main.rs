@@ -214,7 +214,17 @@ fn main() {
         &resolution_result,
         &hir_module,
         context.mode,
-    );
+    )
+    .unwrap_or_else(|errors| {
+        for err in &errors {
+            let report_string = driver.report(err).unwrap();
+            eprintln!("{}", report_string);
+        }
+
+        cli::println_error(format!("Compiler returned {} error(s)", errors.len()));
+
+        exit(1);
+    });
 
     let flow_result = zeen_flow::run_dataflow(
         &mut lowered_mir.program,

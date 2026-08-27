@@ -1,0 +1,12 @@
+fn hello() i32 {
+  @println("called");
+  0
+}
+
+fn main() {
+  let func: typeof hello = hello;
+  let number: typeof hello() = 123;
+  let result: typeof func() = func();
+
+  @println("{} - {}", number, result);
+}

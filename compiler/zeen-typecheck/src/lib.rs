@@ -613,6 +613,8 @@ impl<'res> TypeChecker<'res> {
 
             HirTypeKind::Const(inner) => self.lower_hir_type(inner),
 
+            HirTypeKind::TypeOf(expr) => self.synth_expr(expr),
+
             HirTypeKind::SinglePointer(inner) => {
                 let is_const = matches!(inner.kind, HirTypeKind::Const(_));
                 let inner_ty = self.lower_hir_type(inner);
@@ -1565,6 +1567,35 @@ impl<'res> TypeChecker<'res> {
                 }
 
                 target_ty
+            }
+
+            HirMacroKind::TypeName => {
+                if args.len() != 1 {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                };
+
+                if let Some(arg) = args.first()
+                    && let HirExprKind::Type(ty_expr) = &arg.kind
+                {
+                    let ty = self.lower_hir_type(ty_expr);
+                    self.result.record_expr_type(arg.id, ty);
+                } else {
+                    unreachable!("parser missed non-type-expr in macro");
+                }
+
+                let char_ty = self.result.interner.builtin(BuiltinType::char);
+
+                self.result.interner.intern(Type::Slice {
+                    element: char_ty,
+                    is_const: true,
+                })
             }
 
             HirMacroKind::Unknown => {
