@@ -17,9 +17,11 @@ use zeen_driver::{CompilationMode, CompilationOutput};
 )]
 pub struct Args {
     /// Path to source code
-    pub path: PathBuf,
+    #[arg(required_unless_present = "targets_list")]
+    pub path: Option<PathBuf>,
     /// Path to output file
-    pub output: PathBuf,
+    #[arg(required_unless_present = "targets_list")]
+    pub output: Option<PathBuf>,
 
     /// `--no-warns` flag to disable compiler's warnings
     #[arg(long = "no-warns", action, help = "Disable compiler's warnings")]
@@ -32,6 +34,18 @@ pub struct Args {
     /// `--emit` emit options (BIN/OBJ/IR)
     #[arg(long, value_enum, default_value_t = CompilationOutput::Binary, help = "Emit options")]
     pub emit: CompilationOutput,
+
+    /// `--target` flag to specify the compilation target triple
+    #[arg(
+        long = "target",
+        value_name = "TRIPLE",
+        help = "Compilation target triple (see --targets-list)"
+    )]
+    pub target: Option<String>,
+
+    /// `--targets-list` flag to print all supported target triples
+    #[arg(long = "targets-list", action, help = "List supported target triples")]
+    pub targets_list: bool,
 }
 
 pub fn println_error(message: impl Display) {
