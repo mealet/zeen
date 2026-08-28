@@ -31,3 +31,5 @@ zeen-linker = { path = "../zeen-linker" }
 [dev-dependencies]
 anyhow = "1.0.104"
 assert_cmd = "2.2.2"
+zeen-driver = { path = "../zeen-driver" }
+zeen-linker = { path = "../zeen-linker" }

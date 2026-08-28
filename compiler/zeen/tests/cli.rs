@@ -2,18 +2,7 @@ use assert_cmd::Command;
 use std::{fs, path::Path, process::Command as ProcessCommand};
 
 fn host_triple() -> String {
-    let arch = match std::env::consts::ARCH {
-        "x86" => "i686",
-        "arm64" => "aarch64",
-        other => other,
-    };
-
-    match std::env::consts::OS {
-        "linux" => format!("{arch}-unknown-linux-gnu"),
-        "macos" => format!("{arch}-apple-darwin"),
-        "windows" => format!("{arch}-pc-windows-msvc"),
-        other => format!("{arch}-unknown-{other}"),
-    }
+    zeen_driver::Target::host().triple
 }
 
 #[test]
@@ -85,6 +74,12 @@ fn unsupported_target_is_rejected() {
 
 #[test]
 fn explicit_host_target_compiles_and_runs() {
+    let triple = host_triple();
+    if zeen_linker::linker::ObjectLinker::detect(&triple).is_err() {
+        eprintln!("skipping: no host toolchain found for `{triple}`");
+        return;
+    }
+
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/test_cases/hello_world.zn");
     let binary =
         std::env::temp_dir().join(format!("zeen-cli-host-target-{}.bin", std::process::id()));

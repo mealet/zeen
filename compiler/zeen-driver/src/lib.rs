@@ -1,5 +1,9 @@
 use std::{collections::HashSet, path::PathBuf};
 
+mod target;
+
+pub use target::Target;
+
 pub struct MietteDriver {
     reporter: miette::GraphicalReportHandler,
 }
@@ -48,11 +52,9 @@ pub fn target_requires_main(target: Option<&str>) -> bool {
         return true;
     };
 
-    let mut parts = target.split('-');
-    let arch = parts.next().unwrap_or(target);
-    let os = parts.nth(1).unwrap_or("unknown");
+    let target = Target::parse(target);
 
-    !(arch.starts_with("wasm") && os == "unknown")
+    !(target.arch.starts_with("wasm") && target.os == "unknown")
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]

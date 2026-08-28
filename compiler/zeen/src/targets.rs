@@ -27,18 +27,7 @@ pub fn is_supported(triple: &str) -> bool {
 /// Returns the host target triple, normalized to the naming scheme used in
 /// [`SUPPORTED_TARGETS`].
 pub fn host_target() -> String {
-    let arch = match std::env::consts::ARCH {
-        "x86" => "i686",
-        "arm64" => "aarch64",
-        other => other,
-    };
-
-    match std::env::consts::OS {
-        "linux" => format!("{arch}-unknown-linux-gnu"),
-        "macos" => format!("{arch}-apple-darwin"),
-        "windows" => format!("{arch}-pc-windows-msvc"),
-        other => format!("{arch}-unknown-{other}"),
-    }
+    zeen_driver::Target::host().triple
 }
 
 #[cfg(test)]
