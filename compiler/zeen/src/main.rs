@@ -5,6 +5,7 @@ use std::{
 use zeen_driver::{CompilationContext, CompilationOutput, MietteDriver, PathsConfig};
 
 mod cli;
+mod targets;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
 
