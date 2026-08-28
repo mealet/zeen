@@ -34,6 +34,25 @@ pub struct CompilationContext {
     pub core_files: Vec<(&'static str, &'static str)>,
     pub mode: CompilationMode,
     pub output: CompilationOutput,
+    /// Target triple being compiled for (`None` = host).
+    pub target: Option<String>,
+}
+
+/// Whether the compilation target requires a `main` entry point.
+///
+/// Every executable target does. Bare wasm (`wasm32-unknown-unknown`) does
+/// not: the linker treats it as a module (`--no-entry`), so a program without
+/// `main` is fine there.
+pub fn target_requires_main(target: Option<&str>) -> bool {
+    let Some(target) = target else {
+        return true;
+    };
+
+    let mut parts = target.split('-');
+    let arch = parts.next().unwrap_or(target);
+    let os = parts.nth(1).unwrap_or("unknown");
+
+    !(arch.starts_with("wasm") && os == "unknown")
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -63,4 +82,26 @@ pub struct PathsConfig {
     pub project_root: PathBuf,
     pub std_root: Option<PathBuf>,
     pub linked: HashSet<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn main_required_for_executables() {
+        assert!(target_requires_main(None));
+        assert!(target_requires_main(Some("x86_64-unknown-linux-gnu")));
+        assert!(target_requires_main(Some("x86_64-pc-windows-msvc")));
+    }
+
+    #[test]
+    fn main_not_required_for_bare_wasm() {
+        assert!(!target_requires_main(Some("wasm32-unknown-unknown")));
+    }
+
+    #[test]
+    fn main_required_for_wasi() {
+        assert!(target_requires_main(Some("wasm32-unknown-wasip1")));
+    }
 }

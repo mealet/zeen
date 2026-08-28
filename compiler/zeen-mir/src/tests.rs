@@ -27,6 +27,7 @@ fn compile_mir_mode(
         core_files: vec![("core.ops", CORE_OPS)],
         mode,
         output: CompilationOutput::EmitMIR,
+        target: None,
     };
 
     let mut tokens = zeen_lexer::tokenize(&content);
