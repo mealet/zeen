@@ -67,6 +67,8 @@ pub struct TypeChecker<'res> {
 
     impl_generic_to_struct_generic: HashMap<(DefId, DefId), HashMap<DefId, DefId>>,
     method_owning_interface: HashMap<DefId, DefId>,
+
+    extracting_typename: bool,
 }
 
 struct FnSignature {
@@ -110,6 +112,7 @@ impl<'res> TypeChecker<'res> {
             enum_variants: HashMap::new(),
             impl_generic_to_struct_generic: HashMap::new(),
             method_owning_interface: HashMap::new(),
+            extracting_typename: false,
         }
     }
 
@@ -620,7 +623,20 @@ impl<'res> TypeChecker<'res> {
 
             HirTypeKind::Const(inner) => self.lower_hir_type(inner),
 
-            HirTypeKind::TypeOf(expr) => self.synth_expr(expr),
+            HirTypeKind::TypeOf(expr) => {
+                let type_id = self.synth_expr(expr);
+
+                if type_id == self.result.interner.never()
+                || type_id == self.result.interner.error()
+                && !self.extracting_typename {
+                    self.report(TypeError::NeverFromTypeof {
+                        src: ty.source.src(),
+                        span: ty.source.span,
+                    });
+                }
+
+                type_id
+            },
 
             HirTypeKind::SinglePointer(inner) => {
                 let is_const = matches!(inner.kind, HirTypeKind::Const(_));
@@ -1603,6 +1619,9 @@ impl<'res> TypeChecker<'res> {
                     return self.result.interner.error();
                 };
 
+                let prev_extracting = self.extracting_typename;
+                self.extracting_typename = true;
+
                 if let Some(arg) = args.first()
                     && let HirExprKind::Type(ty_expr) = &arg.kind
                 {
@@ -1611,6 +1630,8 @@ impl<'res> TypeChecker<'res> {
                 } else {
                     unreachable!("parser missed non-type-expr in macro");
                 }
+
+                self.extracting_typename = prev_extracting;
 
                 let char_ty = self.result.interner.builtin(BuiltinType::char);
 
