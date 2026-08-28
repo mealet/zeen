@@ -24,6 +24,7 @@ fn flow_errors(src: &str) -> Vec<FlowError> {
         core_files: vec![("core.ops", CORE_OPS)],
         mode: CompilationMode::Debug,
         output: CompilationOutput::EmitMIR,
+        target: None,
     };
 
     let mut tokens = zeen_lexer::tokenize(&content);

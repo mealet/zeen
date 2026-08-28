@@ -18,7 +18,9 @@ use inkwell::{
 };
 use lasso::{Rodeo, Spur};
 use zeen_ast::{
-    Source, expressions::{BinaryOp, UnaryOp}, types::BuiltinType
+    Source,
+    expressions::{BinaryOp, UnaryOp},
+    types::BuiltinType,
 };
 use zeen_driver::CompilationMode;
 use zeen_hir::HirMacroKind;
@@ -118,8 +120,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             Some(user) => TargetMachine::normalize_triple(&TargetTriple::create(user)),
             None => TargetMachine::get_default_triple(),
         };
-        let triple =
-            TargetTriple::create(&triple.as_str().to_string_lossy().replace("msvc", "gnu"));
 
         let target =
             Target::from_triple(&triple).map_err(|err| CodegenError::UnsupportedTriple {
@@ -1668,7 +1668,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     *target,
                     func,
                     fn_id,
-                    source
+                    source,
                 );
             }
 
@@ -1974,13 +1974,18 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
                 let source = source.clone().expect("unhandled None source");
 
-                let debug_source = &source.src.inner()[source.span.offset()..source.span.offset() + source.span.len()];
+                let debug_source = &source.src.inner()
+                    [source.span.offset()..source.span.offset() + source.span.len()];
                 let debug_inner = debug_source
                     .strip_prefix("@dbg(")
                     .and_then(|s| s.strip_suffix(')'))
                     .unwrap_or(debug_source);
 
-                let debug_location = format!("{}:{}", source.src.name(), source_line(source.src.inner(), source.span.offset()));
+                let debug_location = format!(
+                    "{}:{}",
+                    source.src.name(),
+                    source_line(source.src.inner(), source.span.offset())
+                );
 
                 let printf = self.get_or_declare_runtime_fn(
                     "printf",

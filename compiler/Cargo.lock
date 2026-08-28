@@ -854,6 +854,9 @@ dependencies = [
 [[package]]
 name = "zeen-linker"
 version = "0.0.0"
+dependencies = [
+ "zeen-driver",
+]
 
 [[package]]
 name = "zeen-mir"

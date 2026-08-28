@@ -5,6 +5,7 @@ use std::{
 use zeen_driver::{CompilationContext, CompilationOutput, MietteDriver, PathsConfig};
 
 mod cli;
+mod targets;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
 
@@ -53,6 +54,8 @@ fn main() {
                 cli::println_basic("  zeen example.zn output");
                 cli::println_basic("  zeen example.zn output -m Release");
                 cli::println_basic("  zeen example.zn output --emit IR");
+                cli::println_basic("  zeen example.zn output --target x86_64-pc-windows-gnu");
+                cli::println_basic("  zeen --targets-list");
 
                 if err.kind() == clap::error::ErrorKind::DisplayHelp {
                     exit(0);
@@ -63,8 +66,40 @@ fn main() {
         }
     });
 
-    let filename = args
+    if let Some(triple) = &args.target
+        && !targets::is_supported(triple)
+    {
+        cli::println_error(format!("unsupported target triple `{triple}`"));
+        cli::println_basic("\nSupported targets:");
+        for supported in targets::SUPPORTED_TARGETS {
+            cli::println_basic(format!("  {supported}"));
+        }
+        exit(1);
+    }
+
+    if args.targets_list {
+        cli::println_primary(format!(
+            "Supported targets ({}):",
+            targets::SUPPORTED_TARGETS.len()
+        ));
+
+        for triple in targets::SUPPORTED_TARGETS {
+            cli::println_basic(format!("  {triple}"));
+        }
+
+        exit(0);
+    }
+
+    let target_triple = args.target.clone().unwrap_or_else(targets::host_target);
+
+    let path = args
         .path
+        .expect("path is required unless `--targets-list` is given");
+    let output = args
+        .output
+        .expect("output is required unless `--targets-list` is given");
+
+    let filename = path
         .file_name()
         .unwrap_or_else(|| {
             cli::println_error("Unable to get source filename");
@@ -81,7 +116,7 @@ fn main() {
         format!(
             "`{}` ({})",
             filename,
-            std::fs::canonicalize(&args.path)
+            std::fs::canonicalize(&path)
                 .unwrap_or_else(|_| {
                     cli::println_error(format!("File `{}` doesn't exist", filename));
                     exit(1);
@@ -95,10 +130,10 @@ fn main() {
     let driver = MietteDriver::new();
 
     let content = {
-        let src = std::fs::read_to_string(&args.path).unwrap_or_else(|err| {
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|err| {
             cli::println_error(format!(
                 "Unable to read source ({}) file: {}",
-                args.path.display(),
+                path.display(),
                 err
             ));
             exit(1);
@@ -108,7 +143,7 @@ fn main() {
     };
 
     let filename = Rc::new(filename.to_string());
-    let project_root = std::fs::canonicalize(&args.path)
+    let project_root = std::fs::canonicalize(&path)
         .expect("already verified earlier")
         .parent()
         .expect("must work")
@@ -123,6 +158,7 @@ fn main() {
         core_files: CORE_FILES.iter().map(|file| file.to_basic()).collect(),
         mode: args.mode,
         output: args.emit,
+        target: Some(target_triple.clone()),
     };
 
     cli::println_info(
@@ -132,6 +168,8 @@ fn main() {
             context.paths.project_root.display()
         ),
     );
+
+    cli::println_info("Target", format!("triple `{target_triple}`"));
 
     let mut tokens = zeen_lexer::tokenize(&content);
     let mut parser = zeen_parser::Parser::new(
@@ -163,7 +201,7 @@ fn main() {
     let (resolved_program, mut resolution_result) = zeen_resolve::resolve(
         Rc::clone(&filename),
         Arc::clone(&content),
-        Path::new(&args.path),
+        Path::new(&path),
         program,
         &bump,
         Rc::clone(&rodeo),
@@ -276,7 +314,7 @@ fn main() {
             &rodeo,
         );
 
-        let output_path = with_default_extension(&args.output, "mir");
+        let output_path = with_default_extension(&output, "mir");
 
         let mut output_file = std::fs::File::create(&output_path).unwrap_or_else(|_| {
             cli::println_warn("Unable to write MIR to file, printing to stdout...");
@@ -306,7 +344,7 @@ fn main() {
 
     let codegen_options = zeen_codegen_llvm::CodegenOptions {
         mode: context.mode,
-        target: None,
+        target: Some(target_triple.clone()),
         main_fn: lowered_mir.main_fn,
         source_file_name: filename.to_string(),
     };
@@ -344,7 +382,7 @@ fn main() {
 
     match args.emit {
         CompilationOutput::EmitIR => {
-            let output_path = with_default_extension(&args.output, "ll");
+            let output_path = with_default_extension(&output, "ll");
 
             if let Err(err) = codegen.emit_ir(&output_path) {
                 let report_string = driver.report(&err).unwrap();
@@ -360,7 +398,10 @@ fn main() {
         }
 
         CompilationOutput::Object => {
-            let output_path = with_default_extension(&args.output, "o");
+            let output_path = with_default_extension(
+                &output,
+                zeen_linker::linker::ObjectLinker::object_extension_for(&target_triple),
+            );
 
             if let Err(err) = codegen.emit_object(&output_path) {
                 let report_string = driver.report(&err).unwrap();
@@ -377,14 +418,16 @@ fn main() {
 
         CompilationOutput::Binary => {
             let linker =
-                zeen_linker::linker::ObjectLinker::detect_compiler().unwrap_or_else(|| {
-                    cli::println_error(
-                        "No supported C compilers found in system. Recommended: gcc/clang",
-                    );
+                zeen_linker::linker::ObjectLinker::detect(&target_triple).unwrap_or_else(|err| {
+                    cli::println_error(err);
                     exit(1);
                 });
 
-            let object_path = std::env::temp_dir().join(format!("zeen-{}.o", std::process::id()));
+            let object_path = std::env::temp_dir().join(format!(
+                "zeen-{}.{}",
+                std::process::id(),
+                linker.object_extension()
+            ));
 
             if let Err(err) = codegen.emit_object(&object_path) {
                 let report_string = driver.report(&err).unwrap();
@@ -393,22 +436,24 @@ fn main() {
                 exit(1);
             }
 
-            let output_path = &args.output;
-            let result = zeen_linker::linker::ObjectLinker::link(
-                std::slice::from_ref(&object_path),
-                output_path,
-                &[],
-            );
+            let result = linker.link(std::slice::from_ref(&object_path), &output, &[]);
 
             std::fs::remove_file(&object_path).ok();
 
             match result {
-                Ok(_) => cli::println_info(
+                Ok(output_path) => cli::println_info(
                     "Emitted",
-                    format!("binary (with {linker}): `{}`", output_path.display(),),
+                    format!(
+                        "binary (with {}): `{}`",
+                        linker.name(),
+                        output_path.display()
+                    ),
                 ),
                 Err(err) => {
-                    cli::println_error(format!("Linker failed (object linker: `{linker}`)"));
+                    cli::println_error(format!(
+                        "Linker failed (object linker: `{}`)",
+                        linker.name()
+                    ));
                     eprintln!("\n{err}\n");
                     exit(1);
                 }

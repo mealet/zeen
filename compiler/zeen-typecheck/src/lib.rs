@@ -180,9 +180,16 @@ impl<'res> TypeChecker<'res> {
             self.check_decl_body(decl);
         }
 
-        if self.compilation_context.output == CompilationOutput::Binary && !self.found_main_fn {
+        let target = self.compilation_context.target.as_deref();
+        let requires_main = zeen_driver::target_requires_main(target);
+
+        if self.compilation_context.output == CompilationOutput::Binary
+            && requires_main
+            && !self.found_main_fn
+            && let Some(first_decl) = module.decls.first()
+        {
             self.report(TypeError::MainNotFound {
-                src: module.decls[0].source.src(),
+                src: first_decl.source.src(),
             });
         }
     }
@@ -4297,6 +4304,13 @@ mod tests {
     use crate::{TypeCheckResult, TypeChecker, TypeError};
 
     fn typecheck(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
+        typecheck_with_target(source, None)
+    }
+
+    fn typecheck_with_target(
+        source: &str,
+        target: Option<&str>,
+    ) -> Result<TypeCheckResult, Vec<TypeError>> {
         let rodeo = Rc::new(RefCell::new(Rodeo::default()));
         let bump = Bump::default();
         let content = Arc::new(source.to_string());
@@ -4311,6 +4325,7 @@ mod tests {
             core_files: Vec::new(),
             mode: CompilationMode::Debug,
             output: CompilationOutput::Binary,
+            target: target.map(|triple| triple.to_string()),
         };
 
         let mut tokens = zeen_lexer::tokenize(&content);
@@ -4934,6 +4949,51 @@ mod tests {
             result.is_ok(),
             "string literals inside array literals should coerce to slices: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn missing_main_is_reported_on_binary_targets() {
+        let errors = typecheck("fn not_main() {}")
+            .expect_err("missing main must be reported on an executable target");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::MainNotFound { .. })),
+            "expected TypeError::MainNotFound, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn empty_module_with_binary_target_does_not_panic() {
+        assert!(
+            typecheck("").is_ok(),
+            "an empty module has no source to point at, so it must pass silently"
+        );
+    }
+
+    #[test]
+    fn missing_main_is_allowed_for_bare_wasm() {
+        let result = typecheck_with_target("fn no_main() {}", Some("wasm32-unknown-unknown"));
+
+        assert!(
+            result.is_ok(),
+            "bare wasm modules must not require main: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn missing_main_is_reported_for_wasi() {
+        let errors = typecheck_with_target("fn no_main() {}", Some("wasm32-unknown-wasip1"))
+            .expect_err("WASI commands must require main");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::MainNotFound { .. })),
+            "expected TypeError::MainNotFound, got: {errors:?}"
         );
     }
 
