@@ -1172,7 +1172,7 @@ fn main() {
     let keep = Buffer { .x = 1 };
     if (1 == 1) {
         let inner = Buffer { .x = 2 };
-    }
+    };
 }
 "#,
     );
@@ -1194,8 +1194,8 @@ fn main() {
         let inner_go = 1;
         if (inner_go == 1) {
             guard = Buffer { .x = 1 };
-        }
-    }
+        };
+    };
 }
 "#,
     );
@@ -1277,7 +1277,7 @@ fn main() {
         let temporary = Buffer { .x = 1 };
         if (1 == 1) {
             let inner = Buffer { .x = 2 };
-        }
+        };
         temporary
     };
 }
@@ -1373,7 +1373,7 @@ fn main() {
         let only = Buffer { .x = 1 };
         let _ = only.x;
         let later = Buffer { .x = 2 };
-    }
+    };
 }
 "#,
     );
@@ -1440,7 +1440,7 @@ fn main() {
         let only = Buffer { .x = 1 };
         let _ = only.x;
         only = Buffer { .x = 2 };
-    }
+    };
 }
 "#,
     );

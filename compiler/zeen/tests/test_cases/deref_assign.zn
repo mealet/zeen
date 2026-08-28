@@ -1,0 +1,8 @@
+fn main() {
+  let a = 123;
+  let ptr = &a;
+
+  *ptr = 0;
+
+  @println("{}", a);
+}
