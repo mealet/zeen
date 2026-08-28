@@ -613,7 +613,7 @@ fn nested_fn_can_recurse() {
         r#"
 fn main() {
     fn fib(n: i32) i32 {
-        if (n < 2) { return n; }
+        if (n < 2) { return n; };
         return fib(n - 1) + fib(n - 2);
     }
     let a = fib(10);
