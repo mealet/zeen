@@ -59,6 +59,7 @@ fn compile(src: &str) -> Result<Compiled, Vec<String>> {
         core_files: core_files(),
         mode: CompilationMode::Debug,
         output: CompilationOutput::EmitMIR,
+        target: None,
     };
 
     let mut tokens = zeen_lexer::tokenize(&content);

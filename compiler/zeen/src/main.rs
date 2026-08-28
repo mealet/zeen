@@ -161,6 +161,7 @@ fn main() {
         core_files: CORE_FILES.iter().map(|file| file.to_basic()).collect(),
         mode: args.mode,
         output: args.emit,
+        target: Some(target_triple.clone()),
     };
 
     cli::println_info(
