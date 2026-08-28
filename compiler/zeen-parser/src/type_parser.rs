@@ -10,11 +10,20 @@ use smallvec::SmallVec;
 
 pub struct TypeParser<'tok, 'ctx, 'pr> {
     p: &'pr mut Parser<'tok, 'ctx>,
+    no_typeof: bool,
 }
 
 impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
     pub fn new(parser: &'pr mut Parser<'tok, 'ctx>) -> Self {
-        Self { p: parser }
+        Self {
+            p: parser,
+            no_typeof: false,
+        }
+    }
+
+    pub fn no_typeof(mut self) -> Self {
+        self.no_typeof = true;
+        self
     }
 
     pub fn parse(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
@@ -362,6 +371,16 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
     }
 
     fn parse_typeof(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
+        if self.no_typeof {
+            self.p.report(ParserError::SyntaxError {
+                label: "`typeof` expressions are not allowed here".into(),
+                help: Some("consider using explicit manual types".into()),
+                src: self.p.named_src(),
+                span: self.p.current().span,
+            });
+            return None;
+        }
+
         let kw_typeof = self.p.current_clone();
         let _ = self.p.advance();
 
