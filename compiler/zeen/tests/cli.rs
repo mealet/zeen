@@ -73,6 +73,19 @@ fn unsupported_target_is_rejected() {
 }
 
 #[test]
+fn unsupported_target_is_rejected_even_with_targets_list() {
+    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .args([
+            "--targets-list",
+            "--target",
+            "powerpc64le-unknown-linux-gnu",
+        ])
+        .assert()
+        .code(1);
+}
+
+#[test]
 fn explicit_host_target_compiles_and_runs() {
     let triple = host_triple();
     if zeen_linker::linker::ObjectLinker::detect(&triple).is_err() {
@@ -88,7 +101,7 @@ fn explicit_host_target_compiles_and_runs() {
         .unwrap()
         .arg(&source)
         .arg(&binary)
-        .args(["--target", &host_triple()])
+        .args(["--target", &triple])
         .assert()
         .success();
 
