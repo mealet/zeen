@@ -162,7 +162,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             || self.p.at(TokenKind::Semicolon)
             || self.p.at(TokenKind::Eof))
         {
-            let mut type_parser = TypeParser::new(self.p);
+            let mut type_parser = TypeParser::new(self.p).no_typeof();
             return_type = Some(type_parser.parse()?);
         }
 
