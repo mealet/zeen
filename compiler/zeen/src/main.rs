@@ -66,6 +66,17 @@ fn main() {
         }
     });
 
+    if let Some(triple) = &args.target
+        && !targets::is_supported(triple)
+    {
+        cli::println_error(format!("unsupported target triple `{triple}`"));
+        cli::println_basic("\nSupported targets:");
+        for supported in targets::SUPPORTED_TARGETS {
+            cli::println_basic(format!("  {supported}"));
+        }
+        exit(1);
+    }
+
     if args.targets_list {
         cli::println_primary(format!(
             "Supported targets ({}):",
@@ -79,21 +90,7 @@ fn main() {
         exit(0);
     }
 
-    let target_triple = match &args.target {
-        Some(triple) => {
-            if !targets::is_supported(triple) {
-                cli::println_error(format!("unsupported target triple `{triple}`"));
-                cli::println_basic("\nSupported targets:");
-                for supported in targets::SUPPORTED_TARGETS {
-                    cli::println_basic(format!("  {supported}"));
-                }
-                exit(1);
-            }
-
-            triple.clone()
-        }
-        None => targets::host_target(),
-    };
+    let target_triple = args.target.clone().unwrap_or_else(targets::host_target);
 
     let path = args
         .path
