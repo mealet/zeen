@@ -401,13 +401,10 @@ fn main() {
         }
 
         CompilationOutput::Object => {
-            let object_extension =
-                if zeen_linker::linker::Target::parse(&target_triple).is_windows() {
-                    "obj"
-                } else {
-                    "o"
-                };
-            let output_path = with_default_extension(&output, object_extension);
+            let output_path = with_default_extension(
+                &output,
+                zeen_linker::linker::ObjectLinker::object_extension_for(&target_triple),
+            );
 
             if let Err(err) = codegen.emit_object(&output_path) {
                 let report_string = driver.report(&err).unwrap();

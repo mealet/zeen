@@ -1,39 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A parsed target triple (`arch-vendor-os-env`, e.g. `x86_64-unknown-linux-gnu`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Target {
-    pub triple: String,
-    pub arch: String,
-    pub os: String,
-    pub env: String,
-}
-
-impl Target {
-    pub fn parse(triple: &str) -> Self {
-        let mut parts = triple.split('-');
-        let arch = parts.next().unwrap_or(triple).to_owned();
-        let _vendor = parts.next().unwrap_or("unknown");
-        let os = parts.next().unwrap_or("unknown").to_owned();
-        let env = parts.next().unwrap_or_default().to_owned();
-
-        Self {
-            triple: triple.to_owned(),
-            arch,
-            os,
-            env,
-        }
-    }
-
-    pub fn is_windows(&self) -> bool {
-        self.os == "windows"
-    }
-
-    pub fn is_wasm(&self) -> bool {
-        self.arch == "wasm32" || self.arch == "wasm64"
-    }
-}
+use zeen_driver::Target;
 
 /// How the resulting object files are turned into a binary.
 #[derive(Debug)]
@@ -156,7 +124,16 @@ impl ObjectLinker {
 
     /// The object file extension LLVM should use for this target.
     pub fn object_extension(&self) -> &'static str {
-        if self.target.is_windows() { "obj" } else { "o" }
+        Self::object_extension_for(&self.target.triple)
+    }
+
+    /// Same as [`Self::object_extension`], usable without a resolved toolchain.
+    pub fn object_extension_for(triple: &str) -> &'static str {
+        if Target::parse(triple).is_windows() {
+            "obj"
+        } else {
+            "o"
+        }
     }
 
     /// Applies the binary extension for the target (`.exe` on Windows, `.wasm`
@@ -341,7 +318,7 @@ impl ObjectLinker {
     }
 
     fn resolve_msvc(target: &Target) -> Result<Toolchain, String> {
-        if Self::host_os() != "windows" {
+        if Target::host().os != "windows" {
             return Err(format!(
                 "MSVC target `{}` requires MSVC tools and the Windows SDK, which are only \
                  available on Windows; install MinGW-w64 and use `--target {}-pc-windows-gnu` instead",
@@ -544,37 +521,13 @@ impl ObjectLinker {
     }
 
     fn is_native(target: &Target) -> bool {
-        target.os == Self::host_os() && target.arch == Self::host_arch()
+        let host = Target::host();
+        target.os == host.os && target.arch == host.arch
     }
 
     fn is_musl_host(target: &Target) -> bool {
-        if std::env::consts::OS != "linux" {
-            return false;
-        }
-
-        let loader = match target.arch.as_str() {
-            "x86_64" => "/lib/ld-musl-x86_64.so.1",
-            "i686" => "/lib/ld-musl-i386.so.1",
-            "aarch64" => "/lib/ld-musl-aarch64.so.1",
-            _ => return false,
-        };
-
-        Path::new(loader).exists()
-    }
-
-    fn host_os() -> &'static str {
-        match std::env::consts::OS {
-            "macos" => "darwin",
-            other => other,
-        }
-    }
-
-    fn host_arch() -> &'static str {
-        match std::env::consts::ARCH {
-            "x86" => "i686",
-            "arm64" => "aarch64",
-            other => other,
-        }
+        let host = Target::host();
+        host.os == "linux" && host.env == "musl" && host.arch == target.arch
     }
 
     fn wasi_sysroot() -> Option<PathBuf> {
@@ -731,23 +684,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_target_triple() {
-        let target = Target::parse("x86_64-pc-windows-msvc");
-        assert_eq!(target.arch, "x86_64");
-        assert_eq!(target.os, "windows");
-        assert_eq!(target.env, "msvc");
-        assert!(target.is_windows());
-    }
-
-    #[test]
-    fn parses_short_triple_without_env() {
-        let target = Target::parse("x86_64-apple-darwin");
-        assert_eq!(target.arch, "x86_64");
-        assert_eq!(target.os, "darwin");
-        assert_eq!(target.env, "");
-    }
-
-    #[test]
     fn windows_binary_gets_exe_extension() {
         let output = ObjectLinker::output_path_for("x86_64-pc-windows-gnu", Path::new("out"));
         assert_eq!(output, PathBuf::from("out.exe"));
@@ -773,6 +709,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn msvc_target_rejected_off_windows() {
         let error = ObjectLinker::detect("x86_64-pc-windows-msvc").unwrap_err();
         assert!(error.contains("windows-gnu"), "unexpected error: {error}");
