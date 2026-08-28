@@ -289,7 +289,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
     }
 
     pub fn parse_if(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        let mut expr_parser = ExprParser::new(self.p);
+        let mut expr_parser = ExprParser::new(self.p).if_in_statement();
         let expr = expr_parser.parse()?;
 
         self.finish_expr_stmt(expr)
