@@ -300,6 +300,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
             TokenKind::Keyword(CompilerKeyword::If) => self.parse_if_expr(),
             TokenKind::Keyword(CompilerKeyword::Switch) => self.parse_switch(),
+            TokenKind::Keyword(CompilerKeyword::Fn) => self.parse_closure(),
 
             TokenKind::Keyword(CompilerKeyword::SelfUpper | CompilerKeyword::SelfLower) => {
                 self.parse_ident_or_struct_init()
@@ -1095,6 +1096,78 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
         Some(expr)
     }
+
+    /// Parses a closure expression: `fn(params) ret { body }`.
+    fn parse_closure(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        use zeen_lexer::token::CompilerKeyword;
+
+        let fn_kw = self.p.expect(TokenKind::Keyword(CompilerKeyword::Fn), "fn")?;
+
+        let _ = self.p.expect(TokenKind::OpenParen, "(")?;
+
+        let mut params_buffer: SmallVec<[zeen_ast::declarations::FnParam; 4]> = SmallVec::new();
+
+        while !(self.p.at(TokenKind::CloseParen) || self.p.at(TokenKind::Eof)) {
+            let mut name: Option<lasso::Spur> = None;
+            let mut span = self.p.current().span;
+
+            if self.p.at(TokenKind::Ident) {
+                let name_token = self.p.advance_not_eof()?;
+                let name_span = name_token.span;
+                let name_slice = self.p.src
+                    [name_span.offset()..name_span.offset() + name_span.len()]
+                    .to_owned();
+
+                name = Some(self.p.get_or_intern(name_slice));
+                span = name_span;
+
+                let _ = self.p.expect(TokenKind::Colon, ":")?;
+            }
+
+            let mut type_parser = crate::type_parser::TypeParser::new(self.p);
+            let ty = type_parser.parse()?;
+
+            span = ty.merge_span(span);
+
+            let _ = self.p.eat(TokenKind::Comma);
+
+            params_buffer.push(zeen_ast::declarations::FnParam { name, ty, span });
+        }
+
+        let _ = self.p.expect(TokenKind::CloseParen, ")")?;
+        let params = self.p.arena.alloc_slice_copy(&params_buffer);
+
+        let mut return_type = None;
+
+        if !(self.p.at(TokenKind::OpenBrace)
+            || self.p.at(TokenKind::CloseBrace)
+            || self.p.at(TokenKind::Semicolon)
+            || self.p.at(TokenKind::Eof))
+        {
+            let mut type_parser = crate::type_parser::TypeParser::new(self.p);
+            return_type = Some(type_parser.parse()?);
+        }
+
+        if !self.p.at(TokenKind::OpenBrace) {
+            self.p.expect(TokenKind::OpenBrace, "{")?;
+        }
+
+        let body = {
+            let mut stmt_parser = crate::statements::StmtParser::new(self.p).no_semicolon();
+            stmt_parser.parse()?
+        };
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Closure {
+                params,
+                return_type,
+                body,
+            },
+            span: fn_kw.merge_span(body.span),
+        });
+
+        Some(expr)
+    }
 }
 
 impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
@@ -1242,6 +1315,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use zeen_ast::types::TypeKind;
 
     use std::sync::Arc;
     use std::{cell::RefCell, rc::Rc};
@@ -2013,4 +2088,64 @@ mod tests {
     }
 
     // TODO: Add tests for switch expression
+
+    #[test]
+    fn closure_expr() {
+        const SRC: &str = "fn(x: i32) i32 { x * 2 }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+
+        let ExpressionKind::Closure {
+            params,
+            return_type,
+            body,
+        } = parsed.kind
+        else {
+            panic!("expected Closure, got {:?}", parsed.kind);
+        };
+
+        let x = rodeo.borrow_mut().get_or_intern("x");
+
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, Some(x));
+        assert!(matches!(
+            params[0].ty.kind,
+            TypeKind::Builtin(zeen_ast::types::BuiltinType::i32)
+        ));
+
+        assert!(matches!(
+            return_type.unwrap().kind,
+            TypeKind::Builtin(zeen_ast::types::BuiltinType::i32)
+        ));
+
+        let zeen_ast::statements::StatementKind::Expr(inner) = body.kind else {
+            panic!("closure body should be an expression statement, got {:?}", body.kind);
+        };
+        assert!(matches!(inner.kind, ExpressionKind::Block { .. }));
+    }
+
+    #[test]
+    fn closure_trailing_expr_makes_trailing_value() {
+        const SRC: &str = "fn(x: i32) i32 { let y = 1; x + y }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+
+        let ExpressionKind::Closure { body, .. } = parsed.kind else {
+            panic!("expected Closure");
+        };
+
+        let zeen_ast::statements::StatementKind::Expr(inner) = body.kind else {
+            panic!("closure body should be an expression statement, got {:?}", body.kind);
+        };
+
+        let ExpressionKind::Block { trailing, .. } = inner.kind else {
+            panic!("closure body should wrap a block expression");
+        };
+
+        assert!(trailing.is_some());
+    }
 }

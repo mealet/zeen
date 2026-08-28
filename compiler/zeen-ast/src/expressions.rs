@@ -86,6 +86,14 @@ pub enum ExpressionKind<'arena> {
         trailing: Option<&'arena Expression<'arena>>,
     },
 
+    /// Anonymous function expression: `fn(params) ret { body }`. Lowered to a
+    /// synthetic function capturing its environment by value.
+    Closure {
+        params: &'arena [crate::declarations::FnParam<'arena>],
+        return_type: Option<&'arena crate::types::TypeExpr<'arena>>,
+        body: &'arena crate::statements::Statement<'arena>,
+    },
+
     Type(&'arena crate::types::TypeExpr<'arena>),
 }
 
