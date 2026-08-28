@@ -186,9 +186,10 @@ impl<'res> TypeChecker<'res> {
         if self.compilation_context.output == CompilationOutput::Binary
             && requires_main
             && !self.found_main_fn
+            && let Some(first_decl) = module.decls.first()
         {
             self.report(TypeError::MainNotFound {
-                src: module.decls[0].source.src(),
+                src: first_decl.source.src(),
             });
         }
     }
@@ -4961,6 +4962,14 @@ mod tests {
                 .iter()
                 .any(|err| matches!(err, TypeError::MainNotFound { .. })),
             "expected TypeError::MainNotFound, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn empty_module_with_binary_target_does_not_panic() {
+        assert!(
+            typecheck("").is_ok(),
+            "an empty module has no source to point at, so it must pass silently"
         );
     }
 
