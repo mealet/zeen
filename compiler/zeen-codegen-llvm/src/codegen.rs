@@ -118,8 +118,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             Some(user) => TargetMachine::normalize_triple(&TargetTriple::create(user)),
             None => TargetMachine::get_default_triple(),
         };
-        let triple =
-            TargetTriple::create(&triple.as_str().to_string_lossy().replace("msvc", "gnu"));
 
         let target =
             Target::from_triple(&triple).map_err(|err| CodegenError::UnsupportedTriple {
