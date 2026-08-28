@@ -512,6 +512,15 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("type `never` is not allowed from 'typeof' expressions")]
+    #[diagnostic(severity(Error), code(zeen::typecheck::never_from_typeof))]
+    NeverFromTypeof {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]
