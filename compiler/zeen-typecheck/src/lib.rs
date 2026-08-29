@@ -1291,6 +1291,12 @@ impl<'res> TypeChecker<'res> {
 
             HirExprKind::Switch => unreachable!(),
 
+            // Closure typing (synthetic struct type + `fn` coercion) lands in
+            // the typecheck stage.
+            HirExprKind::Closure { .. } => {
+                unreachable!("closure type synthesis is implemented in a later stage")
+            }
+
             HirExprKind::SliceAccess { object, index } => {
                 let obj_ty = self.synth_expr(object);
                 let usize_ty = self.result.interner.builtin(BuiltinType::usize);

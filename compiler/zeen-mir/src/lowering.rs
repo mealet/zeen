@@ -491,6 +491,11 @@ impl<'ctx> MirLowering<'ctx> {
                     self.collect_global_expr_deps(trailing, out);
                 }
             }
+            HirExprKind::Closure { def, .. } => {
+                if let Some(body) = &def.body {
+                    self.collect_global_stmt_deps(body, out);
+                }
+            }
             HirExprKind::Literal(_)
             | HirExprKind::GenericParamRef(_)
             | HirExprKind::Switch
@@ -1668,6 +1673,11 @@ impl<'ctx> MirLowering<'ctx> {
 
             HirExprKind::Switch => unreachable!("not implemented in previous stages"),
             HirExprKind::Type(_) => unreachable!(),
+            // Real lowering (closure struct construction + closure fn env
+            // params) lands in the MIR stage.
+            HirExprKind::Closure { .. } => {
+                unreachable!("closure expression lowering is implemented in a later stage")
+            }
             HirExprKind::Error => unreachable!(),
         }
     }
