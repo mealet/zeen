@@ -1,0 +1,39 @@
+struct Val[T] {
+  inner: T,
+
+  pub fn new(value: T) Self {
+    Self { .inner = value }
+  }
+}
+
+implement[T: Display] Display : Val[T] {
+  fn display(*const self) []const char {
+    "GENERIC"
+  }
+}
+
+implement Display : Val[i32] {
+  fn display(*const self) []const char {
+    "SPEC-I32"
+  }
+}
+
+implement Display : Val[bool] {
+  fn display(*const self) []const char {
+    "SPEC-BOOL"
+  }
+}
+
+fn main() {
+  let a = Val.new(42);
+  let b = Val.new(2.5);
+  let c = Val.new(true);
+  let d = Val.new(Val.new(42));
+  let e = Val.new(Val.new(2.5));
+
+  @println("{}", a);
+  @println("{}", b);
+  @println("{}", c);
+  @println("{}", d);
+  @println("{}", e);
+}
