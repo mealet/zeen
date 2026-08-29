@@ -1,0 +1,12 @@
+fn main() i32 {
+  let x = 5;
+  let outer = fn() i32 {
+    let y = 100;
+    let inner = fn() i32 { return y + x; };
+    return inner();
+  };
+
+  let r = outer();
+  @println("{}", r);
+  return 0;
+}
