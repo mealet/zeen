@@ -1383,6 +1383,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     },
                     ConstValue::Void => unreachable!("cannot cast a void constant"),
                 };
+
+                // Identical source and target types need no cast machinery.
+                if *self.typecheck.interner.get(target) == src_ty {
+                    return self.const_value(c, Some(target), func);
+                }
+
                 let value = self.const_value(c, None, func);
                 self.cast_value(value, &src_ty, target)
             }
@@ -1390,6 +1396,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let src_ty = self
                     .operand_type(operand, func)
                     .expect("typed cast operand");
+
+                // Identical source and target types need no cast machinery.
+                if src_ty == target {
+                    return self.operand_value(operand, Some(src_ty), func);
+                }
 
                 // `[N]T -> [*]T`: the operand is a loaded array value, so use
                 // the address of its storage instead of a value cast.
