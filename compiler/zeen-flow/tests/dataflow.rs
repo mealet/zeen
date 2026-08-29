@@ -366,6 +366,57 @@ fn main() i32 {
 }
 
 #[test]
+fn fat_value_move_transfers_ownership() {
+    // Fat values are single-owner regardless of `Fn`/`FnOnce`: binding a
+    // closure to a new name moves it, so the old name is gone.
+    let errors = flow_err(
+        r#"
+fn main() i32 {
+    let n = 5;
+    let add = fn(a: i32) i32 { return a + n; };
+    let g = add;
+    return add(1) + g(2);
+}
+"#,
+    );
+    assert!(
+        !errors.is_empty(),
+        "using a closure after it was moved must be rejected"
+    );
+}
+
+#[test]
+fn fat_value_move_then_single_owner_passes() {
+    flow_ok(
+        r#"
+fn main() i32 {
+    let n = 5;
+    let add = fn(a: i32) i32 { return a + n; };
+    let g = add;
+    return g(1) + g(2);
+}
+"#,
+    );
+}
+
+#[test]
+fn captured_closure_env_cascade_passes() {
+    // A closure capturing another closure: the inner fat value moves into
+    // the outer env, and the outer's drop must tear the whole chain down.
+    flow_ok(
+        r#"
+fn main() i32 {
+    let base = 100;
+    let inner = fn(x: i32) i32 { return x + base; };
+    let outer = fn(x: i32) i32 { return inner(x) * 2; };
+    let r = outer(5);
+    return r;
+}
+"#,
+    );
+}
+
+#[test]
 fn reinitialized_struct_is_usable_again() {
     flow_ok(
         r#"

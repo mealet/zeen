@@ -2692,7 +2692,9 @@ impl<'res> TypeChecker<'res> {
                 .map(|info| info.capabalities.is_copy)
                 .unwrap_or(false),
             Type::Array { element, .. } => self.type_is_copy(element),
-            Type::FatFn { once, .. } => !once,
+            // Fat closure values are single-owner (the value owns its env),
+            // so they never copy — every use is a move.
+            Type::FatFn { .. } => false,
             _ => true,
         }
     }

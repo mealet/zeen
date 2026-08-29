@@ -932,7 +932,7 @@ fn escaping_fnonce_closure_gets_fat_drop_function() {
 }
 
 #[test]
-fn stack_bound_closure_declares_no_free() {
+fn stack_bound_closure_never_frees_but_tears_down() {
     let mir = compile_mir_ok(
         "fn main() { \
              let n = 5; \
@@ -947,14 +947,16 @@ fn stack_bound_closure_declares_no_free() {
             .extern_fns
             .iter()
             .any(|f| f.symbol_name == "free"),
-        "a frame-bound closure must not declare `free`"
+        "a frame-bound closure must not declare `free`: its env is on the stack"
     );
+    // The value still owns its captures, so it gets a drop function (which
+    // only tears captured values down — no free for a stack env).
     assert!(
-        !mir.program
+        mir.program
             .function_names
             .values()
             .any(|n| n.starts_with("$fatdrop#")),
-        "a frame-bound closure must not get a drop function"
+        "a frame-bound closure still owns its captures and must get a drop function"
     );
 }
 
@@ -1018,5 +1020,66 @@ fn live_heap_env_closure_registers_drop_function() {
             .values()
             .any(|n| n.starts_with("$fatdrop#")),
         "expected a synthesized `$fatdrop#N` drop function for the heap env"
+    );
+}
+
+#[test]
+fn opaque_fat_type_gets_drop_function() {
+    // The `FnOnce(i32) i32` parameter type is env-erased, but a value of it
+    // may still own a heap env — it must get a drop function all the same.
+    let mir = compile_mir_ok(
+        "fn apply_once(f: FnOnce(i32) i32, x: i32) i32 { return f(x); } \
+         fn main() i32 { \
+             return apply_once(fn(a: i32) i32 { return a + 1; }, 41); \
+         }",
+    );
+
+    assert!(
+        mir.program
+            .extern_fns
+            .iter()
+            .any(|f| f.symbol_name == "free"),
+        "the `Opaque` fat type must be able to free a heap env"
+    );
+    assert!(
+        mir.program
+            .function_names
+            .values()
+            .any(|n| n.starts_with("$fatdrop#")),
+        "the `Opaque` fat type must get a drop function"
+    );
+}
+
+#[test]
+fn consuming_call_of_concrete_env_calls_drop_function() {
+    // An in-frame `FnOnce` call consumes the value: the env must be released
+    // right after the call, through the type's drop function.
+    let mir = compile_mir_ok(
+        "struct Wrap { pub v: i32 } \
+         fn main() i32 { \
+             let w = Wrap { .v = 3 }; \
+             let c = fn(a: i32) i32 { return a + w.v; }; \
+             return c(10); \
+         }",
+    );
+
+    let main_id = closure_id_named(&mir, "main");
+    let main = &mir.program.functions[&main_id];
+
+    // A direct call to the synthesized drop function must follow the
+    // indirect fat call.
+    let drops_after_call = main.blocks.iter().any(|b| {
+        matches!(
+            &b.terminator,
+            Terminator::Call {
+                func: CallTarget::Direct(_),
+                args,
+                ..
+            } if matches!(args.first(), Some(Operand::Copy(place, _)) if place.projection.is_empty())
+        )
+    });
+    assert!(
+        drops_after_call,
+        "a consuming call must invoke the fat drop function on the consumed value"
     );
 }
