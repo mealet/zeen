@@ -486,6 +486,19 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             Type::Fn { .. } => self.context.ptr_type(AddressSpace::default()).into(),
 
+            // Fat function pointer `{ function: ptr, env: ptr }`; produced
+            // lazily here until struct layout registration lands (S7).
+            Type::FatFn { .. } => self
+                .context
+                .struct_type(
+                    &[
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                    ],
+                    false,
+                )
+                .into(),
+
             Type::Void | Type::Never => self.context.void_type().into(),
             Type::Error => self.context.i32_type().into(),
         }

@@ -2568,7 +2568,8 @@ impl<'res, 'mod_> TypeChecker<'res, 'mod_> {
             | CoerceResult::ArrayToSlice
             | CoerceResult::ArrayToManyPointer
             | CoerceResult::NeverCoercion
-            | CoerceResult::VoidPtrCoercion => {
+            | CoerceResult::VoidPtrCoercion
+            | CoerceResult::FatFnCoercion => {
                 self.result.record_expr_type(id, expected);
                 expected
             }
@@ -2807,6 +2808,7 @@ impl<'res, 'mod_> TypeChecker<'res, 'mod_> {
                 .map(|info| info.capabalities.is_copy)
                 .unwrap_or(false),
             Type::Array { element, .. } => self.type_is_copy(element),
+            Type::FatFn { once, .. } => !once,
             _ => true,
         }
     }
