@@ -316,4 +316,171 @@ mod tests {
     fn global_var_dependencies_chain_is_ok() {
         resolve_ok("let a: i32 = 0; let b: i32 = a; let c: i32 = b;");
     }
+
+    // --> Closures
+
+    impl Fixture {
+        fn def_id_by_name(&self, name: &str) -> Option<DefId> {
+            self.resolution
+                .defs
+                .iter()
+                .find(|(_, info)| self.name(info) == name)
+                .map(|(id, _)| *id)
+        }
+
+        fn captured_names(&self, closure: DefId) -> Vec<String> {
+            self.resolution.closure_captures[&closure]
+                .iter()
+                .map(|captured| {
+                    let info = &self.resolution.defs[captured];
+                    self.name(info)
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn closure_registers_def_and_captures_local() {
+        let fx = resolve_ok("fn main() { let x = 1; let c = fn() i32 { return x; }; }");
+
+        let closure = fx
+            .def_id_by_name("closure0")
+            .expect("closure0 def must be defined");
+        let info = &fx.resolution.defs[&closure];
+        assert!(matches!(info.kind, DefKind::Function));
+
+        assert_eq!(fx.captured_names(closure), vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn zero_capture_closure_has_no_captures() {
+        let fx = resolve_ok("fn main() { let x = 1; let c = fn() i32 { return 0; }; }");
+
+        let closure = fx
+            .def_id_by_name("closure0")
+            .expect("closure0 def must be defined");
+
+        assert!(!fx.resolution.closure_captures.contains_key(&closure));
+    }
+
+    #[test]
+    fn nested_closure_capture_cascades_to_outer() {
+        let fx = resolve_ok(
+            "fn main() { let x = 1; let outer = fn() i32 { let y = 2; let inner = fn() i32 { return x + y; }; return inner(); }; }",
+        );
+
+        let outer = fx
+            .def_id_by_name("closure0")
+            .expect("closure0 (outer) def must be defined");
+        let inner = fx
+            .def_id_by_name("closure1")
+            .expect("closure1 (inner) def must be defined");
+
+        assert_eq!(fx.captured_names(outer), vec!["x".to_string()]);
+        assert_eq!(
+            fx.captured_names(inner),
+            vec!["x".to_string(), "y".to_string()]
+        );
+    }
+
+    #[test]
+    fn closure_dedups_and_keeps_first_use_order() {
+        let fx = resolve_ok(
+            "fn main() { let a = 1; let b = 2; let c = fn() i32 { return a + b + a + a; }; }",
+        );
+
+        let closure = fx
+            .def_id_by_name("closure0")
+            .expect("closure0 def must be defined");
+
+        assert_eq!(
+            fx.captured_names(closure),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn closure_inside_nested_fn_captures_only_nested_fn_frame() {
+        let fx = resolve_ok(
+            "fn main() { let x = 1; fn nested() i32 { let y = 2; let c = fn() i32 { return y; }; return c(); } return x; }",
+        );
+
+        let closure = fx
+            .def_id_by_name("closure0")
+            .expect("closure0 def must be defined");
+
+        // `x` lives in main's dead frame — only `y` (nested's frame) is captured
+        assert_eq!(fx.captured_names(closure), vec!["y".to_string()]);
+    }
+
+    #[test]
+    fn closure_in_nested_fn_cannot_reach_enclosing_frame() {
+        let errs = resolve_full(
+            "fn main() { let x = 1; fn nested() i32 { let c = fn() i32 { return x; }; return c(); } return 0; }",
+        )
+        .unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::NestedFnCapture { name, .. } if name.as_str() == "x")
+        ));
+    }
+
+    #[test]
+    fn nested_fn_inside_closure_cannot_capture_closure_frame() {
+        let errs = resolve_full(
+            "fn main() { let x = 1; let c = fn() i32 { fn nested() i32 { return x; } return nested(); }; }",
+        )
+        .unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::NestedFnCapture { name, .. } if name.as_str() == "x")
+        ));
+    }
+
+    #[test]
+    fn self_inside_closure_is_reported() {
+        let errs = resolve_full(
+            "interface Getter { fn get(self) i32; } struct Foo { v: i32 } implement Getter: Foo { fn get(self) i32 { let c = fn() i32 { return self.v; }; return c(); } }",
+        )
+        .unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ResolveError::DisabledFeature { .. }))
+        );
+    }
+
+    #[test]
+    fn closure_param_named_self_is_reported() {
+        let errs = resolve_full("fn main() { let c = fn(self) i32 { return 1; }; }").unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ResolveError::DisabledFeature { .. }))
+        );
+    }
+
+    #[test]
+    fn closure_capturing_generic_param_is_reported() {
+        let errs = resolve_full("fn generic[T](v: T) void { let c = fn(x: T) T { return x; }; }")
+            .unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ResolveError::DisabledFeature { .. }))
+        );
+    }
+
+    #[test]
+    fn closure_calling_sibling_function_is_not_a_capture() {
+        let fx = resolve_ok(
+            "fn helper() i32 { return 1; } fn main() { let c = fn() i32 { return helper(); }; }",
+        );
+
+        let closure = fx
+            .def_id_by_name("closure0")
+            .expect("closure0 def must be defined");
+
+        assert!(!fx.resolution.closure_captures.contains_key(&closure));
+    }
 }

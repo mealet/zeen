@@ -23,6 +23,21 @@ use crate::{
     symbol_table::{ScopeKind, SymbolTable},
 };
 
+/// One active function-like boundary that restricts or enables captures.
+#[derive(Debug, Clone)]
+enum CaptureLayer {
+    /// An active closure body. `def_id` is the closure's function def,
+    /// `candidates` are the enclosing defs it is allowed to capture.
+    Closure {
+        def_id: DefId,
+        candidates: HashSet<DefId>,
+    },
+
+    /// An active nested `fn` body: capturing is forbidden entirely. Contains
+    /// every enclosing def the nested fn can see but must not reference.
+    Blocked(HashSet<DefId>),
+}
+
 pub struct NameResolver {
     interner: Rc<RefCell<Rodeo>>,
     errors: Vec<ResolveError>,
@@ -30,13 +45,16 @@ pub struct NameResolver {
     table: SymbolTable,
     result: ResolutionResult,
 
-    /// DefIds of enclosing-function params/locals a nested function is not
-    /// allowed to reference (no closures). One entry per active nested fn body.
-    capture_stack: Vec<HashSet<DefId>>,
+    /// Active capture boundaries, innermost last: one `Blocked` layer per
+    /// nested `fn` body, one `Closure` layer per closure body.
+    capture_stack: Vec<CaptureLayer>,
 
     /// The `DefId` of the function whose body is currently being resolved,
     /// used to record the parent of nested function declarations.
     current_fn_def: Option<DefId>,
+
+    /// Counter for synthetic closure function names (`closure0`, `closure1`, ...).
+    closure_counter: u32,
 
     /// Edges of the global variables dependency graph: a global var -> globals
     /// referenced from its initializer expression.
@@ -70,6 +88,7 @@ impl<'ctx> NameResolver {
 
             capture_stack: Vec::new(),
             current_fn_def: None,
+            closure_counter: 0,
             global_deps: HashMap::new(),
 
             next_def_id: 0,
@@ -101,6 +120,102 @@ impl<'ctx> NameResolver {
         let id = self.define(info);
         self.result.binding_sites.insert(key, id);
         id
+    }
+
+    /// Handles a resolved def reference against active capture boundaries.
+    /// Captures cascade: an inner closure referencing an outer frame's def
+    /// records it in every enclosing closure whose candidates contain the def
+    /// (otherwise the outer closure would miss the capture). A nested `fn`
+    /// boundary forbids the reference entirely. Returns `false` when the
+    /// reference must resolve to an error.
+    fn process_capture(&mut self, def_id: DefId, span: SourceSpan) -> bool {
+        // Function defs are called, not captured: closures can recurse and
+        // call sibling/nested functions freely.
+        if matches!(
+            self.result.defs.get(&def_id).map(|info| &info.kind),
+            Some(DefKind::Function)
+        ) {
+            return true;
+        }
+
+        let mut captured = false;
+
+        let mut captured_by = Vec::new();
+
+        for layer in self.capture_stack.iter().rev() {
+            match layer {
+                CaptureLayer::Closure {
+                    def_id: closure_def,
+                    candidates,
+                } => {
+                    if candidates.contains(&def_id) {
+                        captured_by.push(*closure_def);
+                    }
+                }
+                CaptureLayer::Blocked(set) => {
+                    if set.contains(&def_id) {
+                        if !captured_by.is_empty() {
+                            break;
+                        }
+
+                        let name = self.result.defs.get(&def_id).map(|info| info.name);
+                        let reported = name
+                            .map(|spur| self.interner_resolve(&spur))
+                            .unwrap_or_else(|| "<unknown>".into());
+
+                        self.report(ResolveError::NestedFnCapture {
+                            name: reported,
+                            src: self.named_src(),
+                            span,
+                        });
+                        return false;
+                    }
+                }
+            }
+        }
+
+        for closure_def in captured_by {
+            self.record_capture(closure_def, def_id);
+            captured = true;
+        }
+
+        if captured {
+            return self.check_capturable(def_id, span);
+        }
+
+        true
+    }
+
+    fn in_closure(&self) -> bool {
+        self.capture_stack
+            .iter()
+            .any(|layer| matches!(layer, CaptureLayer::Closure { .. }))
+    }
+
+    /// Records `captured` in `closure_def`'s capture list (first-use order).
+    fn record_capture(&mut self, closure_def: DefId, captured: DefId) {
+        let captures = self.result.closure_captures.entry(closure_def).or_default();
+        if !captures.contains(&captured) {
+            captures.push(captured);
+        }
+    }
+
+    /// Rejects defs a closure cannot own in its env (generics for now).
+    fn check_capturable(&mut self, def_id: DefId, span: SourceSpan) -> bool {
+        if matches!(
+            self.result.defs.get(&def_id).map(|info| &info.kind),
+            Some(DefKind::GenericParam)
+        ) {
+            self.report(ResolveError::DisabledFeature {
+                reason: "closures cannot capture generic parameters yet".into(),
+                src: self.named_src(),
+                span,
+            });
+
+            return false;
+        }
+
+        true
     }
 
     fn named_src(&self) -> miette::NamedSource<Arc<String>> {
@@ -599,6 +714,8 @@ impl<'ctx> NameResolver {
                     self.collect_global_deps(len, out);
                 }
             }
+
+            ExpressionKind::Closure { body, .. } => self.collect_global_stmt_deps(body, out),
 
             ExpressionKind::Literal(_) => {}
         }
@@ -1118,7 +1235,8 @@ impl<'ctx> NameResolver {
                         )
                     })
                     .collect();
-                self.capture_stack.push(capture_blocked);
+                self.capture_stack
+                    .push(CaptureLayer::Blocked(capture_blocked));
                 self.resolve_fn_body(decl);
                 self.capture_stack.pop();
 
@@ -1253,11 +1371,126 @@ impl<'ctx> NameResolver {
             ExpressionKind::Type(ty) => {
                 self.resolve_type(ty);
             }
+
+            ExpressionKind::Closure {
+                params,
+                return_type,
+                body,
+            } => {
+                self.resolve_closure(expr, params, return_type, body);
+            }
         }
+    }
+
+    /// Resolves a closure expression: defines a synthetic function def for it
+    /// (`closure<N>`), opens its scope and capture boundary, then resolves
+    /// params/return type/body inside.
+    fn resolve_closure(
+        &mut self,
+        expr: &'ctx Expression<'ctx>,
+        params: &'ctx [zeen_ast::declarations::FnParam<'ctx>],
+        return_type: Option<&'ctx TypeExpr<'ctx>>,
+        body: &'ctx Statement<'ctx>,
+    ) {
+        let closure_name = self.interner_intern(format!("closure{}", self.closure_counter));
+        self.closure_counter += 1;
+
+        let closure_def = self.define_at(
+            NodeKey::from_expr(expr),
+            DefInfo {
+                name: closure_name,
+                kind: DefKind::Function,
+                span: (expr.span, self.named_src()).into(),
+                decl: None,
+                is_pub: false,
+            },
+        );
+
+        self.result
+            .expr_bindings
+            .insert(NodeKey::from_expr(expr), Resolution::Def(closure_def));
+
+        if let Some(parent) = self.current_fn_def {
+            self.result.nested_fn_parents.insert(closure_def, parent);
+        }
+
+        // Capturable: the enclosing live frame plus everything outer closures
+        // may capture themselves. Inheritance stops at nested-fn boundaries —
+        // frames behind a `Blocked` layer are dead. Own scope is pushed first
+        // so the walk can skip it.
+        self.table.push(ScopeKind::Function);
+
+        let mut candidates = self.table.closure_capture_candidates();
+        for layer in self.capture_stack.iter().rev() {
+            match layer {
+                CaptureLayer::Closure {
+                    candidates: inherited,
+                    ..
+                } => candidates.extend(inherited.iter().copied()),
+
+                CaptureLayer::Blocked(_) => break,
+            }
+        }
+
+        let prev_fn = self.current_fn_def;
+        self.current_fn_def = Some(closure_def);
+
+        self.capture_stack.push(CaptureLayer::Closure {
+            def_id: closure_def,
+            candidates,
+        });
+
+        for param in params {
+            self.resolve_type(param.ty);
+
+            let Some(pname) = param.name else { continue };
+
+            if pname == self.interner_intern("self") {
+                self.report(ResolveError::DisabledFeature {
+                    reason: "closure parameters cannot be named `self`".into(),
+                    src: self.named_src(),
+                    span: param.span,
+                });
+                continue;
+            }
+
+            let def_id = self.define_at(
+                NodeKey::from_param(param),
+                DefInfo {
+                    name: pname,
+                    kind: DefKind::Param,
+                    span: (param.span, self.named_src()).into(),
+                    decl: None,
+                    is_pub: false,
+                },
+            );
+
+            self.table.declare_value(pname, def_id);
+        }
+
+        if let Some(ret) = return_type {
+            self.resolve_type(ret);
+        }
+
+        self.resolve_stmt(body);
+
+        self.table.pop();
+        self.capture_stack.pop();
+        self.current_fn_def = prev_fn;
     }
 
     fn resolve_ident(&mut self, name: Spur, span: SourceSpan) -> Resolution {
         if name == self.interner_intern("self") {
+            if self.in_closure() {
+                self.report(ResolveError::DisabledFeature {
+                    reason: "`self` cannot be used inside closures yet".into(),
+                    src: self.named_src(),
+                    span,
+                });
+
+                return Resolution::Error;
+            }
+
             return match self.table.enclosing_method_or_interface() {
                 Some((_, Some(self_param))) => Resolution::SelfValue(self_param),
                 _ => {
@@ -1272,6 +1505,16 @@ impl<'ctx> NameResolver {
         }
 
         if name == self.interner_intern("Self") {
+            if self.in_closure() {
+                self.report(ResolveError::DisabledFeature {
+                    reason: "`Self` cannot be used inside closures yet".into(),
+                    src: self.named_src(),
+                    span,
+                });
+
+                return Resolution::Error;
+            }
+
             return match self.table.enclosing_method_or_interface() {
                 Some((self_def, _)) => Resolution::SelfType(self_def),
                 _ => {
@@ -1286,13 +1529,7 @@ impl<'ctx> NameResolver {
         }
 
         if let Some(def_id) = self.table.lookup_value(name) {
-            if self.capture_stack.iter().any(|set| set.contains(&def_id)) {
-                let captured = self.interner_resolve(&name);
-                self.report(ResolveError::NestedFnCapture {
-                    name: captured,
-                    src: self.named_src(),
-                    span,
-                });
+            if !self.process_capture(def_id, span) {
                 return Resolution::Error;
             }
 
@@ -1301,13 +1538,7 @@ impl<'ctx> NameResolver {
         }
 
         if let Some(def_id) = self.table.lookup_type(name) {
-            if self.capture_stack.iter().any(|set| set.contains(&def_id)) {
-                let captured = self.interner_resolve(&name);
-                self.report(ResolveError::NestedFnCapture {
-                    name: captured,
-                    src: self.named_src(),
-                    span,
-                });
+            if !self.process_capture(def_id, span) {
                 return Resolution::Error;
             }
 
@@ -1340,15 +1571,25 @@ impl<'ctx> NameResolver {
             TypeKind::Builtin(_) | TypeKind::VaArgs => {}
 
             TypeKind::SelfType | TypeKind::SelfAlias => {
-                let resolution = match self.table.enclosing_method_or_interface() {
-                    Some((self_def, _)) => Resolution::SelfType(self_def),
-                    None => {
-                        self.errors.push(ResolveError::UnresolvedSelf {
-                            src: self.named_src(),
-                            span: ty.span,
-                        });
+                let resolution = if self.in_closure() {
+                    self.errors.push(ResolveError::DisabledFeature {
+                        reason: "`Self` cannot be used inside closures yet".into(),
+                        src: self.named_src(),
+                        span: ty.span,
+                    });
 
-                        Resolution::Error
+                    Resolution::Error
+                } else {
+                    match self.table.enclosing_method_or_interface() {
+                        Some((self_def, _)) => Resolution::SelfType(self_def),
+                        None => {
+                            self.errors.push(ResolveError::UnresolvedSelf {
+                                src: self.named_src(),
+                                span: ty.span,
+                            });
+
+                            Resolution::Error
+                        }
                     }
                 };
 
@@ -1360,14 +1601,7 @@ impl<'ctx> NameResolver {
             TypeKind::Named { name, generic_args } => {
                 let resolution = match self.table.lookup_type(name) {
                     Some(def_id) => {
-                        if self.capture_stack.iter().any(|set| set.contains(&def_id)) {
-                            let captured = self.interner_resolve(&name);
-                            self.errors.push(ResolveError::NestedFnCapture {
-                                name: captured,
-                                src: self.named_src(),
-                                span: ty.span,
-                            });
-
+                        if !self.process_capture(def_id, ty.span) {
                             Resolution::Error
                         } else {
                             Resolution::Def(def_id)
