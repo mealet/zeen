@@ -344,10 +344,6 @@ pub enum TypeError {
     #[diagnostic(
         severity(Error),
         code(zeen::typechecker::fat_storage_unsupported),
-        help(
-            "closure values are concrete structs here; storing them erases the concrete \
-              type. Use generics over `Fn`/`FnOnce` bounds instead (planned)"
-        )
     )]
     FatStorageUnsupported {
         what: SmolStr,
