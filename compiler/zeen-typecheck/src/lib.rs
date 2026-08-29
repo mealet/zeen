@@ -4251,8 +4251,7 @@ impl<'res> TypeChecker<'res> {
         // generics below (`implement[U] Deref: Box[U]` -> Box[T]).
         let struct_args: Vec<TypeId> = match self.result.interner.get(self_struct_ty) {
             Type::Struct {
-                generic_args: args,
-                ..
+                generic_args: args, ..
             } => args.clone(),
             _ => Vec::new(),
         };
