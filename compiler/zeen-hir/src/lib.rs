@@ -798,6 +798,12 @@ impl<'res> HirLowering<'res> {
                 generics: self.lower_generics(generic_args),
                 ret: Rc::new(self.lower_type(ret)),
             },
+
+            TypeKind::FatFn { params, ret, once } => HirTypeKind::FatFn {
+                params: params.iter().map(|p| Rc::new(self.lower_type(p))).collect(),
+                ret: Rc::new(self.lower_type(ret)),
+                once,
+            },
         };
 
         HirTypeExpr {

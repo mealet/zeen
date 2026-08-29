@@ -1670,6 +1670,14 @@ impl<'ctx> NameResolver {
                     self.resolve_type(ret);
                 }
             }
+
+            TypeKind::FatFn { params, ret, .. } => {
+                for param in params {
+                    self.resolve_type(param);
+                }
+
+                self.resolve_type(ret);
+            }
         }
     }
 }

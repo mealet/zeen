@@ -697,6 +697,9 @@ impl<'res, 'mod_> TypeChecker<'res, 'mod_> {
                 })
             }
 
+            // Fat function pointer types are wired up in S2 (Type::FatFn).
+            HirTypeKind::FatFn { .. } => self.result.interner.error(),
+
             HirTypeKind::Error => self.result.interner.error(),
         }
     }
