@@ -550,6 +550,11 @@ impl<'res> TypeChecker<'res> {
                     methods: imp.methods.iter().map(|m| m.def_id).collect(),
                     object_args: object_args.clone(),
                     is_specialized,
+                    generic_bounds: imp
+                        .generics
+                        .iter()
+                        .map(|g| (g.def_id, g.bounds.clone()))
+                        .collect(),
                 });
         }
 
@@ -2270,7 +2275,16 @@ impl<'res> TypeChecker<'res> {
 
     fn type_implements_display(&self, ty: TypeId) -> bool {
         match self.result.interner.get(ty).clone() {
-            Type::Struct { def_id, .. } => self.struct_implements_by_name(def_id, "Display"),
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let Some(iface) = self.interface_registry.get("Display") else {
+                    return false;
+                };
+
+                self.applicable_impl(def_id, iface, &generic_args).is_some()
+            }
             Type::IntLiteral | Type::FloatLiteral => true,
             Type::Never | Type::Error => true,
             Type::Enum { .. } => true,
@@ -2308,7 +2322,16 @@ impl<'res> TypeChecker<'res> {
 
     fn type_implements_debug(&self, ty: TypeId) -> bool {
         match self.result.interner.get(ty).clone() {
-            Type::Struct { def_id, .. } => self.struct_implements_by_name(def_id, "Debug"),
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let Some(iface) = self.interface_registry.get("Debug") else {
+                    return false;
+                };
+
+                self.applicable_impl(def_id, iface, &generic_args).is_some()
+            }
             Type::IntLiteral | Type::FloatLiteral => true,
             Type::Never | Type::Error => true,
             Type::Enum { .. } => true,
@@ -4137,7 +4160,22 @@ impl<'res> TypeChecker<'res> {
                 )
             }
 
-            Type::Struct { def_id, .. } => self.resolution.impls.contains_key(&(def_id, iface_def)),
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => self
+                .applicable_impl(def_id, iface_def, &generic_args)
+                .is_some(),
+
+            Type::GenericParam(g) => {
+                let cur = self.ctx.current();
+
+                let Some(bounds) = cur.generic_bounds.get(&g) else {
+                    return false;
+                };
+
+                bounds.contains(&iface_def)
+            }
 
             _ => false,
         }
@@ -4227,16 +4265,72 @@ impl<'res> TypeChecker<'res> {
 
     // i'm really sorry 😭
     #[allow(clippy::too_many_arguments)]
+    /// Picks the implementation to use for `(struct, interface)` at the
+    /// concrete instantiation `generic_args`: a specialization registered for
+    /// the exact instantiation wins; otherwise the generic implementation
+    /// applies when the concrete arguments satisfy its bounds. `None` when
+    /// nothing applies.
+    fn applicable_impl(
+        &self,
+        struct_def: DefId,
+        iface_def: DefId,
+        generic_args: &[TypeId],
+    ) -> Option<ImplEntry> {
+        let entries = self.result.impl_registry.get(&(struct_def, iface_def))?;
+
+        if let Some(entry) = entries
+            .iter()
+            .find(|e| e.is_specialized && e.object_args.as_slice() == generic_args)
+        {
+            return Some(entry.clone());
+        }
+
+        let mapping = self
+            .impl_generic_to_struct_generic
+            .get(&(struct_def, iface_def))?;
+        let struct_generics = self
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
+
+        for entry in entries.iter().filter(|e| !e.is_specialized) {
+            let applies = entry.generic_bounds.iter().all(|(imp_g, ifaces)| {
+                // The concrete type bound to the implement generic comes from
+                // the struct's generic slot the generic is mapped to.
+                let Some(struct_g) = mapping.get(imp_g) else {
+                    return true;
+                };
+                let Some(index) = struct_generics.iter().position(|g| g == struct_g) else {
+                    return true;
+                };
+                let Some(&concrete) = generic_args.get(index) else {
+                    return true;
+                };
+
+                ifaces
+                    .iter()
+                    .all(|&iface| self.type_satisfies_interface(concrete, iface))
+            });
+
+            if applies {
+                return Some(entry.clone());
+            }
+        }
+
+        None
+    }
+
     fn call_interface_method(
         &mut self,
         struct_def: DefId,
         struct_generic_args: &[TypeId],
-        iface_name: &str,
-        method_name: &str,
+        iface: (&str, &str),
         explicit_args: &[TypeId],
         receiver_access: ReceiverAccess,
         source: &Source,
     ) -> Option<InterfaceCallResult> {
+        let (iface_name, method_name) = iface;
         let Some(iface_def) = self.interface_registry.get(iface_name) else {
             self.report(TypeError::InterfaceNotAvailable {
                 name: iface_name.into(),
@@ -4246,34 +4340,23 @@ impl<'res> TypeChecker<'res> {
             return None;
         };
 
-        let Some(entries) = self.result.impl_registry.get(&(struct_def, iface_def)) else {
-            self.report(TypeError::InterfaceMethodMissing {
-                interface: iface_name.into(),
-                method: method_name.into(),
+        // A concrete specialization for this exact instantiation wins; the
+        // generic implementation applies only when the concrete arguments
+        // satisfy its bounds.
+        let Some(entry) = self.applicable_impl(struct_def, iface_def, struct_generic_args) else {
+            let struct_ty = self.result.interner.intern(Type::Struct {
+                def_id: struct_def,
+                generic_args: struct_generic_args.to_vec(),
+            });
+
+            self.report(TypeError::InterfaceNotImplemented {
+                name: iface_name.into(),
+                ty_name: self.display_type(struct_ty).into(),
                 src: source.src(),
                 span: source.span,
             });
             return None;
         };
-
-        // A concrete specialization registered for this exact instantiation
-        // wins over the generic implementation.
-        let entry = entries
-            .iter()
-            .find(|e| e.is_specialized && e.object_args.as_slice() == struct_generic_args)
-            .or_else(|| entries.iter().find(|e| !e.is_specialized));
-
-        let Some(entry) = entry else {
-            self.report(TypeError::InterfaceMethodMissing {
-                interface: iface_name.into(),
-                method: method_name.into(),
-                src: source.src(),
-                span: source.span,
-            });
-            return None;
-        };
-
-        let entry = entry.clone();
 
         let &method_def_id = entry
             .methods
@@ -4655,8 +4738,7 @@ impl<'res> TypeChecker<'res> {
                 match self.call_interface_method(
                     def_id,
                     &generic_args,
-                    iface_name,
-                    method_name,
+                    (iface_name, method_name),
                     &[rhs],
                     ReceiverAccess::Value,
                     &source,
@@ -4924,8 +5006,7 @@ impl<'res> TypeChecker<'res> {
                 match self.call_interface_method(
                     def_id,
                     &generic_args,
-                    iface_name,
-                    method_name,
+                    (iface_name, method_name),
                     &[],
                     ReceiverAccess::Value,
                     &source,
@@ -5056,8 +5137,7 @@ impl<'res> TypeChecker<'res> {
         let result = self.call_interface_method(
             def_id,
             generic_args,
-            iface_name,
-            method_name,
+            (iface_name, method_name),
             &[],
             ReceiverAccess::Value,
             source,
@@ -5103,8 +5183,7 @@ impl<'res> TypeChecker<'res> {
         let result = self.call_interface_method(
             def_id,
             generic_args,
-            iface_name,
-            method_name,
+            (iface_name, method_name),
             &[index_ty],
             ReceiverAccess::Value,
             source,

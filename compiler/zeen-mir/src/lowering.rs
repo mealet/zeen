@@ -2236,6 +2236,28 @@ impl<'ctx> MirLowering<'ctx> {
                 expr: inner,
                 op: UnaryOp::Deref,
             } => {
+                // A deref through a struct's `Deref`/`DerefPtr` interface
+                // dispatches to the method; the result is materialized into a
+                // temp local. A `DerefPtr` result is a pointer into the
+                // struct, so the place keeps dereferencing it (writes through
+                // it reach the struct); a `Deref` result is the value itself.
+                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    let result_ty = self.expr_type(fb, expr);
+                    let (block, operand) =
+                        self.lower_operator_method_call(fb, inner, &op_res, block, result_ty);
+
+                    if matches!(
+                        self.typecheck.interner.get(result_ty),
+                        Type::Pointer { .. } | Type::ManyPointer { .. }
+                    ) {
+                        let ptr_local = self.operand_to_local(fb, operand, result_ty, block);
+                        return (block, Place::from_local(ptr_local).deref());
+                    }
+
+                    let temp = self.operand_to_local(fb, operand, result_ty, block);
+                    return (block, Place::from_local(temp));
+                }
+
                 let (block, inner_place) = self.lower_expr_to_place_or_temp(fb, inner, block);
                 (block, inner_place.deref())
             }
@@ -3695,11 +3717,32 @@ impl<'ctx> MirLowering<'ctx> {
                 .get(&owner)
                 .cloned()
                 .unwrap_or_default();
-            struct_generics
+            let mut bindings: HashMap<DefId, TypeId> = struct_generics
                 .iter()
                 .copied()
                 .zip(generic_args.iter().copied())
-                .collect()
+                .collect();
+
+            // An implement block's methods may be written with the block's
+            // own generic parameters (`implement[T] Deref : Holder[T]`):
+            // substitute them through the struct's generic slots.
+            for entries in self.typecheck.impl_registry.values() {
+                for entry in entries {
+                    if !entry.methods.contains(&def_id) {
+                        continue;
+                    }
+
+                    for (arg, &struct_g) in entry.object_args.iter().zip(struct_generics.iter()) {
+                        if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
+                            && let Some(&concrete) = bindings.get(&struct_g)
+                        {
+                            bindings.insert(*imp_g, concrete);
+                        }
+                    }
+                }
+            }
+
+            bindings
         } else {
             HashMap::new()
         };
