@@ -453,6 +453,21 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("generic parameter cannot be nested inside a specialized implement slot")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::impl_slot_mixed),
+        help(
+            "a slot must be either a bare generic parameter (`Box[T]`) or a fully concrete type (`Box[i32]`)"
+        )
+    )]
+    ImplSlotMixed {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("operator interface `{operator}` is not supported on provided generic")]
     #[diagnostic(severity(Error), code(zeen::typechecker::generic_op_not_supported))]
     OperatorNotSupportedOnGeneric {

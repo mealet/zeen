@@ -124,6 +124,9 @@ pub struct HirImplement {
 
     pub generics: Vec<HirGenericParam>,
     pub object_generics_bindings: Vec<DefId>,
+    /// Lowered object slots: a generic-parameter name yields
+    /// `HirTypeKind::GenericParam`, everything else is a concrete type.
+    pub object_generic_types: Vec<Rc<HirTypeExpr>>,
     pub object_bindings_span: SourceSpan,
 
     pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn

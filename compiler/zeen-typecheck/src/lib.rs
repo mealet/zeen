@@ -13,7 +13,7 @@ use crate::{
     coerce::{CoerceResult, try_coerce},
     context::{FnCtx, InterfaceRegistry, TypeCheckCtx},
     format_str::FormatSpec,
-    result::{CallResolution, OperatorResolution, TypeCheckResult},
+    result::{CallResolution, ImplEntry, OperatorResolution, TypeCheckResult},
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -91,6 +91,23 @@ struct FnSignature {
 struct InterfaceCallResult {
     pub ret_ty: TypeId,
     pub method_def: DefId,
+}
+
+/// Implement-block context carried into the check of its methods: the
+/// lowered object slots, whether the block specializes a concrete
+/// instantiation, and the implement generics' bounds.
+struct MethodImplCtx {
+    object_args: Vec<TypeId>,
+    is_specialized: bool,
+    generic_bounds: Vec<(DefId, Vec<DefId>)>,
+}
+
+/// Implement-block data needed to compare an interface method signature
+/// against the implementing method.
+struct ImplSigCtx<'a> {
+    imp_generics: &'a [DefId],
+    object_args: &'a [TypeId],
+    is_specialized: bool,
 }
 
 impl<'res> TypeChecker<'res> {
@@ -487,7 +504,9 @@ impl<'res> TypeChecker<'res> {
             .cloned()
             .unwrap_or_default();
 
-        if imp.object_generics_bindings.len() != struct_generics.len() {
+        let (object_args, is_specialized) = self.impl_object_args(imp, true);
+
+        if imp.object_generic_types.len() != struct_generics.len() {
             let name_id = self
                 .resolution
                 .defs
@@ -502,22 +521,36 @@ impl<'res> TypeChecker<'res> {
             self.report(TypeError::GenericArgCountMismatch {
                 name,
                 expected: struct_generics.len(),
-                found: imp.object_generics_bindings.len(),
+                found: imp.object_generic_types.len(),
                 src: source.src(),
                 span: imp.object_bindings_span,
             });
-        } else {
-            if let Some(iface_def) = imp.interface {
-                let mapping: HashMap<DefId, DefId> = imp
-                    .object_generics_bindings
+        } else if let Some(iface_def) = imp.interface {
+            // Only a fully generic impl binds the implement generics to the
+            // struct's generic slots; a specialization pins concrete types.
+            if !is_specialized {
+                let mapping: HashMap<DefId, DefId> = object_args
                     .iter()
-                    .copied()
-                    .zip(struct_generics.iter().copied())
+                    .zip(struct_generics.iter())
+                    .filter_map(|(arg, &struct_g)| match self.result.interner.get(*arg) {
+                        Type::GenericParam(g) => Some((*g, struct_g)),
+                        _ => None,
+                    })
                     .collect();
 
                 self.impl_generic_to_struct_generic
                     .insert((object_def, iface_def), mapping);
             }
+
+            self.result
+                .impl_registry
+                .entry((object_def, iface_def))
+                .or_default()
+                .push(ImplEntry {
+                    methods: imp.methods.iter().map(|m| m.def_id).collect(),
+                    object_args: object_args.clone(),
+                    is_specialized,
+                });
         }
 
         let Some(iface_def) = imp.interface else {
@@ -552,13 +585,74 @@ impl<'res> TypeChecker<'res> {
 
         let imp_generics: Vec<DefId> = imp.generics.iter().map(|g| g.def_id).collect();
 
+        let sig_ctx = ImplSigCtx {
+            imp_generics: &imp_generics,
+            object_args: &object_args,
+            is_specialized,
+        };
+
         self.check_implement_matches_interface(
             imp,
             iface_def,
             object_def,
-            &imp_generics,
+            &sig_ctx,
             &((source.span, source.src()).into()),
         );
+    }
+
+    /// Lowers the object slots of an implement block. A slot is either a bare
+    /// generic parameter of the implement (`Box[T]`) or a fully concrete type
+    /// (`Box[i32]`); anything mixing both is reported when `report_mixed` is
+    /// set (the declare pass; the check pass recomputes silently).
+    fn impl_object_args(
+        &mut self,
+        imp: &zeen_hir::HirImplement,
+        report_mixed: bool,
+    ) -> (Vec<TypeId>, bool) {
+        let imp_generic_defs: HashSet<DefId> = imp.generics.iter().map(|g| g.def_id).collect();
+
+        let mut object_args = Vec::with_capacity(imp.object_generic_types.len());
+        let mut is_specialized = false;
+
+        for slot in &imp.object_generic_types {
+            let arg = self.lower_hir_type(slot);
+
+            match self.result.interner.get(arg) {
+                Type::GenericParam(g) if imp_generic_defs.contains(g) => {}
+                _ if self.type_contains_generic(arg) => {
+                    if report_mixed {
+                        self.report(TypeError::ImplSlotMixed {
+                            src: slot.source.src(),
+                            span: slot.source.span,
+                        });
+                    }
+                }
+                _ => is_specialized = true,
+            }
+
+            object_args.push(arg);
+        }
+
+        (object_args, is_specialized)
+    }
+
+    /// Builds the per-method implement context for an implement block.
+    fn impl_method_ctx(&mut self, imp: &zeen_hir::HirImplement) -> Option<MethodImplCtx> {
+        imp.object?;
+
+        let (object_args, is_specialized) = self.impl_object_args(imp, false);
+
+        let generic_bounds: Vec<(DefId, Vec<DefId>)> = imp
+            .generics
+            .iter()
+            .map(|g| (g.def_id, g.bounds.clone()))
+            .collect();
+
+        Some(MethodImplCtx {
+            object_args,
+            is_specialized,
+            generic_bounds,
+        })
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {
@@ -871,7 +965,7 @@ impl<'res> TypeChecker<'res> {
 
     fn check_decl_body(&mut self, decl: &HirDecl) {
         match &decl.kind {
-            HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None, None),
+            HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None, None, None),
 
             HirDeclKind::Struct(s) => {
                 let _self_ty = self.result.interner.intern(Type::Struct {
@@ -880,14 +974,14 @@ impl<'res> TypeChecker<'res> {
                 });
 
                 for method in &s.methods {
-                    self.check_decl_body_as_method(method, decl.def_id, None);
+                    self.check_decl_body_as_method(method, decl.def_id, None, None);
                 }
             }
 
             HirDeclKind::Interface(i) => {
                 for method in &i.methods {
                     if let HirDeclKind::Fn(f) = &method.kind {
-                        self.check_fn_body(method.def_id, f, None, None);
+                        self.check_fn_body(method.def_id, f, None, None, None);
                     }
                 }
             }
@@ -899,13 +993,20 @@ impl<'res> TypeChecker<'res> {
                         generic_args: Vec::new(),
                     });
 
+                    let impl_ctx = self.impl_method_ctx(imp);
+
                     for method in &imp.methods {
-                        self.check_decl_body_as_method(method, object_def, imp.interface);
+                        self.check_decl_body_as_method(
+                            method,
+                            object_def,
+                            imp.interface,
+                            impl_ctx.as_ref(),
+                        );
                     }
                 } else {
                     for method in &imp.methods {
                         if let HirDeclKind::Fn(f) = &method.kind {
-                            self.check_fn_body(method.def_id, f, None, None);
+                            self.check_fn_body(method.def_id, f, None, None, None);
                         }
                     }
                 }
@@ -928,9 +1029,10 @@ impl<'res> TypeChecker<'res> {
         method: &HirDecl,
         struct_def: DefId,
         iface_def: Option<DefId>,
+        impl_ctx: Option<&MethodImplCtx>,
     ) {
         if let HirDeclKind::Fn(f) = &method.kind {
-            self.check_fn_body(method.def_id, f, Some(struct_def), iface_def);
+            self.check_fn_body(method.def_id, f, Some(struct_def), iface_def, impl_ctx);
         }
     }
 
@@ -940,6 +1042,7 @@ impl<'res> TypeChecker<'res> {
         hir_fn: &HirFn,
         struct_def: Option<DefId>,
         iface_def: Option<DefId>,
+        impl_ctx: Option<&MethodImplCtx>,
     ) {
         let Some(body) = &hir_fn.body else {
             self.bodies_checked.insert(def_id);
@@ -968,7 +1071,14 @@ impl<'res> TypeChecker<'res> {
         let self_type = struct_def.map(|sd| {
             let struct_generics = self.struct_generics.get(&sd).cloned().unwrap_or_default();
 
-            let generic_args: Vec<TypeId> = if let Some(iface) = iface_def
+            // A specialized implement pins the method's `Self` to the
+            // concrete object type (`Box[i32]`).
+            let generic_args: Vec<TypeId> = if let Some(ictx) = impl_ctx
+                && ictx.is_specialized
+                && ictx.object_args.len() == struct_generics.len()
+            {
+                ictx.object_args.clone()
+            } else if let Some(iface) = iface_def
                 && let Some(mapping) = self.impl_generic_to_struct_generic.get(&(sd, iface))
             {
                 let reverse: HashMap<DefId, DefId> =
@@ -1029,6 +1139,14 @@ impl<'res> TypeChecker<'res> {
 
         for (g, bounds) in &sig_generic_bounds {
             generic_bounds.insert(*g, bounds.clone());
+        }
+
+        // The implement block's own generics (`implement[T: Display]`) and
+        // their bounds are in scope for every method of the block.
+        if let Some(ictx) = impl_ctx {
+            for (g, bounds) in &ictx.generic_bounds {
+                generic_bounds.entry(*g).or_insert_with(|| bounds.clone());
+            }
         }
 
         self.ctx.push_fn(FnCtx {
@@ -1517,7 +1635,7 @@ impl<'res> TypeChecker<'res> {
     /// type is unreachable from user syntax).
     fn check_closure(&mut self, def_id: DefId, def: &Rc<HirFn>, source: &Source) -> TypeId {
         self.declare_fn_signature(def_id, def);
-        self.check_fn_body(def_id, def, None, None);
+        self.check_fn_body(def_id, def, None, None, None);
 
         let fn_ty = *self
             .result
@@ -4128,7 +4246,7 @@ impl<'res> TypeChecker<'res> {
             return None;
         };
 
-        let Some(method_defs) = self.resolution.impls.get(&(struct_def, iface_def)) else {
+        let Some(entries) = self.result.impl_registry.get(&(struct_def, iface_def)) else {
             self.report(TypeError::InterfaceMethodMissing {
                 interface: iface_name.into(),
                 method: method_name.into(),
@@ -4138,7 +4256,27 @@ impl<'res> TypeChecker<'res> {
             return None;
         };
 
-        let method_def_id = *method_defs
+        // A concrete specialization registered for this exact instantiation
+        // wins over the generic implementation.
+        let entry = entries
+            .iter()
+            .find(|e| e.is_specialized && e.object_args.as_slice() == struct_generic_args)
+            .or_else(|| entries.iter().find(|e| !e.is_specialized));
+
+        let Some(entry) = entry else {
+            self.report(TypeError::InterfaceMethodMissing {
+                interface: iface_name.into(),
+                method: method_name.into(),
+                src: source.src(),
+                span: source.span,
+            });
+            return None;
+        };
+
+        let entry = entry.clone();
+
+        let &method_def_id = entry
+            .methods
             .iter()
             .find(|&&def_id| self.def_name(def_id).as_deref() == Some(method_name))?;
 
@@ -4236,7 +4374,7 @@ impl<'res> TypeChecker<'res> {
         iface_method_def: DefId,
         impl_method_def: DefId,
         self_struct_ty: TypeId,
-        imp_generics: &[DefId],
+        sig_ctx: &ImplSigCtx,
         source: &Source,
     ) {
         let iface_generics = self
@@ -4263,10 +4401,27 @@ impl<'res> TypeChecker<'res> {
         // `implement[U] Add: Box[U]` binds the implement generic (U) positionally
         // to the object struct's generic slot. Substitute them so the impl
         // signature (written with U) can be compared against the interface one
-        // (written with the struct's own generic).
+        // (written with the struct's own generic). A specialization instead
+        // substitutes the struct's generic slots with the pinned concrete
+        // types (`implement Display : Box[i32]` -> self: Box[i32]).
+        let struct_generics: Vec<DefId> = match self.result.interner.get(self_struct_ty) {
+            Type::Struct { def_id, .. } => self
+                .struct_generics
+                .get(def_id)
+                .cloned()
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
         let mut impl_subst: HashMap<DefId, TypeId> = HashMap::new();
-        for (imp_g, struct_arg) in imp_generics.iter().zip(struct_args.iter()) {
-            impl_subst.insert(*imp_g, *struct_arg);
+        if sig_ctx.is_specialized {
+            for (struct_g, arg) in struct_generics.iter().zip(sig_ctx.object_args.iter()) {
+                impl_subst.insert(*struct_g, *arg);
+            }
+        } else {
+            for (imp_g, struct_arg) in sig_ctx.imp_generics.iter().zip(struct_args.iter()) {
+                impl_subst.insert(*imp_g, *struct_arg);
+            }
         }
 
         let Some(iface_sig) = self.fn_sigs.get(&iface_method_def) else {
@@ -4380,7 +4535,7 @@ impl<'res> TypeChecker<'res> {
         imp: &zeen_hir::HirImplement,
         iface_def: DefId,
         object_def: DefId,
-        imp_generics: &[DefId],
+        sig_ctx: &ImplSigCtx,
         source: &Source,
     ) {
         let Some(interface_methods) = self.interface_methods.get(&iface_def).cloned() else {
@@ -4392,10 +4547,19 @@ impl<'res> TypeChecker<'res> {
             .get(&object_def)
             .cloned()
             .unwrap_or_default();
-        let self_generic_args: Vec<TypeId> = struct_generics
-            .iter()
-            .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
-            .collect();
+
+        // A specialization compares against its pinned concrete object type
+        // (`Box[i32]`); a generic impl keeps the struct's generic slots.
+        let self_generic_args: Vec<TypeId> =
+            if sig_ctx.is_specialized && sig_ctx.object_args.len() == struct_generics.len() {
+                sig_ctx.object_args.to_vec()
+            } else {
+                struct_generics
+                    .iter()
+                    .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
+                    .collect()
+            };
+
         let self_struct_ty = self.result.interner.intern(Type::Struct {
             def_id: object_def,
             generic_args: self_generic_args,
@@ -4431,7 +4595,7 @@ impl<'res> TypeChecker<'res> {
                         iface_method_def,
                         impl_method_def,
                         self_struct_ty,
-                        imp_generics,
+                        sig_ctx,
                         source,
                     );
 

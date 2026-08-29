@@ -44,6 +44,20 @@ pub struct TypeCheckResult {
     /// Resolved concrete return type of a function declared to return a
     /// `Fn`/`FnOnce` bound.
     pub fn_return_fats: HashMap<DefId, TypeId>,
+
+    /// Interface implementations registered per `(struct, interface)`,
+    /// including concrete specializations (`implement Display : Box[i32]`).
+    pub impl_registry: HashMap<(DefId, DefId), Vec<ImplEntry>>,
+}
+
+/// A single `implement` block registered for a `(struct, interface)` pair.
+#[derive(Debug, Clone)]
+pub struct ImplEntry {
+    pub methods: Vec<DefId>,
+    /// Lowered object slots: `Type::GenericParam` for generic-binding slots,
+    /// concrete types for specializations.
+    pub object_args: Vec<TypeId>,
+    pub is_specialized: bool,
 }
 
 impl TypeCheckResult {
