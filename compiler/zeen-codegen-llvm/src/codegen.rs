@@ -907,7 +907,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             // `{ ptr, len }` for slices) instead of being stored as a raw
             // pointer to the global literal.
             let elem_ty = match kind {
-                AggregateKind::Struct(_) => self.program.struct_layouts[&expected_ty].fields[i].ty,
+                AggregateKind::Struct(_) | AggregateKind::Slice => {
+                    // Slices store through their registered layout: the `len`
+                    // field is `usize` — storing it narrower leaves the rest
+                    // of the slot uninitialized garbage, which the loop
+                    // condition then reads as a huge length.
+                    self.program.struct_layouts[&expected_ty].fields[i].ty
+                }
                 _ => self.index_element_type(expected_ty),
             };
             let value = if matches!(operand, Operand::Constant(ConstValue::Str(_), _)) {
