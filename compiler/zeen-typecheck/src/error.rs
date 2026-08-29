@@ -292,6 +292,78 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("closure cannot capture a value of generic type")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::closure_generic_capture),
+        help("closures are not generic yet; move the closure out of the generic context")
+    )]
+    ClosureGenericCapture {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("a fat function pointer `{found}` cannot be used as a bare `{expected}` type")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::closure_coercion),
+        help(
+            "a bare fn pointer carries no environment; keep the value in its `Fn`/`FnOnce` \
+              type, or use the closure without captures"
+        )
+    )]
+    ClosureCoercion {
+        expected: SmolStr,
+        found: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("fat pointer `{found}` cannot be narrowed to a bare fn")]
+        span: SourceSpan,
+    },
+
+    #[error("a `Fn`/`FnOnce` annotation requires an initializer")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::fat_annotation_needs_init),
+        help(
+            "closure values store a concrete closure type, so the variable must be \
+              initialized to know which closure it holds"
+        )
+    )]
+    FatAnnotationNeedsInit {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("add `= <closure>` to this binding")]
+        span: SourceSpan,
+    },
+
+    #[error("a `Fn`/`FnOnce` value cannot be stored in this position yet")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::fat_storage_unsupported))]
+    FatStorageUnsupported {
+        what: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("closure value in `{what}`")]
+        span: SourceSpan,
+    },
+
+    #[error("a function returning `Fn`/`FnOnce` must return the same closure from every path")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::fat_return_mismatch),
+        help("closure return types are inferred from the body and must agree")
+    )]
+    FatReturnMismatch {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this path returns a different closure type")]
+        span: SourceSpan,
+    },
+
     #[error("attempt to assign to const")]
     #[diagnostic(severity(Error), code(zeen::typechecker::assign_to_const))]
     AssignToConst {

@@ -172,6 +172,14 @@ fn collect_from_expr(expr: &zeen_hir::expr::HirExpr, map: &mut HashMap<DefId, Rc
             collect_from_expr(len, map);
         }
 
+        HirExprKind::Closure { def_id, def } => {
+            map.insert(*def_id, def.clone());
+
+            if let Some(body) = &def.body {
+                collect_from_stmt(body, map);
+            }
+        }
+
         HirExprKind::Literal(_)
         | HirExprKind::VarRef(_)
         | HirExprKind::GenericParamRef(_)

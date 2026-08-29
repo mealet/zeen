@@ -1,5 +1,5 @@
 use zeen_ast::types::BuiltinType;
-use zeen_types::{Type, TypeId, TypeInterner};
+use zeen_types::{FatFnBody, Type, TypeId, TypeInterner};
 
 pub fn builtin_is_integer(b: BuiltinType) -> bool {
     matches!(
@@ -41,6 +41,9 @@ pub enum CoerceResult {
     NeverCoercion,
     /// One side was `Error`, avoiding extra diagnostics
     ErrorRecovery,
+    /// Bare `fn(...) ...` -> `Fn(...) ...`/`FnOnce(...) ...`, or `Fn` -> `FnOnce`
+    /// (same signature on both sides).
+    FatFnCoercion,
     // Error coercion
     Fail,
 }
@@ -171,6 +174,89 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
             CoerceResult::ArrayToManyPointer
         }
 
+        // A basic fn pointer coerces into a fat fn value of the same
+        // signature (`fn(T) R -> Fn(T) R`). The storage the coercion
+        // produces (inline env + static target, or an inline fn pointer) is
+        // decided by the checker, which knows the coerced expression.
+        (
+            Type::Fn {
+                params: fp,
+                ret: fr,
+            },
+            Type::FatFn {
+                params: tp,
+                ret: tr,
+                ..
+            },
+        ) if fp == tp && fr == tr => CoerceResult::FatFnCoercion,
+
+        // A concrete fat value widens into the erased `Fn`/`FnOnce` bound of
+        // the same signature. `FnOnce` never narrows back to `Fn`, while an
+        // `Fn` value may flow into an `FnOnce` slot (the concrete storage
+        // keeps its `Fn` abilities).
+        (
+            Type::FatFn {
+                params: fp,
+                ret: fr,
+                once: from_once,
+                ..
+            },
+            Type::FatFn {
+                params: tp,
+                ret: tr,
+                once: to_once,
+                body: FatFnBody::Bound,
+            },
+        ) if fp == tp && fr == tr && (!from_once || from_once == to_once) => {
+            CoerceResult::FatFnCoercion
+        }
+
+        // The same widening, through a pointer: `*<concrete closure>` into
+        // `*Fn(T) R`. The pointer value is identical — only the annotation
+        // is erased — so the storage stays the concrete pointer type.
+        (
+            Type::Pointer {
+                inner: from_inner,
+                is_const: from_const,
+            },
+            Type::Pointer {
+                inner: to_inner,
+                is_const: to_const,
+            },
+        ) if from_const == to_const
+            && matches!(
+                interner.get(from_inner),
+                Type::FatFn {
+                    body: FatFnBody::Closure { .. },
+                    ..
+                }
+            )
+            && matches!(
+                interner.get(to_inner),
+                Type::FatFn {
+                    body: FatFnBody::Bound,
+                    ..
+                }
+            )
+            && match (interner.get(from_inner), interner.get(to_inner)) {
+                (
+                    Type::FatFn {
+                        params: fp,
+                        ret: fr,
+                        ..
+                    },
+                    Type::FatFn {
+                        params: tp,
+                        ret: tr,
+                        ..
+                    },
+                ) => fp == tp && fr == tr,
+                _ => false,
+            } =>
+        {
+            CoerceResult::FatFnCoercion
+        }
+
         _ => CoerceResult::Fail,
     }
 }
@@ -188,6 +274,10 @@ pub fn type_contains_error(interner: &TypeInterner, ty: TypeId) -> bool {
             .iter()
             .any(|a| type_contains_error(interner, *a)),
         Type::Fn { params, ret } => {
+            params.iter().any(|p| type_contains_error(interner, *p))
+                || type_contains_error(interner, *ret)
+        }
+        Type::FatFn { params, ret, .. } => {
             params.iter().any(|p| type_contains_error(interner, *p))
                 || type_contains_error(interner, *ret)
         }
@@ -730,5 +820,208 @@ mod tests {
 
         assert!(verify_cast(&mut it, fn_ty, ptr_ty));
         assert!(verify_cast(&mut it, ptr_ty, fn_ty));
+    }
+
+    #[test]
+    fn bare_fn_coerces_to_fat_fn() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+
+        let bare = it.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+        let fat = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: false,
+            body: FatFnBody::Bound,
+        });
+
+        assert_eq!(try_coerce(&mut it, bare, fat), CoerceResult::FatFnCoercion);
+    }
+
+    #[test]
+    fn bare_fn_coerces_to_fat_fn_once() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+
+        let bare = it.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+        let fat_once = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+            body: FatFnBody::Bound,
+        });
+
+        assert_eq!(
+            try_coerce(&mut it, bare, fat_once),
+            CoerceResult::FatFnCoercion
+        );
+    }
+
+    #[test]
+    fn fat_fn_coerces_to_fat_fn_once() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+
+        let fat = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: false,
+            body: FatFnBody::Bound,
+        });
+        let fat_once = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+            body: FatFnBody::Bound,
+        });
+
+        assert_eq!(
+            try_coerce(&mut it, fat, fat_once),
+            CoerceResult::FatFnCoercion
+        );
+    }
+
+    #[test]
+    fn fat_fn_once_does_not_coerce_back_to_fat_fn() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+
+        let fat = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: false,
+            body: FatFnBody::Bound,
+        });
+        let fat_once = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+            body: FatFnBody::Bound,
+        });
+
+        assert_eq!(try_coerce(&mut it, fat_once, fat), CoerceResult::Fail);
+    }
+
+    #[test]
+    fn concrete_closure_widens_to_bound() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+        let env_struct = it.intern(Type::Struct {
+            def_id: zeen_resolve::DefId(9_000),
+            generic_args: vec![],
+        });
+
+        let concrete = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+            body: FatFnBody::Closure {
+                env: env_struct,
+                target: zeen_resolve::DefId(9_500),
+            },
+        });
+        let opaque = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+            body: FatFnBody::Bound,
+        });
+
+        assert_eq!(
+            try_coerce(&mut it, concrete, opaque),
+            CoerceResult::FatFnCoercion
+        );
+    }
+
+    #[test]
+    fn bound_does_not_narrow_to_concrete() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+        let env_struct = it.intern(Type::Struct {
+            def_id: zeen_resolve::DefId(9_000),
+            generic_args: vec![],
+        });
+
+        let opaque = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+            body: FatFnBody::Bound,
+        });
+        let concrete = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+            body: FatFnBody::Closure {
+                env: env_struct,
+                target: zeen_resolve::DefId(9_500),
+            },
+        });
+
+        assert_eq!(try_coerce(&mut it, opaque, concrete), CoerceResult::Fail);
+    }
+
+    #[test]
+    fn different_concrete_targets_do_not_coerce() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+        let env_a = it.intern(Type::Struct {
+            def_id: zeen_resolve::DefId(9_000),
+            generic_args: vec![],
+        });
+        let env_b = it.intern(Type::Struct {
+            def_id: zeen_resolve::DefId(9_001),
+            generic_args: vec![],
+        });
+
+        let closure_a = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: false,
+            body: FatFnBody::Closure {
+                env: env_a,
+                target: zeen_resolve::DefId(9_500),
+            },
+        });
+        let closure_b = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: false,
+            body: FatFnBody::Closure {
+                env: env_b,
+                target: zeen_resolve::DefId(9_501),
+            },
+        });
+
+        assert_eq!(
+            try_coerce(&mut it, closure_a, closure_b),
+            CoerceResult::Fail
+        );
+    }
+
+    #[test]
+    fn fat_fn_signature_mismatch_fails() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+        let void = it.intern(Type::Builtin(BuiltinType::void));
+
+        let bare = it.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+        let mismatched = it.intern(Type::FatFn {
+            params: vec![void],
+            ret: i32,
+            once: false,
+            body: FatFnBody::Bound,
+        });
+
+        assert_eq!(try_coerce(&mut it, bare, mismatched), CoerceResult::Fail);
     }
 }

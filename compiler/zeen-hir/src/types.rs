@@ -45,5 +45,11 @@ pub enum HirTypeKind {
         ret: Rc<HirTypeExpr>,
     },
 
+    FatFn {
+        params: Vec<Rc<HirTypeExpr>>,
+        ret: Rc<HirTypeExpr>,
+        once: bool,
+    },
+
     Error,
 }

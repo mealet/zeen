@@ -44,6 +44,12 @@ fn type_needs_drop_impl(
         | Type::Never
         | Type::Error => false,
 
+        // `FnOnce` closure values own a non-Copy capture, so their death
+        // tears the captured values down (a synthesized per-type drop
+        // function does it). `Fn` values hold only Copy captures — nothing
+        // to drop, and copies keep the value alive anyway.
+        Type::FatFn { once, .. } => once,
+
         Type::Struct {
             def_id,
             generic_args,
@@ -127,6 +133,10 @@ fn expand_live_drops(
                 expand_live_drops(interner, typecheck, place, bound, bindings, out);
             }
         }
+        // A fat closure value is dropped as a whole: codegen resolves the
+        // per-type drop (a heap env goes back through `free`); values of
+        // types without a registered drop function are skipped there.
+        Type::FatFn { .. } => out.push(place.clone()),
         Type::Array { .. } | Type::Slice { .. } => out.push(place.clone()),
         _ => {}
     }
