@@ -579,28 +579,9 @@ fn calls_of(mir: &MirLoweringResult, id: MirFunctionId) -> Vec<&Terminator> {
         .collect()
 }
 
-#[test]
-fn closure_fn_named_after_parent() {
-    let mir = compile_mir_ok("fn main() { let x = 1; let c = fn() i32 { return x; }; }");
-
-    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
-    assert!(
-        names.iter().any(|n| n == "main->closure0"),
-        "closure fn must be named `main->closure0`, got {names:?}"
-    );
-}
-
-#[test]
-fn closure_fn_receives_env_params() {
-    let mir = compile_mir_ok(
-        "fn main() { let x = 1; let y = 2; let c = fn(a: i32) i32 { return a + x + y; }; }",
-    );
-
-    let id = fn_id_by_name(&mir, "main->closure0").expect("closure fn missing");
-    let func = &mir.program.functions[&id];
-
-    assert_eq!(func.params.len(), 3, "user param + two captured env params");
-}
+// Capturing-closure MIR tests were removed in S3: closures now lower to fat
+// `Fn`/`FnOnce` pointers with a synthesized env struct, which MIR lowering
+// implements in a later stage (see the closures plan, stage 5).
 
 #[test]
 fn zero_capture_closure_lowered_to_fn_const_call() {
@@ -636,69 +617,6 @@ fn zero_capture_closure_lowered_to_fn_const_call() {
         fn_const_stored,
         "closure value must lower to a fn-ptr constant"
     );
-}
-
-#[test]
-fn capturing_closure_call_appends_env_args() {
-    let mir = compile_mir_ok(
-        "fn main() { let x = 5; let c = fn(a: i32) i32 { return a + x; }; let r = c(2); }",
-    );
-
-    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
-    let calls = calls_of(&mir, main_id);
-
-    let env_arg_count = calls.iter().find_map(|t| match t {
-        Terminator::Call {
-            func: CallTarget::Indirect(Operand::Copy(place, _)),
-            args,
-            ..
-        } if !place.projection.is_empty() => Some(args.len()),
-        _ => None,
-    });
-
-    assert_eq!(
-        env_arg_count,
-        Some(2),
-        "call args must be user arg + captured env arg"
-    );
-}
-
-#[test]
-fn closure_value_is_struct_aggregate() {
-    let mir = compile_mir_ok("fn main() { let x = 5; let c = fn() i32 { return x; }; }");
-
-    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
-    let func = &mir.program.functions[&main_id];
-
-    let has_aggregate = func.blocks.iter().any(|b| {
-        b.statements.iter().any(|s| {
-            matches!(
-                s,
-                crate::MirStatement::Assign {
-                    rvalue: Rvalue::Aggregate { kind: AggregateKind::Struct(def), .. },
-                    ..
-                } if is_closure_struct_def(*def)
-            )
-        })
-    });
-
-    assert!(
-        has_aggregate,
-        "capturing closure must build a struct aggregate"
-    );
-}
-
-#[test]
-fn closure_struct_layout_is_registered() {
-    let mir = compile_mir_ok("fn main() { let x = 5; let c = fn() i32 { return x; }; }");
-
-    let has_layout = mir
-        .program
-        .struct_layouts
-        .values()
-        .any(|layout| is_closure_struct_def(layout.def_id));
-
-    assert!(has_layout, "closure struct must have a registered layout");
 }
 
 #[test]
