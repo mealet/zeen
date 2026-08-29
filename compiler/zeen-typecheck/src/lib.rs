@@ -31,9 +31,9 @@ use zeen_hir::{
 };
 use zeen_resolve::{DefId, DefInfo, DefKind, ResolutionResult};
 use zeen_types::{
-    ARRAY_LEN_FIELD, Capabilities, ReceiverAccess, SLICE_LEN_FIELD, SLICE_PTR_FIELD, SelfMode,
-    StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface, closure_field_def,
-    closure_struct_def, self_mode_of, unary_op_interface,
+    ARRAY_LEN_FIELD, Capabilities, FatEnvKind, ReceiverAccess, SLICE_LEN_FIELD, SLICE_PTR_FIELD,
+    SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface,
+    closure_field_def, closure_struct_def, self_mode_of, unary_op_interface,
 };
 
 pub mod closure_alloc;
@@ -185,11 +185,14 @@ impl<'res> TypeChecker<'res> {
             self.compute_structs_capabilities(decl);
         }
 
+        // Closure allocation analysis reads the HIR and the capture map only,
+        // so it runs before body checking: the fat type a closure literal gets
+        // must already know whether its env escapes (heap) or stays local.
+        self.result.closure_allocs = analyze_closures(module, &self.resolution.closure_captures);
+
         for decl in &module.decls {
             self.check_decl_body(decl);
         }
-
-        self.result.closure_allocs = analyze_closures(module, &self.resolution.closure_captures);
 
         let target = self.compilation_context.target.as_deref();
         let requires_main = zeen_driver::target_requires_main(target);
@@ -702,6 +705,7 @@ impl<'res> TypeChecker<'res> {
                     params: params_tys,
                     ret: ret_ty,
                     once: *once,
+                    env: FatEnvKind::Opaque,
                 })
             }
 
@@ -1265,9 +1269,33 @@ impl<'res> TypeChecker<'res> {
 
         self.synthesize_env_struct(def_id, &captures, once, source);
 
-        self.result
-            .interner
-            .intern(Type::FatFn { params, ret, once })
+        // The env kind mirrors the per-site allocation decision: an escaping
+        // closure owns a malloc'd block, a frame-bound one a stack cell. The
+        // kind lives in the type itself so MIR/flow/codegen can key drop
+        // behavior off it without side tables. `Unused` values are never
+        // observed, so the concrete-but-unfreed `Stack` kind is harmless.
+        let alloc_kind = self
+            .result
+            .closure_allocs
+            .get(&def_id)
+            .copied()
+            .unwrap_or(crate::closure_alloc::ClosureAllocKind::Heap);
+        let env_ty = self.result.interner.intern(Type::Struct {
+            def_id: closure_struct_def(def_id),
+            generic_args: Vec::new(),
+        });
+        let env_kind = match alloc_kind {
+            crate::closure_alloc::ClosureAllocKind::Heap => FatEnvKind::Heap(env_ty),
+            crate::closure_alloc::ClosureAllocKind::Stack
+            | crate::closure_alloc::ClosureAllocKind::Unused => FatEnvKind::Stack(env_ty),
+        };
+
+        self.result.interner.intern(Type::FatFn {
+            params,
+            ret,
+            once,
+            env: env_kind,
+        })
     }
 
     /// Registers the anonymous environment struct of a capturing closure. Its
@@ -5337,7 +5365,7 @@ mod tests {
 
     // --> Closures
 
-    use zeen_types::{Type, is_closure_struct_def};
+    use zeen_types::{FatEnvKind, Type, is_closure_struct_def};
 
     fn find_fat_fn(result: &TypeCheckResult) -> Option<zeen_types::TypeId> {
         result
@@ -5509,10 +5537,52 @@ mod tests {
         let fat = find_fat_fn(&result).expect("mult's return must be a `Fn` fat pointer");
         assert!(matches!(
             result.interner.get(fat),
-            Type::FatFn { params, ret, once: false }
+            Type::FatFn { params, ret, once: false, .. }
                 if params.len() == 1
                     && matches!(result.interner.get(*ret), Type::Builtin(zeen_ast::types::BuiltinType::i32))
         ));
+    }
+
+    #[test]
+    fn capturing_closure_fat_type_carries_env_kind() {
+        // Stack case: the closure is only called inside its own frame.
+        let result = typecheck(
+            "fn main() i32 { let x = 1; let add = fn(a: i32) i32 { return a + x; }; return add(2); }",
+        )
+        .expect("stack closure must typecheck");
+
+        assert!(
+            result.expr_types.values().any(|&ty| matches!(
+                result.interner.get(ty),
+                Type::FatFn {
+                    env: FatEnvKind::Stack(_),
+                    ..
+                }
+            )),
+            "a frame-bound closure must carry a stack env kind"
+        );
+
+        // Heap case: the closure escapes into a call argument.
+        let result = typecheck(
+            "fn apply(f: Fn(i32) i32, x: i32) i32 { return f(x); } \
+             fn main() i32 { \
+                 let x = 1; \
+                 let add = fn(a: i32) i32 { return a + x; }; \
+                 return apply(add, 2); \
+             }",
+        )
+        .expect("escaping closure must typecheck");
+
+        assert!(
+            result.expr_types.values().any(|&ty| matches!(
+                result.interner.get(ty),
+                Type::FatFn {
+                    env: FatEnvKind::Heap(_),
+                    ..
+                }
+            )),
+            "an escaping closure must carry a heap env kind"
+        );
     }
 
     #[test]

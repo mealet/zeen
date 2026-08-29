@@ -24,9 +24,9 @@ use zeen_typecheck::{
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use zeen_types::{
-    CLOSURE_FAT_DEF, CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD, SLICE_LEN_FIELD, SLICE_PTR_FIELD,
-    SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner, closure_field_def,
-    closure_struct_def,
+    CLOSURE_FAT_DEF, CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD, FatEnvKind, SLICE_LEN_FIELD,
+    SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
+    closure_field_def, closure_struct_def,
 };
 
 use crate::error::{MirError, MirWarning};
@@ -102,6 +102,8 @@ pub fn lower_program<'ctx>(
 
     lowering.build_init_globals();
     lowering.register_drop_functions();
+    lowering.register_reachable_fat_layouts();
+    lowering.register_fat_drop_functions();
 
     let warnings = std::mem::take(&mut lowering.warnings);
     let mut program = lowering.finish()?;
@@ -621,6 +623,172 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    /// Registers the `{ $fn, $env }` layout for every `FatFn` type showing up
+    /// among the lowered locals — including the `Opaque` annotation form.
+    /// Building a fat value registers its own layout, but a value that merely
+    /// flows through a parameter or a call slot never gets one built, and
+    /// field access on it needs the layout too.
+    fn register_reachable_fat_layouts(&mut self) {
+        let fat_types: Vec<TypeId> = self
+            .program
+            .functions
+            .values()
+            .flat_map(|func| func.locals.iter().map(|local| local.ty))
+            .filter(|&ty| matches!(self.typecheck.interner.get(ty), Type::FatFn { .. }))
+            .collect::<HashSet<TypeId>>()
+            .into_iter()
+            .collect();
+
+        for fat_ty in fat_types {
+            let Type::FatFn { params, ret, .. } = self.typecheck.interner.get(fat_ty).clone()
+            else {
+                unreachable!("filtered to fat types");
+            };
+
+            let env_ptr_ty = {
+                let void_ty = self.typecheck.interner.intern(Type::Void);
+                self.typecheck.interner.intern(Type::Pointer {
+                    inner: void_ty,
+                    is_const: true,
+                })
+            };
+            let mut env_first_params = Vec::with_capacity(params.len() + 1);
+            env_first_params.push(env_ptr_ty);
+            env_first_params.extend(params.iter().copied());
+            let env_first_fn_ty = self.typecheck.interner.intern(Type::Fn {
+                params: env_first_params,
+                ret,
+            });
+
+            self.register_fat_layout(fat_ty, env_first_fn_ty);
+        }
+    }
+
+    /// Synthesizes a `free`-based drop function for every heap-env `FnOnce`
+    /// fat type showing up among the lowered locals. Dataflow treats those
+    /// values as owning their captured environment, so a value that dies
+    /// without being called must release the block; a called value is
+    /// consumed at the call site and never reaches a drop.
+    fn register_fat_drop_functions(&mut self) {
+        let fat_types: Vec<TypeId> = self
+            .program
+            .functions
+            .values()
+            .flat_map(|func| func.locals.iter().map(|local| local.ty))
+            .filter(|&ty| {
+                matches!(
+                    self.typecheck.interner.get(ty),
+                    Type::FatFn {
+                        once: true,
+                        env: FatEnvKind::Heap(_),
+                        ..
+                    }
+                )
+            })
+            .collect::<HashSet<TypeId>>()
+            .into_iter()
+            .collect();
+
+        for fat_ty in fat_types {
+            if self.program.drop_functions.contains_key(&fat_ty) {
+                continue;
+            }
+            let id = self.synthesize_fat_drop_function(fat_ty);
+            self.program.drop_functions.insert(fat_ty, id);
+        }
+    }
+
+    /// Builds the drop function of a heap-env fat type: `%env = self.$env;
+    /// free(%env)`. `free(null)` is a no-op, so envs nulled out by a later
+    /// re-assignment of the closure value are safe too.
+    fn synthesize_fat_drop_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
+        let Type::FatFn { params, ret, .. } = self.typecheck.interner.get(fat_ty).clone() else {
+            unreachable!("fat drop requires a fat type");
+        };
+
+        let env_ptr_ty = {
+            let void_ty = self.typecheck.interner.intern(Type::Void);
+            self.typecheck.interner.intern(Type::Pointer {
+                inner: void_ty,
+                is_const: true,
+            })
+        };
+        let env_first_fn_ty = {
+            let mut env_first_params = Vec::with_capacity(params.len() + 1);
+            env_first_params.push(env_ptr_ty);
+            env_first_params.extend(params.iter().copied());
+            self.typecheck.interner.intern(Type::Fn {
+                params: env_first_params,
+                ret,
+            })
+        };
+        self.register_fat_layout(fat_ty, env_first_fn_ty);
+
+        let id = self.mono_cache.fresh_id();
+        self.set_function_name(id, format!("$fatdrop#{}", id.0));
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+
+        let mut func = MirFunction {
+            source_def: CLOSURE_FAT_DEF,
+            mono_args: Vec::new(),
+            locals: Vec::new(),
+            blocks: Vec::new(),
+            params: Vec::new(),
+            entry_block: BlockId(0),
+            ret_ty: void_ty,
+            is_drop_impl: true,
+        };
+        func.new_block(); // block 0 (entry)
+        let bb1 = func.new_block();
+
+        let self_param = func.new_local(LocalDecl {
+            ty: fat_ty,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Param,
+            name: None,
+            source: None,
+        });
+        func.params.push(self_param);
+
+        let env_local = func.new_local(LocalDecl {
+            ty: env_ptr_ty,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Temporary,
+            name: None,
+            source: None,
+        });
+        func.blocks[0].statements.push(MirStatement::Assign {
+            place: Place::from_local(env_local),
+            rvalue: Rvalue::Use(Operand::Copy(
+                Place::from_local(self_param).field(CLOSURE_FAT_ENV_FIELD),
+                None,
+            )),
+            source: None,
+        });
+
+        let free_idx = self.ensure_free_extern();
+        let sink = func.new_local(LocalDecl {
+            ty: void_ty,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Temporary,
+            name: None,
+            source: None,
+        });
+        func.blocks[0].terminator = Terminator::Call {
+            func: CallTarget::Extern(free_idx),
+            args: vec![Operand::Copy(Place::from_local(env_local), None)],
+            destination: Place::from_local(sink),
+            target: Some(bb1),
+            source: None,
+        };
+        func.blocks[bb1.0 as usize].terminator =
+            Terminator::Return(Operand::Constant(ConstValue::Void, None));
+
+        self.program.functions.insert(id, func);
+        id
+    }
+
     fn find_interface_def(&self, interface_name: &str) -> Option<DefId> {
         for (def, info) in &self.resolution.defs {
             if matches!(info.kind, DefKind::Interface)
@@ -888,7 +1056,7 @@ impl<'ctx> MirLowering<'ctx> {
 
     /// Returns the index of the `malloc` extern declaration, registering it (in
     /// the requested pointee type) on first use. Heap closure environments are
-    /// allocated with it and (in later stages) released with `free`.
+    /// allocated with it and released with `free`.
     fn ensure_malloc_extern(&mut self, ret_ty: TypeId) -> usize {
         if let Some(idx) = self
             .program
@@ -908,6 +1076,36 @@ impl<'ctx> MirLowering<'ctx> {
             symbol_name: "malloc".to_string(),
             param_types: vec![usize_ty],
             ret_ty,
+            is_variadic: false,
+        });
+
+        self.program.extern_fns.len() - 1
+    }
+
+    /// Returns the index of the `free` extern declaration, registering it on
+    /// first use. Heap closure environments are released with it: right after
+    /// an `FnOnce` call consumed the value, and from the synthesized per-type
+    /// drop function when the value dies uncalled.
+    fn ensure_free_extern(&mut self) -> usize {
+        if let Some(idx) = self
+            .program
+            .extern_fns
+            .iter()
+            .position(|f| f.symbol_name == "free")
+        {
+            return idx;
+        }
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let void_ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+            inner: void_ty,
+            is_const: false,
+        });
+
+        self.program.extern_fns.push(ExternFnDecl {
+            symbol_name: "free".to_string(),
+            param_types: vec![void_ptr_ty],
+            ret_ty: void_ty,
             is_variadic: false,
         });
 
@@ -3880,8 +4078,11 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     /// Calls a fat closure value `c` using the env-first ABI: `c.$fn(c.$env,
-    /// args...)`. Both fields are extracted as copies so the closure keeps
-    /// living where it was placed.
+    /// args...)`. An `Fn` value is callable freely, so both fields are read as
+    /// copies. An `FnOnce` value is consumed by the call: the whole closure
+    /// moves into a slot first (its fields are plain pointers — `Copy` — so
+    /// moving the fields alone would go unnoticed by dataflow), and a heap
+    /// env is released with `free` right after the call returns.
     fn lower_fat_call(
         &mut self,
         fb: &mut FnBuilder,
@@ -3890,15 +4091,39 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
         ret_ty: TypeId,
     ) -> (BlockId, Operand) {
+        let callee_ty = self.expr_type(fb, callee);
+        let (once, frees_env) = match self.typecheck.interner.get(callee_ty).clone() {
+            Type::FatFn { once, env, .. } => (once, once && matches!(env, FatEnvKind::Heap(_))),
+            _ => panic!("fat call requires a fat callee"),
+        };
+
         let (mut block, closure_operand) = self.lower_expr_to_operand(fb, callee, block);
 
-        let closure_place = match closure_operand {
-            Operand::Copy(place, _) | Operand::Move(place, _) => place,
+        let closure_place = match &closure_operand {
+            Operand::Copy(place, _) | Operand::Move(place, _) => place.clone(),
             Operand::Constant(..) => panic!("fat closure value must live in a place"),
         };
 
+        // Consuming call: move the whole closure value into a dedicated slot,
+        // so dataflow marks the value used-up; the fields are then read from
+        // the slot as plain copies.
+        let closure_place = if once {
+            let slot = fb.new_temp(callee_ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(slot),
+                    rvalue: Rvalue::Use(closure_operand),
+                    source: Some(callee.source.clone()),
+                },
+            );
+            Place::from_local(slot)
+        } else {
+            closure_place
+        };
+
         let fn_ptr = Operand::Copy(closure_place.clone().field(CLOSURE_FAT_FN_FIELD), None);
-        let env_ptr = Operand::Copy(closure_place.field(CLOSURE_FAT_ENV_FIELD), None);
+        let env_ptr = Operand::Copy(closure_place.clone().field(CLOSURE_FAT_ENV_FIELD), None);
 
         let mut arg_operands = Vec::with_capacity(args.len() + 1);
         arg_operands.push(env_ptr);
@@ -3908,7 +4133,35 @@ impl<'ctx> MirLowering<'ctx> {
             arg_operands.push(op);
         }
 
-        self.emit_indirect_call(fb, fn_ptr, arg_operands, block, ret_ty, callee)
+        let (block, result) =
+            self.emit_indirect_call(fb, fn_ptr, arg_operands, block, ret_ty, callee);
+
+        if !frees_env {
+            return (block, result);
+        }
+
+        // The heap env is owned by the value and the value is dead now (the
+        // call consumed it), so the block goes back. `free(null)` is a no-op,
+        // which keeps envs nulled out by later re-assignments safe.
+        let free_idx = self.ensure_free_extern();
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let sink = fb.new_temp(void_ty);
+        let next = fb.new_block();
+        fb.set_terminator(
+            block,
+            Terminator::Call {
+                func: CallTarget::Extern(free_idx),
+                args: vec![Operand::Copy(
+                    closure_place.field(CLOSURE_FAT_ENV_FIELD),
+                    None,
+                )],
+                destination: Place::from_local(sink),
+                target: Some(next),
+                source: Some(callee.source.clone()),
+            },
+        );
+
+        (next, result)
     }
 
     fn emit_indirect_call(
