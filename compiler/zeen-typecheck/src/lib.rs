@@ -1733,8 +1733,14 @@ impl<'res> TypeChecker<'res> {
                 generic_args,
             } => {
                 let (ty_def, ty_span) = *ty;
-                let struct_ty =
-                    self.check_struct_init(ty_def, generic_args, fields, ty_span, &expr.source);
+                let struct_ty = self.check_struct_init(
+                    ty_def,
+                    generic_args,
+                    fields,
+                    ty_span,
+                    &expr.source,
+                    None,
+                );
 
                 self.result.expr_types.insert(expr.id, struct_ty);
                 struct_ty
@@ -2512,6 +2518,7 @@ impl<'res> TypeChecker<'res> {
         fields: &[HirFieldInit],
         ty_span: SourceSpan,
         init_source: &Source,
+        expected: Option<TypeId>,
     ) -> TypeId {
         let Some(def_id) = ty_def else {
             for f in fields {
@@ -2534,6 +2541,23 @@ impl<'res> TypeChecker<'res> {
             .unwrap_or_default();
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+
+        // When the expected type is the same struct (e.g. an annotated
+        // `let g: Gen[u32] = Gen { .v = 7 };`), seed its generic arguments
+        // so field literals coerce to the expected fields instead of
+        // inferring a conflicting instantiation. Explicit generic args on
+        // the init still win over the seeded ones.
+        if let Some(expected) = expected
+            && let Type::Struct {
+                def_id: expected_def,
+                generic_args: expected_args,
+            } = self.result.interner.get(expected).clone()
+            && expected_def == def_id
+        {
+            for (g, arg) in struct_generics.iter().zip(expected_args.iter()) {
+                bindings.insert(*g, *arg);
+            }
+        }
 
         // When the struct being built is the enclosing struct (`Self { .. }`),
         // its generic parameters are already bound to the current instantiation
@@ -2595,13 +2619,19 @@ impl<'res> TypeChecker<'res> {
             field_value_types.insert(f.name, value_ty);
 
             if self.type_contains_generic(info.field_ty) {
-                let value_ty = self.default_literal(value_ty);
-                self.unify_for_inference(
-                    info.field_ty,
-                    value_ty,
-                    &mut bindings,
-                    (f.span, init_source.src()).into(),
-                );
+                // Generics fully bound by the expected type or explicit args
+                // are not re-inferred from the field value: the check loop
+                // below coerces the value to the bound type instead.
+                let substituted = self.substitute_generics(info.field_ty, &bindings);
+                if self.type_contains_generic(substituted) {
+                    let value_ty = self.default_literal(value_ty);
+                    self.unify_for_inference(
+                        info.field_ty,
+                        value_ty,
+                        &mut bindings,
+                        (f.span, init_source.src()).into(),
+                    );
+                }
             }
         }
 
@@ -2727,6 +2757,24 @@ impl<'res> TypeChecker<'res> {
                 let ty = self.check_block(stmts, trailing, Some(expected), &expr.source);
                 self.result.record_expr_type(expr.id, ty);
                 return ty;
+            }
+
+            HirExprKind::StructInit {
+                ty,
+                fields,
+                generic_args,
+            } => {
+                let (ty_def, ty_span) = *ty;
+                let struct_ty = self.check_struct_init(
+                    ty_def,
+                    generic_args,
+                    fields,
+                    ty_span,
+                    &expr.source,
+                    Some(expected),
+                );
+                self.result.record_expr_type(expr.id, struct_ty);
+                struct_ty
             }
 
             _ => self.synth_expr(expr),
