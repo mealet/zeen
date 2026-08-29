@@ -292,6 +292,19 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("closure cannot capture a value of generic type")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::closure_generic_capture),
+        help("closures are not generic yet; move the closure out of the generic context")
+    )]
+    ClosureGenericCapture {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("attempt to assign to const")]
     #[diagnostic(severity(Error), code(zeen::typechecker::assign_to_const))]
     AssignToConst {
