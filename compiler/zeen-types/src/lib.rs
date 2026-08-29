@@ -50,23 +50,23 @@ pub fn is_closure_struct_def(def_id: DefId) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub u32);
 
-/// How (and whether) the environment of a `Type::FatFn` value is materialized.
+/// What a fat fn value is made of.
 ///
-/// Every capturing closure gets its own concrete fat type: `Stack`/`Heap`
-/// carry the env struct type, so closure sites of the same signature stay
-/// distinguishable and heap envs can own a per-type drop function. `Opaque`
-/// is the erased form written in annotations (`Fn(T) R`) — any concrete kind
-/// widens into it, and it never owns a free.
+/// Storage is always concrete: the captures live in an inline struct (the
+/// value *is* the environment) and the called function is known statically.
+/// `Bound` is the erased annotation form `Fn(T) R` — a coercion target used
+/// for checks, never a storage type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FatEnvKind {
-    /// Erased environment: annotations and zero-capture/static coercions.
-    /// The `$env` slot is an opaque (possibly null) pointer.
-    Opaque,
-    /// A concrete stack environment of the given env struct type.
-    Stack(TypeId),
-    /// A concrete heap environment of the given env struct type; values of
-    /// this kind own the block and are released through `free` on drop.
-    Heap(TypeId),
+pub enum FatFnBody {
+    /// The annotation form `Fn(T) R` / `FnOnce(T) R`.
+    Bound,
+    /// A closure (or static `fn`) value: captures in an inline env struct,
+    /// called by dispatching directly to `target` with `&env` as the first
+    /// argument (env-first ABI).
+    Closure { env: TypeId, target: DefId },
+    /// A basic fn pointer value stored inline in a one-field struct; called
+    /// indirectly through it with the plain (no-env) ABI.
+    Pointer { pointee: TypeId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -114,15 +114,17 @@ pub enum Type {
         ret: TypeId,
     },
 
-    /// Fat function pointer `{ function: ptr, env: ptr }`. `once` marks
-    /// `FnOnce` — callable at most once because it owns a non-Copy env. The
-    /// `env` kind records how the captured environment is materialized; only
-    /// heap envs own their storage and need a free on drop.
+    /// Fat closure value. `once` marks `FnOnce` — callable at most once
+    /// because it owns a non-Copy capture; `Fn` values (all-Copy captures or
+    /// none) are `Copy`. The `body` says what the value is made of: storage
+    /// is always concrete (inline env struct + static target, or an inline
+    /// fn pointer), while `Bound` is the erased annotation form used only as
+    /// a coercion target.
     FatFn {
         params: Vec<TypeId>,
         ret: TypeId,
         once: bool,
-        env: FatEnvKind,
+        body: FatFnBody,
     },
 
     GenericParam(DefId),
@@ -968,13 +970,13 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
         let fat_once = interner.intern(Type::FatFn {
             params: vec![foo],
             ret: void,
             once: true,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
 
         assert_eq!(

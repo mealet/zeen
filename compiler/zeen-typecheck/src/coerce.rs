@@ -1,5 +1,5 @@
 use zeen_ast::types::BuiltinType;
-use zeen_types::{FatEnvKind, Type, TypeId, TypeInterner};
+use zeen_types::{FatFnBody, Type, TypeId, TypeInterner};
 
 pub fn builtin_is_integer(b: BuiltinType) -> bool {
     matches!(
@@ -174,8 +174,10 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
             CoerceResult::ArrayToManyPointer
         }
 
-        // A bare fn pointer coerces into a fat fn pointer of the same
-        // signature (`fn(T) R -> Fn(T) R`). The fat value gets a nullptr env.
+        // A basic fn pointer coerces into a fat fn value of the same
+        // signature (`fn(T) R -> Fn(T) R`). The storage the coercion
+        // produces (inline env + static target, or an inline fn pointer) is
+        // decided by the checker, which knows the coerced expression.
         (
             Type::Fn {
                 params: fp,
@@ -188,41 +190,29 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
             },
         ) if fp == tp && fr == tr => CoerceResult::FatFnCoercion,
 
-        // `Fn` (copyable, zero or Copy env) coerces into the corresponding
-        // `FnOnce` when the target expects a single call. Concrete env kinds
-        // widen into the `Opaque` annotation form; a concrete target only
-        // accepts a value of the very same env (i.e. identity, handled above).
+        // A concrete fat value widens into the erased `Fn`/`FnOnce` bound of
+        // the same signature. `FnOnce` never narrows back to `Fn`, while an
+        // `Fn` value may flow into an `FnOnce` slot (the concrete storage
+        // keeps its `Fn` abilities).
         (
             Type::FatFn {
                 params: fp,
                 ret: fr,
                 once: from_once,
-                env: from_env,
+                ..
             },
             Type::FatFn {
                 params: tp,
                 ret: tr,
                 once: to_once,
-                env: to_env,
+                body: FatFnBody::Bound,
             },
-        ) if fp == tp
-            && fr == tr
-            && (from_once == to_once || !from_once)
-            && fat_env_coercible(from_env, to_env)
-            && (from_once != to_once || from_env != to_env) =>
-        {
+        ) if fp == tp && fr == tr && (!from_once || from_once == to_once) => {
             CoerceResult::FatFnCoercion
         }
 
         _ => CoerceResult::Fail,
     }
-}
-
-/// Whether a fat value with env kind `from` can flow into a slot of env kind
-/// `to`: the erased `Opaque` form accepts any concrete kind, while a concrete
-/// slot only takes a value of its own env struct.
-fn fat_env_coercible(from: FatEnvKind, to: FatEnvKind) -> bool {
-    matches!(to, FatEnvKind::Opaque) || from == to
 }
 
 pub fn type_contains_error(interner: &TypeInterner, ty: TypeId) -> bool {
@@ -799,7 +789,7 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
 
         assert_eq!(try_coerce(&mut it, bare, fat), CoerceResult::FatFnCoercion);
@@ -818,7 +808,7 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: true,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
 
         assert_eq!(
@@ -836,13 +826,13 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
         let fat_once = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
 
         assert_eq!(
@@ -860,20 +850,20 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
         let fat_once = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
 
         assert_eq!(try_coerce(&mut it, fat_once, fat), CoerceResult::Fail);
     }
 
     #[test]
-    fn concrete_env_widens_to_opaque() {
+    fn concrete_closure_widens_to_bound() {
         let mut it = TypeInterner::default();
         let i32 = it.intern(Type::Builtin(BuiltinType::i32));
         let env_struct = it.intern(Type::Struct {
@@ -885,13 +875,16 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: true,
-            env: FatEnvKind::Heap(env_struct),
+            body: FatFnBody::Closure {
+                env: env_struct,
+                target: zeen_resolve::DefId(9_500),
+            },
         });
         let opaque = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
 
         assert_eq!(
@@ -901,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn opaque_env_does_not_narrow_to_concrete() {
+    fn bound_does_not_narrow_to_concrete() {
         let mut it = TypeInterner::default();
         let i32 = it.intern(Type::Builtin(BuiltinType::i32));
         let env_struct = it.intern(Type::Struct {
@@ -913,20 +906,23 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: true,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
         let concrete = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            env: FatEnvKind::Stack(env_struct),
+            body: FatFnBody::Closure {
+                env: env_struct,
+                target: zeen_resolve::DefId(9_500),
+            },
         });
 
         assert_eq!(try_coerce(&mut it, opaque, concrete), CoerceResult::Fail);
     }
 
     #[test]
-    fn different_concrete_envs_do_not_coerce() {
+    fn different_concrete_targets_do_not_coerce() {
         let mut it = TypeInterner::default();
         let i32 = it.intern(Type::Builtin(BuiltinType::i32));
         let env_a = it.intern(Type::Struct {
@@ -942,13 +938,19 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
-            env: FatEnvKind::Stack(env_a),
+            body: FatFnBody::Closure {
+                env: env_a,
+                target: zeen_resolve::DefId(9_500),
+            },
         });
         let closure_b = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: false,
-            env: FatEnvKind::Stack(env_b),
+            body: FatFnBody::Closure {
+                env: env_b,
+                target: zeen_resolve::DefId(9_501),
+            },
         });
 
         assert_eq!(
@@ -971,7 +973,7 @@ mod tests {
             params: vec![void],
             ret: i32,
             once: false,
-            env: FatEnvKind::Opaque,
+            body: FatFnBody::Bound,
         });
 
         assert_eq!(try_coerce(&mut it, bare, mismatched), CoerceResult::Fail);
