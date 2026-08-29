@@ -58,6 +58,9 @@ pub struct ImplEntry {
     /// concrete types for specializations.
     pub object_args: Vec<TypeId>,
     pub is_specialized: bool,
+    /// Bounds of the implement's generic parameters
+    /// (`implement[T: Display]`): `T` -> the interfaces it requires.
+    pub generic_bounds: Vec<(DefId, Vec<DefId>)>,
 }
 
 impl TypeCheckResult {
