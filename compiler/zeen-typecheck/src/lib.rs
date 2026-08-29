@@ -1186,6 +1186,19 @@ impl<'res> TypeChecker<'res> {
             return fn_ty;
         }
 
+        // Generic-typed captures would make the closure implicitly generic,
+        // which MIR monomorphization does not model yet.
+        for captured in &captures {
+            let cap_ty = self.lookup_def_type(*captured, source.clone());
+            if self.type_contains_generic(cap_ty) {
+                self.report(TypeError::ClosureGenericCapture {
+                    src: source.src(),
+                    span: source.span,
+                });
+                return self.result.interner.error();
+            }
+        }
+
         let struct_def = closure_struct_def(def_id);
 
         if !self.result.struct_info.contains_key(&struct_def) {

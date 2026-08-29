@@ -1673,11 +1673,77 @@ impl<'ctx> MirLowering<'ctx> {
 
             HirExprKind::Switch => unreachable!("not implemented in previous stages"),
             HirExprKind::Type(_) => unreachable!(),
-            // Real lowering (closure struct construction + closure fn env
-            // params) lands in the MIR stage.
-            HirExprKind::Closure { .. } => {
-                unreachable!("closure expression lowering is implemented in a later stage")
+
+            HirExprKind::Closure { def_id, .. } => {
+                let closure_ty = self.expr_type(fb, expr);
+
+                let struct_def = match self.typecheck.interner.get(closure_ty).clone() {
+                    Type::Struct { def_id, .. } if zeen_types::is_closure_struct_def(def_id) => {
+                        Some(def_id)
+                    }
+                    Type::Fn { .. } => None,
+                    other => panic!("unexpected closure type: {other:?}"),
+                };
+
+                let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None);
+
+                let Some(struct_def) = struct_def else {
+                    return (
+                        block,
+                        Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
+                    );
+                };
+
+                self.register_struct_layout(closure_ty, struct_def);
+
+                let captures = self
+                    .resolution
+                    .closure_captures
+                    .get(def_id)
+                    .cloned()
+                    .unwrap_or_default();
+
+                let mut operands = Vec::with_capacity(1 + captures.len());
+                operands.push(Operand::Constant(
+                    ConstValue::Fn(mir_id),
+                    Some(expr.source.clone()),
+                ));
+
+                for captured in captures {
+                    let local = *fb
+                        .locals_by_def
+                        .get(&captured)
+                        .expect("captured value must be a local of the enclosing frame");
+                    let ty = self
+                        .typecheck
+                        .def_types
+                        .get(&captured)
+                        .copied()
+                        .expect("captured value must have a type");
+
+                    let place = Place::from_local(local);
+                    operands.push(self.place_to_operand(place, ty, Some(expr.source.clone())));
+                }
+
+                let temp = fb.new_temp(closure_ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::Aggregate {
+                            kind: AggregateKind::Struct(struct_def),
+                            operands,
+                        },
+                        source: Some(expr.source.clone()),
+                    },
+                );
+
+                (
+                    block,
+                    Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                )
             }
+
             HirExprKind::Error => unreachable!(),
         }
     }
@@ -3201,6 +3267,31 @@ impl<'ctx> MirLowering<'ctx> {
             fb.locals_by_def.insert(param_def, local);
         }
 
+        // Closure functions receive their captured environment as trailing
+        // by-value parameters. The captured defs keep their enclosing-frame
+        // `DefId`s so body references resolve to these params.
+        let captures = self
+            .resolution
+            .closure_captures
+            .get(&def_id)
+            .cloned()
+            .unwrap_or_default();
+
+        for captured in captures {
+            let raw_ty = self
+                .typecheck
+                .def_types
+                .get(&captured)
+                .copied()
+                .expect("captured value must have a type");
+            let concrete_ty =
+                zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ty, &bindings);
+
+            let local = fb.new_local(concrete_ty, LocalKind::Param, Mutability::Mut, None, None);
+            fb.func.params.push(local);
+            fb.locals_by_def.insert(captured, local);
+        }
+
         fb.bindings = bindings;
 
         let Some(body) = &hir_fn.body else {
@@ -3275,6 +3366,14 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
         ret_ty: TypeId,
     ) -> (BlockId, Operand) {
+        let callee_ty = self.expr_type(fb, callee);
+
+        if let Type::Struct { def_id, .. } = self.typecheck.interner.get(callee_ty).clone()
+            && zeen_types::is_closure_struct_def(def_id)
+        {
+            return self.lower_closure_call(fb, callee, def_id, args, block, ret_ty);
+        }
+
         let (mut block, callee_operand) = self.lower_expr_to_operand(fb, callee, block);
 
         let mut arg_operands = Vec::with_capacity(args.len());
@@ -3284,6 +3383,60 @@ impl<'ctx> MirLowering<'ctx> {
             arg_operands.push(op);
         }
 
+        self.emit_indirect_call(fb, callee_operand, arg_operands, block, ret_ty, callee)
+    }
+
+    /// Calls a closure value: extracts the `$fn_ptr` field and appends the
+    /// captured environment fields as trailing by-value arguments (moved for
+    /// non-`Copy` captures, copied otherwise).
+    fn lower_closure_call(
+        &mut self,
+        fb: &mut FnBuilder,
+        callee: &HirExpr,
+        struct_def: DefId,
+        args: &[Rc<HirExpr>],
+        block: BlockId,
+        ret_ty: TypeId,
+    ) -> (BlockId, Operand) {
+        let (mut block, closure_operand) = self.lower_expr_to_operand(fb, callee, block);
+
+        let closure_place = match closure_operand {
+            Operand::Copy(place, _) | Operand::Move(place, _) => place,
+            Operand::Constant(..) => panic!("closure value must live in a place"),
+        };
+
+        let info = self
+            .struct_info(struct_def)
+            .expect("closure struct info is missing")
+            .clone();
+
+        let fn_ptr_field = info.fields[0].field_def;
+        let fn_ptr_operand = Operand::Copy(closure_place.clone().field(fn_ptr_field), None);
+
+        let mut arg_operands = Vec::with_capacity(args.len() + info.fields.len() - 1);
+        for arg in args.iter() {
+            let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+            block = b;
+            arg_operands.push(op);
+        }
+
+        for field in info.fields.iter().skip(1) {
+            let place = closure_place.clone().field(field.field_def);
+            arg_operands.push(self.place_to_operand(place, field.field_ty, None));
+        }
+
+        self.emit_indirect_call(fb, fn_ptr_operand, arg_operands, block, ret_ty, callee)
+    }
+
+    fn emit_indirect_call(
+        &mut self,
+        fb: &mut FnBuilder,
+        callee_operand: Operand,
+        arg_operands: Vec<Operand>,
+        block: BlockId,
+        ret_ty: TypeId,
+        source_expr: &HirExpr,
+    ) -> (BlockId, Operand) {
         let dest_local = fb.new_temp(ret_ty);
         let dest_place = Place::from_local(dest_local);
         let next_block = fb.new_block();
@@ -3297,7 +3450,7 @@ impl<'ctx> MirLowering<'ctx> {
                 args: arg_operands,
                 destination: dest_place.clone(),
                 target: if is_diverging { None } else { Some(next_block) },
-                source: None,
+                source: Some(source_expr.source.clone()),
             },
         );
 
@@ -3305,7 +3458,10 @@ impl<'ctx> MirLowering<'ctx> {
             fb.set_terminator(next_block, Terminator::Unreachable);
             (next_block, Operand::Constant(ConstValue::Void, None))
         } else {
-            (next_block, self.place_to_operand(dest_place, ret_ty, None))
+            (
+                next_block,
+                self.place_to_operand(dest_place, ret_ty, Some(source_expr.source.clone())),
+            )
         }
     }
 

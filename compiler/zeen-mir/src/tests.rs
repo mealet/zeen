@@ -557,3 +557,158 @@ fn global_depends_on_another_init_order() {
         "a must be initialized before b"
     );
 }
+
+// --> Closures
+
+use crate::{AggregateKind, CallTarget, ConstValue, MirFunctionId, Operand, Rvalue, Terminator};
+use zeen_types::is_closure_struct_def;
+
+fn fn_id_by_name(mir: &MirLoweringResult, name: &str) -> Option<MirFunctionId> {
+    mir.program
+        .function_names
+        .iter()
+        .find(|(_, n)| n.as_str() == name)
+        .map(|(id, _)| *id)
+}
+
+fn calls_of(mir: &MirLoweringResult, id: MirFunctionId) -> Vec<&Terminator> {
+    mir.program.functions[&id]
+        .blocks
+        .iter()
+        .map(|b| &b.terminator)
+        .collect()
+}
+
+#[test]
+fn closure_fn_named_after_parent() {
+    let mir = compile_mir_ok("fn main() { let x = 1; let c = fn() i32 { return x; }; }");
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+    assert!(
+        names.iter().any(|n| n == "main->closure0"),
+        "closure fn must be named `main->closure0`, got {names:?}"
+    );
+}
+
+#[test]
+fn closure_fn_receives_env_params() {
+    let mir = compile_mir_ok(
+        "fn main() { let x = 1; let y = 2; let c = fn(a: i32) i32 { return a + x + y; }; }",
+    );
+
+    let id = fn_id_by_name(&mir, "main->closure0").expect("closure fn missing");
+    let func = &mir.program.functions[&id];
+
+    assert_eq!(func.params.len(), 3, "user param + two captured env params");
+}
+
+#[test]
+fn zero_capture_closure_lowered_to_fn_const_call() {
+    let mir =
+        compile_mir_ok("fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(41); }");
+
+    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
+    let func = &mir.program.functions[&main_id];
+
+    let indirect = func.blocks.iter().any(|b| {
+        matches!(
+            b.terminator,
+            Terminator::Call {
+                func: CallTarget::Indirect(_),
+                ..
+            }
+        )
+    });
+    assert!(indirect, "zero-capture closure call must be indirect");
+
+    let fn_const_stored = func.blocks.iter().any(|b| {
+        b.statements.iter().any(|s| {
+            matches!(
+                s,
+                crate::MirStatement::Assign {
+                    rvalue: Rvalue::Use(Operand::Constant(ConstValue::Fn(_), _)),
+                    ..
+                }
+            )
+        })
+    });
+    assert!(
+        fn_const_stored,
+        "closure value must lower to a fn-ptr constant"
+    );
+}
+
+#[test]
+fn capturing_closure_call_appends_env_args() {
+    let mir = compile_mir_ok(
+        "fn main() { let x = 5; let c = fn(a: i32) i32 { return a + x; }; let r = c(2); }",
+    );
+
+    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
+    let calls = calls_of(&mir, main_id);
+
+    let env_arg_count = calls.iter().find_map(|t| match t {
+        Terminator::Call {
+            func: CallTarget::Indirect(Operand::Copy(place, _)),
+            args,
+            ..
+        } if !place.projection.is_empty() => Some(args.len()),
+        _ => None,
+    });
+
+    assert_eq!(
+        env_arg_count,
+        Some(2),
+        "call args must be user arg + captured env arg"
+    );
+}
+
+#[test]
+fn closure_value_is_struct_aggregate() {
+    let mir = compile_mir_ok("fn main() { let x = 5; let c = fn() i32 { return x; }; }");
+
+    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
+    let func = &mir.program.functions[&main_id];
+
+    let has_aggregate = func.blocks.iter().any(|b| {
+        b.statements.iter().any(|s| {
+            matches!(
+                s,
+                crate::MirStatement::Assign {
+                    rvalue: Rvalue::Aggregate { kind: AggregateKind::Struct(def), .. },
+                    ..
+                } if is_closure_struct_def(*def)
+            )
+        })
+    });
+
+    assert!(
+        has_aggregate,
+        "capturing closure must build a struct aggregate"
+    );
+}
+
+#[test]
+fn closure_struct_layout_is_registered() {
+    let mir = compile_mir_ok("fn main() { let x = 5; let c = fn() i32 { return x; }; }");
+
+    let has_layout = mir
+        .program
+        .struct_layouts
+        .values()
+        .any(|layout| is_closure_struct_def(layout.def_id));
+
+    assert!(has_layout, "closure struct must have a registered layout");
+}
+
+#[test]
+fn generic_typed_capture_is_rejected() {
+    let errors = compile_mir("fn generic[T](v: T) void { let c = fn() T { return v; }; }")
+        .err()
+        .expect("generic-typed capture must be rejected");
+
+    assert!(
+        errors.iter().any(|e| e.contains("generic")),
+        "expected generic capture error, got: {errors:?}"
+    );
+}
