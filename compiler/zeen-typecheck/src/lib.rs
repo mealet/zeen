@@ -2592,10 +2592,10 @@ impl<'res> TypeChecker<'res> {
             };
 
             let value_ty = self.synth_expr(&f.value);
-            let value_ty = self.default_literal(value_ty);
             field_value_types.insert(f.name, value_ty);
 
             if self.type_contains_generic(info.field_ty) {
+                let value_ty = self.default_literal(value_ty);
                 self.unify_for_inference(
                     info.field_ty,
                     value_ty,
@@ -2638,7 +2638,10 @@ impl<'res> TypeChecker<'res> {
                 .copied()
                 .unwrap_or(expected_ty);
 
-            if matches!(f.value.kind, HirExprKind::ArrayInit { .. }) {
+            if matches!(
+                f.value.kind,
+                HirExprKind::ArrayInit { .. } | HirExprKind::ArrayRepeatInit { .. }
+            ) {
                 // Let `check_expr` check each element against the expected
                 // array element type (string literals coerce to slices), and
                 // record the coerced array type for MIR lowering.
