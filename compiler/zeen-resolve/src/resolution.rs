@@ -113,6 +113,11 @@ pub struct ResolutionResult {
     /// For nested function declarations: maps the nested fn's `DefId` to its
     /// enclosing function's `DefId`, used to build `<parent>-><name>` symbols.
     pub nested_fn_parents: HashMap<DefId, DefId>,
+
+    /// For closures: maps the closure's `DefId` to the ordered (first-use,
+    /// deduplicated) list of `DefId`s it captures from its environment. Env
+    /// values become extra params of the generated closure function.
+    pub closure_captures: HashMap<DefId, Vec<DefId>>,
 }
 
 impl ResolutionResult {

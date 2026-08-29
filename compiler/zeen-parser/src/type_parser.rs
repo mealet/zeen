@@ -39,6 +39,11 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
             // fn type: fn(T, ...) T
             TokenKind::Keyword(token::CompilerKeyword::Fn) => self.parse_fn_type(),
 
+            // fat fn type: Fn(T, ...) T / FnOnce(T, ...) T
+            TokenKind::Ident if self.current_ident_is("FnOnce") || self.current_ident_is("Fn") => {
+                self.parse_fat_fn_type()
+            }
+
             // self / Self
             TokenKind::Keyword(token::CompilerKeyword::SelfLower) => self.parse_self_type(),
             TokenKind::Keyword(token::CompilerKeyword::SelfUpper) => self.parse_self_alias(),
@@ -81,6 +86,69 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
 }
 
 impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
+    fn current_ident_is(&self, name: &str) -> bool {
+        let tok = self.p.current();
+        let slice = &self.p.src[tok.span.offset()..tok.span.offset() + tok.span.len()];
+        slice == name
+    }
+
+    fn parse_fat_fn_type(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
+        let kw = self.p.current_clone();
+        let once = self.current_ident_is("FnOnce");
+        let _ = self.p.advance_not_eof()?;
+
+        if !self.p.eat(TokenKind::OpenParen) {
+            self.p.report(ParserError::UnknownType {
+                label: "invalid fat fn type syntax".into(),
+                help: Some(
+                    "consider following syntax: `Fn(T, ...) T` or `FnOnce(T, ...) T`".into(),
+                ),
+
+                src: self.p.named_src(),
+                span: kw.merge_span(self.p.current.span),
+            });
+
+            return None;
+        }
+
+        let mut args_types: SmallVec<[&'_ TypeExpr<'ctx>; 16]> = SmallVec::new();
+
+        while !(self.p.at(TokenKind::CloseParen) || self.p.at(TokenKind::Eof)) {
+            let type_expr = self.parse()?;
+            args_types.push(type_expr);
+
+            let _ = self.p.eat(TokenKind::Comma);
+        }
+
+        if !self.p.eat(TokenKind::CloseParen) {
+            self.p.report(ParserError::UnknownType {
+                label: "signature is not closed".into(),
+                help: Some("consider following syntax: `Fn(T, ...) T`".into()),
+
+                src: self.p.named_src(),
+                span: kw.merge_span(self.p.current.span),
+            });
+
+            return None;
+        }
+
+        let arena_params = self.p.arena.alloc_slice_clone(&args_types);
+
+        // The return type is mandatory: `Fn(T, ...) R` / `FnOnce(T, ...) R`.
+        let ret_type = self.parse()?;
+
+        let expr = self.p.arena.alloc(TypeExpr {
+            kind: TypeKind::FatFn {
+                params: arena_params,
+                ret: ret_type,
+                once,
+            },
+            span: kw.merge_span(ret_type.span),
+        });
+
+        Some(expr)
+    }
+
     pub fn parse_generics_declarations(&mut self) -> Option<&'ctx [GenericType<'ctx>]> {
         if self.p.eat(TokenKind::OpenBracket) {
             let mut generics: SmallVec<[GenericType<'ctx>; 8]> = SmallVec::new();
@@ -939,6 +1007,71 @@ mod tests {
                     ]),
                 },
                 span: (0, 21).into()
+            }
+        );
+
+        // eof
+        assert_eq!(type_parser.parse(), None);
+    }
+
+    #[test]
+    fn fat_fn_type() {
+        const SRC: &str = "Fn(i32, u32) void";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::FatFn {
+                    params: &[
+                        &TypeExpr {
+                            kind: TypeKind::Builtin(types::BuiltinType::i32),
+                            span: (3, 3).into()
+                        },
+                        &TypeExpr {
+                            kind: TypeKind::Builtin(types::BuiltinType::u32),
+                            span: (8, 3).into()
+                        },
+                    ],
+                    ret: &TypeExpr {
+                        kind: TypeKind::Builtin(types::BuiltinType::void),
+                        span: (13, 4).into()
+                    },
+                    once: false,
+                },
+                span: (0, 17).into()
+            }
+        );
+
+        // eof
+        assert_eq!(type_parser.parse(), None);
+    }
+
+    #[test]
+    fn fat_fn_once_type() {
+        const SRC: &str = "FnOnce(Foo) i32";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::FatFn {
+                    params: &[&TypeExpr {
+                        kind: TypeKind::Named {
+                            name: (rodeo.borrow_mut().get_or_intern("Foo")),
+                            generic_args: None,
+                        },
+                        span: (7, 3).into()
+                    },],
+                    ret: &TypeExpr {
+                        kind: TypeKind::Builtin(types::BuiltinType::i32),
+                        span: (12, 3).into()
+                    },
+                    once: true,
+                },
+                span: (0, 15).into()
             }
         );
 

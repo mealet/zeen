@@ -103,6 +103,9 @@ pub struct CodeGen<'ctx, 'prog> {
     // per-function state
     locals: HashMap<LocalId, PointerValue<'ctx>>,
     blocks: HashMap<BlockId, BasicBlock<'ctx>>,
+    /// Entry block of the function currently being emitted; allocas must be
+    /// created there so loops don't grow the stack on every iteration.
+    current_entry: Option<BasicBlock<'ctx>>,
 }
 
 impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
@@ -202,6 +205,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             global_vars,
             locals: HashMap::new(),
             blocks: HashMap::new(),
+            current_entry: None,
         })
     }
 
@@ -379,6 +383,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let entry = self.context.append_basic_block(function, "entry");
         self.locals.clear();
         self.blocks.clear();
+        self.current_entry = Some(entry);
         self.builder.position_at_end(entry);
 
         self.emit_panic_prologue(func, id);
@@ -419,11 +424,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             self.emit_terminator(&block.terminator, func, id);
         }
 
-        assert!(
-            function.verify(false),
-            "LLVM failed to verify function:\n{}",
-            self.print_ir()
-        );
+        if !function.verify(false) {
+            panic!(
+                "LLVM failed to verify function {:?}:\n{}",
+                function.get_name().to_str(),
+                self.print_ir()
+            );
+        }
     }
 
     fn emit_main_wrapper(&mut self) {
@@ -467,7 +474,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             Type::IntLiteral => self.context.i32_type().into(),
             Type::FloatLiteral => self.context.f64_type().into(),
 
-            Type::Struct { .. } | Type::Slice { .. } => self.struct_types[&ty].into(),
+            Type::Struct { .. } | Type::Slice { .. } | Type::FatFn { .. } => {
+                let entry = *self.struct_types.get(&ty).unwrap_or_else(|| {
+                    panic!(
+                        "no struct type registered for {ty:?} = {:?}",
+                        self.typecheck.interner.get(ty).clone()
+                    )
+                });
+                entry.into()
+            }
 
             Type::Enum { .. } => self.context.i32_type().into(),
             // Never reach codegen on a valid program.
@@ -640,6 +655,22 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
+    /// Builds an `alloca` at the top of the current function's entry block.
+    /// An alloca created at the current position would execute on every visit
+    /// of its block, growing the stack each time — a loop creating aggregate
+    /// temporaries would exhaust it after enough iterations.
+    fn entry_alloca(&self, ty: BasicTypeEnum<'ctx>, name: &str) -> PointerValue<'ctx> {
+        let entry = self
+            .current_entry
+            .expect("entry block must be set while emitting a function");
+        let alloca_builder = self.context.create_builder();
+        match entry.get_first_instruction() {
+            Some(first) => alloca_builder.position_before(&first),
+            None => alloca_builder.position_at_end(entry),
+        }
+        alloca_builder.build_alloca(ty, name).unwrap()
+    }
+
     fn emit_statement(&mut self, stmt: &MirStatement, func: &MirFunction) {
         match stmt {
             MirStatement::Assign { place, rvalue, .. } => {
@@ -678,11 +709,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     /// Drops the value stored at `ptr`: either calls the monomorphized `drop`
-    /// function of a struct with an explicit `Drop` implementation, or tears
-    /// down an aggregate element-by-element (recursively).
+    /// function of a struct with an explicit `Drop` implementation, calls the
+    /// synthesized env-free of a heap-owning fat closure, or tears down an
+    /// aggregate element-by-element (recursively).
     fn emit_drop_ptr(&mut self, ptr: PointerValue<'ctx>, ty: TypeId) {
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } => {
+            Type::Struct { .. } | Type::FatFn { .. } => {
                 let drop_id = self.program.drop_functions[&ty];
                 let callee = self.functions[&drop_id];
                 let value = self
@@ -716,7 +748,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     fn place_needs_drop(&self, place: &Place, func: &MirFunction) -> bool {
         let ty = self.place_type(place, func);
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } => self.program.drop_functions.contains_key(&ty),
+            Type::Struct { .. } | Type::FatFn { .. } => {
+                self.program.drop_functions.contains_key(&ty)
+            }
             Type::Array { element, .. } => self.place_elem_needs_drop(element),
             _ => false,
         }
@@ -724,7 +758,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     fn place_elem_needs_drop(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } => self.program.drop_functions.contains_key(&ty),
+            Type::Struct { .. } | Type::FatFn { .. } => {
+                self.program.drop_functions.contains_key(&ty)
+            }
             Type::Array { element, .. } => self.place_elem_needs_drop(element),
             _ => false,
         }
@@ -863,7 +899,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         func: &MirFunction,
     ) -> BasicValueEnum<'ctx> {
         let agg_ty = self.map_basic_type(expected_ty);
-        let alloca = self.builder.build_alloca(agg_ty, "aggregate").unwrap();
+        let alloca = self.entry_alloca(agg_ty, "aggregate");
 
         for (i, operand) in operands.iter().enumerate() {
             // A string literal stored into an array/slice field must be
@@ -871,7 +907,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             // `{ ptr, len }` for slices) instead of being stored as a raw
             // pointer to the global literal.
             let elem_ty = match kind {
-                AggregateKind::Struct(_) => self.program.struct_layouts[&expected_ty].fields[i].ty,
+                AggregateKind::Struct(_) | AggregateKind::Slice => {
+                    // Slices store through their registered layout: the `len`
+                    // field is `usize` — storing it narrower leaves the rest
+                    // of the slot uninitialized garbage, which the loop
+                    // condition then reads as a huge length.
+                    self.program.struct_layouts[&expected_ty].fields[i].ty
+                }
                 _ => self.index_element_type(expected_ty),
             };
             let value = if matches!(operand, Operand::Constant(ConstValue::Str(_), _)) {
@@ -1366,7 +1408,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         ptr: PointerValue<'ctx>,
         len: u64,
     ) -> BasicValueEnum<'ctx> {
-        let alloca = self.builder.build_alloca(slice_ty, "slice").unwrap();
+        let alloca = self.entry_alloca(slice_ty, "slice");
         let ptr_field = self
             .builder
             .build_struct_gep(slice_ty, alloca, 0, "")
@@ -1606,6 +1648,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             (Enum { .. }, Enum { .. }) => value,
 
+            // A fat-to-fat cast is the env-kind widening (a concrete closure
+            // flowing into an `Opaque` `Fn`/`FnOnce` slot). Both layouts are
+            // the same `{ $fn, $env }` pair, so the value passes through.
+            (FatFn { .. }, FatFn { .. }) => value,
+
             _ => {
                 unreachable!("cast from {src:?} to {dst_ty:?} reached codegen")
             }
@@ -1747,7 +1794,34 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let op_ty = self
                     .operand_type(operand, func)
                     .expect("fn pointer operand");
-                let fn_ty = self.map_fn_pointer_type(op_ty);
+
+                // Closure calls pass the captured environment as trailing
+                // arguments beyond the `$fn_ptr` signature, so the ABI must be
+                // rebuilt from the call site when the counts disagree.
+                let declared_params: Vec<TypeId> = match self.typecheck.interner.get(op_ty) {
+                    Type::Fn { params, .. } => params.clone(),
+                    _ => Vec::new(),
+                };
+
+                let fn_ty = if declared_params.len() == args.len() {
+                    self.map_fn_pointer_type(op_ty)
+                } else {
+                    let arg_types: Vec<BasicMetadataTypeEnum<'ctx>> = args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, arg)| {
+                            let arg_ty = self
+                                .operand_type(arg, func)
+                                .or_else(|| declared_params.get(i).copied())
+                                .expect("indirect call argument type");
+                            self.map_basic_type(arg_ty).into()
+                        })
+                        .collect();
+
+                    let ret_ty = func.local(destination.local).ty;
+                    self.make_fn_type(self.map_ret_type(ret_ty), &arg_types, false)
+                };
+
                 self.builder
                     .build_indirect_call(fn_ty, fptr, &arg_values, "")
                     .unwrap()
@@ -1944,7 +2018,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     // The macro result is `[]const char`: build the
                     // `{ ptr, len }` fat pointer over the stack buffer.
                     let slice_ty = self.map_basic_type(dest_ty);
-                    let slice_alloca = self.builder.build_alloca(slice_ty, "fmt_slice").unwrap();
+                    let slice_alloca = self.entry_alloca(slice_ty, "fmt_slice");
                     let ptr_field = self
                         .builder
                         .build_struct_gep(slice_ty, slice_alloca, 0, "")

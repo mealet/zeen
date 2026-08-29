@@ -24,7 +24,9 @@ use zeen_typecheck::{
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use zeen_types::{
-    SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
+    CLOSURE_FAT_DEF, CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD, FatFnBody, SLICE_LEN_FIELD,
+    SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
+    closure_field_def, closure_struct_def,
 };
 
 use crate::error::{MirError, MirWarning};
@@ -78,7 +80,7 @@ pub fn lower_program<'ctx>(
     let mut main_fn: Option<MirFunctionId> = None;
 
     if let Some(main_def) = main_def {
-        let main_fn_monomorphized = lowering.monomorphize_fn(main_def, Vec::new(), None);
+        let main_fn_monomorphized = lowering.monomorphize_fn(main_def, Vec::new(), None, &[]);
         lowering.set_function_name(main_fn_monomorphized, "main");
 
         main_fn = Some(main_fn_monomorphized);
@@ -91,7 +93,7 @@ pub fn lower_program<'ctx>(
                 .unwrap_or(false);
 
             if !is_core {
-                lowering.monomorphize_fn(*def_id, Vec::new(), *owner);
+                lowering.monomorphize_fn(*def_id, Vec::new(), *owner, &[]);
             }
         });
 
@@ -100,6 +102,8 @@ pub fn lower_program<'ctx>(
 
     lowering.build_init_globals();
     lowering.register_drop_functions();
+    lowering.register_reachable_fat_layouts();
+    lowering.register_fat_drop_functions();
 
     let warnings = std::mem::take(&mut lowering.warnings);
     let mut program = lowering.finish()?;
@@ -132,6 +136,18 @@ pub struct MirLowering<'ctx> {
     /// of a nested function so its MIR name becomes `<parent>-><name>`.
     fn_stack: Vec<FnContext>,
 
+    /// Cache of synthesized bare-fn → fat-`{fn,env}` adapter functions, keyed
+    /// by (target, fat signature) so each adapter is emitted once.
+    fat_adapter_cache: HashMap<(MirFunctionId, TypeId), MirFunctionId>,
+
+    /// Cache of synthesized per-fat-type drop functions (env teardown +
+    /// `free`), keyed by the fat `TypeId`.
+    fat_drop_cache: HashMap<TypeId, MirFunctionId>,
+
+    /// Fat types of closures whose value is never used: no env is
+    /// materialized for them (`null`), so they must not get a drop function.
+    unused_fat_types: HashSet<TypeId>,
+
     mode: CompilationMode,
 
     globals: Vec<GlobalDecl>,
@@ -156,7 +172,10 @@ pub struct FnContext {
 
 #[derive(Default)]
 pub struct MonoCache {
-    cache: HashMap<(DefId, Vec<TypeId>), MirFunctionId>,
+    /// Generic instantiations plus per-call-site fat (closure) parameter
+    /// bindings: the third key component is the concrete fat type bound to
+    /// each `Fn`/`FnOnce`-typed parameter, in parameter order.
+    cache: HashMap<(DefId, Vec<TypeId>, Vec<TypeId>), MirFunctionId>,
     next_id: u32,
 }
 
@@ -180,8 +199,15 @@ struct LoopTargets {
 pub struct FnBuilder {
     func: MirFunction,
     locals_by_def: HashMap<DefId, LocalId>,
+    /// For closure bodies: captured variables referenced through the env
+    /// pointer. Maps the captured `DefId` to `env.deref().field(..)`. Looked up
+    /// after `locals_by_def` so ordinary locals still win.
+    captured_places: HashMap<DefId, Place>,
     loop_stack: Vec<LoopTargets>,
     bindings: HashMap<DefId, TypeId>,
+    /// Concrete fat types bound to this function's `Fn`/`FnOnce` parameters
+    /// (param `DefId` → concrete fat type), filled in per monomorphized copy.
+    fat_bindings: Vec<(DefId, TypeId)>,
     /// Lexical scope stack. Each active `HirExprKind::Block` pushes an entry;
     /// every `let` inside it registers its local. On scope exit the locals are
     /// emitted as `StorageDead`, giving zeen-flow a per-scope drop point.
@@ -208,9 +234,21 @@ impl FnBuilder {
                 is_drop_impl: false,
             },
             locals_by_def: HashMap::new(),
+            captured_places: HashMap::new(),
             loop_stack: Vec::new(),
             bindings,
+            fat_bindings: Vec::new(),
             scope_stack: Vec::new(),
+        }
+    }
+
+    /// The place backing a `DefId` inside this frame: an ordinary local first,
+    /// then a captured variable exposed through the closure env pointer.
+    fn place_for_def(&self, def_id: DefId) -> Option<Place> {
+        if let Some(local) = self.locals_by_def.get(&def_id) {
+            Some(Place::from_local(*local))
+        } else {
+            self.captured_places.get(&def_id).cloned()
         }
     }
 
@@ -282,6 +320,9 @@ impl<'ctx> MirLowering<'ctx> {
             mono_cache: MonoCache::new(),
             hir_fns_by_def,
             fn_stack: Vec::new(),
+            fat_adapter_cache: HashMap::new(),
+            fat_drop_cache: HashMap::new(),
+            unused_fat_types: HashSet::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             mode,
@@ -491,6 +532,11 @@ impl<'ctx> MirLowering<'ctx> {
                     self.collect_global_expr_deps(trailing, out);
                 }
             }
+            HirExprKind::Closure { def, .. } => {
+                if let Some(body) = &def.body {
+                    self.collect_global_stmt_deps(body, out);
+                }
+            }
             HirExprKind::Literal(_)
             | HirExprKind::GenericParamRef(_)
             | HirExprKind::Switch
@@ -586,11 +632,205 @@ impl<'ctx> MirLowering<'ctx> {
                 continue;
             };
 
-            let mono_id = self.monomorphize_fn(*drop_method, generic_args, Some(struct_def));
+            let mono_id = self.monomorphize_fn(*drop_method, generic_args, Some(struct_def), &[]);
             if let Some(func) = self.program.functions.get_mut(&mono_id) {
                 func.is_drop_impl = true;
             }
             self.program.drop_functions.insert(ty, mono_id);
+        }
+    }
+
+    /// Registers the layout of every `FatFn` type showing up among the
+    /// lowered locals. A fat value *is* its environment: a `Closure` body's
+    /// layout is the env struct's capture fields, a `Pointer` body holds one
+    /// fn pointer. Building a fat value registers its own layout, but a value
+    /// that merely flows through a parameter or a call slot never gets one
+    /// built, and field access on it needs the layout too.
+    fn register_reachable_fat_layouts(&mut self) {
+        let fat_types: Vec<TypeId> = self
+            .program
+            .functions
+            .values()
+            .flat_map(|func| func.locals.iter().map(|local| local.ty))
+            .filter(|&ty| matches!(self.typecheck.interner.get(ty), Type::FatFn { .. }))
+            .collect::<HashSet<TypeId>>()
+            .into_iter()
+            .collect();
+
+        for fat_ty in fat_types {
+            if self.program.struct_layouts.contains_key(&fat_ty) {
+                continue;
+            }
+            match self.typecheck.interner.get(fat_ty).clone() {
+                Type::FatFn {
+                    body: FatFnBody::Closure { env, .. },
+                    ..
+                } => {
+                    if let Type::Struct { def_id, .. } = self.typecheck.interner.get(env).clone() {
+                        self.register_fat_layout(fat_ty, def_id);
+                    }
+                }
+                Type::FatFn {
+                    body: FatFnBody::Pointer { pointee },
+                    ..
+                } => {
+                    self.program.struct_layouts.insert(
+                        fat_ty,
+                        StructLayout {
+                            def_id: CLOSURE_FAT_DEF,
+                            generic_args: vec![],
+                            fields: vec![StructFieldLayout {
+                                def_id: CLOSURE_FAT_FN_FIELD,
+                                ty: pointee,
+                            }],
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Registers the drop function of every `FnOnce` fat type showing up
+    /// among the lowered locals. The value owns its captured environment
+    /// inline, so its death tears the captured (non-Copy) values down —
+    /// nothing is ever freed. `Fn` values hold only Copy captures and need
+    /// no drop.
+    fn register_fat_drop_functions(&mut self) {
+        let fat_types: Vec<TypeId> = self
+            .program
+            .functions
+            .values()
+            .flat_map(|func| func.locals.iter().map(|local| local.ty))
+            .filter(|&ty| {
+                matches!(
+                    self.typecheck.interner.get(ty),
+                    Type::FatFn {
+                        once: true,
+                        body: FatFnBody::Closure { .. },
+                        ..
+                    }
+                )
+            })
+            .collect::<HashSet<TypeId>>()
+            .into_iter()
+            .collect();
+
+        for fat_ty in fat_types {
+            if self.program.drop_functions.contains_key(&fat_ty) {
+                continue;
+            }
+            let id = self.fat_drop_function(fat_ty);
+            self.program.drop_functions.insert(fat_ty, id);
+        }
+    }
+
+    /// Returns (synthesizing on first use) the drop function of a fat type:
+    /// teardown of the captured values. Consuming `FnOnce` calls reuse it to
+    /// release the captures right after the call.
+    fn fat_drop_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
+        if let Some(&id) = self.fat_drop_cache.get(&fat_ty) {
+            return id;
+        }
+        let id = self.synthesize_fat_drop_function(fat_ty);
+        self.fat_drop_cache.insert(fat_ty, id);
+        id
+    }
+
+    /// Builds the drop function of a `FnOnce` fat type: the value is passed
+    /// by value and `Drop` statements tear each teardown-needing capture
+    /// down (codegen expands them recursively). Nothing is freed — the
+    /// captures live inside the value itself.
+    fn synthesize_fat_drop_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
+        let Type::FatFn {
+            body: FatFnBody::Closure { env, .. },
+            ..
+        } = self.typecheck.interner.get(fat_ty).clone()
+        else {
+            unreachable!("fat drop requires a closure-body fat type");
+        };
+
+        if let Type::Struct { def_id, .. } = self.typecheck.interner.get(env).clone() {
+            self.register_fat_layout(fat_ty, def_id);
+        }
+
+        let id = self.mono_cache.fresh_id();
+        self.set_function_name(id, format!("$fatdrop#{}", id.0));
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+
+        let mut func = MirFunction {
+            source_def: CLOSURE_FAT_DEF,
+            mono_args: Vec::new(),
+            locals: Vec::new(),
+            blocks: Vec::new(),
+            params: Vec::new(),
+            entry_block: BlockId(0),
+            ret_ty: void_ty,
+            is_drop_impl: true,
+        };
+        func.new_block(); // block 0 (entry)
+        let bb1 = func.new_block();
+
+        let self_param = func.new_local(LocalDecl {
+            ty: fat_ty,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Param,
+            name: None,
+            source: None,
+        });
+        func.params.push(self_param);
+
+        for field in self.env_struct_fields(env) {
+            if !self.type_needs_teardown(field.field_ty) {
+                continue;
+            }
+            let field_place = Place::from_local(self_param).field(field.field_def);
+            func.blocks[0]
+                .statements
+                .push(MirStatement::Drop(field_place));
+        }
+
+        func.blocks[0].terminator = Terminator::Goto(bb1);
+        func.blocks[bb1.0 as usize].terminator =
+            Terminator::Return(Operand::Constant(ConstValue::Void, None));
+
+        self.program.functions.insert(id, func);
+        id
+    }
+
+    /// Field infos of a synthesized env struct type.
+    fn env_struct_fields(&self, env_ty: TypeId) -> Vec<zeen_types::StructFieldInfo> {
+        match self.typecheck.interner.get(env_ty).clone() {
+            Type::Struct { def_id, .. } => self
+                .typecheck
+                .struct_info
+                .get(&def_id)
+                .map(|info| info.fields.clone())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether a value of this type needs teardown when its owner dies:
+    /// structs with a `Drop` implementation (or nested teardown-needing
+    /// fields), fat closure values, and arrays of such. Env structs are
+    /// never generic, so no substitution is needed here.
+    fn type_needs_teardown(&self, ty: TypeId) -> bool {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Struct { def_id, .. } => {
+                let Some(info) = self.typecheck.struct_info.get(&def_id) else {
+                    return false;
+                };
+                info.capabalities.has_explicit_drop
+                    || info
+                        .fields
+                        .iter()
+                        .any(|f| self.type_needs_teardown(f.field_ty))
+            }
+            Type::FatFn { .. } => true,
+            Type::Array { element, .. } => self.type_needs_teardown(element),
+            _ => false,
         }
     }
 
@@ -606,6 +846,15 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn expr_type(&mut self, fb: &FnBuilder, expr: &HirExpr) -> TypeId {
+        // A fat-annotated parameter is erased in the signature but stores a
+        // concrete closure type in this monomorphized copy: rewrite reads of
+        // it to the bound type.
+        if let HirExprKind::VarRef(def_id) = &expr.kind
+            && let Some((_, bound_ty)) = fb.fat_bindings.iter().find(|(d, _)| d == def_id)
+        {
+            return *bound_ty;
+        }
+
         let raw = self
             .typecheck
             .expr_types
@@ -665,6 +914,11 @@ impl<'ctx> MirLowering<'ctx> {
             | Type::Void
             | Type::Never
             | Type::Error => true,
+
+            // `Fn` closure values (all-Copy captures or none) are Copy: the
+            // inline environment is duplicated with the value. `FnOnce` owns
+            // a non-Copy capture, so it is move-only.
+            Type::FatFn { once, .. } => !once,
 
             Type::Struct { def_id, .. } => self
                 .typecheck
@@ -820,6 +1074,104 @@ impl<'ctx> MirLowering<'ctx> {
         );
     }
 
+    /// Registers the layout of a fat closure value: the value *is* its
+    /// environment, so the layout is the env struct's capture fields.
+    fn register_fat_layout(&mut self, fat_ty: TypeId, env_def: DefId) {
+        if self.program.struct_layouts.contains_key(&fat_ty) {
+            return;
+        }
+
+        let env_ty = self.typecheck.interner.intern(Type::Struct {
+            def_id: env_def,
+            generic_args: Vec::new(),
+        });
+        self.register_struct_layout(env_ty, env_def);
+
+        let fields = self
+            .typecheck
+            .struct_info
+            .get(&env_def)
+            .map(|info| {
+                info.fields
+                    .iter()
+                    .map(|f| StructFieldLayout {
+                        def_id: f.field_def,
+                        ty: f.field_ty,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        self.program.struct_layouts.insert(
+            fat_ty,
+            StructLayout {
+                def_id: CLOSURE_FAT_DEF,
+                generic_args: vec![],
+                fields,
+            },
+        );
+    }
+
+    /// Builds a fat closure value of type `fat_ty` and returns it as a moved
+    /// operand. The value *is* the captured environment: an inline struct of
+    /// the captured values, with `closure_def` naming the function its calls
+    /// dispatch to.
+    fn build_fat_envelope(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        fat_ty: TypeId,
+        closure_def: DefId,
+        source_expr: &HirExpr,
+    ) -> (BlockId, Operand) {
+        let captures = self
+            .resolution
+            .closure_captures
+            .get(&closure_def)
+            .cloned()
+            .unwrap_or_default();
+
+        let env_def = closure_struct_def(closure_def);
+        self.register_fat_layout(fat_ty, env_def);
+
+        // Materialize each captured value on its own before grouping them,
+        // so reads happen in source order.
+        let mut capture_ops = Vec::with_capacity(captures.len());
+        for captured in &captures {
+            let local = *fb
+                .locals_by_def
+                .get(captured)
+                .expect("captured value must be a local of the enclosing frame");
+            let raw_ty = self
+                .typecheck
+                .def_types
+                .get(captured)
+                .copied()
+                .expect("captured value must have a type");
+            let ty = self.substitute_fn_type(fb, raw_ty);
+            let place = Place::from_local(local);
+            capture_ops.push(self.place_to_operand(place, ty, None));
+        }
+
+        let temp = fb.new_temp(fat_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Struct(env_def),
+                    operands: capture_ops,
+                },
+                source: Some(source_expr.source.clone()),
+            },
+        );
+
+        (
+            block,
+            Operand::Move(Place::from_local(temp), Some(source_expr.source.clone())),
+        )
+    }
+
     /// Registers slice layouts for every `Slice[T]` reachable from a struct
     /// field. Codegen needs a `{ ptr, len }` body for any slice type that
     /// shows up as a struct field — `register_slice_layout` alone only sees
@@ -903,24 +1255,58 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
+                let expr_ty = self.expr_type(fb, expr);
+
                 if matches!(&expr.kind, HirExprKind::VarRef(_))
                     && matches!(
                         self.resolution.defs.get(def_id).map(|info| &info.kind),
                         Some(DefKind::Function)
                     )
                 {
-                    let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None);
+                    // A static function coerced into a fat slot becomes a
+                    // closure value with an empty inline env whose calls
+                    // dispatch directly to the function.
+                    if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
+                        return self.build_fat_envelope(fb, block, expr_ty, *def_id, expr);
+                    }
+
+                    let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
                     return (
                         block,
                         Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
                     );
                 }
 
-                let local = *fb.locals_by_def.get(def_id).unwrap_or_else(|| {
+                let place = fb.place_for_def(*def_id).unwrap_or_else(|| {
                     panic!("HIR DefId {:?} has no MIR local", def_id);
                 });
-                let place = Place::from_local(local);
-                let ty = fb.func.local(local).ty;
+                let ty = self.place_type(fb, &place);
+
+                // A basic fn value read from a variable coerces into a fat
+                // slot at runtime: wrap the pointer into a one-field fat
+                // value, which the call dispatches through indirectly.
+                if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. })
+                    && !matches!(self.typecheck.interner.get(ty), Type::FatFn { .. })
+                {
+                    let inner = self.place_to_operand(place.clone(), ty, None);
+                    let temp = fb.new_temp(expr_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Aggregate {
+                                kind: AggregateKind::Struct(CLOSURE_FAT_DEF),
+                                operands: vec![inner],
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    return (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    );
+                }
+
                 let operand = self.place_to_operand(place, ty, Some(expr.source.clone()));
                 (block, operand)
             }
@@ -1439,16 +1825,45 @@ impl<'ctx> MirLowering<'ctx> {
                     unreachable!("must been recorded this table");
                 };
 
-                let call_target = self.resolve_call_target(fn_def, generic_args, &hir_fn);
-
-                let mut arg_operands = Vec::with_capacity(args.len() + 1);
-
                 let method_ty = self.typecheck.def_types.get(&fn_def).copied().expect("...");
                 let param_count = match self.typecheck.interner.get(method_ty).clone() {
                     Type::Fn { params, .. } => params.len(),
                     _ => 0,
                 };
                 let has_self_param = param_count == args.len() + 1;
+
+                // `Fn`/`FnOnce`-typed parameters are erased in the signature:
+                // this call instantiates the callee with the concrete closure
+                // type of every fat argument, in fat-parameter order.
+                let declared_params: Vec<TypeId> = match self.typecheck.interner.get(method_ty) {
+                    Type::Fn { params, .. } => params.clone(),
+                    _ => Vec::new(),
+                };
+                let substituted_params: Vec<TypeId> = declared_params
+                    .iter()
+                    .map(|&t| self.substitute_fn_type(fb, t))
+                    .collect();
+                let mut fat_args: Vec<TypeId> = Vec::new();
+                for (offset, arg) in args.iter().enumerate() {
+                    let param_ty = substituted_params
+                        .get(offset + usize::from(has_self_param))
+                        .copied()
+                        .unwrap_or(self.typecheck.interner.error());
+                    if matches!(
+                        self.typecheck.interner.get(param_ty),
+                        Type::FatFn {
+                            body: FatFnBody::Bound,
+                            ..
+                        }
+                    ) {
+                        fat_args.push(self.expr_type(fb, arg));
+                    }
+                }
+
+                let call_target =
+                    self.resolve_call_target(fn_def, generic_args, &hir_fn, &fat_args);
+
+                let mut arg_operands = Vec::with_capacity(args.len() + 1);
 
                 if let HirExprKind::FieldAccess { object, .. } = &callee.kind
                     && has_self_param
@@ -1668,6 +2083,30 @@ impl<'ctx> MirLowering<'ctx> {
 
             HirExprKind::Switch => unreachable!("not implemented in previous stages"),
             HirExprKind::Type(_) => unreachable!(),
+
+            HirExprKind::Closure { def_id, .. } => {
+                let closure_ty = self.expr_type(fb, expr);
+
+                let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
+
+                match self.typecheck.interner.get(closure_ty).clone() {
+                    // Zero-capture closure: a plain `fn` pointer.
+                    Type::Fn { .. } => (
+                        block,
+                        Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
+                    ),
+
+                    // Fat closure: the value is the captured environment
+                    // itself; its calls dispatch directly to this literal's
+                    // body.
+                    Type::FatFn { .. } => {
+                        self.build_fat_envelope(fb, block, closure_ty, *def_id, expr)
+                    }
+
+                    other => panic!("unexpected closure type: {other:?}"),
+                }
+            }
+
             HirExprKind::Error => unreachable!(),
         }
     }
@@ -1726,8 +2165,10 @@ impl<'ctx> MirLowering<'ctx> {
                 if let Some(global_id) = self.globals_by_def.get(def_id) {
                     return (block, Place::global(*global_id));
                 }
-                let local = *fb.locals_by_def.get(def_id).expect("undeclared local");
-                (block, Place::from_local(local))
+                let place = fb
+                    .place_for_def(*def_id)
+                    .expect("undeclared local or capture");
+                (block, place)
             }
 
             HirExprKind::FieldAccess { object, .. } => {
@@ -1822,8 +2263,80 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    fn place_type(&self, fb: &FnBuilder, place: &Place) -> TypeId {
-        fb.func.local(place.local).ty
+    fn place_type(&mut self, fb: &FnBuilder, place: &Place) -> TypeId {
+        let (mut ty, start) = if let Some(PlaceElem::Global(id)) = place.projection.first() {
+            (self.program.global_vars[id.0 as usize].ty, 1)
+        } else {
+            (fb.func.local(place.local).ty, 0)
+        };
+
+        for elem in &place.projection[start..] {
+            ty = match elem {
+                PlaceElem::Field(field_def) => self.struct_field_ty(ty, *field_def),
+                PlaceElem::Index(_) => self.index_elem_ty(ty),
+                PlaceElem::Deref => match self.typecheck.interner.get(ty).clone() {
+                    Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+                    other => panic!("dereferencing a non-pointer type: {other:?}"),
+                },
+                PlaceElem::Global(_) => unreachable!("global already consumed"),
+            };
+        }
+
+        ty
+    }
+
+    /// Resolves the type of a struct field (potentially through generic
+    /// arguments) from the typechecker's recorded layout.
+    fn struct_field_ty(&mut self, ty: TypeId, field_def: DefId) -> TypeId {
+        let Type::Struct {
+            def_id,
+            generic_args,
+        } = self.typecheck.interner.get(ty).clone()
+        else {
+            // Fat closure values and their canonical fields resolve through the
+            // registered fat layout.
+            match self.typecheck.interner.get(ty).clone() {
+                Type::FatFn { .. } => {
+                    return self.program.struct_layouts[&ty]
+                        .fields
+                        .iter()
+                        .find(|f| f.def_id == field_def)
+                        .expect("field must be present in fat layout")
+                        .ty;
+                }
+                other => panic!("projecting a field into a non-struct type: {other:?}"),
+            }
+        };
+
+        let Some(info) = self.typecheck.struct_info.get(&def_id) else {
+            panic!("struct layout missing for {def_id:?}");
+        };
+        let struct_generics = self
+            .typecheck
+            .struct_generics
+            .get(&def_id)
+            .cloned()
+            .unwrap_or_default();
+        let bindings: HashMap<DefId, TypeId> = struct_generics
+            .iter()
+            .copied()
+            .zip(generic_args.iter().copied())
+            .collect();
+
+        let field = info
+            .fields
+            .iter()
+            .find(|f| f.field_def == field_def)
+            .expect("field must be present in struct");
+        zeen_types::substitute_generics(&mut self.typecheck.interner, field.field_ty, &bindings)
+    }
+
+    fn index_elem_ty(&self, ty: TypeId) -> TypeId {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Array { element, .. } | Type::Slice { element, .. } => element,
+            Type::ManyPointer { inner, .. } => inner,
+            other => panic!("indexing a non-indexable type: {other:?}"),
+        }
     }
 
     fn lower_receiver_operand(
@@ -2226,7 +2739,7 @@ impl<'ctx> MirLowering<'ctx> {
 
         let mono_args = self.substitute_generic_args(fb, &generic_args);
         let owner = self.typecheck.method_owner.get(&method_def).copied();
-        let mir_fn_id = self.monomorphize_fn(method_def, mono_args, owner);
+        let mir_fn_id = self.monomorphize_fn(method_def, mono_args, owner, &[]);
 
         let ret_ty = match self.typecheck.def_types.get(&method_def) {
             Some(ty) => match self.typecheck.interner.get(*ty).clone() {
@@ -2363,6 +2876,7 @@ impl<'ctx> MirLowering<'ctx> {
             op_res.method_def,
             mono_args,
             self.typecheck.method_owner.get(&op_res.method_def).copied(),
+            &[],
         );
 
         let mut args = vec![self_operand];
@@ -2419,6 +2933,20 @@ impl<'ctx> MirLowering<'ctx> {
                     .get(&stmt.id)
                     .copied()
                     .unwrap_or_else(|| panic!("let statement missing recorded type"));
+                // A `Fn`/`FnOnce`-bound recorded on the statement itself is
+                // not a storage type: the variable holds the concrete closure
+                // type resolved into its def during finalization.
+                let ty = if matches!(
+                    self.typecheck.interner.get(ty),
+                    Type::FatFn {
+                        body: FatFnBody::Bound,
+                        ..
+                    }
+                ) {
+                    self.typecheck.def_types.get(def_id).copied().unwrap_or(ty)
+                } else {
+                    ty
+                };
 
                 // `let _ = expr;` discards the value: evaluate the expression
                 // for its side effects but don't allocate a storage local.
@@ -2997,9 +3525,10 @@ impl<'ctx> MirLowering<'ctx> {
         def_id: DefId,
         generic_args: Vec<TypeId>,
         owner_struct: Option<DefId>,
+        fat_args: &[TypeId],
     ) -> MirFunctionId {
         let hir_fn = self.hir_fns_by_def[&def_id].clone();
-        let key = (def_id, generic_args.clone());
+        let key = (def_id, generic_args.clone(), fat_args.to_vec());
 
         if let Some(&existing) = self.mono_cache.cache.get(&key) {
             return existing;
@@ -3009,6 +3538,15 @@ impl<'ctx> MirLowering<'ctx> {
         self.mono_cache.cache.insert(key, id);
 
         let display_name = self.compute_fn_readable_name(&hir_fn, &generic_args, owner_struct);
+        let display_name = if fat_args.is_empty() {
+            display_name
+        } else {
+            let fat_names: Vec<String> = fat_args
+                .iter()
+                .map(|&t| self.display_type_name(t))
+                .collect();
+            format!("{display_name}~f{}", fat_names.join("_"))
+        };
 
         if hir_fn.is_extern {
             self.set_function_name(id, display_name.clone());
@@ -3022,7 +3560,7 @@ impl<'ctx> MirLowering<'ctx> {
             readable_name: display_name,
         });
 
-        let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args, owner_struct);
+        let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args, owner_struct, fat_args);
         for local in &mir_func.locals {
             if matches!(self.typecheck.interner.get(local.ty), Type::Slice { .. }) {
                 self.register_slice_layout(local.ty);
@@ -3122,6 +3660,7 @@ impl<'ctx> MirLowering<'ctx> {
         hir_fn: &HirFn,
         generic_args: &[TypeId],
         owner_struct: Option<DefId>,
+        fat_args: &[TypeId],
     ) -> MirFunction {
         let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
         let bindings: HashMap<DefId, TypeId> = if !generic_defs.is_empty() {
@@ -3161,9 +3700,64 @@ impl<'ctx> MirLowering<'ctx> {
         let ret_ty =
             zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ret_ty, &bindings);
 
+        // A `Fn`/`FnOnce` return annotation is a bound, not a storage type:
+        // the function actually returns the concrete closure type derived
+        // from its body during the typecheck finalization.
+        let ret_ty = if matches!(
+            self.typecheck.interner.get(ret_ty),
+            Type::FatFn {
+                body: FatFnBody::Bound,
+                ..
+            }
+        ) {
+            self.typecheck
+                .fn_return_fats
+                .get(&def_id)
+                .copied()
+                .unwrap_or(ret_ty)
+        } else {
+            ret_ty
+        };
+
         let entry = BlockId(0);
         let mut fb = FnBuilder::new(def_id, generic_args.to_vec(), entry, ret_ty, HashMap::new());
         fb.new_block();
+        let mut fat_bound_count = 0usize;
+
+        // Closure functions receive their captured environment as a leading
+        // `*const` pointer parameter. Captured variables are read through it
+        // (`env->$env0`, `env->$env1`, ...), so captured binds keep their
+        // enclosing-frame `DefId`s and resolve to projections of this pointer.
+        let captures = self
+            .resolution
+            .closure_captures
+            .get(&def_id)
+            .cloned()
+            .unwrap_or_default();
+
+        if !captures.is_empty() {
+            let env_def = zeen_types::closure_struct_def(def_id);
+            let env_ty = self.typecheck.interner.intern(Type::Struct {
+                def_id: env_def,
+                generic_args: Vec::new(),
+            });
+            let env_ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                inner: env_ty,
+                is_const: true,
+            });
+
+            let env_param = fb.new_local(env_ptr_ty, LocalKind::Param, Mutability::Mut, None, None);
+            fb.func.params.push(env_param);
+            let env_place = Place::from_local(env_param);
+
+            for (index, captured) in captures.iter().enumerate() {
+                let field_place = env_place
+                    .clone()
+                    .deref()
+                    .field(closure_field_def(def_id, index));
+                fb.captured_places.insert(*captured, field_place);
+            }
+        }
 
         for param in &hir_fn.params {
             let Some(param_def) = param.def_id else {
@@ -3179,8 +3773,30 @@ impl<'ctx> MirLowering<'ctx> {
             let concrete_ty =
                 zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ty, &bindings);
 
+            // A `Fn`/`FnOnce`-annotated parameter is erased in the signature;
+            // this monomorphized copy stores the concrete closure type of the
+            // actual call-site argument.
+            let param_is_fat_bound = matches!(
+                self.typecheck.interner.get(concrete_ty),
+                Type::FatFn {
+                    body: FatFnBody::Bound,
+                    ..
+                }
+            );
+            let storage_ty = if param_is_fat_bound {
+                let idx = fat_bound_count;
+                fat_bound_count += 1;
+                fat_args.get(idx).copied().unwrap_or(concrete_ty)
+            } else {
+                concrete_ty
+            };
+
+            if param_is_fat_bound {
+                fb.fat_bindings.push((param_def, storage_ty));
+            }
+
             let local = fb.new_local(
-                concrete_ty,
+                storage_ty,
                 LocalKind::Param,
                 Mutability::Mut,
                 param.name,
@@ -3265,6 +3881,14 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
         ret_ty: TypeId,
     ) -> (BlockId, Operand) {
+        let callee_ty = self.expr_type(fb, callee);
+
+        // Fat closure/coerced function: dispatch through the `{ $fn, $env }`
+        // envelope with the uniform env-first ABI.
+        if matches!(self.typecheck.interner.get(callee_ty), Type::FatFn { .. }) {
+            return self.lower_fat_call(fb, callee, args, block, ret_ty);
+        }
+
         let (mut block, callee_operand) = self.lower_expr_to_operand(fb, callee, block);
 
         let mut arg_operands = Vec::with_capacity(args.len());
@@ -3274,6 +3898,141 @@ impl<'ctx> MirLowering<'ctx> {
             arg_operands.push(op);
         }
 
+        self.emit_call(
+            fb,
+            CallTarget::Indirect(callee_operand),
+            arg_operands,
+            block,
+            ret_ty,
+            callee,
+        )
+    }
+
+    /// Calls a fat closure value. The called function is known statically
+    /// from the value's type: a `Closure` body dispatches directly to its
+    /// target with a pointer to the value (which *is* the environment) as the
+    /// leading env-first argument; a `Pointer` body calls the fn pointer it
+    /// holds with the plain ABI. An `FnOnce` value is consumed by the call —
+    /// the whole value moves into a slot so dataflow rejects a second call —
+    /// and its captured values are torn down right after the call returns.
+    fn lower_fat_call(
+        &mut self,
+        fb: &mut FnBuilder,
+        callee: &HirExpr,
+        args: &[Rc<HirExpr>],
+        block: BlockId,
+        ret_ty: TypeId,
+    ) -> (BlockId, Operand) {
+        let callee_ty = self.expr_type(fb, callee);
+        let (once, body) = match self.typecheck.interner.get(callee_ty).clone() {
+            Type::FatFn { once, body, .. } => (once, body),
+            _ => panic!("fat call requires a fat callee"),
+        };
+        let diverging = matches!(self.typecheck.interner.get(ret_ty), Type::Never);
+
+        let (mut block, closure_operand) = self.lower_expr_to_operand(fb, callee, block);
+
+        let closure_place = match &closure_operand {
+            Operand::Copy(place, _) | Operand::Move(place, _) => place.clone(),
+            Operand::Constant(..) => panic!("fat closure value must live in a place"),
+        };
+
+        // Consuming call: move the whole closure value into a dedicated slot,
+        // so dataflow marks the value used-up.
+        let closure_place = if once {
+            let slot = fb.new_temp(callee_ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(slot),
+                    rvalue: Rvalue::Use(closure_operand),
+                    source: Some(callee.source.clone()),
+                },
+            );
+            Place::from_local(slot)
+        } else {
+            closure_place
+        };
+
+        let mut arg_operands = Vec::with_capacity(args.len() + 1);
+        let call_target: CallTarget = match body {
+            FatFnBody::Closure { env, target } => {
+                // Capturing closure bodies use the env-first ABI: pass
+                // `&value` (which *is* the environment) as the leading
+                // argument. Zero-capture closures have an empty env, so
+                // their bodies use the plain ABI.
+                let has_captures = !self.env_struct_fields(env).is_empty();
+                if has_captures {
+                    let env_ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                        inner: callee_ty,
+                        is_const: true,
+                    });
+                    let env_temp = fb.new_temp(env_ptr_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(env_temp),
+                            rvalue: Rvalue::Ref {
+                                place: closure_place.clone(),
+                                is_const: true,
+                            },
+                            source: None,
+                        },
+                    );
+                    arg_operands.push(Operand::Copy(Place::from_local(env_temp), None));
+                }
+                CallTarget::Direct(self.monomorphize_fn(target, Vec::new(), None, &[]))
+            }
+            FatFnBody::Pointer { .. } => {
+                // A wrapped fn pointer: call it directly with the plain ABI.
+                let fn_ptr = Operand::Copy(closure_place.clone().field(CLOSURE_FAT_FN_FIELD), None);
+                CallTarget::Indirect(fn_ptr)
+            }
+            FatFnBody::Bound => unreachable!("an erased bound is not a storage type"),
+        };
+
+        for arg in args.iter() {
+            let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+            block = b;
+            arg_operands.push(op);
+        }
+
+        let (block, result) = self.emit_call(fb, call_target, arg_operands, block, ret_ty, callee);
+
+        // A consuming call ends the value's life here: tear its captured
+        // values down right after the call returns. Diverging calls never
+        // return, so there is nothing to release on that path.
+        if !once || diverging || !matches!(body, FatFnBody::Closure { .. }) {
+            return (block, result);
+        }
+
+        let drop_id = self.fat_drop_function(callee_ty);
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let sink = fb.new_temp(void_ty);
+        let next = fb.new_block();
+        fb.set_terminator(
+            block,
+            Terminator::Call {
+                func: CallTarget::Direct(drop_id),
+                args: vec![Operand::Copy(closure_place, None)],
+                destination: Place::from_local(sink),
+                target: Some(next),
+                source: Some(callee.source.clone()),
+            },
+        );
+
+        (next, result)
+    }
+
+    fn emit_call(
+        &mut self,
+        fb: &mut FnBuilder,
+        target: CallTarget,
+        arg_operands: Vec<Operand>,
+        block: BlockId,
+        ret_ty: TypeId,
+        source_expr: &HirExpr,
+    ) -> (BlockId, Operand) {
         let dest_local = fb.new_temp(ret_ty);
         let dest_place = Place::from_local(dest_local);
         let next_block = fb.new_block();
@@ -3283,11 +4042,11 @@ impl<'ctx> MirLowering<'ctx> {
         fb.set_terminator(
             block,
             Terminator::Call {
-                func: CallTarget::Indirect(callee_operand),
+                func: target,
                 args: arg_operands,
                 destination: dest_place.clone(),
                 target: if is_diverging { None } else { Some(next_block) },
-                source: None,
+                source: Some(source_expr.source.clone()),
             },
         );
 
@@ -3295,7 +4054,10 @@ impl<'ctx> MirLowering<'ctx> {
             fb.set_terminator(next_block, Terminator::Unreachable);
             (next_block, Operand::Constant(ConstValue::Void, None))
         } else {
-            (next_block, self.place_to_operand(dest_place, ret_ty, None))
+            (
+                next_block,
+                self.place_to_operand(dest_place, ret_ty, Some(source_expr.source.clone())),
+            )
         }
     }
 
@@ -3304,6 +4066,7 @@ impl<'ctx> MirLowering<'ctx> {
         fn_def: DefId,
         generic_args: Vec<TypeId>,
         hir_fn: &Rc<HirFn>,
+        fat_args: &[TypeId],
     ) -> CallTarget {
         if hir_fn.is_extern && hir_fn.body.is_none() {
             let idx = self.register_extern_fn(fn_def, hir_fn);
@@ -3313,6 +4076,7 @@ impl<'ctx> MirLowering<'ctx> {
                 fn_def,
                 generic_args,
                 self.typecheck.method_owner.get(&fn_def).copied(),
+                fat_args,
             );
             CallTarget::Direct(mir_id)
         }

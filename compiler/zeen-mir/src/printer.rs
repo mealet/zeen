@@ -550,6 +550,20 @@ impl<'a> MirPrinter<'a> {
                 format!("fn({}) {}", param_strs.join(", "), self.display_type(ret))
             }
 
+            Type::FatFn {
+                params, ret, once, ..
+            } => {
+                let param_strs: Vec<String> =
+                    params.iter().map(|&p| self.display_type(p)).collect();
+                let keyword = if once { "FnOnce" } else { "Fn" };
+                format!(
+                    "{}({}) {}",
+                    keyword,
+                    param_strs.join(", "),
+                    self.display_type(ret)
+                )
+            }
+
             Type::GenericParam(def_id) => self.resolve_def_name(def_id),
             Type::InterfaceSelfPlaceholder(_) => "Self".to_string(),
 
@@ -560,11 +574,17 @@ impl<'a> MirPrinter<'a> {
     }
 
     fn resolve_def_name(&self, def_id: DefId) -> String {
-        self.resolution
-            .defs
-            .get(&def_id)
-            .map(|info| self.resolve_spur(info.name))
-            .unwrap_or_else(|| format!("<def#{:?}>", def_id))
+        match def_id {
+            zeen_types::CLOSURE_FAT_DEF => "$fat".to_string(),
+            zeen_types::CLOSURE_FAT_FN_FIELD => "$fn".to_string(),
+            zeen_types::CLOSURE_FAT_ENV_FIELD => "$env".to_string(),
+            _ => self
+                .resolution
+                .defs
+                .get(&def_id)
+                .map(|info| self.resolve_spur(info.name))
+                .unwrap_or_else(|| format!("<def#{:?}>", def_id)),
+        }
     }
 
     fn resolve_spur(&self, spur: lasso::Spur) -> String {

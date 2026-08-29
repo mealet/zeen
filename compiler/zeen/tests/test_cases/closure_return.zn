@@ -1,0 +1,25 @@
+struct Wrap {
+    pub v: i32,
+}
+
+fn return_adder_by(v: i32) Fn(i32) i32 {
+    let base = v;
+    return fn(x: i32) i32 { return x + base; };
+}
+
+fn return_once(v: i32) FnOnce(i32) i32 {
+    let w = Wrap { .v = v };
+    return fn(x: i32) i32 { return x + w.v; };
+}
+
+fn main() i32 {
+    let adder = return_adder_by(7);
+    let r1 = adder(3);
+    let r2 = return_adder_by(100)(20);
+    let r3 = return_once(1000)(5);
+
+    @println("r1={}", r1);
+    @println("r2={}", r2);
+    @println("r3={}", r3);
+    return 0;
+}

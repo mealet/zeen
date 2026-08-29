@@ -671,6 +671,45 @@ impl<'res> HirLowering<'res> {
             },
 
             ExpressionKind::Type(ty) => HirExprKind::Type(Rc::new(self.lower_type(ty))),
+
+            ExpressionKind::Closure {
+                params,
+                return_type,
+                body,
+            } => {
+                let def_id = match self.resolution.resolution_of_expr(expr) {
+                    Some(Resolution::Def(id)) => id,
+                    _ => DefId(u32::MAX),
+                };
+
+                let name = self
+                    .resolution
+                    .defs
+                    .get(&def_id)
+                    .map(|info| info.name)
+                    .unwrap_or_else(|| self.interner.borrow_mut().get_or_intern("<closure>"));
+
+                let parent_fn = self.resolution.nested_fn_parents.get(&def_id).copied();
+
+                let hir_params: Vec<Rc<HirParam>> = params
+                    .iter()
+                    .map(|param| Rc::new(self.lower_param(param)))
+                    .collect();
+
+                let def = Rc::new(HirFn {
+                    name: (name, expr.span),
+                    generics: Vec::new(),
+                    params: hir_params,
+                    return_type: return_type.map(|ty| Rc::new(self.lower_type(ty))),
+                    body: Some(Rc::new(self.lower_stmt(body))),
+                    is_pub: false,
+                    is_extern: false,
+                    self_param: None,
+                    parent_fn,
+                });
+
+                HirExprKind::Closure { def_id, def }
+            }
         };
 
         HirExpr {
@@ -758,6 +797,12 @@ impl<'res> HirLowering<'res> {
                 params: params.iter().map(|p| Rc::new(self.lower_type(p))).collect(),
                 generics: self.lower_generics(generic_args),
                 ret: Rc::new(self.lower_type(ret)),
+            },
+
+            TypeKind::FatFn { params, ret, once } => HirTypeKind::FatFn {
+                params: params.iter().map(|p| Rc::new(self.lower_type(p))).collect(),
+                ret: Rc::new(self.lower_type(ret)),
+                once,
             },
         };
 
@@ -1171,5 +1216,123 @@ mod tests {
             rhs.kind,
             HirExprKind::Literal(zeen_ast::expressions::Literal::Int(2))
         ));
+    }
+
+    // --> Closures
+
+    fn closure_expr_of(fx: &Fixture, fn_name: &str) -> Rc<crate::expr::HirExpr> {
+        let f = fx.fn_decl(fn_name);
+        let body = f.body.as_ref().expect("body must be lowered");
+        let HirStmtKind::Expr(expr) = &body.kind else {
+            panic!("function body must be an expression block")
+        };
+        let HirExprKind::Block { stmts, .. } = &expr.kind else {
+            panic!("function body must be a block expression")
+        };
+
+        stmts
+            .iter()
+            .find_map(|stmt| match &stmt.kind {
+                HirStmtKind::Let {
+                    value: Some(value), ..
+                } => matches!(value.kind, HirExprKind::Closure { .. }).then(|| value.clone()),
+                _ => None,
+            })
+            .expect("block must contain a closure let binding")
+    }
+
+    #[test]
+    fn closure_lowers_to_closure_expr_with_fn() {
+        let fx = lower_ok("fn main() { let c = fn(x: i32) i32 { return x + 1; }; }");
+
+        let value = closure_expr_of(&fx, "main");
+
+        let HirExprKind::Closure { def_id, def } = &value.kind else {
+            panic!("closure value must lower to HirExprKind::Closure")
+        };
+
+        assert_ne!(*def_id, DefId(u32::MAX));
+        assert!(def.parent_fn.is_some());
+        assert!(!def.is_extern);
+        assert!(!def.is_pub);
+
+        assert_eq!(def.params.len(), 1);
+        assert!(def.params[0].def_id.is_some());
+        assert!(matches!(
+            def.params[0].ty.kind,
+            HirTypeKind::Builtin(BuiltinType::i32)
+        ));
+
+        assert!(matches!(
+            def.return_type.as_ref().map(|ty| &ty.kind),
+            Some(HirTypeKind::Builtin(BuiltinType::i32))
+        ));
+
+        let body = def.body.as_ref().expect("closure body must be lowered");
+        let HirStmtKind::Expr(block) = &body.kind else {
+            panic!("closure body must be an expression block")
+        };
+        assert!(matches!(block.kind, HirExprKind::Block { .. }));
+    }
+
+    #[test]
+    fn closure_fn_has_parent_and_capture_free_param_names() {
+        let fx =
+            lower_ok("fn outer() void { let a = 1; let c = fn(b: i32) i32 { return a + b; }; }");
+
+        let value = closure_expr_of(&fx, "outer");
+
+        let HirExprKind::Closure { def, .. } = &value.kind else {
+            panic!("closure value must lower to HirExprKind::Closure")
+        };
+
+        assert_eq!(fx.name(def.name.0), "closure0");
+        assert_eq!(def.params.len(), 1);
+        assert_eq!(
+            fx.name(def.params[0].name.expect("param must be named")),
+            "b"
+        );
+    }
+
+    #[test]
+    fn nested_closure_lowers_inside_outer_closure() {
+        let fx = lower_ok(
+            "fn main() { let x = 1; let outer = fn() i32 { let y = 2; let inner = fn() i32 { return x + y; }; return inner(); }; }",
+        );
+
+        let outer = closure_expr_of(&fx, "main");
+
+        let HirExprKind::Closure {
+            def_id: outer_id,
+            def: outer_def,
+        } = &outer.kind
+        else {
+            panic!("outer value must be a closure")
+        };
+
+        assert_eq!(fx.name(outer_def.name.0), "closure0");
+
+        let outer_body = outer_def.body.as_ref().expect("outer body must be lowered");
+        let HirStmtKind::Expr(outer_block) = &outer_body.kind else {
+            panic!("outer body must be a block expression")
+        };
+        let HirExprKind::Block {
+            stmts: outer_stmts, ..
+        } = &outer_block.kind
+        else {
+            panic!("outer body must be a block")
+        };
+
+        let inner_value = match &outer_stmts[1].kind {
+            HirStmtKind::Let { value, .. } => value.clone().expect("inner must have a value"),
+            other => panic!("expected let binding, got {other:?}"),
+        };
+
+        let HirExprKind::Closure { def: inner_def, .. } = &inner_value.kind else {
+            panic!("inner value must be a closure")
+        };
+
+        assert_eq!(fx.name(inner_def.name.0), "closure1");
+        assert_eq!(inner_def.parent_fn, Some(*outer_id));
     }
 }

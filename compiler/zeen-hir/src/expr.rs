@@ -5,7 +5,7 @@ use lasso::Spur;
 use miette::SourceSpan;
 use std::rc::Rc;
 
-use crate::{HirId, stmt::HirStmt, types::HirTypeExpr};
+use crate::{HirId, decl::HirFn, stmt::HirStmt, types::HirTypeExpr};
 
 #[derive(Debug, Clone)]
 pub struct HirExpr {
@@ -82,6 +82,15 @@ pub enum HirExprKind {
         trailing: Option<Rc<HirExpr>>,
     },
     Type(Rc<HirTypeExpr>),
+
+    /// Anonymous function expression `fn(params) ret { body }`. `def_id` is the
+    /// synthetic closure function's `DefId`, `def` its lowered `HirFn`. The
+    /// closure's captured environment (`resolution.closure_captures[def_id]`)
+    /// is appended as extra parameters at MIR lowering.
+    Closure {
+        def_id: DefId,
+        def: Rc<HirFn>,
+    },
 
     Error,
 }

@@ -49,6 +49,14 @@ pub enum TypeKind<'arena> {
         generic_args: Option<&'arena [crate::declarations::GenericType<'arena>]>,
         ret: &'arena TypeExpr<'arena>,
     },
+
+    /// Fat function pointer: `Fn(T, ...) R` (copyable) or `FnOnce(T, ...) R`
+    /// (movable). Layout in the backend is `{ function: ptr, env: ptr }`.
+    FatFn {
+        params: &'arena [&'arena TypeExpr<'arena>],
+        ret: &'arena TypeExpr<'arena>,
+        once: bool,
+    },
 }
 
 #[allow(non_camel_case_types)]
