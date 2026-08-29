@@ -28,11 +28,11 @@ use zeen_hir::{
     stmt::{HirStmt, HirStmtKind},
     types::{HirTypeExpr, HirTypeKind},
 };
-use zeen_resolve::{DefId, DefKind, ResolutionResult};
+use zeen_resolve::{DefId, DefInfo, DefKind, ResolutionResult};
 use zeen_types::{
     ARRAY_LEN_FIELD, Capabilities, ReceiverAccess, SLICE_LEN_FIELD, SLICE_PTR_FIELD, SelfMode,
-    StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface, self_mode_of,
-    unary_op_interface,
+    StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface, closure_field_def,
+    closure_struct_def, is_closure_struct_def, self_mode_of, unary_op_interface,
 };
 
 pub mod coerce;
@@ -1160,6 +1160,92 @@ impl<'res> TypeChecker<'res> {
         self.check_decl_body(decl);
     }
 
+    /// Types a closure expression: declares and checks the synthetic closure
+    /// function like a regular one, then computes the closure value type.
+    /// Zero-capture closures are plain `fn` pointers; capturing ones get a
+    /// synthetic `{ $fn_ptr, $env0..$envN }` struct (move-only, fields are
+    /// unreachable from user syntax).
+    fn check_closure(&mut self, def_id: DefId, def: &Rc<HirFn>, source: &Source) -> TypeId {
+        self.declare_fn_signature(def_id, def);
+        self.check_fn_body(def_id, def, None, None);
+
+        let fn_ty = *self
+            .result
+            .def_types
+            .get(&def_id)
+            .expect("closure signature must register the fn type");
+
+        let captures = self
+            .resolution
+            .closure_captures
+            .get(&def_id)
+            .cloned()
+            .unwrap_or_default();
+
+        if captures.is_empty() {
+            return fn_ty;
+        }
+
+        let struct_def = closure_struct_def(def_id);
+
+        if !self.result.struct_info.contains_key(&struct_def) {
+            let struct_name = self
+                .interner
+                .borrow_mut()
+                .get_or_intern(format!("$closure{}", def_id.0));
+
+            self.resolution
+                .defs
+                .entry(struct_def)
+                .or_insert_with(|| DefInfo {
+                    name: struct_name,
+                    kind: DefKind::Struct,
+                    span: (source.span, source.src()).into(),
+                    decl: None,
+                    is_pub: false,
+                });
+
+            let fn_ptr_field = StructFieldInfo {
+                name: self.interner.borrow_mut().get_or_intern("$fn_ptr"),
+                field_def: closure_field_def(def_id, 0),
+                field_ty: fn_ty,
+                struct_def,
+                is_pub: false,
+            };
+
+            let mut fields = vec![fn_ptr_field];
+
+            for (index, captured) in captures.iter().enumerate() {
+                let cap_ty = self.lookup_def_type(*captured, source.clone());
+
+                fields.push(StructFieldInfo {
+                    name: self
+                        .interner
+                        .borrow_mut()
+                        .get_or_intern(format!("$env{index}")),
+                    field_def: closure_field_def(def_id, index + 1),
+                    field_ty: cap_ty,
+                    struct_def,
+                    is_pub: false,
+                });
+            }
+
+            self.result.struct_info.insert(
+                struct_def,
+                StructTypeInfo {
+                    def_id: struct_def,
+                    fields,
+                    capabalities: Capabilities::MOVE_ONLY,
+                },
+            );
+        }
+
+        self.result.interner.intern(Type::Struct {
+            def_id: struct_def,
+            generic_args: Vec::new(),
+        })
+    }
+
     fn check_stmt_as_block_value(&mut self, stmt: &HirStmt, expected: Option<TypeId>) -> TypeId {
         match &stmt.kind {
             HirStmtKind::Expr(block_expr) => {
@@ -1291,11 +1377,7 @@ impl<'res> TypeChecker<'res> {
 
             HirExprKind::Switch => unreachable!(),
 
-            // Closure typing (synthetic struct type + `fn` coercion) lands in
-            // the typecheck stage.
-            HirExprKind::Closure { .. } => {
-                unreachable!("closure type synthesis is implemented in a later stage")
-            }
+            HirExprKind::Closure { def_id, def } => self.check_closure(*def_id, def, &expr.source),
 
             HirExprKind::SliceAccess { object, index } => {
                 let obj_ty = self.synth_expr(object);
@@ -3079,6 +3161,53 @@ impl<'res> TypeChecker<'res> {
     ) -> TypeId {
         match self.result.interner.get(callee_ty).clone() {
             Type::Fn { params, ret } => {
+                if args.len() != params.len() {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: params.len(),
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+
+                for (param_ty, arg) in params.iter().zip(args.iter()) {
+                    self.check_expr(arg, *param_ty, false);
+                }
+
+                ret
+            }
+
+            // Calling a closure value: checked against the signature stored in
+            // its `$fn_ptr` field (the captured env is appended at MIR).
+            Type::Struct { def_id, .. } if is_closure_struct_def(def_id) => {
+                let fn_ptr_ty = self
+                    .result
+                    .struct_info
+                    .get(&def_id)
+                    .and_then(|info| info.fields.first())
+                    .map(|field| field.field_ty);
+
+                let Some(fn_ptr_ty) = fn_ptr_ty else {
+                    self.report(TypeError::NotCallable {
+                        ty: self.display_type(callee_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                };
+
+                let (params, ret) = match self.result.interner.get(fn_ptr_ty).clone() {
+                    Type::Fn { params, ret } => (params, ret),
+                    _ => {
+                        self.report(TypeError::NotCallable {
+                            ty: self.display_type(callee_ty).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                        return self.result.interner.error();
+                    }
+                };
+
                 if args.len() != params.len() {
                     self.report(TypeError::ArgCountMismatch {
                         expected: params.len(),
@@ -5144,6 +5273,156 @@ mod tests {
                 .iter()
                 .any(|err| matches!(err, TypeError::EmptyArrayError { .. })),
             "expected TypeError::EmptyArrayError, got: {errors:?}"
+        );
+    }
+
+    // --> Closures
+
+    use zeen_types::{Type, is_closure_struct_def};
+
+    fn find_closure_struct(result: &TypeCheckResult) -> Option<zeen_resolve::DefId> {
+        result
+            .def_types
+            .values()
+            .find_map(|&ty| match result.interner.get(ty) {
+                Type::Struct { def_id, .. } if is_closure_struct_def(*def_id) => Some(*def_id),
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn zero_capture_closure_types_as_fn() {
+        let result = typecheck("fn main() { let c = fn(x: i32) i32 { return x + 1; }; }")
+            .expect("zero-capture closure must typecheck");
+
+        assert!(
+            result
+                .def_types
+                .values()
+                .any(|&ty| matches!(
+                    result.interner.get(ty),
+                    Type::Fn { params, ret } if params.len() == 1
+                        && matches!(result.interner.get(params[0]), Type::Builtin(zeen_ast::types::BuiltinType::i32))
+                        && matches!(result.interner.get(*ret), Type::Builtin(zeen_ast::types::BuiltinType::i32))
+                )),
+            "closure variable must be typed as `fn(i32) i32`"
+        );
+
+        assert!(
+            find_closure_struct(&result).is_none(),
+            "zero-capture closure must not create a synthetic struct"
+        );
+    }
+
+    #[test]
+    fn capturing_closure_types_as_synthetic_struct() {
+        let result = typecheck("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
+            .expect("capturing closure must typecheck");
+
+        let struct_def = find_closure_struct(&result).expect("closure struct must be registered");
+        let info = &result.struct_info[&struct_def];
+
+        assert_eq!(info.fields.len(), 2);
+        assert!(matches!(
+            result.interner.get(info.fields[0].field_ty),
+            Type::Fn { .. }
+        ));
+        assert!(matches!(
+            result.interner.get(info.fields[1].field_ty),
+            Type::Builtin(zeen_ast::types::BuiltinType::i32)
+        ));
+        assert!(!info.capabalities.is_copy);
+    }
+
+    #[test]
+    fn closure_call_checks_argument_types() {
+        let result =
+            typecheck("fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(2); }")
+                .expect("closure call with matching args must typecheck");
+
+        assert!(
+            result.expr_types.values().any(|&ty| matches!(
+                result.interner.get(ty),
+                Type::Builtin(zeen_ast::types::BuiltinType::i32)
+            )),
+            "call result must be i32"
+        );
+
+        let errors =
+            typecheck("fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(true); }")
+                .expect_err("closure call with mismatched arg must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::Mismatch { .. })),
+            "expected TypeError::Mismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn capturing_closure_call_checks_args() {
+        typecheck("fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(); }")
+            .expect("capturing closure call must typecheck");
+
+        let errors =
+            typecheck("fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(1); }")
+                .expect_err("capturing closure call with extra arg must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::ArgCountMismatch { .. })),
+            "expected TypeError::ArgCountMismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn zero_capture_closure_passes_as_fn_argument() {
+        let result = typecheck(
+            r#"
+            fn apply(f: fn(i32) i32) i32 {
+                return f(21);
+            }
+
+            fn main() {
+                let r = apply(fn(x: i32) i32 { return x * 2; });
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "zero-capture closure must coerce to `fn(i32) i32` parameter: {:?}",
+            result.err().map(|errors| errors.len())
+        );
+    }
+
+    #[test]
+    fn closure_body_return_type_is_checked() {
+        let errors = typecheck("fn main() { let c = fn() i32 { return true; }; }")
+            .expect_err("closure body return mismatch must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::Mismatch { .. })),
+            "expected TypeError::Mismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn closure_capture_type_mismatch_is_reported() {
+        let errors = typecheck(
+            "fn main() { let x = 1; let c = fn(y: bool) bool { return y; }; let r = c(x); }",
+        )
+        .expect_err("captured value passed as wrong arg type must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::Mismatch { .. })),
+            "expected TypeError::Mismatch, got: {errors:?}"
         );
     }
 }
