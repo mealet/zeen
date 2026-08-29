@@ -244,6 +244,23 @@ impl<'res> TypeChecker<'res> {
                 for field in &s.fields {
                     let (ty, is_const) = self.lower_hir_type_with_const(&field.ty);
 
+                    // A `Fn`/`FnOnce` annotation is not a storage type and a
+                    // struct field would erase the concrete closure; rejected
+                    // until generic fields over fat bounds exist.
+                    if matches!(
+                        self.result.interner.get(ty),
+                        Type::FatFn {
+                            body: FatFnBody::Bound,
+                            ..
+                        }
+                    ) {
+                        self.report(TypeError::FatStorageUnsupported {
+                            what: "struct field".into(),
+                            src: field.ty.source.src(),
+                            span: field.ty.source.span,
+                        });
+                    }
+
                     self.result.def_types.insert(field.def_id, ty);
                     self.result.const_bindings.insert(field.def_id, is_const);
 
@@ -332,6 +349,23 @@ impl<'res> TypeChecker<'res> {
             HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {}
             HirDeclKind::GlobalVar { ty, is_const, .. } => {
                 let ty_id = self.lower_hir_type(ty);
+
+                // Globals are initialized before `main` runs; no concrete
+                // closure site can back a `Fn`/`FnOnce` annotation here yet.
+                if matches!(
+                    self.result.interner.get(ty_id),
+                    Type::FatFn {
+                        body: FatFnBody::Bound,
+                        ..
+                    }
+                ) {
+                    self.report(TypeError::FatStorageUnsupported {
+                        what: "global".into(),
+                        src: ty.source.src(),
+                        span: ty.source.span,
+                    });
+                }
+
                 self.result.def_types.insert(decl.def_id, ty_id);
                 self.result.const_bindings.insert(decl.def_id, *is_const);
             }
