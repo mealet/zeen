@@ -774,6 +774,18 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     ) -> BasicValueEnum<'ctx> {
         match rvalue {
             Rvalue::Use(operand) => {
+                // A string literal stored into an array/slice slot must be
+                // materialized as the slot's value (null-terminated bytes or
+                // `{ ptr, len }`), not as a raw pointer to the global.
+                if matches!(operand, Operand::Constant(ConstValue::Str(_), _))
+                    && matches!(
+                        self.typecheck.interner.get(expected_ty),
+                        Type::Array { .. } | Type::Slice { .. }
+                    )
+                {
+                    return self.cast_op(operand, expected_ty, func);
+                }
+
                 let value = self.operand_value(operand, Some(expected_ty), func);
 
                 // Copy/move operands keep their own width, so a plain store
@@ -1761,6 +1773,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             CallTarget::Indirect(_) => Vec::new(),
         };
 
+        let is_variadic_extern = match target {
+            CallTarget::Extern(idx) => self.program.extern_fns[*idx].is_variadic,
+            _ => false,
+        };
+
         let arg_values: Vec<BasicMetadataValueEnum<'ctx>> = args
             .iter()
             .enumerate()
@@ -1774,6 +1791,17 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     let value = self.operand_value(arg, Some(*param_ty), func);
                     return value.into();
                 }
+
+                // Variadic args have no declared parameter type: an array
+                // decays to a pointer to its storage (C varargs ABI).
+                if is_variadic_extern
+                    && let Some(arg_ty) = self.operand_type(arg, func)
+                    && matches!(self.typecheck.interner.get(arg_ty), Type::Array { .. })
+                    && let Operand::Copy(place, _) | Operand::Move(place, _) = arg
+                {
+                    return self.place_ptr(place, func).into();
+                }
+
                 let ty = self.operand_type(arg, func);
                 self.operand_value(arg, ty, func).into()
             })
