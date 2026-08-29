@@ -44,10 +44,11 @@ fn type_needs_drop_impl(
         | Type::Never
         | Type::Error => false,
 
-        // `FnOnce` owns its captured environment, so its value must be
-        // dropped when it goes out of scope without being called. `Fn`
-        // copies are handled by the closure-value drop machinery in flow.
-        Type::FatFn { once, .. } => once,
+        // Fat closure values are single-owner: whatever the env kind, the
+        // death of the last holder releases the environment (concrete envs
+        // tear their captures down, heap blocks are freed; codegen skips
+        // types without a registered drop function, e.g. unused closures).
+        Type::FatFn { .. } => true,
 
         Type::Struct {
             def_id,

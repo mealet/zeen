@@ -103,6 +103,9 @@ pub struct CodeGen<'ctx, 'prog> {
     // per-function state
     locals: HashMap<LocalId, PointerValue<'ctx>>,
     blocks: HashMap<BlockId, BasicBlock<'ctx>>,
+    /// Entry block of the function currently being emitted; allocas must be
+    /// created there so loops don't grow the stack on every iteration.
+    current_entry: Option<BasicBlock<'ctx>>,
 }
 
 impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
@@ -202,6 +205,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             global_vars,
             locals: HashMap::new(),
             blocks: HashMap::new(),
+            current_entry: None,
         })
     }
 
@@ -379,6 +383,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let entry = self.context.append_basic_block(function, "entry");
         self.locals.clear();
         self.blocks.clear();
+        self.current_entry = Some(entry);
         self.builder.position_at_end(entry);
 
         self.emit_panic_prologue(func, id);
@@ -419,11 +424,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             self.emit_terminator(&block.terminator, func, id);
         }
 
-        assert!(
-            function.verify(false),
-            "LLVM failed to verify function:\n{}",
-            self.print_ir()
-        );
+        if !function.verify(false) {
+            panic!(
+                "LLVM failed to verify function {:?}:\n{}",
+                function.get_name().to_str(),
+                self.print_ir()
+            );
+        }
     }
 
     fn emit_main_wrapper(&mut self) {
@@ -651,6 +658,22 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         } else {
             int.into()
         }
+    }
+
+    /// Builds an `alloca` at the top of the current function's entry block.
+    /// An alloca created at the current position would execute on every visit
+    /// of its block, growing the stack each time — a loop creating aggregate
+    /// temporaries would exhaust it after enough iterations.
+    fn entry_alloca(&self, ty: BasicTypeEnum<'ctx>, name: &str) -> PointerValue<'ctx> {
+        let entry = self
+            .current_entry
+            .expect("entry block must be set while emitting a function");
+        let alloca_builder = self.context.create_builder();
+        match entry.get_first_instruction() {
+            Some(first) => alloca_builder.position_before(&first),
+            None => alloca_builder.position_at_end(entry),
+        }
+        alloca_builder.build_alloca(ty, name).unwrap()
     }
 
     fn emit_statement(&mut self, stmt: &MirStatement, func: &MirFunction) {
@@ -881,7 +904,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         func: &MirFunction,
     ) -> BasicValueEnum<'ctx> {
         let agg_ty = self.map_basic_type(expected_ty);
-        let alloca = self.builder.build_alloca(agg_ty, "aggregate").unwrap();
+        let alloca = self.entry_alloca(agg_ty, "aggregate");
 
         for (i, operand) in operands.iter().enumerate() {
             // A string literal stored into an array/slice field must be
@@ -1384,7 +1407,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         ptr: PointerValue<'ctx>,
         len: u64,
     ) -> BasicValueEnum<'ctx> {
-        let alloca = self.builder.build_alloca(slice_ty, "slice").unwrap();
+        let alloca = self.entry_alloca(slice_ty, "slice");
         let ptr_field = self
             .builder
             .build_struct_gep(slice_ty, alloca, 0, "")
@@ -1994,7 +2017,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     // The macro result is `[]const char`: build the
                     // `{ ptr, len }` fat pointer over the stack buffer.
                     let slice_ty = self.map_basic_type(dest_ty);
-                    let slice_alloca = self.builder.build_alloca(slice_ty, "fmt_slice").unwrap();
+                    let slice_alloca = self.entry_alloca(slice_ty, "fmt_slice");
                     let ptr_field = self
                         .builder
                         .build_struct_gep(slice_ty, slice_alloca, 0, "")
