@@ -44,11 +44,22 @@ pub mod result;
 pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
-pub struct TypeChecker<'res> {
+pub struct TypeChecker<'res, 'mod_> {
     resolution: &'res mut ResolutionResult,
     compilation_context: &'res CompilationContext,
     expect_assign_interface: bool,
     found_main_fn: bool,
+
+    /// The module being checked, kept for on-demand body checks when a call
+    /// needs a callee's elaborated closure return type before its declaration
+    /// was reached in declaration order.
+    module: Option<&'mod_ HirModule>,
+
+    /// Closure-return elaboration: functions whose declared `fn`-type return
+    /// was elaborated to the concrete closure struct type.
+    elaborated_returns: HashMap<DefId, TypeId>,
+    bodies_checked: HashSet<DefId>,
+    bodies_in_progress: HashSet<DefId>,
 
     result: TypeCheckResult,
     ctx: TypeCheckCtx,
@@ -84,7 +95,7 @@ struct InterfaceCallResult {
     pub method_def: DefId,
 }
 
-impl<'res> TypeChecker<'res> {
+impl<'res, 'mod_> TypeChecker<'res, 'mod_> {
     pub fn new(
         resolution: &'res mut ResolutionResult,
         compilation_context: &'res CompilationContext,
@@ -100,6 +111,10 @@ impl<'res> TypeChecker<'res> {
             errors: Vec::new(),
             expect_assign_interface: false,
             found_main_fn: false,
+            module: None,
+            elaborated_returns: HashMap::new(),
+            bodies_checked: HashSet::new(),
+            bodies_in_progress: HashSet::new(),
             interner,
             fn_sigs: HashMap::new(),
             interface_registry,
@@ -153,7 +168,9 @@ impl<'res> TypeChecker<'res> {
 
     // --> Entry Point
 
-    pub fn check_module(&mut self, module: &HirModule) {
+    pub fn check_module(&mut self, module: &'mod_ HirModule) {
+        self.module = Some(module);
+
         // Few words here: we're doing multiple passes here:
         // 0. Register struct generic params (for lower_hir_type_inner)
         // 1. Declare signatures
@@ -873,13 +890,28 @@ impl<'res> TypeChecker<'res> {
         iface_def: Option<DefId>,
     ) {
         let Some(body) = &hir_fn.body else {
+            self.bodies_checked.insert(def_id);
             return;
         };
 
-        let sig = self
-            .fn_sigs
-            .get(&def_id)
-            .expect("unregistered signature, wtf");
+        // On-demand checks may race with the declaration loop; check each
+        // body exactly once.
+        if self.bodies_checked.contains(&def_id) || !self.bodies_in_progress.insert(def_id) {
+            return;
+        }
+
+        let (sig_ret, self_mode, sig_generics, sig_generic_bounds) = {
+            let sig = self
+                .fn_sigs
+                .get(&def_id)
+                .expect("unregistered signature, wtf");
+            (
+                sig.ret,
+                sig.self_mode,
+                sig.generics.clone(),
+                sig.generic_bounds.clone(),
+            )
+        };
 
         let self_type = struct_def.map(|sd| {
             let struct_generics = self.struct_generics.get(&sd).cloned().unwrap_or_default();
@@ -909,7 +941,7 @@ impl<'res> TypeChecker<'res> {
                 generic_args,
             });
 
-            match sig.self_mode {
+            match self_mode {
                 Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_struct_ty,
                 Some(SelfMode::RefMut) => self.result.interner.intern(Type::Pointer {
                     inner: base_struct_ty,
@@ -925,7 +957,7 @@ impl<'res> TypeChecker<'res> {
         let mut generic_bindings = HashMap::new();
         let mut generic_bounds = HashMap::new();
 
-        for generic in &sig.generics {
+        for generic in &sig_generics {
             let ty = self.result.interner.intern(Type::GenericParam(*generic));
             generic_bindings.insert(*generic, ty);
         }
@@ -943,12 +975,13 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        for (g, bounds) in &sig.generic_bounds {
+        for (g, bounds) in &sig_generic_bounds {
             generic_bounds.insert(*g, bounds.clone());
         }
 
         self.ctx.push_fn(FnCtx {
-            return_type: sig.ret,
+            fn_def: def_id,
+            return_type: sig_ret,
             struct_def,
             self_type,
             generic_bindings,
@@ -960,7 +993,7 @@ impl<'res> TypeChecker<'res> {
             HirStmtKind::Expr(block_expr) => {
                 if let HirExprKind::Block { stmts, trailing } = &block_expr.kind {
                     let sig_source = self.fn_signature_source(hir_fn, &block_expr.source);
-                    let ty = self.check_block(stmts, trailing, Some(sig.ret), &sig_source);
+                    let ty = self.check_block_fn_body(stmts, trailing, sig_ret, &sig_source);
                     self.result.record_expr_type(block_expr.id, ty);
                 } else {
                     self.check_stmt(body);
@@ -971,6 +1004,174 @@ impl<'res> TypeChecker<'res> {
         };
 
         self.ctx.pop_fn();
+
+        self.bodies_in_progress.remove(&def_id);
+        self.bodies_checked.insert(def_id);
+    }
+
+    /// Like [`Self::check_block`] for a function body: the trailing expression
+    /// is a return value, so capturing closures may elaborate the declared
+    /// `fn`-type return.
+    fn check_block_fn_body(
+        &mut self,
+        stmts: &[Rc<HirStmt>],
+        trailing: &Option<Rc<HirExpr>>,
+        expected: TypeId,
+        source: &Source,
+    ) -> TypeId {
+        for stmt in stmts {
+            self.check_stmt(stmt);
+        }
+
+        match trailing {
+            Some(expr) => self.coerce_return_expr(expr),
+            None => {
+                let diverges = stmts.last().is_some_and(|s| self.stmt_diverges(s));
+                let actual = if diverges {
+                    self.result.interner.never()
+                } else {
+                    self.result.interner.void()
+                };
+
+                match try_coerce(&mut self.result.interner, actual, expected) {
+                    CoerceResult::Fail => {
+                        self.report(TypeError::Mismatch {
+                            expected: self.display_type(expected).into(),
+                            found: self.display_type(actual).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+
+                        actual
+                    }
+                    _ => expected,
+                }
+            }
+        }
+    }
+
+    /// Checks a return-position expression. When a capturing closure (or a
+    /// call producing one) is returned while the declared return type is a
+    /// bare `fn` type, the declared return is elaborated to the concrete
+    /// closure struct type, making `fn f() fn(T) R { return closure; }` work.
+    fn coerce_return_expr(&mut self, expr: &HirExpr) -> TypeId {
+        let expected = self.ctx.current().return_type;
+        let actual = self.synth_expr(expr);
+
+        let actual_is_closure = matches!(
+            self.result.interner.get(actual),
+            Type::Struct { def_id, .. } if is_closure_struct_def(*def_id)
+        );
+        let expected_is_fn = matches!(self.result.interner.get(expected), Type::Fn { .. });
+
+        if actual_is_closure && expected_is_fn {
+            self.elaborate_closure_return(actual, expr.source.clone());
+            return actual;
+        }
+
+        self.coerce_or_error(actual, expected, expr.source.clone(), expr.id, false)
+    }
+
+    fn elaborate_closure_return(&mut self, closure_ty: TypeId, source: Source) {
+        let fn_def = self.ctx.current().fn_def;
+
+        if let Some(existing) = self.elaborated_returns.get(&fn_def) {
+            if *existing != closure_ty {
+                let expected = self.display_type(*existing);
+                let found = self.display_type(closure_ty);
+
+                self.report(TypeError::InconsistentClosureReturn {
+                    expected: expected.into(),
+                    found: found.into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+            }
+            return;
+        }
+
+        self.elaborated_returns.insert(fn_def, closure_ty);
+
+        let params = self
+            .fn_sigs
+            .get(&fn_def)
+            .map(|sig| sig.params.clone())
+            .unwrap_or_default();
+
+        let elaborated = self.result.interner.intern(Type::Fn {
+            params,
+            ret: closure_ty,
+        });
+
+        if let Some(sig) = self.fn_sigs.get_mut(&fn_def) {
+            sig.ret = closure_ty;
+        }
+        self.result.def_types.insert(fn_def, elaborated);
+    }
+
+    /// Checks a not-yet-checked function body on demand so that a call site
+    /// observes the elaborated closure return type even when the callee is
+    /// declared after the caller. Cyclic on-demand checks fall back to the
+    /// declared return type.
+    fn ensure_closure_return_checked(&mut self, def_id: DefId) {
+        let might_elaborate = self
+            .fn_sigs
+            .get(&def_id)
+            .is_some_and(|sig| matches!(self.result.interner.get(sig.ret), Type::Fn { .. }));
+
+        if !might_elaborate
+            || self.bodies_checked.contains(&def_id)
+            || self.bodies_in_progress.contains(&def_id)
+        {
+            return;
+        }
+
+        let Some(found) = self.find_decl_fn(def_id) else {
+            return;
+        };
+
+        self.check_fn_body(def_id, &found.0, found.1, found.2);
+    }
+
+    /// Finds the `HirFn` of a top-level declaration (plain fn, struct method
+    /// or implement method) with its owner/interface info, if it is still
+    /// unchecked.
+    fn find_decl_fn(&self, def_id: DefId) -> Option<(Rc<HirFn>, Option<DefId>, Option<DefId>)> {
+        let module = self.module?;
+
+        let plain = module.decls.iter().find_map(|decl| match &decl.kind {
+            HirDeclKind::Fn(f) if decl.def_id == def_id => Some((f.clone(), None, None)),
+            _ => None,
+        });
+        if plain.is_some() {
+            return plain;
+        }
+
+        for decl in &module.decls {
+            match &decl.kind {
+                HirDeclKind::Struct(s) => {
+                    for method in &s.methods {
+                        if let HirDeclKind::Fn(f) = &method.kind
+                            && method.def_id == def_id
+                        {
+                            return Some((f.clone(), Some(decl.def_id), None));
+                        }
+                    }
+                }
+                HirDeclKind::Implement(imp) => {
+                    for method in &imp.methods {
+                        if let HirDeclKind::Fn(f) = &method.kind
+                            && method.def_id == def_id
+                        {
+                            return Some((f.clone(), imp.object, imp.interface));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
     }
 
     /// A `Source` pointing at just the function's signature (name through
@@ -1115,7 +1316,7 @@ impl<'res> TypeChecker<'res> {
 
                 match value {
                     Some(v) => {
-                        self.check_expr(v, expected, false);
+                        self.coerce_return_expr(v);
                     }
 
                     None => {
@@ -1253,9 +1454,17 @@ impl<'res> TypeChecker<'res> {
             );
         }
 
+        // generic_args carry the display signature (`$fn_ptr` type first, then
+        // captured types) — see `Type::to_display`.
+        let mut generic_args = Vec::with_capacity(1 + captures.len());
+        generic_args.push(fn_ty);
+        for captured in &captures {
+            generic_args.push(self.lookup_def_type(*captured, source.clone()));
+        }
+
         self.result.interner.intern(Type::Struct {
             def_id: struct_def,
-            generic_args: Vec::new(),
+            generic_args,
         })
     }
 
@@ -1314,7 +1523,10 @@ impl<'res> TypeChecker<'res> {
                 }
             },
 
-            HirExprKind::VarRef(def_id) => self.lookup_def_type(*def_id, expr.source.clone()),
+            HirExprKind::VarRef(def_id) => {
+                self.ensure_closure_return_checked(*def_id);
+                self.lookup_def_type(*def_id, expr.source.clone())
+            }
 
             HirExprKind::GenericParamRef(def_id) => self
                 .ctx
@@ -2372,6 +2584,26 @@ impl<'res> TypeChecker<'res> {
             }
 
             CoerceResult::Fail => {
+                let closure_to_fn =
+                    matches!(
+                        self.result.interner.get(actual),
+                        Type::Struct { def_id, .. } if is_closure_struct_def(*def_id)
+                    ) && matches!(self.result.interner.get(expected), Type::Fn { .. });
+
+                if closure_to_fn {
+                    let expected = self.display_type(expected);
+                    let found = self.display_type(actual);
+
+                    self.report(TypeError::ClosureCoercion {
+                        expected: expected.into(),
+                        found: found.into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return actual;
+                }
+
                 self.report(TypeError::Mismatch {
                     expected: self.display_type(expected).into(),
                     found: self.display_type(actual).into(),
@@ -2606,6 +2838,10 @@ impl<'res> TypeChecker<'res> {
             let callee_ty = self.synth_expr(callee);
             return self.check_call_via_fn_type(callee_ty, args, source);
         };
+
+        // A call may be the first observation of a forward-declared function
+        // whose `fn`-type return is elaborated to a closure struct.
+        self.ensure_closure_return_checked(def_id);
 
         let sig = &self.fn_sigs[&def_id];
 
@@ -5436,6 +5672,76 @@ mod tests {
                 .iter()
                 .any(|err| matches!(err, TypeError::Mismatch { .. })),
             "expected TypeError::Mismatch, got: {errors:?}"
+        );
+    }
+
+    // --> Closure returns
+
+    const MULT_SOURCE: &str =
+        "fn mult() fn(i32) i32 { let a = 10; return fn(x: i32) i32 { return x * a; }; }";
+    const MULT_WITH_MAIN: &str = "fn mult() fn(i32) i32 { let a = 10; return fn(x: i32) i32 { return x * a; }; } fn main() i32 { let r = mult(); let q = mult()(2); return 0; }";
+
+    #[test]
+    fn closure_return_elaborates_fn_type() {
+        let result = typecheck(&format!("{MULT_SOURCE} fn main() i32 {{ return 0; }}"))
+            .expect("closure return must typecheck");
+
+        let elaborated = result
+            .def_types
+            .values()
+            .find_map(|ty| match result.interner.get(*ty) {
+                Type::Fn { ret, .. } => match result.interner.get(*ret) {
+                    Type::Struct { def_id, .. } if is_closure_struct_def(*def_id) => Some(*ret),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("mult's return type must be elaborated to the closure struct");
+
+        assert!(matches!(
+            result.interner.get(elaborated),
+            Type::Struct { .. }
+        ));
+    }
+
+    #[test]
+    fn closure_return_forward_reference_elaborates() {
+        let result =
+            typecheck(MULT_WITH_MAIN).expect("forward-referenced closure return must typecheck");
+
+        assert!(
+            find_closure_struct(&result).is_some(),
+            "elaborated closure struct must exist"
+        );
+    }
+
+    #[test]
+    fn typed_let_of_capturing_closure_is_rejected() {
+        let errors = typecheck(&format!(
+            "{MULT_SOURCE} fn main() i32 {{ let f: fn(i32) i32 = mult(); }}"
+        ))
+        .expect_err("capturing closure cannot be stored in a bare fn-typed variable");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::ClosureCoercion { .. })),
+            "expected TypeError::ClosureCoercion, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn inconsistent_closure_returns_are_reported() {
+        let errors = typecheck(
+            "fn pick() fn(i32) i32 { let a = 1; let b = 2; if (true) { return fn(x: i32) i32 { return x + a; }; } return fn(x: i32) i32 { return x + b; }; }",
+        )
+        .expect_err("different closure shapes from one function must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::InconsistentClosureReturn { .. })),
+            "expected TypeError::InconsistentClosureReturn, got: {errors:?}"
         );
     }
 }

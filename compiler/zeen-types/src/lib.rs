@@ -110,6 +110,37 @@ impl Type {
             Type::Struct {
                 def_id,
                 generic_args,
+            } if is_closure_struct_def(*def_id) && !generic_args.is_empty() => {
+                // Closure value structs carry their callable signature in
+                // `generic_args[0]` and captured types after it, so they can
+                // be displayed as a readable signature.
+                let signature = type_interner.get(generic_args[0]).to_display(
+                    Rc::clone(&interner),
+                    type_interner,
+                    resolution_result,
+                );
+
+                if generic_args.len() == 1 {
+                    signature
+                } else {
+                    let env: Vec<String> = generic_args[1..]
+                        .iter()
+                        .map(|&ty| {
+                            type_interner.get(ty).to_display(
+                                Rc::clone(&interner),
+                                type_interner,
+                                resolution_result,
+                            )
+                        })
+                        .collect();
+
+                    format!("{} [env: {}]", signature, env.join(", "))
+                }
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
             } => {
                 let name = resolution_result
                     .defs
@@ -832,6 +863,32 @@ mod tests {
         assert_eq!(
             interner.display_type(error, Rc::clone(&rodeo), &resolution),
             "error"
+        );
+    }
+
+    #[test]
+    fn closure_struct_displays_as_signature_with_env() {
+        use zeen_resolve::DefId;
+
+        let mut interner = TypeInterner::new();
+        let resolution = ResolutionResult::default();
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let fn_ty = interner.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+
+        let closure_def = closure_struct_def(DefId(7));
+        let closure_ty = interner.intern(Type::Struct {
+            def_id: closure_def,
+            generic_args: vec![fn_ty, i32],
+        });
+
+        assert_eq!(
+            interner.display_type(closure_ty, Rc::clone(&rodeo), &resolution),
+            "fn(i32) i32 [env: i32]"
         );
     }
 

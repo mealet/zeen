@@ -1,0 +1,21 @@
+fn mult() fn(i32) i32 {
+  let a = 10;
+  return fn(x: i32) i32 { return x * a; };
+}
+
+fn adder(base: i32) fn(i32) i32 {
+  return fn(x: i32) i32 { return x + base; };
+}
+
+fn main() i32 {
+  let m = mult();
+  let r1 = m(5);
+  let r2 = mult()(7);
+  let add3 = adder(3);
+  let r3 = add3(4);
+
+  @println("{}", r1);
+  @println("{}", r2);
+  @println("{}", r3);
+  return 0;
+}
