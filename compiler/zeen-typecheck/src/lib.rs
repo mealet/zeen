@@ -4244,7 +4244,6 @@ impl<'res> TypeChecker<'res> {
             .get(&iface_def)
             .cloned()
             .unwrap_or_default();
-
         // Both signatures are compared in terms of the struct's own
         // generics: the interface one rebinds its generic parameters to the
         // struct's generic slots, the impl one substitutes its implement
@@ -4261,11 +4260,42 @@ impl<'res> TypeChecker<'res> {
             generic_subst.insert(*iface_g, *struct_arg);
         }
 
+        // `implement[U] Add: Box[U]` binds the implement generic (U) positionally
+        // to the object struct's generic slot. Substitute them so the impl
+        // signature (written with U) can be compared against the interface one
+        // (written with the struct's own generic).
+        let mut impl_subst: HashMap<DefId, TypeId> = HashMap::new();
+        for (imp_g, struct_arg) in imp_generics.iter().zip(struct_args.iter()) {
+            impl_subst.insert(*imp_g, *struct_arg);
+        }
+
         let Some(iface_sig) = self.fn_sigs.get(&iface_method_def) else {
             return;
         };
         let iface_params_raw = iface_sig.params.clone();
         let iface_ret_raw = iface_sig.ret;
+
+        let Some(impl_sig) = self.fn_sigs.get(&impl_method_def) else {
+            return;
+        };
+        let impl_params_raw = impl_sig.params.clone();
+        let impl_ret_raw = impl_sig.ret;
+
+        let impl_params: Vec<TypeId> = impl_params_raw
+            .iter()
+            .map(|&p| self.substitute_generics(p, &impl_subst))
+            .collect();
+        let impl_ret = self.substitute_generics(impl_ret_raw, &impl_subst);
+
+        // An interface generic not covered by the struct's own generics (a
+        // non-generic impl of a generic interface, `implement Deref : Foo`)
+        // is inferred from the impl method's corresponding type.
+        for (&iface_param, &impl_param) in iface_params_raw.iter().zip(impl_params.iter()) {
+            let iface_param = self.substitute_self(iface_param, self_struct_ty);
+            self.unify_iface_generics(iface_param, impl_param, &iface_generics, &mut generic_subst);
+        }
+        let iface_ret_raw = self.substitute_self(iface_ret_raw, self_struct_ty);
+        self.unify_iface_generics(iface_ret_raw, impl_ret, &iface_generics, &mut generic_subst);
 
         let iface_params: Vec<TypeId> = iface_params_raw
             .iter()
@@ -4275,35 +4305,7 @@ impl<'res> TypeChecker<'res> {
             })
             .collect();
 
-        let iface_ret = {
-            let r = self.substitute_self(iface_ret_raw, self_struct_ty);
-            self.substitute_generics(r, &generic_subst)
-        };
-
-        let Some(impl_sig) = self.fn_sigs.get(&impl_method_def) else {
-            return;
-        };
-        let impl_params_raw = impl_sig.params.clone();
-        let impl_ret_raw = impl_sig.ret;
-
-        // `implement[U] Add: Box[U]` binds the implement generic (U) positionally
-        // to the object struct's generic slot. Substitute them so the impl
-        // signature (written with U) can be compared against the interface one
-        // (written with the struct's own generic).
-        let struct_generic_args: Vec<TypeId> = match self.result.interner.get(self_struct_ty) {
-            Type::Struct { generic_args, .. } => generic_args.clone(),
-            _ => Vec::new(),
-        };
-        let mut impl_subst: HashMap<DefId, TypeId> = HashMap::new();
-        for (imp_g, struct_arg) in imp_generics.iter().zip(struct_generic_args.iter()) {
-            impl_subst.insert(*imp_g, *struct_arg);
-        }
-
-        let impl_params: Vec<TypeId> = impl_params_raw
-            .iter()
-            .map(|&p| self.substitute_generics(p, &impl_subst))
-            .collect();
-        let impl_ret = self.substitute_generics(impl_ret_raw, &impl_subst);
+        let iface_ret = self.substitute_generics(iface_ret_raw, &generic_subst);
 
         let params_match = iface_params.len() == impl_params.len()
             && iface_params
@@ -4324,6 +4326,52 @@ impl<'res> TypeChecker<'res> {
                 src: source.src(),
                 span: source.span,
             });
+        }
+    }
+
+    /// Unifies an interface signature type against the impl method's
+    /// corresponding type, binding interface generics the struct's own
+    /// generics did not cover (non-generic impl of a generic interface).
+    fn unify_iface_generics(
+        &mut self,
+        iface_ty: TypeId,
+        impl_ty: TypeId,
+        iface_generics: &[DefId],
+        bindings: &mut HashMap<DefId, TypeId>,
+    ) {
+        match (
+            self.result.interner.get(iface_ty).clone(),
+            self.result.interner.get(impl_ty).clone(),
+        ) {
+            (Type::GenericParam(g), _)
+                if iface_generics.contains(&g) && !bindings.contains_key(&g) =>
+            {
+                bindings.insert(g, impl_ty);
+            }
+
+            (Type::Pointer { inner: pi, .. }, Type::Pointer { inner: ii, .. })
+            | (Type::ManyPointer { inner: pi, .. }, Type::ManyPointer { inner: ii, .. })
+            | (Type::Array { element: pi, .. }, Type::Array { element: ii, .. })
+            | (Type::Slice { element: pi, .. }, Type::Slice { element: ii, .. }) => {
+                self.unify_iface_generics(pi, ii, iface_generics, bindings);
+            }
+
+            (
+                Type::Struct {
+                    def_id: pd,
+                    generic_args: pa,
+                },
+                Type::Struct {
+                    def_id: pdi,
+                    generic_args: ia,
+                },
+            ) if pd == pdi => {
+                for (p, i) in pa.iter().zip(ia.iter()) {
+                    self.unify_iface_generics(*p, *i, iface_generics, bindings);
+                }
+            }
+
+            _ => {}
         }
     }
 
