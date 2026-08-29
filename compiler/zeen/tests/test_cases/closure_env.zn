@@ -1,0 +1,25 @@
+struct Wrap {
+    pub v: i32,
+}
+
+fn apply(f: Fn(i32) i32, x: i32) i32 {
+    return f(x);
+}
+
+fn apply_once(f: FnOnce(i32) i32, x: i32) i32 {
+    return f(x);
+}
+
+fn main() i32 {
+    let m = 6;
+    let mul = fn(x: i32) i32 { return x * m; };
+    let r1 = apply(mul, 2);
+
+    let w = Wrap { .v = 100 };
+    let c = fn(a: i32) i32 { return a + w.v; };
+    let r2 = apply_once(c, 10);
+
+    @println("r1={}", r1);
+    @println("r2={}", r2);
+    return 0;
+}
