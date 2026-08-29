@@ -247,13 +247,7 @@ impl<'res> TypeChecker<'res> {
                     // A `Fn`/`FnOnce` annotation is not a storage type and a
                     // struct field would erase the concrete closure; rejected
                     // until generic fields over fat bounds exist.
-                    if matches!(
-                        self.result.interner.get(ty),
-                        Type::FatFn {
-                            body: FatFnBody::Bound,
-                            ..
-                        }
-                    ) {
+                    if self.type_contains_fat_bound(ty) {
                         self.report(TypeError::FatStorageUnsupported {
                             what: "struct field".into(),
                             src: field.ty.source.src(),
@@ -352,13 +346,7 @@ impl<'res> TypeChecker<'res> {
 
                 // Globals are initialized before `main` runs; no concrete
                 // closure site can back a `Fn`/`FnOnce` annotation here yet.
-                if matches!(
-                    self.result.interner.get(ty_id),
-                    Type::FatFn {
-                        body: FatFnBody::Bound,
-                        ..
-                    }
-                ) {
+                if self.type_contains_fat_bound(ty_id) {
                     self.report(TypeError::FatStorageUnsupported {
                         what: "global".into(),
                         src: ty.source.src(),
@@ -1174,6 +1162,25 @@ impl<'res> TypeChecker<'res> {
         )
     }
 
+    /// Whether the type contains an erased `Fn`/`FnOnce` bound anywhere
+    /// (directly, or inside pointers/arrays/struct args) — such types cannot
+    /// name a storage layout.
+    fn type_contains_fat_bound(&self, ty: TypeId) -> bool {
+        match self.result.interner.get(ty).clone() {
+            Type::FatFn { body, .. } => matches!(body, FatFnBody::Bound),
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+                self.type_contains_fat_bound(inner)
+            }
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                self.type_contains_fat_bound(element)
+            }
+            Type::Struct { generic_args, .. } => generic_args
+                .iter()
+                .any(|&a| self.type_contains_fat_bound(a)),
+            _ => false,
+        }
+    }
+
     /// Resolves the concrete return type of a fat-returning function from its
     /// recorded return expressions. Reports and fails on disagreement or on
     /// an unresolvable (polymorphic) path.
@@ -1329,15 +1336,8 @@ impl<'res> TypeChecker<'res> {
                 // storage type: the variable stores the concrete fat form of
                 // the initializer. Without an initializer there is no
                 // concrete type to store, which is rejected.
-                let declared_is_fat_bound = declared_ty.is_some_and(|ty| {
-                    matches!(
-                        self.result.interner.get(ty),
-                        Type::FatFn {
-                            body: FatFnBody::Bound,
-                            ..
-                        }
-                    )
-                });
+                let declared_is_fat_bound =
+                    declared_ty.is_some_and(|ty| self.type_contains_fat_bound(ty));
                 if declared_is_fat_bound && value.is_none() {
                     self.report(TypeError::FatAnnotationNeedsInit {
                         src: stmt.source.src(),
@@ -2017,6 +2017,18 @@ impl<'res> TypeChecker<'res> {
                     && let HirExprKind::Type(ty_expr) = &arg.kind
                 {
                     let ty = self.lower_hir_type(ty_expr);
+
+                    // An erased `Fn`/`FnOnce` bound has no concrete size: only
+                    // concrete closure types (e.g. via `typeof f`) can be
+                    // measured.
+                    if self.type_contains_fat_bound(ty) {
+                        self.report(TypeError::FatStorageUnsupported {
+                            what: "@sizeof/@alignof argument (erased closure type)".into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+
                     self.result.record_expr_type(arg.id, ty);
                 } else {
                     unreachable!("parser missed non-type-expr in macro");
@@ -2807,9 +2819,18 @@ impl<'res> TypeChecker<'res> {
         };
 
         match self.result.interner.get(actual).clone() {
+            // A concrete fat value keeps its own type; the bound is only a
+            // check.
+            Type::FatFn {
+                body: FatFnBody::Bound,
+                ..
+            } => expected,
             Type::FatFn { .. } => actual,
 
             Type::Fn { .. } => {
+                // A basic fn value only wraps when the bound itself is the
+                // storage shape; nested bounds (e.g. behind a pointer) can
+                // never be materialized from a bare pointer.
                 let body = self.fat_body_for_basic(actual, expr);
                 self.result.interner.intern(Type::FatFn {
                     params,
@@ -2818,6 +2839,10 @@ impl<'res> TypeChecker<'res> {
                     body,
                 })
             }
+
+            // The concrete type flows through unchanged (e.g. `*<closure>`
+            // into `*Fn(T) R`): the bound erasure is annotation-only.
+            _ if !self.type_contains_fat_bound(actual) => actual,
 
             _ => expected,
         }

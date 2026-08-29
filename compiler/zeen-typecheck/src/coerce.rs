@@ -211,6 +211,52 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
             CoerceResult::FatFnCoercion
         }
 
+        // The same widening, through a pointer: `*<concrete closure>` into
+        // `*Fn(T) R`. The pointer value is identical — only the annotation
+        // is erased — so the storage stays the concrete pointer type.
+        (
+            Type::Pointer {
+                inner: from_inner,
+                is_const: from_const,
+            },
+            Type::Pointer {
+                inner: to_inner,
+                is_const: to_const,
+            },
+        ) if from_const == to_const
+            && matches!(
+                interner.get(from_inner),
+                Type::FatFn {
+                    body: FatFnBody::Closure { .. },
+                    ..
+                }
+            )
+            && matches!(
+                interner.get(to_inner),
+                Type::FatFn {
+                    body: FatFnBody::Bound,
+                    ..
+                }
+            )
+            && match (interner.get(from_inner), interner.get(to_inner)) {
+                (
+                    Type::FatFn {
+                        params: fp,
+                        ret: fr,
+                        ..
+                    },
+                    Type::FatFn {
+                        params: tp,
+                        ret: tr,
+                        ..
+                    },
+                ) => fp == tp && fr == tr,
+                _ => false,
+            } =>
+        {
+            CoerceResult::FatFnCoercion
+        }
+
         _ => CoerceResult::Fail,
     }
 }
