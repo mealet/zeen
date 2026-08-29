@@ -5,6 +5,8 @@ use zeen_types::TypeId;
 
 #[derive(Debug)]
 pub struct FnCtx {
+    /// `DefId` of the function whose body is being checked.
+    pub fn_def: DefId,
     pub return_type: TypeId,
     pub self_type: Option<TypeId>,
     pub struct_def: Option<DefId>,
@@ -108,6 +110,7 @@ mod tests {
 
     fn fn_ctx(return_type: TypeId) -> FnCtx {
         FnCtx {
+            fn_def: DefId(0),
             return_type,
             self_type: None,
             struct_def: None,
