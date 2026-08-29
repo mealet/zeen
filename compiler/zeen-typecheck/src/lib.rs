@@ -72,7 +72,6 @@ pub struct TypeChecker<'res> {
     struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
     enum_variants: HashMap<DefId, Vec<DefId>>,
 
-    impl_generic_to_struct_generic: HashMap<(DefId, DefId), HashMap<DefId, DefId>>,
     method_owning_interface: HashMap<DefId, DefId>,
 
     extracting_typename: bool,
@@ -98,7 +97,6 @@ struct InterfaceCallResult {
 /// instantiation, and the implement generics' bounds.
 struct MethodImplCtx {
     object_args: Vec<TypeId>,
-    is_specialized: bool,
     generic_bounds: Vec<(DefId, Vec<DefId>)>,
 }
 
@@ -136,7 +134,6 @@ impl<'res> TypeChecker<'res> {
             struct_generics: HashMap::new(),
             struct_methods: HashMap::new(),
             enum_variants: HashMap::new(),
-            impl_generic_to_struct_generic: HashMap::new(),
             method_owning_interface: HashMap::new(),
             extracting_typename: false,
         }
@@ -526,21 +523,17 @@ impl<'res> TypeChecker<'res> {
                 span: imp.object_bindings_span,
             });
         } else if let Some(iface_def) = imp.interface {
-            // Only a fully generic impl binds the implement generics to the
-            // struct's generic slots; a specialization pins concrete types.
-            if !is_specialized {
-                let mapping: HashMap<DefId, DefId> = object_args
-                    .iter()
-                    .zip(struct_generics.iter())
-                    .filter_map(|(arg, &struct_g)| match self.result.interner.get(*arg) {
-                        Type::GenericParam(g) => Some((*g, struct_g)),
-                        _ => None,
-                    })
-                    .collect();
-
-                self.impl_generic_to_struct_generic
-                    .insert((object_def, iface_def), mapping);
-            }
+            // Each implementation carries its own binding of the implement's
+            // generic parameters to the struct's generic slots; a
+            // specialization pins concrete types instead.
+            let generic_bindings: Vec<(DefId, DefId)> = object_args
+                .iter()
+                .zip(struct_generics.iter())
+                .filter_map(|(arg, &struct_g)| match self.result.interner.get(*arg) {
+                    Type::GenericParam(g) => Some((*g, struct_g)),
+                    _ => None,
+                })
+                .collect();
 
             self.result
                 .impl_registry
@@ -555,6 +548,7 @@ impl<'res> TypeChecker<'res> {
                         .iter()
                         .map(|g| (g.def_id, g.bounds.clone()))
                         .collect(),
+                    generic_bindings,
                 });
         }
 
@@ -645,7 +639,7 @@ impl<'res> TypeChecker<'res> {
     fn impl_method_ctx(&mut self, imp: &zeen_hir::HirImplement) -> Option<MethodImplCtx> {
         imp.object?;
 
-        let (object_args, is_specialized) = self.impl_object_args(imp, false);
+        let (object_args, _) = self.impl_object_args(imp, false);
 
         let generic_bounds: Vec<(DefId, Vec<DefId>)> = imp
             .generics
@@ -655,7 +649,6 @@ impl<'res> TypeChecker<'res> {
 
         Some(MethodImplCtx {
             object_args,
-            is_specialized,
             generic_bounds,
         })
     }
@@ -1076,26 +1069,15 @@ impl<'res> TypeChecker<'res> {
         let self_type = struct_def.map(|sd| {
             let struct_generics = self.struct_generics.get(&sd).cloned().unwrap_or_default();
 
-            // A specialized implement pins the method's `Self` to the
-            // concrete object type (`Box[i32]`).
+            // An interface implementation's methods see `Self` through the
+            // block's own object slots: a specialization pins concrete types
+            // (`Box[i32]`), a generic impl binds them to the block's generic
+            // parameters.
             let generic_args: Vec<TypeId> = if let Some(ictx) = impl_ctx
-                && ictx.is_specialized
+                && iface_def.is_some()
                 && ictx.object_args.len() == struct_generics.len()
             {
                 ictx.object_args.clone()
-            } else if let Some(iface) = iface_def
-                && let Some(mapping) = self.impl_generic_to_struct_generic.get(&(sd, iface))
-            {
-                let reverse: HashMap<DefId, DefId> =
-                    mapping.iter().map(|(&k, &v)| (v, k)).collect();
-
-                struct_generics
-                    .iter()
-                    .map(|g| {
-                        let target = reverse.get(g).copied().unwrap_or(*g);
-                        self.result.interner.intern(Type::GenericParam(target))
-                    })
-                    .collect()
             } else {
                 struct_generics
                     .iter()
@@ -2423,7 +2405,7 @@ impl<'res> TypeChecker<'res> {
             let arg_ty = self.synth_expr(arg);
             let arg_ty = self.default_literal(arg_ty);
 
-            self.check_format_arg(*spec, arg_ty, arg.source.clone());
+            self.check_format_arg(*spec, arg_ty, arg);
         }
 
         // checking extra args
@@ -2432,30 +2414,30 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, source: Source) {
+    fn check_format_arg(&mut self, spec: FormatSpec, arg_ty: TypeId, arg: &HirExpr) {
         match spec {
             FormatSpec::Display => {
-                let implements_iface = self.type_implements_display(arg_ty);
-
-                if !implements_iface {
+                if !self.resolve_format_struct_arg(arg_ty, "Display", "display", arg)
+                    && !self.type_implements_display(arg_ty)
+                {
                     self.report(TypeError::InterfaceNotImplemented {
                         name: "Display".into(),
                         ty_name: self.display_type(arg_ty).into(),
-                        src: source.src(),
-                        span: source.span,
+                        src: arg.source.src(),
+                        span: arg.source.span,
                     });
                 };
             }
 
             FormatSpec::Debug => {
-                let implements_iface = self.type_implements_debug(arg_ty);
-
-                if !implements_iface {
+                if !self.resolve_format_struct_arg(arg_ty, "Debug", "debug", arg)
+                    && !self.type_implements_debug(arg_ty)
+                {
                     self.report(TypeError::InterfaceNotImplemented {
                         name: "Debug".into(),
                         ty_name: self.display_type(arg_ty).into(),
-                        src: source.src(),
-                        span: source.span,
+                        src: arg.source.src(),
+                        span: arg.source.span,
                     });
                 };
             }
@@ -2472,8 +2454,8 @@ impl<'res> TypeChecker<'res> {
                                 .interner
                                 .display_type(arg_ty, Rc::clone(&self.interner), self.resolution)
                                 .into(),
-                            src: source.src(),
-                            span: source.span,
+                            src: arg.source.src(),
+                            span: arg.source.span,
                         });
                     }
                 }
@@ -2490,12 +2472,62 @@ impl<'res> TypeChecker<'res> {
                             .interner
                             .display_type(arg_ty, Rc::clone(&self.interner), self.resolution)
                             .into(),
-                        src: source.src(),
-                        span: source.span,
+                        src: arg.source.src(),
+                        span: arg.source.span,
                     });
                 }
             },
         }
+    }
+
+    /// Resolves the interface method used to format a struct-typed argument
+    /// and records it, so MIR dispatches to the same implementation the
+    /// checker picked. Returns `false` when the type is not a struct.
+    fn resolve_format_struct_arg(
+        &mut self,
+        arg_ty: TypeId,
+        iface_name: &str,
+        method_name: &str,
+        arg: &HirExpr,
+    ) -> bool {
+        let Type::Struct {
+            def_id,
+            generic_args,
+        } = self.result.interner.get(arg_ty).clone()
+        else {
+            return false;
+        };
+
+        let Some(iface_def) = self.interface_registry.get(iface_name) else {
+            return true;
+        };
+
+        match self.applicable_impl(def_id, iface_def, &generic_args) {
+            Some(entry) => {
+                if let Some(&method) = entry
+                    .methods
+                    .iter()
+                    .find(|&&d| self.def_name(d).as_deref() == Some(method_name))
+                {
+                    self.result.format_arg_resolutions.insert(arg.id, method);
+                }
+            }
+            None => {
+                let struct_ty = self.result.interner.intern(Type::Struct {
+                    def_id,
+                    generic_args,
+                });
+
+                self.report(TypeError::InterfaceNotImplemented {
+                    name: iface_name.into(),
+                    ty_name: self.display_type(struct_ty).into(),
+                    src: arg.source.src(),
+                    span: arg.source.span,
+                });
+            }
+        }
+
+        true
     }
 
     // << Macros
@@ -3591,13 +3623,12 @@ impl<'res> TypeChecker<'res> {
             .collect();
 
         if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
-            && let Some(impl_to_struct) = self
-                .impl_generic_to_struct_generic
-                .get(&(struct_def, owning_iface))
+            && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
+            && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
         {
-            for (&impl_g, &struct_g) in impl_to_struct {
-                if let Some(&concrete) = bindings.get(&struct_g) {
-                    bindings.insert(impl_g, concrete);
+            for (imp_g, struct_g) in &entry.generic_bindings {
+                if let Some(&concrete) = bindings.get(struct_g) {
+                    bindings.insert(*imp_g, concrete);
                 }
             }
         }
@@ -4263,13 +4294,11 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    // i'm really sorry 😭
-    #[allow(clippy::too_many_arguments)]
     /// Picks the implementation to use for `(struct, interface)` at the
     /// concrete instantiation `generic_args`: a specialization registered for
-    /// the exact instantiation wins; otherwise the generic implementation
-    /// applies when the concrete arguments satisfy its bounds. `None` when
-    /// nothing applies.
+    /// the exact instantiation wins; then generic implementations whose
+    /// bounds the arguments satisfy; then a boundless wildcard
+    /// implementation. `None` when nothing applies.
     fn applicable_impl(
         &self,
         struct_def: DefId,
@@ -4285,26 +4314,32 @@ impl<'res> TypeChecker<'res> {
             return Some(entry.clone());
         }
 
-        let mapping = self
-            .impl_generic_to_struct_generic
-            .get(&(struct_def, iface_def))?;
         let struct_generics = self
             .struct_generics
             .get(&struct_def)
             .cloned()
             .unwrap_or_default();
 
-        for entry in entries.iter().filter(|e| !e.is_specialized) {
+        // The concrete type bound to an implement generic comes from the
+        // struct's generic slot the generic is bound to.
+        let bound_arg = |entry: &ImplEntry, imp_g: DefId| -> Option<TypeId> {
+            let struct_g = entry
+                .generic_bindings
+                .iter()
+                .find(|(g, _)| g == &imp_g)
+                .map(|(_, sg)| *sg)?;
+            let index = struct_generics.iter().position(|g| g == &struct_g)?;
+            generic_args.get(index).copied()
+        };
+
+        // Generic implementations with bounds are more specific than a
+        // boundless wildcard: pick the first whose bounds are satisfied.
+        for entry in entries
+            .iter()
+            .filter(|e| !e.is_specialized && !e.generic_bounds.is_empty())
+        {
             let applies = entry.generic_bounds.iter().all(|(imp_g, ifaces)| {
-                // The concrete type bound to the implement generic comes from
-                // the struct's generic slot the generic is mapped to.
-                let Some(struct_g) = mapping.get(imp_g) else {
-                    return true;
-                };
-                let Some(index) = struct_generics.iter().position(|g| g == struct_g) else {
-                    return true;
-                };
-                let Some(&concrete) = generic_args.get(index) else {
+                let Some(concrete) = bound_arg(entry, *imp_g) else {
                     return true;
                 };
 
@@ -4318,7 +4353,12 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        None
+        // A boundless wildcard implementation applies to every
+        // instantiation.
+        entries
+            .iter()
+            .find(|e| !e.is_specialized && e.generic_bounds.is_empty())
+            .cloned()
     }
 
     fn call_interface_method(
@@ -4414,14 +4454,11 @@ impl<'res> TypeChecker<'res> {
             .zip(struct_generic_args.iter().copied())
             .collect();
 
-        if let Some(impl_to_struct) = self
-            .impl_generic_to_struct_generic
-            .get(&(struct_def, iface_def))
-        {
-            for (&impl_g, &struct_g) in impl_to_struct {
-                if let Some(&concrete) = bindings.get(&struct_g) {
-                    bindings.insert(impl_g, concrete);
-                }
+        // The chosen implementation's generic parameters resolve through the
+        // struct's generic slots (`Deref[T].deref` returns the struct's `T`).
+        for (imp_g, struct_g) in &entry.generic_bindings {
+            if let Some(&concrete) = bindings.get(struct_g) {
+                bindings.insert(*imp_g, concrete);
             }
         }
 

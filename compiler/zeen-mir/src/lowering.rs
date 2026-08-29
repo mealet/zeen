@@ -2741,9 +2741,18 @@ impl<'ctx> MirLowering<'ctx> {
             };
         };
 
-        let Some(method_def) =
-            self.resolve_interface_method(struct_def, iface_name, method_name, &generic_args)
-        else {
+        // The checker records which implementation it picked for this
+        // argument; fall back to resolving here for unrecorded cases.
+        let method_def = self
+            .typecheck
+            .format_arg_resolutions
+            .get(&arg.id)
+            .copied()
+            .or_else(|| {
+                self.resolve_interface_method(struct_def, iface_name, method_name, &generic_args)
+            });
+
+        let Some(method_def) = method_def else {
             return {
                 let (b, op) = self.lower_expr_to_operand(fb, arg, block);
                 (b, op, obj_ty)
@@ -2815,6 +2824,11 @@ impl<'ctx> MirLowering<'ctx> {
             let entry = entries
                 .iter()
                 .find(|e| e.is_specialized && e.object_args.as_slice() == generic_args)
+                .or_else(|| {
+                    entries
+                        .iter()
+                        .find(|e| !e.is_specialized && !e.generic_bounds.is_empty())
+                })
                 .or_else(|| entries.iter().find(|e| !e.is_specialized));
 
             if let Some(entry) = entry {

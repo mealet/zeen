@@ -48,6 +48,11 @@ pub struct TypeCheckResult {
     /// Interface implementations registered per `(struct, interface)`,
     /// including concrete specializations (`implement Display : Box[i32]`).
     pub impl_registry: HashMap<(DefId, DefId), Vec<ImplEntry>>,
+
+    /// Interface method chosen for a struct-typed format argument (`{}` /
+    /// `{:?}`), keyed by the argument expression. Recorded so MIR dispatches
+    /// to the same implementation the checker picked.
+    pub format_arg_resolutions: HashMap<HirId, DefId>,
 }
 
 /// A single `implement` block registered for a `(struct, interface)` pair.
@@ -61,6 +66,9 @@ pub struct ImplEntry {
     /// Bounds of the implement's generic parameters
     /// (`implement[T: Display]`): `T` -> the interfaces it requires.
     pub generic_bounds: Vec<(DefId, Vec<DefId>)>,
+    /// The implement's generic parameters bound to the struct's generic
+    /// slots (`implement[T] Display : Box[T]` -> `T` -> the struct's `T`).
+    pub generic_bindings: Vec<(DefId, DefId)>,
 }
 
 impl TypeCheckResult {
