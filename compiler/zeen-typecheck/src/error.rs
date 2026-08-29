@@ -305,13 +305,13 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("capturing closure cannot be used as a bare `{expected}` type")]
+    #[error("a fat function pointer `{found}` cannot be used as a bare `{expected}` type")]
     #[diagnostic(
         severity(Error),
         code(zeen::typechecker::closure_coercion),
         help(
-            "a fn pointer has nowhere to carry the captured environment; \
-              use the closure's inferred type instead, or remove the captures"
+            "a bare fn pointer carries no environment; keep the value in its `Fn`/`FnOnce` \
+              type, or use the closure without captures"
         )
     )]
     ClosureCoercion {
@@ -320,23 +320,7 @@ pub enum TypeError {
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("closure type `{found}` captures environment")]
-        span: SourceSpan,
-    },
-
-    #[error("inconsistent closure return types: `{expected}` and `{found}`")]
-    #[diagnostic(
-        severity(Error),
-        code(zeen::typechecker::inconsistent_closure_return),
-        help("all closures returned from a function must capture the same environment")
-    )]
-    InconsistentClosureReturn {
-        expected: SmolStr,
-        found: SmolStr,
-
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label]
+        #[label("fat pointer `{found}` cannot be narrowed to a bare fn")]
         span: SourceSpan,
     },
 
