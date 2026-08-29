@@ -341,10 +341,7 @@ pub enum TypeError {
     },
 
     #[error("a `Fn`/`FnOnce` value cannot be stored in this position yet")]
-    #[diagnostic(
-        severity(Error),
-        code(zeen::typechecker::fat_storage_unsupported),
-    )]
+    #[diagnostic(severity(Error), code(zeen::typechecker::fat_storage_unsupported))]
     FatStorageUnsupported {
         what: SmolStr,
 
