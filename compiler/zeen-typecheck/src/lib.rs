@@ -665,8 +665,8 @@ impl<'res> TypeChecker<'res> {
                 let type_id = self.synth_expr(expr);
 
                 if type_id == self.result.interner.never()
-                || type_id == self.result.interner.error()
-                && !self.extracting_typename {
+                    || type_id == self.result.interner.error() && !self.extracting_typename
+                {
                     self.report(TypeError::NeverFromTypeof {
                         src: ty.source.src(),
                         span: ty.source.span,
@@ -674,7 +674,7 @@ impl<'res> TypeChecker<'res> {
                 }
 
                 type_id
-            },
+            }
 
             HirTypeKind::SinglePointer(inner) => {
                 let is_const = matches!(inner.kind, HirTypeKind::Const(_));
@@ -3159,13 +3159,15 @@ impl<'res> TypeChecker<'res> {
             bindings.insert(*g, ty);
         }
 
-        for (idx, (param_ty, arg)) in sig_params.iter().zip(args.iter()).enumerate() {
-            if idx > sig_params.len() - 1 {
-                // variadic args
-                continue;
-            }
-
+        for (param_ty, arg) in sig_params.iter().zip(args.iter()) {
             self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+        }
+
+        // Variadic args have no declared parameter type: just record theirs.
+        for arg in args.iter().skip(sig_params.len()) {
+            let arg_ty = self.synth_expr(arg);
+            let arg_ty = self.default_literal(arg_ty);
+            self.result.record_expr_type(arg.id, arg_ty);
         }
 
         for g in &sig_generics {
