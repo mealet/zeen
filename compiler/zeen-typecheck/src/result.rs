@@ -4,6 +4,7 @@ use zeen_hir::HirId;
 use zeen_resolve::DefId;
 use zeen_types::{StructTypeInfo, TypeId, TypeInterner};
 
+use crate::closure_alloc::ClosureAllocKind;
 use crate::format_str::FormatChunk;
 
 #[derive(Debug, Default)]
@@ -21,6 +22,9 @@ pub struct TypeCheckResult {
     pub method_owner: HashMap<DefId, DefId>,
     pub const_bindings: HashMap<DefId, bool>,
     pub format_specs: HashMap<HirId, Vec<FormatChunk>>,
+    /// Per-closure-site environment allocation decision (key = the closure's
+    /// synthetic fn `DefId`), see `closure_alloc`.
+    pub closure_allocs: HashMap<DefId, ClosureAllocKind>,
 }
 
 impl TypeCheckResult {

@@ -9,6 +9,7 @@ use miette::SourceSpan;
 use zeen_ast::Source;
 
 use crate::{
+    closure_alloc::analyze_closures,
     coerce::{CoerceResult, try_coerce},
     context::{FnCtx, InterfaceRegistry, TypeCheckCtx},
     format_str::FormatSpec,
@@ -35,6 +36,7 @@ use zeen_types::{
     closure_struct_def, self_mode_of, unary_op_interface,
 };
 
+pub mod closure_alloc;
 pub mod coerce;
 pub mod context;
 pub mod error;
@@ -186,6 +188,8 @@ impl<'res> TypeChecker<'res> {
         for decl in &module.decls {
             self.check_decl_body(decl);
         }
+
+        self.result.closure_allocs = analyze_closures(module, &self.resolution.closure_captures);
 
         let target = self.compilation_context.target.as_deref();
         let requires_main = zeen_driver::target_requires_main(target);
@@ -5622,5 +5626,136 @@ mod tests {
             "#,
         )
         .expect("fn, Fn and FnOnce params must accept bare fn and closures");
+    }
+
+    // --> Closure env allocation (S4 escape analysis)
+
+    use crate::closure_alloc::ClosureAllocKind;
+
+    fn allocs(result: &TypeCheckResult) -> Vec<ClosureAllocKind> {
+        result.closure_allocs.values().copied().collect()
+    }
+
+    #[test]
+    fn closure_only_called_stays_on_stack() {
+        let result =
+            typecheck("fn main() { let x = 1; let c = fn() i32 { return x; }; let r = c(); }")
+                .expect("closure only used as a call target must typecheck");
+
+        assert_eq!(
+            allocs(&result),
+            vec![ClosureAllocKind::Stack],
+            "a closure that never leaves the frame must stay a stack value"
+        );
+    }
+
+    #[test]
+    fn unused_closure_is_elided() {
+        let result = typecheck("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
+            .expect("an unused closure must typecheck");
+
+        assert_eq!(
+            allocs(&result),
+            vec![ClosureAllocKind::Unused],
+            "a closure that is never referenced must be elided"
+        );
+    }
+
+    #[test]
+    fn returned_closure_is_heap_allocated() {
+        let result = typecheck(
+            r#"
+            fn make() Fn() i32 {
+                let x = 1;
+                return fn() i32 { return x; };
+            }
+
+            fn main() void {
+                let m = make();
+            }
+            "#,
+        )
+        .expect("closure return must typecheck");
+
+        assert_eq!(
+            allocs(&result),
+            vec![ClosureAllocKind::Heap],
+            "a closure returned from a function must be heap-allocated"
+        );
+    }
+
+    #[test]
+    fn closure_passed_as_argument_is_heap_allocated() {
+        let result = typecheck(
+            r#"
+            fn apply(f: Fn(i32) i32) i32 {
+                return f(1);
+            }
+
+            fn main() void {
+                let b = 2;
+                let r = apply(fn(a: i32) i32 { return a + b; });
+            }
+            "#,
+        )
+        .expect("closure argument must typecheck");
+
+        assert!(
+            allocs(&result).contains(&ClosureAllocKind::Heap),
+            "a closure passed to a function must be heap-allocated"
+        );
+    }
+
+    #[test]
+    fn closure_called_in_place_stays_on_stack() {
+        let result = typecheck("fn main() { let r = (fn(a: i32) i32 { return a + 1; })(2); }")
+            .expect("immediately-called closure must typecheck");
+
+        assert_eq!(
+            allocs(&result),
+            vec![ClosureAllocKind::Stack],
+            "an immediately-called closure never escapes its expression"
+        );
+    }
+
+    #[test]
+    fn closure_captured_by_sibling_is_heap_allocated() {
+        let result = typecheck(
+            r#"
+            fn main() void {
+                let x = 1;
+                let c = fn() i32 { return x; };
+                let outer = fn() i32 { return c(); };
+                let r = outer();
+            }
+            "#,
+        )
+        .expect("closure-in-closure must typecheck");
+
+        let kinds = allocs(&result);
+        assert!(
+            kinds.contains(&ClosureAllocKind::Heap),
+            "a closure captured by another closure must be heap-allocated, got {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn closure_moved_into_another_local_is_heap_allocated() {
+        let result = typecheck(
+            r#"
+            fn main() void {
+                let x = 1;
+                let c = fn() i32 { return x; };
+                let d = c;
+                let r = d();
+            }
+            "#,
+        )
+        .expect("moved closure must typecheck");
+
+        assert!(
+            allocs(&result).contains(&ClosureAllocKind::Heap),
+            "moving a closure into another local must force the heap"
+        );
     }
 }
