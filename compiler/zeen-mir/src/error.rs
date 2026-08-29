@@ -14,6 +14,19 @@ pub enum MirError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("a value `Fn` pointer cannot be converted into a fat `Fn`/`FnOnce` value at runtime")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::mir::runtime_fat_coercion),
+        help("coerce a closure literal directly instead of storing it in a variable first")
+    )]
+    RuntimeFatCoercion {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Error, Diagnostic, Clone)]

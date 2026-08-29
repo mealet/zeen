@@ -24,7 +24,9 @@ use zeen_typecheck::{
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use zeen_types::{
-    SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
+    CLOSURE_FAT_DEF, CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD, SLICE_LEN_FIELD, SLICE_PTR_FIELD,
+    SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner, closure_field_def,
+    closure_struct_def,
 };
 
 use crate::error::{MirError, MirWarning};
@@ -132,6 +134,10 @@ pub struct MirLowering<'ctx> {
     /// of a nested function so its MIR name becomes `<parent>-><name>`.
     fn_stack: Vec<FnContext>,
 
+    /// Cache of synthesized bare-fn → fat-`{fn,env}` adapter functions, keyed
+    /// by (target, fat signature) so each adapter is emitted once.
+    fat_adapter_cache: HashMap<(MirFunctionId, TypeId), MirFunctionId>,
+
     mode: CompilationMode,
 
     globals: Vec<GlobalDecl>,
@@ -180,6 +186,10 @@ struct LoopTargets {
 pub struct FnBuilder {
     func: MirFunction,
     locals_by_def: HashMap<DefId, LocalId>,
+    /// For closure bodies: captured variables referenced through the env
+    /// pointer. Maps the captured `DefId` to `env.deref().field(..)`. Looked up
+    /// after `locals_by_def` so ordinary locals still win.
+    captured_places: HashMap<DefId, Place>,
     loop_stack: Vec<LoopTargets>,
     bindings: HashMap<DefId, TypeId>,
     /// Lexical scope stack. Each active `HirExprKind::Block` pushes an entry;
@@ -208,9 +218,20 @@ impl FnBuilder {
                 is_drop_impl: false,
             },
             locals_by_def: HashMap::new(),
+            captured_places: HashMap::new(),
             loop_stack: Vec::new(),
             bindings,
             scope_stack: Vec::new(),
+        }
+    }
+
+    /// The place backing a `DefId` inside this frame: an ordinary local first,
+    /// then a captured variable exposed through the closure env pointer.
+    fn place_for_def(&self, def_id: DefId) -> Option<Place> {
+        if let Some(local) = self.locals_by_def.get(&def_id) {
+            Some(Place::from_local(*local))
+        } else {
+            self.captured_places.get(&def_id).cloned()
         }
     }
 
@@ -282,6 +303,7 @@ impl<'ctx> MirLowering<'ctx> {
             mono_cache: MonoCache::new(),
             hir_fns_by_def,
             fn_stack: Vec::new(),
+            fat_adapter_cache: HashMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             mode,
@@ -827,6 +849,414 @@ impl<'ctx> MirLowering<'ctx> {
         );
     }
 
+    /// Registers the layout of a `Type::FatFn` value as the canonical
+    /// two-slot struct `{ $fn: bare signature, $env: *const void }`. The env
+    /// slot is an opaque pointer: closures built by different source sites with
+    /// the same signature share one layout, and LLVM ignores pointee types for
+    /// pointer-sized args anyway.
+    fn register_fat_layout(&mut self, fat_ty: TypeId, bare_fn_ty: TypeId) {
+        if self.program.struct_layouts.contains_key(&fat_ty) {
+            return;
+        }
+
+        let env_ptr_ty = {
+            let void_ty = self.typecheck.interner.intern(Type::Void);
+            self.typecheck.interner.intern(Type::Pointer {
+                inner: void_ty,
+                is_const: true,
+            })
+        };
+
+        self.program.struct_layouts.insert(
+            fat_ty,
+            StructLayout {
+                def_id: CLOSURE_FAT_DEF,
+                generic_args: vec![],
+                fields: vec![
+                    StructFieldLayout {
+                        def_id: CLOSURE_FAT_FN_FIELD,
+                        ty: bare_fn_ty,
+                    },
+                    StructFieldLayout {
+                        def_id: CLOSURE_FAT_ENV_FIELD,
+                        ty: env_ptr_ty,
+                    },
+                ],
+            },
+        );
+    }
+
+    /// Returns the index of the `malloc` extern declaration, registering it (in
+    /// the requested pointee type) on first use. Heap closure environments are
+    /// allocated with it and (in later stages) released with `free`.
+    fn ensure_malloc_extern(&mut self, ret_ty: TypeId) -> usize {
+        if let Some(idx) = self
+            .program
+            .extern_fns
+            .iter()
+            .position(|f| f.symbol_name == "malloc")
+        {
+            return idx;
+        }
+
+        let usize_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+
+        self.program.extern_fns.push(ExternFnDecl {
+            symbol_name: "malloc".to_string(),
+            param_types: vec![usize_ty],
+            ret_ty,
+            is_variadic: false,
+        });
+
+        self.program.extern_fns.len() - 1
+    }
+
+    /// Builds a fat closure value `{ $fn, $env }` of type `fat_ty` and returns
+    /// it as a moved operand. `source` is `Some(closure_def)` when the value
+    /// comes from a closure literal (which may capture); `None` when a static
+    /// `fn` is being coerced into a fat slot.
+    fn build_fat_envelope(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        fat_ty: TypeId,
+        source: Option<DefId>,
+        body_mir_id: MirFunctionId,
+        source_expr: &HirExpr,
+    ) -> (BlockId, Operand) {
+        let captures = source
+            .and_then(|def| self.resolution.closure_captures.get(&def).cloned())
+            .unwrap_or_default();
+
+        let captures_have_env = !captures.is_empty();
+
+        // Only `Type::FatFn` values reach the builder (the literal branch
+        // dispatches on that type beforehand).
+        let Type::FatFn { params, ret, .. } = self.typecheck.interner.get(fat_ty).clone() else {
+            unreachable!("fat envelope requires a fat signature");
+        };
+
+        // The `$fn` slot stores a callee with the *env-first* ABI
+        // `(env, args...) -> ret`. Declaring it that way keeps call sites free
+        // of argument-count juggling: a fat call is just `c.$fn(c.$env, args...)`.
+        let env_ptr_ty = {
+            let void_ty = self.typecheck.interner.intern(Type::Void);
+            self.typecheck.interner.intern(Type::Pointer {
+                inner: void_ty,
+                is_const: true,
+            })
+        };
+        let env_first_fn_ty = {
+            let mut env_first_params = Vec::with_capacity(params.len() + 1);
+            env_first_params.push(env_ptr_ty);
+            env_first_params.extend(params.iter().copied());
+            self.typecheck.interner.intern(Type::Fn {
+                params: env_first_params,
+                ret,
+            })
+        };
+        self.register_fat_layout(fat_ty, env_first_fn_ty);
+
+        // The callee side of the envelope: for a capturing closure the body
+        // function already takes `(env_ptr, args...)`; for a zero-capture
+        // closure coerced into a fat slot we substitute an adapter so every fat
+        // call site can use the env-first ABI uniformly.
+        let fn_operand = Operand::Constant(ConstValue::Fn(body_mir_id), None);
+        let fn_operand = if captures_have_env {
+            fn_operand
+        } else {
+            Operand::Constant(
+                ConstValue::Fn(self.synthesize_fat_adapter(body_mir_id, fat_ty)),
+                None,
+            )
+        };
+
+        let (block, env_operand) = if !captures_have_env {
+            // Zero-capture fat value: no environment, `$env` is a null pointer.
+            (block, Operand::Constant(ConstValue::NullPtr, None))
+        } else {
+            let (block, env_id) = self.build_env_value(fb, block, source.unwrap(), &captures);
+            (block, env_id)
+        };
+
+        let temp = fb.new_temp(fat_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Struct(CLOSURE_FAT_DEF),
+                    operands: vec![fn_operand, env_operand],
+                },
+                source: Some(source_expr.source.clone()),
+            },
+        );
+
+        (
+            block,
+            Operand::Move(Place::from_local(temp), Some(source_expr.source.clone())),
+        )
+    }
+
+    /// Lowers the captured environment of a closure literal. Returns the
+    /// `$env` operand for the fat envelope: a pointer to a stack cell, a
+    /// malloc'd heap block, or `null` when the value is never used in a way
+    /// that observes it.
+    fn build_env_value(
+        &mut self,
+        fb: &mut FnBuilder,
+        mut block: BlockId,
+        closure_def: DefId,
+        captures: &[DefId],
+    ) -> (BlockId, Operand) {
+        let env_def = closure_struct_def(closure_def);
+        let env_ty = self.typecheck.interner.intern(Type::Struct {
+            def_id: env_def,
+            generic_args: Vec::new(),
+        });
+        self.register_struct_layout(env_ty, env_def);
+
+        let alloc_kind = self
+            .typecheck
+            .closure_allocs
+            .get(&closure_def)
+            .copied()
+            .unwrap_or(zeen_typecheck::closure_alloc::ClosureAllocKind::Heap);
+
+        // Cheap no-op: the closure value is never used in an observing way.
+        if alloc_kind == zeen_typecheck::closure_alloc::ClosureAllocKind::Unused {
+            return (block, Operand::Constant(ConstValue::NullPtr, None));
+        }
+
+        // Materialize each captured value on its own before grouping them, so
+        // reads happen in source order even when the env goes to the heap.
+        let mut capture_ops = Vec::with_capacity(captures.len());
+        for captured in captures {
+            let local = *fb
+                .locals_by_def
+                .get(captured)
+                .expect("captured value must be a local of the enclosing frame");
+            let raw_ty = self
+                .typecheck
+                .def_types
+                .get(captured)
+                .copied()
+                .expect("captured value must have a type");
+            let ty = self.substitute_fn_type(fb, raw_ty);
+            let place = Place::from_local(local);
+            capture_ops.push(self.place_to_operand(place, ty, None));
+        }
+
+        let env_ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+            inner: env_ty,
+            is_const: true,
+        });
+
+        match alloc_kind {
+            zeen_typecheck::closure_alloc::ClosureAllocKind::Stack => {
+                let env_temp = fb.new_temp(env_ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(env_temp),
+                        rvalue: Rvalue::Aggregate {
+                            kind: AggregateKind::Struct(env_def),
+                            operands: capture_ops,
+                        },
+                        source: None,
+                    },
+                );
+
+                let env_ptr_temp = fb.new_temp(env_ptr_ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(env_ptr_temp),
+                        rvalue: Rvalue::Ref {
+                            place: Place::from_local(env_temp),
+                            is_const: true,
+                        },
+                        source: None,
+                    },
+                );
+
+                (block, Operand::Move(Place::from_local(env_ptr_temp), None))
+            }
+
+            zeen_typecheck::closure_alloc::ClosureAllocKind::Heap => {
+                let usize_ty = self
+                    .typecheck
+                    .interner
+                    .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+                let heap_ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                    inner: env_ty,
+                    is_const: false,
+                });
+
+                let size_temp = fb.new_temp(usize_ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(size_temp),
+                        rvalue: Rvalue::SizeOf(env_ty),
+                        source: None,
+                    },
+                );
+
+                let malloc_idx = self.ensure_malloc_extern(heap_ptr_ty);
+                let env_ptr_temp = fb.new_temp(heap_ptr_ty);
+                let next = fb.new_block();
+                fb.set_terminator(
+                    block,
+                    Terminator::Call {
+                        func: CallTarget::Extern(malloc_idx),
+                        args: vec![Operand::Copy(Place::from_local(size_temp), None)],
+                        destination: Place::from_local(env_ptr_temp),
+                        target: Some(next),
+                        source: None,
+                    },
+                );
+                block = next;
+
+                for (index, captured) in captures.iter().enumerate() {
+                    let ty = self.substitute_fn_type(
+                        fb,
+                        self.typecheck
+                            .def_types
+                            .get(captured)
+                            .copied()
+                            .expect("captured value must have a type"),
+                    );
+                    let field = Place::from_local(env_ptr_temp)
+                        .deref()
+                        .field(closure_field_def(closure_def, index));
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: field,
+                            rvalue: Rvalue::Use(match capture_ops.get(index) {
+                                Some(op) => op.clone(),
+                                None => Operand::Constant(ConstValue::NullPtr, None),
+                            }),
+                            source: None,
+                        },
+                    );
+                }
+
+                (block, Operand::Move(Place::from_local(env_ptr_temp), None))
+            }
+
+            zeen_typecheck::closure_alloc::ClosureAllocKind::Unused => {
+                unreachable!("early-returned above")
+            }
+        }
+    }
+
+    /// Synthesizes an adapter function `(env, args...) -> ret` that forwards to
+    /// a bare `fn` target, giving zero-capture closures and static functions a
+    /// fat value with a uniform env-first ABI. One adapter is created per
+    /// (target, fat signature) pair and cached.
+    fn synthesize_fat_adapter(&mut self, target: MirFunctionId, fat_ty: TypeId) -> MirFunctionId {
+        if let Some(&existing) = self.fat_adapter_cache.get(&(target, fat_ty)) {
+            return existing;
+        }
+
+        let id = self.mono_cache.fresh_id();
+        self.set_function_name(
+            id,
+            format!(
+                "{}.fatadapter#{}",
+                self.program
+                    .function_names
+                    .get(&target)
+                    .cloned()
+                    .unwrap_or_else(|| format!("fn#{}", target.0)),
+                id.0
+            ),
+        );
+
+        let Type::FatFn { params, ret, .. } = self.typecheck.interner.get(fat_ty).clone() else {
+            panic!("adapter requires a fat signature");
+        };
+
+        let env_ptr_ty = {
+            let void_ty = self.typecheck.interner.intern(Type::Void);
+            self.typecheck.interner.intern(Type::Pointer {
+                inner: void_ty,
+                is_const: true,
+            })
+        };
+
+        let mut func = MirFunction {
+            source_def: CLOSURE_FAT_DEF,
+            mono_args: Vec::new(),
+            locals: Vec::new(),
+            blocks: Vec::new(),
+            params: Vec::new(),
+            entry_block: BlockId(0),
+            ret_ty: ret,
+            is_drop_impl: false,
+        };
+        func.new_block(); // block 0 (entry)
+        let bb0 = BlockId(0);
+        let bb1 = func.new_block();
+
+        let env_param = func.new_local(LocalDecl {
+            ty: env_ptr_ty,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Param,
+            name: None,
+            source: None,
+        });
+        func.params.push(env_param);
+
+        let mut arg_operands = Vec::with_capacity(params.len());
+        for &param_ty in &params {
+            let local = func.new_local(LocalDecl {
+                ty: param_ty,
+                mutability: Mutability::Mut,
+                kind: LocalKind::Param,
+                name: None,
+                source: None,
+            });
+            func.params.push(local);
+            arg_operands.push(Operand::Copy(Place::from_local(local), None));
+        }
+
+        let dest = func.new_local(LocalDecl {
+            ty: ret,
+            mutability: Mutability::Mut,
+            kind: LocalKind::ReturnSlot,
+            name: None,
+            source: None,
+        });
+
+        let diverging = matches!(self.typecheck.interner.get(ret), Type::Never);
+        func.blocks[bb0.0 as usize].terminator = Terminator::Call {
+            func: CallTarget::Direct(target),
+            args: arg_operands,
+            destination: Place::from_local(dest),
+            target: if diverging { None } else { Some(bb1) },
+            source: None,
+        };
+
+        if !diverging {
+            let return_operand = if matches!(self.typecheck.interner.get(ret), Type::Void) {
+                Operand::Constant(ConstValue::Void, None)
+            } else {
+                Operand::Copy(Place::from_local(dest), None)
+            };
+            func.blocks[bb1.0 as usize].terminator = Terminator::Return(return_operand);
+        }
+
+        self.program.functions.insert(id, func);
+        self.fat_adapter_cache.insert((target, fat_ty), id);
+        id
+    }
+
     /// Registers slice layouts for every `Slice[T]` reachable from a struct
     /// field. Codegen needs a `{ ptr, len }` body for any slice type that
     /// shows up as a struct field — `register_slice_layout` alone only sees
@@ -910,6 +1340,8 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
+                let expr_ty = self.expr_type(fb, expr);
+
                 if matches!(&expr.kind, HirExprKind::VarRef(_))
                     && matches!(
                         self.resolution.defs.get(def_id).map(|info| &info.kind),
@@ -917,17 +1349,39 @@ impl<'ctx> MirLowering<'ctx> {
                     )
                 {
                     let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None);
+
+                    // A static function coerced into a fat `Fn`/`FnOnce` slot
+                    // must be wrapped in a `{ function, env }` envelope whose
+                    // `$env` is null and whose `$fn` is an adapter that ignores
+                    // the env argument (bare fn -> env-first ABI).
+                    if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
+                        return self.build_fat_envelope(fb, block, expr_ty, None, mir_id, expr);
+                    }
+
                     return (
                         block,
                         Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
                     );
                 }
 
-                let local = *fb.locals_by_def.get(def_id).unwrap_or_else(|| {
+                let place = fb.place_for_def(*def_id).unwrap_or_else(|| {
                     panic!("HIR DefId {:?} has no MIR local", def_id);
                 });
-                let place = Place::from_local(local);
-                let ty = fb.func.local(local).ty;
+                let ty = self.place_type(fb, &place);
+
+                // A bare `fn`/closure value stored in a variable is a runtime
+                // pointer: it cannot be wrapped in a `{ $fn, $env }` envelope.
+                // Only literals and static functions are wrapped, so this
+                // coercion is a hard error instead of a silent ABI mismatch.
+                if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. })
+                    && !matches!(self.typecheck.interner.get(ty), Type::FatFn { .. })
+                {
+                    self.errors.push(MirError::RuntimeFatCoercion {
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+                }
+
                 let operand = self.place_to_operand(place, ty, Some(expr.source.clone()));
                 (block, operand)
             }
@@ -1679,71 +2133,24 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Closure { def_id, .. } => {
                 let closure_ty = self.expr_type(fb, expr);
 
-                let struct_def = match self.typecheck.interner.get(closure_ty).clone() {
-                    Type::Struct { def_id, .. } if zeen_types::is_closure_struct_def(def_id) => {
-                        Some(def_id)
-                    }
-                    Type::Fn { .. } => None,
-                    other => panic!("unexpected closure type: {other:?}"),
-                };
-
                 let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None);
 
-                let Some(struct_def) = struct_def else {
-                    return (
+                match self.typecheck.interner.get(closure_ty).clone() {
+                    // Zero-capture closure: a plain `fn` pointer.
+                    Type::Fn { .. } => (
                         block,
                         Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
-                    );
-                };
+                    ),
 
-                self.register_struct_layout(closure_ty, struct_def);
+                    // Fat closure: `{ $fn, $env }` envelope. `def_id` tells the
+                    // builder whether this literal captures anything, so it can
+                    // pick the env construction strategy.
+                    Type::FatFn { .. } => {
+                        self.build_fat_envelope(fb, block, closure_ty, Some(*def_id), mir_id, expr)
+                    }
 
-                let captures = self
-                    .resolution
-                    .closure_captures
-                    .get(def_id)
-                    .cloned()
-                    .unwrap_or_default();
-
-                let mut operands = Vec::with_capacity(1 + captures.len());
-                operands.push(Operand::Constant(
-                    ConstValue::Fn(mir_id),
-                    Some(expr.source.clone()),
-                ));
-
-                for captured in captures {
-                    let local = *fb
-                        .locals_by_def
-                        .get(&captured)
-                        .expect("captured value must be a local of the enclosing frame");
-                    let ty = self
-                        .typecheck
-                        .def_types
-                        .get(&captured)
-                        .copied()
-                        .expect("captured value must have a type");
-
-                    let place = Place::from_local(local);
-                    operands.push(self.place_to_operand(place, ty, Some(expr.source.clone())));
+                    other => panic!("unexpected closure type: {other:?}"),
                 }
-
-                let temp = fb.new_temp(closure_ty);
-                fb.push_stmt(
-                    block,
-                    MirStatement::Assign {
-                        place: Place::from_local(temp),
-                        rvalue: Rvalue::Aggregate {
-                            kind: AggregateKind::Struct(struct_def),
-                            operands,
-                        },
-                        source: Some(expr.source.clone()),
-                    },
-                );
-
-                (
-                    block,
-                    Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
-                )
             }
 
             HirExprKind::Error => unreachable!(),
@@ -1804,8 +2211,10 @@ impl<'ctx> MirLowering<'ctx> {
                 if let Some(global_id) = self.globals_by_def.get(def_id) {
                     return (block, Place::global(*global_id));
                 }
-                let local = *fb.locals_by_def.get(def_id).expect("undeclared local");
-                (block, Place::from_local(local))
+                let place = fb
+                    .place_for_def(*def_id)
+                    .expect("undeclared local or capture");
+                (block, place)
             }
 
             HirExprKind::FieldAccess { object, .. } => {
@@ -1900,8 +2309,80 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    fn place_type(&self, fb: &FnBuilder, place: &Place) -> TypeId {
-        fb.func.local(place.local).ty
+    fn place_type(&mut self, fb: &FnBuilder, place: &Place) -> TypeId {
+        let (mut ty, start) = if let Some(PlaceElem::Global(id)) = place.projection.first() {
+            (self.program.global_vars[id.0 as usize].ty, 1)
+        } else {
+            (fb.func.local(place.local).ty, 0)
+        };
+
+        for elem in &place.projection[start..] {
+            ty = match elem {
+                PlaceElem::Field(field_def) => self.struct_field_ty(ty, *field_def),
+                PlaceElem::Index(_) => self.index_elem_ty(ty),
+                PlaceElem::Deref => match self.typecheck.interner.get(ty).clone() {
+                    Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+                    other => panic!("dereferencing a non-pointer type: {other:?}"),
+                },
+                PlaceElem::Global(_) => unreachable!("global already consumed"),
+            };
+        }
+
+        ty
+    }
+
+    /// Resolves the type of a struct field (potentially through generic
+    /// arguments) from the typechecker's recorded layout.
+    fn struct_field_ty(&mut self, ty: TypeId, field_def: DefId) -> TypeId {
+        let Type::Struct {
+            def_id,
+            generic_args,
+        } = self.typecheck.interner.get(ty).clone()
+        else {
+            // Fat closure values and their canonical fields resolve through the
+            // registered fat layout.
+            match self.typecheck.interner.get(ty).clone() {
+                Type::FatFn { .. } => {
+                    return self.program.struct_layouts[&ty]
+                        .fields
+                        .iter()
+                        .find(|f| f.def_id == field_def)
+                        .expect("field must be present in fat layout")
+                        .ty;
+                }
+                other => panic!("projecting a field into a non-struct type: {other:?}"),
+            }
+        };
+
+        let Some(info) = self.typecheck.struct_info.get(&def_id) else {
+            panic!("struct layout missing for {def_id:?}");
+        };
+        let struct_generics = self
+            .typecheck
+            .struct_generics
+            .get(&def_id)
+            .cloned()
+            .unwrap_or_default();
+        let bindings: HashMap<DefId, TypeId> = struct_generics
+            .iter()
+            .copied()
+            .zip(generic_args.iter().copied())
+            .collect();
+
+        let field = info
+            .fields
+            .iter()
+            .find(|f| f.field_def == field_def)
+            .expect("field must be present in struct");
+        zeen_types::substitute_generics(&mut self.typecheck.interner, field.field_ty, &bindings)
+    }
+
+    fn index_elem_ty(&self, ty: TypeId) -> TypeId {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Array { element, .. } | Type::Slice { element, .. } => element,
+            Type::ManyPointer { inner, .. } => inner,
+            other => panic!("indexing a non-indexable type: {other:?}"),
+        }
     }
 
     fn lower_receiver_operand(
@@ -3243,6 +3724,41 @@ impl<'ctx> MirLowering<'ctx> {
         let mut fb = FnBuilder::new(def_id, generic_args.to_vec(), entry, ret_ty, HashMap::new());
         fb.new_block();
 
+        // Closure functions receive their captured environment as a leading
+        // `*const` pointer parameter. Captured variables are read through it
+        // (`env->$env0`, `env->$env1`, ...), so captured binds keep their
+        // enclosing-frame `DefId`s and resolve to projections of this pointer.
+        let captures = self
+            .resolution
+            .closure_captures
+            .get(&def_id)
+            .cloned()
+            .unwrap_or_default();
+
+        if !captures.is_empty() {
+            let env_def = zeen_types::closure_struct_def(def_id);
+            let env_ty = self.typecheck.interner.intern(Type::Struct {
+                def_id: env_def,
+                generic_args: Vec::new(),
+            });
+            let env_ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                inner: env_ty,
+                is_const: true,
+            });
+
+            let env_param = fb.new_local(env_ptr_ty, LocalKind::Param, Mutability::Mut, None, None);
+            fb.func.params.push(env_param);
+            let env_place = Place::from_local(env_param);
+
+            for (index, captured) in captures.iter().enumerate() {
+                let field_place = env_place
+                    .clone()
+                    .deref()
+                    .field(closure_field_def(def_id, index));
+                fb.captured_places.insert(*captured, field_place);
+            }
+        }
+
         for param in &hir_fn.params {
             let Some(param_def) = param.def_id else {
                 continue;
@@ -3267,31 +3783,6 @@ impl<'ctx> MirLowering<'ctx> {
 
             fb.func.params.push(local);
             fb.locals_by_def.insert(param_def, local);
-        }
-
-        // Closure functions receive their captured environment as trailing
-        // by-value parameters. The captured defs keep their enclosing-frame
-        // `DefId`s so body references resolve to these params.
-        let captures = self
-            .resolution
-            .closure_captures
-            .get(&def_id)
-            .cloned()
-            .unwrap_or_default();
-
-        for captured in captures {
-            let raw_ty = self
-                .typecheck
-                .def_types
-                .get(&captured)
-                .copied()
-                .expect("captured value must have a type");
-            let concrete_ty =
-                zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ty, &bindings);
-
-            let local = fb.new_local(concrete_ty, LocalKind::Param, Mutability::Mut, None, None);
-            fb.func.params.push(local);
-            fb.locals_by_def.insert(captured, local);
         }
 
         fb.bindings = bindings;
@@ -3370,10 +3861,10 @@ impl<'ctx> MirLowering<'ctx> {
     ) -> (BlockId, Operand) {
         let callee_ty = self.expr_type(fb, callee);
 
-        if let Type::Struct { def_id, .. } = self.typecheck.interner.get(callee_ty).clone()
-            && zeen_types::is_closure_struct_def(def_id)
-        {
-            return self.lower_closure_call(fb, callee, def_id, args, block, ret_ty);
+        // Fat closure/coerced function: dispatch through the `{ $fn, $env }`
+        // envelope with the uniform env-first ABI.
+        if matches!(self.typecheck.interner.get(callee_ty), Type::FatFn { .. }) {
+            return self.lower_fat_call(fb, callee, args, block, ret_ty);
         }
 
         let (mut block, callee_operand) = self.lower_expr_to_operand(fb, callee, block);
@@ -3388,14 +3879,13 @@ impl<'ctx> MirLowering<'ctx> {
         self.emit_indirect_call(fb, callee_operand, arg_operands, block, ret_ty, callee)
     }
 
-    /// Calls a closure value: extracts the `$fn_ptr` field and appends the
-    /// captured environment fields as trailing by-value arguments (moved for
-    /// non-`Copy` captures, copied otherwise).
-    fn lower_closure_call(
+    /// Calls a fat closure value `c` using the env-first ABI: `c.$fn(c.$env,
+    /// args...)`. Both fields are extracted as copies so the closure keeps
+    /// living where it was placed.
+    fn lower_fat_call(
         &mut self,
         fb: &mut FnBuilder,
         callee: &HirExpr,
-        struct_def: DefId,
         args: &[Rc<HirExpr>],
         block: BlockId,
         ret_ty: TypeId,
@@ -3404,30 +3894,21 @@ impl<'ctx> MirLowering<'ctx> {
 
         let closure_place = match closure_operand {
             Operand::Copy(place, _) | Operand::Move(place, _) => place,
-            Operand::Constant(..) => panic!("closure value must live in a place"),
+            Operand::Constant(..) => panic!("fat closure value must live in a place"),
         };
 
-        let info = self
-            .struct_info(struct_def)
-            .expect("closure struct info is missing")
-            .clone();
+        let fn_ptr = Operand::Copy(closure_place.clone().field(CLOSURE_FAT_FN_FIELD), None);
+        let env_ptr = Operand::Copy(closure_place.field(CLOSURE_FAT_ENV_FIELD), None);
 
-        let fn_ptr_field = info.fields[0].field_def;
-        let fn_ptr_operand = Operand::Copy(closure_place.clone().field(fn_ptr_field), None);
-
-        let mut arg_operands = Vec::with_capacity(args.len() + info.fields.len() - 1);
+        let mut arg_operands = Vec::with_capacity(args.len() + 1);
+        arg_operands.push(env_ptr);
         for arg in args.iter() {
             let (b, op) = self.lower_expr_to_operand(fb, arg, block);
             block = b;
             arg_operands.push(op);
         }
 
-        for field in info.fields.iter().skip(1) {
-            let place = closure_place.clone().field(field.field_def);
-            arg_operands.push(self.place_to_operand(place, field.field_ty, None));
-        }
-
-        self.emit_indirect_call(fb, fn_ptr_operand, arg_operands, block, ret_ty, callee)
+        self.emit_indirect_call(fb, fn_ptr, arg_operands, block, ret_ty, callee)
     }
 
     fn emit_indirect_call(
