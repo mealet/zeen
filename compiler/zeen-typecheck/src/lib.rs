@@ -1753,8 +1753,8 @@ impl<'res> TypeChecker<'res> {
                 self.check_binary_op(*op, lhs_ty, rhs_ty, expr.id, expr.source.clone())
             }
 
-            HirExprKind::Unary { expr, op } => {
-                let inner_ty = self.synth_expr(expr);
+            HirExprKind::Unary { expr: inner, op } => {
+                let inner_ty = self.synth_expr(inner);
                 self.check_unary_op(*op, inner_ty, expr.id, expr.source.clone())
             }
 
