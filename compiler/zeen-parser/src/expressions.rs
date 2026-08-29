@@ -1101,7 +1101,9 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     fn parse_closure(&mut self) -> Option<&'ctx Expression<'ctx>> {
         use zeen_lexer::token::CompilerKeyword;
 
-        let fn_kw = self.p.expect(TokenKind::Keyword(CompilerKeyword::Fn), "fn")?;
+        let fn_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Fn), "fn")?;
 
         let _ = self.p.expect(TokenKind::OpenParen, "(")?;
 
@@ -1114,9 +1116,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             if self.p.at(TokenKind::Ident) {
                 let name_token = self.p.advance_not_eof()?;
                 let name_span = name_token.span;
-                let name_slice = self.p.src
-                    [name_span.offset()..name_span.offset() + name_span.len()]
-                    .to_owned();
+                let name_slice =
+                    self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
 
                 name = Some(self.p.get_or_intern(name_slice));
                 span = name_span;
@@ -2121,7 +2122,10 @@ mod tests {
         ));
 
         let zeen_ast::statements::StatementKind::Expr(inner) = body.kind else {
-            panic!("closure body should be an expression statement, got {:?}", body.kind);
+            panic!(
+                "closure body should be an expression statement, got {:?}",
+                body.kind
+            );
         };
         assert!(matches!(inner.kind, ExpressionKind::Block { .. }));
     }
@@ -2139,7 +2143,10 @@ mod tests {
         };
 
         let zeen_ast::statements::StatementKind::Expr(inner) = body.kind else {
-            panic!("closure body should be an expression statement, got {:?}", body.kind);
+            panic!(
+                "closure body should be an expression statement, got {:?}",
+                body.kind
+            );
         };
 
         let ExpressionKind::Block { trailing, .. } = inner.kind else {
