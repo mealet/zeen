@@ -367,9 +367,30 @@ fn main() i32 {
 
 #[test]
 fn fat_value_move_transfers_ownership() {
-    // Fat values are single-owner regardless of `Fn`/`FnOnce`: binding a
-    // closure to a new name moves it, so the old name is gone.
+    // `FnOnce` closure values are move-only: binding one to a new name
+    // moves it, so the old name is gone.
     let errors = flow_err(
+        r#"
+struct Wrap { pub v: i32 }
+fn main() i32 {
+    let w = Wrap { .v = 3 };
+    let c = fn(a: i32) i32 { return a + w.v; };
+    let g = c;
+    return c(1) + g(2);
+}
+"#,
+    );
+    assert!(
+        !errors.is_empty(),
+        "using an `FnOnce` closure after it was moved must be rejected"
+    );
+}
+
+#[test]
+fn fn_closure_value_is_copy() {
+    // `Fn` closure values hold only Copy captures, so the value itself is
+    // Copy: copying it to a new name keeps both usable.
+    flow_ok(
         r#"
 fn main() i32 {
     let n = 5;
@@ -378,10 +399,6 @@ fn main() i32 {
     return add(1) + g(2);
 }
 "#,
-    );
-    assert!(
-        !errors.is_empty(),
-        "using a closure after it was moved must be rejected"
     );
 }
 

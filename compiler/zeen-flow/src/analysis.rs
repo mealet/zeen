@@ -758,6 +758,9 @@ impl<'ctx> DataFlow<'ctx> {
                 .get(&def_id)
                 .map(|info| info.capabalities.is_copy)
                 .unwrap_or(false),
+            // `Fn` closure values duplicate their inline env on copy;
+            // `FnOnce` owns a non-Copy capture and is move-only.
+            Type::FatFn { once, .. } => !once,
             Type::Array { element, .. } => self.type_is_copy(element),
             Type::Slice { .. } => true,
             _ => false,

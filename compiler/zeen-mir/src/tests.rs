@@ -581,12 +581,22 @@ fn calls_of(mir: &MirLoweringResult, id: MirFunctionId) -> Vec<&Terminator> {
         .collect()
 }
 
-// Capturing closures lower to a fat `{ $fn, $env }` value; the closure body
-// gets the captured environment as a leading `*const` parameter (env-first
-// ABI), and call sites dispatch as `c.$fn(c.$env, args...)`.
+// Capturing closures lower to a fat value that *is* the captured environment
+// (an inline struct of captures); the closure body gets a leading `*const`
+// parameter pointing at it (env-first ABI), and call sites dispatch directly
+// to the body with `&value` as that first argument.
 
 fn closure_id_named(mir: &MirLoweringResult, name: &str) -> MirFunctionId {
     fn_id_by_name(mir, name).expect("expected closure function by name")
+}
+
+fn fn_id_starting_with(mir: &MirLoweringResult, prefix: &str) -> MirFunctionId {
+    mir.program
+        .function_names
+        .iter()
+        .find(|(_, n)| n.as_str().starts_with(prefix))
+        .map(|(id, _)| *id)
+        .unwrap_or_else(|| panic!("expected a function named like `{prefix}`"))
 }
 
 fn env_rooted(op: &Operand, env_local: LocalId) -> bool {
@@ -651,34 +661,46 @@ fn fat_call_passes_env_before_user_args() {
          }",
     );
 
-    let apply_id = closure_id_named(&mir, "apply");
+    let apply_id = fn_id_starting_with(&mir, "apply");
     let apply = &mir.program.functions[&apply_id];
 
+    // The fat call dispatches directly to the closure body, passing `&f`
+    // (a const ref to the fat parameter) as the leading env-first argument.
     let fat_call = apply.blocks.iter().any(|b| {
         matches!(
             &b.terminator,
             Terminator::Call {
-                func: CallTarget::Indirect(_),
+                func: CallTarget::Direct(_),
                 args,
                 ..
-            } if {
-                match args.first() {
-                    Some(Operand::Copy(place, _) | Operand::Move(place, _)) => {
-                        matches!(
-                            place.projection.last(),
-                            Some(crate::PlaceElem::Field(f)) if *f == CLOSURE_FAT_ENV_FIELD
-                        )
-                    }
-                    _ => false,
-                }
-            }
+            } if matches!(
+                args.first(),
+                Some(Operand::Copy(place, _)) if place.projection.is_empty()
+            )
         )
     });
-    assert!(fat_call, "fat call must pass `$env` as the first argument");
+    assert!(
+        fat_call,
+        "fat call must dispatch directly with `&value` as the first argument"
+    );
+
+    // The env pointer is built with a `&const` ref of the fat value itself.
+    let takes_env_addr = apply.blocks.iter().any(|b| {
+        b.statements.iter().any(|s| {
+            matches!(
+                s,
+                crate::MirStatement::Assign {
+                    rvalue: Rvalue::Ref { is_const: true, .. },
+                    ..
+                }
+            )
+        })
+    });
+    assert!(takes_env_addr, "expected a `&const value` env pointer");
 }
 
 #[test]
-fn passed_closure_env_is_allocated_on_heap_with_malloc() {
+fn closure_values_never_touch_the_heap() {
     let mir = compile_mir_ok(
         "fn apply(f: Fn(i32) i32, x: i32) i32 { f(x) } \
          fn main() { \
@@ -689,29 +711,25 @@ fn passed_closure_env_is_allocated_on_heap_with_malloc() {
     );
 
     assert!(
-        mir.program
-            .extern_fns
-            .iter()
-            .any(|f| f.symbol_name == "malloc"),
-        "escaping closure must allocate its env with malloc"
+        mir.program.extern_fns.is_empty(),
+        "closure values are inline structs: no malloc/free must be declared"
     );
 
-    // The env struct is populated through a deref of the malloc'd pointer.
-    let stores_into_deref_field = mir.program.functions.values().any(|func| {
+    // The captures are grouped into the fat value with a plain aggregate.
+    let builds_aggregate = mir.program.functions.values().any(|func| {
         func.blocks.iter().any(|b| {
             b.statements.iter().any(|s| {
                 matches!(
                     s,
-                    crate::MirStatement::Assign { place, .. }
-                    if matches!(place.projection.as_slice(), [crate::PlaceElem::Deref, crate::PlaceElem::Field(_)])
+                    crate::MirStatement::Assign {
+                        rvalue: Rvalue::Aggregate { .. },
+                        ..
+                    }
                 )
             })
         })
     });
-    assert!(
-        stores_into_deref_field,
-        "expected `(*env).$env0 = cap;` stores after malloc"
-    );
+    assert!(builds_aggregate, "expected the env aggregate assignment");
 }
 
 #[test]
@@ -750,7 +768,7 @@ fn stack_only_closure_env_does_not_call_malloc() {
 }
 
 #[test]
-fn zero_capture_closure_coerced_to_fat_uses_adapter() {
+fn zero_capture_closure_coerced_to_fat_dispatches_directly() {
     let mir = compile_mir_ok(
         "fn apply_once(f: FnOnce(i32) i32, x: i32) i32 { f(x) } \
          fn main() { \
@@ -760,24 +778,15 @@ fn zero_capture_closure_coerced_to_fat_uses_adapter() {
 
     let names: Vec<String> = mir.program.function_names.values().cloned().collect();
     assert!(
-        names
-            .iter()
-            .any(|n| n.starts_with("main->closure0.fatadapter")),
-        "zero-capture closure coerced to a fat slot needs an adapter, got {names:?}"
+        !names.iter().any(|n| n.contains("fatadapter")),
+        "adapters are gone: fat values dispatch directly, got {names:?}"
     );
 
-    let adapter_id = mir
-        .program
-        .function_names
-        .iter()
-        .find(|(_, n)| n.starts_with("main->closure0.fatadapter"))
-        .map(|(id, _)| *id)
-        .expect("adapter id");
-    let adapter = &mir.program.functions[&adapter_id];
-
-    // Adapter ABI: (env, user args...); it ignores env and forwards directly.
-    assert_eq!(adapter.params.len(), 2, "adapter must be env-first");
-    let forwards_direct = adapter.blocks.iter().any(|b| {
+    // The mono copy of `apply_once` for the zero-capture closure calls the
+    // closure body directly.
+    let apply_once_id = fn_id_starting_with(&mir, "apply_once");
+    let apply_once = &mir.program.functions[&apply_once_id];
+    let direct = apply_once.blocks.iter().any(|b| {
         matches!(
             b.terminator,
             Terminator::Call {
@@ -786,26 +795,59 @@ fn zero_capture_closure_coerced_to_fat_uses_adapter() {
             }
         )
     });
-    assert!(forwards_direct, "adapter must forward to the real closure");
+    assert!(direct, "the fat call must dispatch to the closure body");
 }
 
 #[test]
-fn static_fn_coerced_to_fat_uses_adapter() {
+fn static_fn_coerced_to_fat_dispatches_directly() {
     let mir = compile_mir_ok(
         "fn double(x: i32) i32 { x * 2 } \
          fn apply(f: Fn(i32) i32, x: i32) i32 { f(x) } \
          fn main() { @println(\"{}\", apply(double, 21)); }",
     );
 
-    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+    let apply_id = fn_id_starting_with(&mir, "apply");
+    let apply = &mir.program.functions[&apply_id];
+
+    // The direct call inside `apply` must target the `double` body itself.
+    let double_id = fn_id_by_name(&mir, "double").expect("double body must be lowered");
+    let calls_double = apply.blocks.iter().any(|b| {
+        matches!(
+            b.terminator,
+            Terminator::Call {
+                func: CallTarget::Direct(id),
+                ..
+            } if id == double_id
+        )
+    });
     assert!(
-        names.iter().any(|n| n.starts_with("double.fatadapter")),
-        "static fn coerced to a fat slot needs an adapter, got {names:?}"
+        calls_double,
+        "a static fn in a fat slot must be called through its own body"
+    );
+
+    // The env envelope is built at the call site: an aggregate with no
+    // captures (the static fn has an empty env).
+    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
+    let main_fn = &mir.program.functions[&main_id];
+    let empty_aggregate = main_fn.blocks.iter().any(|b| {
+        b.statements.iter().any(|s| {
+            matches!(
+                s,
+                crate::MirStatement::Assign {
+                    rvalue: Rvalue::Aggregate { operands, .. },
+                    ..
+                } if operands.is_empty()
+            )
+        })
+    });
+    assert!(
+        empty_aggregate,
+        "expected an empty env aggregate at the call site"
     );
 }
 
 #[test]
-fn fat_layout_is_registered_per_signature() {
+fn fat_layout_matches_captures() {
     let mir = compile_mir_ok(
         "fn apply(f: Fn(i32) i32, x: i32) i32 { f(x) } \
          fn main() { \
@@ -815,38 +857,64 @@ fn fat_layout_is_registered_per_signature() {
          }",
     );
 
-    let fat_layout = mir
+    // A fat value is its environment: the layout has one field per capture.
+    let fat_layouts: Vec<_> = mir
         .program
         .struct_layouts
         .values()
-        .find(|l| l.def_id == zeen_types::CLOSURE_FAT_DEF)
-        .expect("fat layout must be registered");
-    assert_eq!(fat_layout.fields.len(), 2, "fat value is `{{ $fn, $env }}`");
+        .filter(|l| l.def_id == zeen_types::CLOSURE_FAT_DEF)
+        .collect();
+    assert!(!fat_layouts.is_empty(), "fat layout must be registered");
     assert_eq!(
-        fat_layout.fields[0].def_id, CLOSURE_FAT_FN_FIELD,
-        "first fat field is the function pointer"
-    );
-    assert_eq!(
-        fat_layout.fields[1].def_id, CLOSURE_FAT_ENV_FIELD,
-        "second fat field is the environment pointer"
+        fat_layouts[0].fields.len(),
+        1,
+        "the fat value is the env struct: one field per capture"
     );
 }
 
 #[test]
-fn runtime_bare_fn_coercion_is_rejected() {
-    let errors = compile_mir(
+fn runtime_bare_fn_coercion_wraps_into_pointer_fat() {
+    let mir = compile_mir_ok(
         "fn apply(f: Fn(i32) i32, x: i32) i32 { f(x) } \
          fn main() { \
              let k = fn(x: i32) i32 { return x + 1; }; \
              @println(\"{}\", apply(k, 5)); \
          }",
-    )
-    .err()
-    .expect("bare fn stored in a local cannot become a fat value");
+    );
 
+    // A basic fn value read from a variable is wrapped into a one-field fat
+    // value and called indirectly.
+    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
+    let main = &mir.program.functions[&main_id];
+    let wraps_fn_ptr = main.blocks.iter().any(|b| {
+        b.statements.iter().any(|s| {
+            matches!(
+                s,
+                crate::MirStatement::Assign {
+                    rvalue: Rvalue::Aggregate { operands, .. },
+                    ..
+                } if operands.len() == 1
+            )
+        })
+    });
     assert!(
-        errors.iter().any(|e| e.contains("runtime")),
-        "expected a runtime fat-coercion error, got: {errors:?}"
+        wraps_fn_ptr,
+        "a basic fn value must be wrapped into a one-field fat value"
+    );
+    let apply_id = fn_id_starting_with(&mir, "apply");
+    let apply = &mir.program.functions[&apply_id];
+    let indirect = apply.blocks.iter().any(|b| {
+        matches!(
+            b.terminator,
+            Terminator::Call {
+                func: CallTarget::Indirect(_),
+                ..
+            }
+        )
+    });
+    assert!(
+        indirect,
+        "a pointer-fat value must be called indirectly through its field"
     );
 }
 
@@ -915,24 +983,23 @@ fn escaping_fnonce_closure_gets_fat_drop_function() {
     );
 
     assert!(
-        mir.program
+        !mir.program
             .extern_fns
             .iter()
             .any(|f| f.symbol_name == "free"),
-        "a heap-owning fat closure must declare `free`"
+        "closure envs are inline: `free` must not be declared"
     );
     assert!(
         mir.program
             .function_names
             .values()
             .any(|n| n.starts_with("$fatdrop#")),
-        "expected a synthesized `$fatdrop#N` drop function for the heap env, got {:?}",
-        mir.program.function_names.values().collect::<Vec<_>>()
+        "expected a synthesized `$fatdrop#N` drop function for the FnOnce value",
     );
 }
 
 #[test]
-fn stack_bound_closure_never_frees_but_tears_down() {
+fn fn_closure_needs_no_drop_function() {
     let mir = compile_mir_ok(
         "fn main() { \
              let n = 5; \
@@ -949,14 +1016,14 @@ fn stack_bound_closure_never_frees_but_tears_down() {
             .any(|f| f.symbol_name == "free"),
         "a frame-bound closure must not declare `free`: its env is on the stack"
     );
-    // The value still owns its captures, so it gets a drop function (which
-    // only tears captured values down — no free for a stack env).
+    // `Fn` values hold only Copy captures: nothing to tear down, no drop
+    // function.
     assert!(
-        mir.program
+        !mir.program
             .function_names
             .values()
             .any(|n| n.starts_with("$fatdrop#")),
-        "a frame-bound closure still owns its captures and must get a drop function"
+        "an `Fn` closure's captures are all Copy: no drop function"
     );
 }
 
@@ -969,7 +1036,7 @@ fn fnonce_call_consumes_the_closure_value() {
          }",
     );
 
-    let apply_once_id = closure_id_named(&mir, "apply_once");
+    let apply_once_id = fn_id_starting_with(&mir, "apply_once");
     let apply_once = &mir.program.functions[&apply_once_id];
     let f_param = apply_once.params[0];
 
@@ -1009,24 +1076,18 @@ fn live_heap_env_closure_registers_drop_function() {
 
     assert!(
         mir.program
-            .extern_fns
-            .iter()
-            .any(|f| f.symbol_name == "free"),
-        "a live heap-owning closure must declare `free`"
-    );
-    assert!(
-        mir.program
             .function_names
             .values()
             .any(|n| n.starts_with("$fatdrop#")),
-        "expected a synthesized `$fatdrop#N` drop function for the heap env"
+        "expected a synthesized `$fatdrop#N` drop function for the FnOnce value"
     );
 }
 
 #[test]
-fn opaque_fat_type_gets_drop_function() {
-    // The `FnOnce(i32) i32` parameter type is env-erased, but a value of it
-    // may still own a heap env — it must get a drop function all the same.
+fn fnonce_param_mono_copy_registers_drop_function() {
+    // The `FnOnce(i32) i32` parameter type is erased in the signature, but
+    // the monomorphized copy stores the concrete closure type and its
+    // FnOnce drop function must exist for uncalled/owned values.
     let mir = compile_mir_ok(
         "fn apply_once(f: FnOnce(i32) i32, x: i32) i32 { return f(x); } \
          fn main() i32 { \
@@ -1035,18 +1096,18 @@ fn opaque_fat_type_gets_drop_function() {
     );
 
     assert!(
-        mir.program
+        !mir.program
             .extern_fns
             .iter()
             .any(|f| f.symbol_name == "free"),
-        "the `Opaque` fat type must be able to free a heap env"
+        "closure envs are inline: `free` must not be declared"
     );
     assert!(
         mir.program
             .function_names
             .values()
             .any(|n| n.starts_with("$fatdrop#")),
-        "the `Opaque` fat type must get a drop function"
+        "the concrete FnOnce fat type must get a drop function"
     );
 }
 

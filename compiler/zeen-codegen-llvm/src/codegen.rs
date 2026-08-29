@@ -474,7 +474,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             Type::IntLiteral => self.context.i32_type().into(),
             Type::FloatLiteral => self.context.f64_type().into(),
 
-            Type::Struct { .. } | Type::Slice { .. } => self.struct_types[&ty].into(),
+            Type::Struct { .. } | Type::Slice { .. } | Type::FatFn { .. } => {
+                let entry = *self.struct_types.get(&ty).unwrap_or_else(|| {
+                    panic!(
+                        "no struct type registered for {ty:?} = {:?}",
+                        self.typecheck.interner.get(ty).clone()
+                    )
+                });
+                entry.into()
+            }
 
             Type::Enum { .. } => self.context.i32_type().into(),
             // Never reach codegen on a valid program.
@@ -492,19 +500,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .into(),
 
             Type::Fn { .. } => self.context.ptr_type(AddressSpace::default()).into(),
-
-            // Fat function pointer `{ function: ptr, env: ptr }`; produced
-            // lazily here until struct layout registration lands (S7).
-            Type::FatFn { .. } => self
-                .context
-                .struct_type(
-                    &[
-                        self.context.ptr_type(AddressSpace::default()).into(),
-                        self.context.ptr_type(AddressSpace::default()).into(),
-                    ],
-                    false,
-                )
-                .into(),
 
             Type::Void | Type::Never => self.context.void_type().into(),
             Type::Error => self.context.i32_type().into(),

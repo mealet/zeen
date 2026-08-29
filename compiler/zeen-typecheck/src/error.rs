@@ -324,6 +324,53 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("a `Fn`/`FnOnce` annotation requires an initializer")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::fat_annotation_needs_init),
+        help(
+            "closure values store a concrete closure type, so the variable must be \
+              initialized to know which closure it holds"
+        )
+    )]
+    FatAnnotationNeedsInit {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("add `= <closure>` to this binding")]
+        span: SourceSpan,
+    },
+
+    #[error("a `Fn`/`FnOnce` value cannot be stored in this position yet")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::fat_storage_unsupported),
+        help(
+            "closure values are concrete structs here; storing them erases the concrete \
+              type. Use generics over `Fn`/`FnOnce` bounds instead (planned)"
+        )
+    )]
+    FatStorageUnsupported {
+        what: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("closure value in `{what}`")]
+        span: SourceSpan,
+    },
+
+    #[error("a function returning `Fn`/`FnOnce` must return the same closure from every path")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::fat_return_mismatch),
+        help("closure return types are inferred from the body and must agree")
+    )]
+    FatReturnMismatch {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this path returns a different closure type")]
+        span: SourceSpan,
+    },
+
     #[error("attempt to assign to const")]
     #[diagnostic(severity(Error), code(zeen::typechecker::assign_to_const))]
     AssignToConst {
