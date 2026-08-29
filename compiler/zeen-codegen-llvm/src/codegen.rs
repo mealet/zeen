@@ -1793,13 +1793,25 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 }
 
                 // Variadic args have no declared parameter type: an array
-                // decays to a pointer to its storage (C varargs ABI).
-                if is_variadic_extern
-                    && let Some(arg_ty) = self.operand_type(arg, func)
-                    && matches!(self.typecheck.interner.get(arg_ty), Type::Array { .. })
-                    && let Operand::Copy(place, _) | Operand::Move(place, _) = arg
-                {
-                    return self.place_ptr(place, func).into();
+                // decays to a pointer to its storage and a slice passes its
+                // data pointer (C varargs ABI).
+                if is_variadic_extern && let Some(arg_ty) = self.operand_type(arg, func) {
+                    match self.typecheck.interner.get(arg_ty).clone() {
+                        Type::Array { .. } => {
+                            if let Operand::Copy(place, _) | Operand::Move(place, _) = arg {
+                                return self.place_ptr(place, func).into();
+                            }
+                        }
+                        Type::Slice { .. } => {
+                            let value = self.operand_value(arg, Some(arg_ty), func);
+                            let ptr = self
+                                .builder
+                                .build_extract_value(value.into_struct_value(), 0, "slice.ptr")
+                                .unwrap();
+                            return ptr.into();
+                        }
+                        _ => {}
+                    }
                 }
 
                 let ty = self.operand_type(arg, func);
