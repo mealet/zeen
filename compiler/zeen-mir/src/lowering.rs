@@ -669,6 +669,8 @@ impl<'ctx> MirLowering<'ctx> {
             | Type::Never
             | Type::Error => true,
 
+            Type::FatFn { once, .. } => !once,
+
             Type::Struct { def_id, .. } => self
                 .typecheck
                 .struct_info

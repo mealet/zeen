@@ -87,6 +87,14 @@ pub enum Type {
         ret: TypeId,
     },
 
+    /// Fat function pointer `{ function: ptr, env: ptr }`. `once` marks
+    /// `FnOnce` — callable at most once because it owns a non-Copy env.
+    FatFn {
+        params: Vec<TypeId>,
+        ret: TypeId,
+        once: bool,
+    },
+
     GenericParam(DefId),
     InterfaceSelfPlaceholder(DefId),
 
@@ -209,6 +217,20 @@ impl Type {
                 let string_ret = type_interner.display_type(*ret, interner, resolution_result);
 
                 format!("fn({}) {}", string_params.join(", "), string_ret)
+            }
+
+            Type::FatFn { params, ret, once } => {
+                let string_params = params
+                    .iter()
+                    .map(|param| {
+                        type_interner.display_type(*param, Rc::clone(&interner), resolution_result)
+                    })
+                    .collect::<Vec<String>>();
+
+                let string_ret = type_interner.display_type(*ret, interner, resolution_result);
+
+                let keyword = if *once { "FnOnce" } else { "Fn" };
+                format!("{}({}) {}", keyword, string_params.join(", "), string_ret)
             }
 
             Type::InterfaceSelfPlaceholder(_) => "Self".into(),
@@ -889,6 +911,73 @@ mod tests {
         assert_eq!(
             interner.display_type(closure_ty, Rc::clone(&rodeo), &resolution),
             "fn(i32) i32 [env: i32]"
+        );
+    }
+
+    #[test]
+    fn fat_fn_displays_as_signature() {
+        use zeen_resolve::DefId;
+
+        let mut interner = TypeInterner::new();
+        let resolution = ResolutionResult::default();
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+
+        let foo_def = DefId(4);
+        let foo_name = rodeo.borrow_mut().get_or_intern("Foo");
+
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let void = interner.intern(Type::Builtin(BuiltinType::void));
+        let foo = interner.intern(Type::Struct {
+            def_id: foo_def,
+            generic_args: Vec::new(),
+        });
+
+        let fat = interner.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: false,
+        });
+        let fat_once = interner.intern(Type::FatFn {
+            params: vec![foo],
+            ret: void,
+            once: true,
+        });
+
+        assert_eq!(
+            interner.display_type(fat, Rc::clone(&rodeo), &resolution),
+            "Fn(i32) i32"
+        );
+        assert_eq!(
+            interner.display_type(fat_once, Rc::clone(&rodeo), &resolution),
+            "FnOnce(undefined) void"
+        );
+
+        let mut defs = ResolutionResult::default().defs;
+        defs.insert(
+            foo_def,
+            zeen_resolve::DefInfo {
+                name: foo_name,
+                kind: zeen_resolve::DefKind::Struct,
+                span: (
+                    miette::SourceSpan::from((0, 0)),
+                    miette::NamedSource::new("test.zn", std::sync::Arc::new(String::new())),
+                )
+                    .into(),
+                decl: None,
+                is_pub: false,
+            },
+        );
+
+        assert_eq!(
+            interner.display_type(
+                fat_once,
+                Rc::clone(&rodeo),
+                &zeen_resolve::ResolutionResult {
+                    defs,
+                    ..Default::default()
+                }
+            ),
+            "FnOnce(Foo) void"
         );
     }
 

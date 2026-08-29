@@ -41,6 +41,9 @@ pub enum CoerceResult {
     NeverCoercion,
     /// One side was `Error`, avoiding extra diagnostics
     ErrorRecovery,
+    /// Bare `fn(...) ...` -> `Fn(...) ...`/`FnOnce(...) ...`, or `Fn` -> `FnOnce`
+    /// (same signature on both sides).
+    FatFnCoercion,
     // Error coercion
     Fail,
 }
@@ -171,6 +174,35 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
             CoerceResult::ArrayToManyPointer
         }
 
+        // A bare fn pointer coerces into a fat fn pointer of the same
+        // signature (`fn(T) R -> Fn(T) R`). The fat value gets a nullptr env.
+        (
+            Type::Fn {
+                params: fp,
+                ret: fr,
+            },
+            Type::FatFn {
+                params: tp,
+                ret: tr,
+                ..
+            },
+        ) if fp == tp && fr == tr => CoerceResult::FatFnCoercion,
+
+        // `Fn` (copyable, zero or Copy env) coerces into the corresponding
+        // `FnOnce` when the target expects a single call.
+        (
+            Type::FatFn {
+                params: fp,
+                ret: fr,
+                once: false,
+            },
+            Type::FatFn {
+                params: tp,
+                ret: tr,
+                once: true,
+            },
+        ) if fp == tp && fr == tr => CoerceResult::FatFnCoercion,
+
         _ => CoerceResult::Fail,
     }
 }
@@ -188,6 +220,10 @@ pub fn type_contains_error(interner: &TypeInterner, ty: TypeId) -> bool {
             .iter()
             .any(|a| type_contains_error(interner, *a)),
         Type::Fn { params, ret } => {
+            params.iter().any(|p| type_contains_error(interner, *p))
+                || type_contains_error(interner, *ret)
+        }
+        Type::FatFn { params, ret, .. } => {
             params.iter().any(|p| type_contains_error(interner, *p))
                 || type_contains_error(interner, *ret)
         }
@@ -730,5 +766,104 @@ mod tests {
 
         assert!(verify_cast(&mut it, fn_ty, ptr_ty));
         assert!(verify_cast(&mut it, ptr_ty, fn_ty));
+    }
+
+    #[test]
+    fn bare_fn_coerces_to_fat_fn() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+
+        let bare = it.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+        let fat = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: false,
+        });
+
+        assert_eq!(try_coerce(&mut it, bare, fat), CoerceResult::FatFnCoercion);
+    }
+
+    #[test]
+    fn bare_fn_coerces_to_fat_fn_once() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+
+        let bare = it.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+        let fat_once = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+        });
+
+        assert_eq!(
+            try_coerce(&mut it, bare, fat_once),
+            CoerceResult::FatFnCoercion
+        );
+    }
+
+    #[test]
+    fn fat_fn_coerces_to_fat_fn_once() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+
+        let fat = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: false,
+        });
+        let fat_once = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+        });
+
+        assert_eq!(
+            try_coerce(&mut it, fat, fat_once),
+            CoerceResult::FatFnCoercion
+        );
+    }
+
+    #[test]
+    fn fat_fn_once_does_not_coerce_back_to_fat_fn() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+
+        let fat = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: false,
+        });
+        let fat_once = it.intern(Type::FatFn {
+            params: vec![i32],
+            ret: i32,
+            once: true,
+        });
+
+        assert_eq!(try_coerce(&mut it, fat_once, fat), CoerceResult::Fail);
+    }
+
+    #[test]
+    fn fat_fn_signature_mismatch_fails() {
+        let mut it = TypeInterner::default();
+        let i32 = it.intern(Type::Builtin(BuiltinType::i32));
+        let void = it.intern(Type::Builtin(BuiltinType::void));
+
+        let bare = it.intern(Type::Fn {
+            params: vec![i32],
+            ret: i32,
+        });
+        let mismatched = it.intern(Type::FatFn {
+            params: vec![void],
+            ret: i32,
+            once: false,
+        });
+
+        assert_eq!(try_coerce(&mut it, bare, mismatched), CoerceResult::Fail);
     }
 }

@@ -44,6 +44,11 @@ fn type_needs_drop_impl(
         | Type::Never
         | Type::Error => false,
 
+        // `FnOnce` owns its captured environment, so its value must be
+        // dropped when it goes out of scope without being called. `Fn`
+        // copies are handled by the closure-value drop machinery in flow.
+        Type::FatFn { once, .. } => once,
+
         Type::Struct {
             def_id,
             generic_args,
