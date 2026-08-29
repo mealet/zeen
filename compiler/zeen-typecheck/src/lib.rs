@@ -4245,10 +4245,21 @@ impl<'res> TypeChecker<'res> {
             .cloned()
             .unwrap_or_default();
 
+        // Both signatures are compared in terms of the struct's own
+        // generics: the interface one rebinds its generic parameters to the
+        // struct's generic slots, the impl one substitutes its implement
+        // generics below (`implement[U] Deref: Box[U]` -> Box[T]).
+        let struct_args: Vec<TypeId> = match self.result.interner.get(self_struct_ty) {
+            Type::Struct {
+                generic_args: args,
+                ..
+            } => args.clone(),
+            _ => Vec::new(),
+        };
+
         let mut generic_subst: HashMap<DefId, TypeId> = HashMap::new();
-        for (iface_g, imp_g) in iface_generics.iter().zip(imp_generics.iter()) {
-            let imp_g_ty = self.result.interner.intern(Type::GenericParam(*imp_g));
-            generic_subst.insert(*iface_g, imp_g_ty);
+        for (iface_g, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
+            generic_subst.insert(*iface_g, *struct_arg);
         }
 
         let Some(iface_sig) = self.fn_sigs.get(&iface_method_def) else {
