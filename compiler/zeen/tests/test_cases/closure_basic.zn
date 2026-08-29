@@ -1,0 +1,15 @@
+fn apply(f: fn(i32) i32) i32 {
+  return f(20);
+}
+
+fn main() i32 {
+  let x = 5;
+  let add_x = fn(a: i32) i32 { return a + x; };
+  let r1 = add_x(1);
+
+  let r2 = apply(fn(v: i32) i32 { return v * 2; });
+
+  @println("{}", r1);
+  @println("{}", r2);
+  return 0;
+}

@@ -1,0 +1,24 @@
+struct Point {
+  pub x: i32,
+  pub y: i32,
+}
+
+fn helper() i32 {
+  return 99;
+}
+
+fn main() i32 {
+  let p = Point { .x = 7, .y = 3 };
+  let get_x = fn() i32 { return p.x; };
+
+  let base = 10;
+  let a = fn() i32 { return base; };
+  let b = fn() i32 { return base + 1; };
+
+  let sib = fn() i32 { return helper(); };
+
+  @println("{}", get_x());
+  @println("{}", a() + b());
+  @println("{}", sib());
+  return 0;
+}
