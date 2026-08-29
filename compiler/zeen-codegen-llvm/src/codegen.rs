@@ -1747,7 +1747,34 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let op_ty = self
                     .operand_type(operand, func)
                     .expect("fn pointer operand");
-                let fn_ty = self.map_fn_pointer_type(op_ty);
+
+                // Closure calls pass the captured environment as trailing
+                // arguments beyond the `$fn_ptr` signature, so the ABI must be
+                // rebuilt from the call site when the counts disagree.
+                let declared_params: Vec<TypeId> = match self.typecheck.interner.get(op_ty) {
+                    Type::Fn { params, .. } => params.clone(),
+                    _ => Vec::new(),
+                };
+
+                let fn_ty = if declared_params.len() == args.len() {
+                    self.map_fn_pointer_type(op_ty)
+                } else {
+                    let arg_types: Vec<BasicMetadataTypeEnum<'ctx>> = args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, arg)| {
+                            let arg_ty = self
+                                .operand_type(arg, func)
+                                .or_else(|| declared_params.get(i).copied())
+                                .expect("indirect call argument type");
+                            self.map_basic_type(arg_ty).into()
+                        })
+                        .collect();
+
+                    let ret_ty = func.local(destination.local).ty;
+                    self.make_fn_type(self.map_ret_type(ret_ty), &arg_types, false)
+                };
+
                 self.builder
                     .build_indirect_call(fn_ty, fptr, &arg_values, "")
                     .unwrap()
