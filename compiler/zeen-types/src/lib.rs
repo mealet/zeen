@@ -17,6 +17,28 @@ pub const SLICE_PTR_FIELD: DefId = DefId(u32::MAX - 2);
 pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
 pub const ARRAY_LEN_FIELD: DefId = DefId(u32::MAX - 4);
 
+/// Synthetic `DefId`s for closure value structs. Each closure function gets a
+/// private block of ids (struct def first, then one per field), far away from
+/// real defs (small), slice/array sentinels (top of the range) and each other.
+const CLOSURE_SYNTH_BASE: u32 = 1 << 30;
+const CLOSURE_SYNTH_STRIDE: u32 = 1024;
+
+/// The value-struct `DefId` of the closure defined by `closure_fn`.
+pub fn closure_struct_def(closure_fn: DefId) -> DefId {
+    DefId(CLOSURE_SYNTH_BASE + closure_fn.0 * CLOSURE_SYNTH_STRIDE)
+}
+
+/// The `i`-th field (0 = `$fn_ptr`, then captures) of the closure value struct.
+pub fn closure_field_def(closure_fn: DefId, index: usize) -> DefId {
+    DefId(CLOSURE_SYNTH_BASE + closure_fn.0 * CLOSURE_SYNTH_STRIDE + 1 + index as u32)
+}
+
+/// Whether `def_id` belongs to a synthetic closure value struct.
+pub fn is_closure_struct_def(def_id: DefId) -> bool {
+    def_id.0 >= CLOSURE_SYNTH_BASE
+        && def_id.0 < CLOSURE_SYNTH_BASE + (u32::MAX - CLOSURE_SYNTH_BASE) / 2
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub u32);
 
