@@ -50,6 +50,25 @@ pub fn is_closure_struct_def(def_id: DefId) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub u32);
 
+/// How (and whether) the environment of a `Type::FatFn` value is materialized.
+///
+/// Every capturing closure gets its own concrete fat type: `Stack`/`Heap`
+/// carry the env struct type, so closure sites of the same signature stay
+/// distinguishable and heap envs can own a per-type drop function. `Opaque`
+/// is the erased form written in annotations (`Fn(T) R`) — any concrete kind
+/// widens into it, and it never owns a free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FatEnvKind {
+    /// Erased environment: annotations and zero-capture/static coercions.
+    /// The `$env` slot is an opaque (possibly null) pointer.
+    Opaque,
+    /// A concrete stack environment of the given env struct type.
+    Stack(TypeId),
+    /// A concrete heap environment of the given env struct type; values of
+    /// this kind own the block and are released through `free` on drop.
+    Heap(TypeId),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Builtin(BuiltinType),
@@ -96,11 +115,14 @@ pub enum Type {
     },
 
     /// Fat function pointer `{ function: ptr, env: ptr }`. `once` marks
-    /// `FnOnce` — callable at most once because it owns a non-Copy env.
+    /// `FnOnce` — callable at most once because it owns a non-Copy env. The
+    /// `env` kind records how the captured environment is materialized; only
+    /// heap envs own their storage and need a free on drop.
     FatFn {
         params: Vec<TypeId>,
         ret: TypeId,
         once: bool,
+        env: FatEnvKind,
     },
 
     GenericParam(DefId),
@@ -227,7 +249,9 @@ impl Type {
                 format!("fn({}) {}", string_params.join(", "), string_ret)
             }
 
-            Type::FatFn { params, ret, once } => {
+            Type::FatFn {
+                params, ret, once, ..
+            } => {
                 let string_params = params
                     .iter()
                     .map(|param| {
@@ -944,11 +968,13 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
+            env: FatEnvKind::Opaque,
         });
         let fat_once = interner.intern(Type::FatFn {
             params: vec![foo],
             ret: void,
             once: true,
+            env: FatEnvKind::Opaque,
         });
 
         assert_eq!(

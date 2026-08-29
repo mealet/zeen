@@ -691,11 +691,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     /// Drops the value stored at `ptr`: either calls the monomorphized `drop`
-    /// function of a struct with an explicit `Drop` implementation, or tears
-    /// down an aggregate element-by-element (recursively).
+    /// function of a struct with an explicit `Drop` implementation, calls the
+    /// synthesized env-free of a heap-owning fat closure, or tears down an
+    /// aggregate element-by-element (recursively).
     fn emit_drop_ptr(&mut self, ptr: PointerValue<'ctx>, ty: TypeId) {
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } => {
+            Type::Struct { .. } | Type::FatFn { .. } => {
                 let drop_id = self.program.drop_functions[&ty];
                 let callee = self.functions[&drop_id];
                 let value = self
@@ -729,7 +730,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     fn place_needs_drop(&self, place: &Place, func: &MirFunction) -> bool {
         let ty = self.place_type(place, func);
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } => self.program.drop_functions.contains_key(&ty),
+            Type::Struct { .. } | Type::FatFn { .. } => {
+                self.program.drop_functions.contains_key(&ty)
+            }
             Type::Array { element, .. } => self.place_elem_needs_drop(element),
             _ => false,
         }
@@ -737,7 +740,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     fn place_elem_needs_drop(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } => self.program.drop_functions.contains_key(&ty),
+            Type::Struct { .. } | Type::FatFn { .. } => {
+                self.program.drop_functions.contains_key(&ty)
+            }
             Type::Array { element, .. } => self.place_elem_needs_drop(element),
             _ => false,
         }
@@ -1618,6 +1623,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
 
             (Enum { .. }, Enum { .. }) => value,
+
+            // A fat-to-fat cast is the env-kind widening (a concrete closure
+            // flowing into an `Opaque` `Fn`/`FnOnce` slot). Both layouts are
+            // the same `{ $fn, $env }` pair, so the value passes through.
+            (FatFn { .. }, FatFn { .. }) => value,
 
             _ => {
                 unreachable!("cast from {src:?} to {dst_ty:?} reached codegen")

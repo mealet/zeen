@@ -897,3 +897,126 @@ fn generic_typed_capture_is_rejected() {
         "expected generic capture error, got: {errors:?}"
     );
 }
+
+// A heap-env `FnOnce` closure owns its captured block: an escaping,
+// non-Copy-capturing closure must get a synthesized `$fatdrop#N` free
+// function, while frame-bound or copyable closures must not.
+
+#[test]
+fn escaping_fnonce_closure_gets_fat_drop_function() {
+    let mir = compile_mir_ok(
+        "struct Wrap { pub v: i32 } \
+         fn apply_once(f: FnOnce(i32) i32, x: i32) i32 { return f(x); } \
+         fn main() i32 { \
+             let w = Wrap { .v = 3 }; \
+             let c = fn(a: i32) i32 { return a + w.v; }; \
+             return apply_once(c, 10); \
+         }",
+    );
+
+    assert!(
+        mir.program
+            .extern_fns
+            .iter()
+            .any(|f| f.symbol_name == "free"),
+        "a heap-owning fat closure must declare `free`"
+    );
+    assert!(
+        mir.program
+            .function_names
+            .values()
+            .any(|n| n.starts_with("$fatdrop#")),
+        "expected a synthesized `$fatdrop#N` drop function for the heap env, got {:?}",
+        mir.program.function_names.values().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn stack_bound_closure_declares_no_free() {
+    let mir = compile_mir_ok(
+        "fn main() { \
+             let n = 5; \
+             let add = fn(x: i32) i32 { return x + n; }; \
+             let r = add(10); \
+             @println(\"{}\", r); \
+         }",
+    );
+
+    assert!(
+        !mir.program
+            .extern_fns
+            .iter()
+            .any(|f| f.symbol_name == "free"),
+        "a frame-bound closure must not declare `free`"
+    );
+    assert!(
+        !mir.program
+            .function_names
+            .values()
+            .any(|n| n.starts_with("$fatdrop#")),
+        "a frame-bound closure must not get a drop function"
+    );
+}
+
+#[test]
+fn fnonce_call_consumes_the_closure_value() {
+    let mir = compile_mir_ok(
+        "fn apply_once(f: FnOnce(i32) i32, x: i32) i32 { return f(x); } \
+         fn main() i32 { \
+             return apply_once(fn(a: i32) i32 { return a + 1; }, 41); \
+         }",
+    );
+
+    let apply_once_id = closure_id_named(&mir, "apply_once");
+    let apply_once = &mir.program.functions[&apply_once_id];
+    let f_param = apply_once.params[0];
+
+    // The body must move the whole fat value into a slot before extracting
+    // `$fn`/`$env`, so a second call of `f` is rejected by dataflow.
+    let consumes_value = apply_once.blocks.iter().any(|b| {
+        b.statements.iter().any(|s| {
+            matches!(
+                s,
+                crate::MirStatement::Assign {
+                    rvalue: Rvalue::Use(Operand::Move(place, _)),
+                    ..
+                } if place.local == f_param && place.projection.is_empty()
+            )
+        })
+    });
+    assert!(
+        consumes_value,
+        "`FnOnce` call must move the whole closure value into a slot"
+    );
+}
+
+#[test]
+fn live_heap_env_closure_registers_drop_function() {
+    // The closure is referenced without being moved (a shared borrow keeps it
+    // alive), so dataflow will drop it at scope exit and the env must be
+    // released through the synthesized per-type drop function.
+    let mir = compile_mir_ok(
+        "struct Wrap { pub v: i32 } \
+         fn main() i32 { \
+             let w = Wrap { .v = 3 }; \
+             let c = fn(a: i32) i32 { return a + w.v; }; \
+             let p = &c; \
+             return 0; \
+         }",
+    );
+
+    assert!(
+        mir.program
+            .extern_fns
+            .iter()
+            .any(|f| f.symbol_name == "free"),
+        "a live heap-owning closure must declare `free`"
+    );
+    assert!(
+        mir.program
+            .function_names
+            .values()
+            .any(|n| n.starts_with("$fatdrop#")),
+        "expected a synthesized `$fatdrop#N` drop function for the heap env"
+    );
+}

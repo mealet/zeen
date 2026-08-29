@@ -132,6 +132,10 @@ fn expand_live_drops(
                 expand_live_drops(interner, typecheck, place, bound, bindings, out);
             }
         }
+        // A fat closure value is dropped as a whole: codegen resolves the
+        // per-type drop (a heap env goes back through `free`); values of
+        // types without a registered drop function are skipped there.
+        Type::FatFn { .. } => out.push(place.clone()),
         Type::Array { .. } | Type::Slice { .. } => out.push(place.clone()),
         _ => {}
     }

@@ -218,6 +218,153 @@ fn main() {
     assert!(!errors.is_empty());
 }
 
+// --> Closure consumption (S6: env-kind in the fat type)
+
+#[test]
+fn fnonce_double_call_is_error() {
+    let errors = flow_err(
+        r#"
+struct Wrap { pub v: i32 }
+fn main() i32 {
+    let w = Wrap { .v = 3 };
+    let c = fn(a: i32) i32 { return a + w.v; };
+    let r = c(1);
+    let s = c(2);
+    return r + s;
+}
+"#,
+    );
+    assert!(
+        !errors.is_empty(),
+        "a second `FnOnce` call must be rejected: the value was consumed"
+    );
+}
+
+#[test]
+fn fnonce_use_after_call_is_error() {
+    let errors = flow_err(
+        r#"
+struct Wrap { pub v: i32 }
+fn main() i32 {
+    let w = Wrap { .v = 3 };
+    let c = fn(a: i32) i32 { return a + w.v; };
+    let r = c(1);
+    let d = c;
+    return r;
+}
+"#,
+    );
+    assert!(
+        !errors.is_empty(),
+        "moving an `FnOnce` closure after it was called must be rejected"
+    );
+}
+
+#[test]
+fn fnonce_single_call_passes() {
+    flow_ok(
+        r#"
+struct Wrap { pub v: i32 }
+fn main() i32 {
+    let w = Wrap { .v = 3 };
+    let c = fn(a: i32) i32 { return a + w.v; };
+    let r = c(1);
+    return r;
+}
+"#,
+    );
+}
+
+#[test]
+fn fn_once_closure_stays_callable() {
+    // `Fn` closures with Copy captures stay copyable: the value is read as
+    // copies at the call site and must survive for a second call.
+    flow_ok(
+        r#"
+fn main() i32 {
+    let n = 5;
+    let add = fn(a: i32) i32 { return a + n; };
+    let r = add(1);
+    let s = add(2);
+    return r + s;
+}
+"#,
+    );
+}
+
+#[test]
+fn fnonce_closure_passed_as_argument_passes() {
+    flow_ok(
+        r#"
+struct Wrap { pub v: i32 }
+fn apply_once(f: FnOnce(i32) i32, x: i32) i32 { return f(x); }
+fn main() i32 {
+    let w = Wrap { .v = 3 };
+    let c = fn(a: i32) i32 { return a + w.v; };
+    return apply_once(c, 10);
+}
+"#,
+    );
+}
+
+#[test]
+fn fnonce_double_pass_is_error() {
+    let errors = flow_err(
+        r#"
+struct Wrap { pub v: i32 }
+fn apply_once(f: FnOnce(i32) i32, x: i32) i32 { return f(x); }
+fn main() i32 {
+    let w = Wrap { .v = 3 };
+    let c = fn(a: i32) i32 { return a + w.v; };
+    let r = apply_once(c, 10);
+    let s = apply_once(c, 20);
+    return r + s;
+}
+"#,
+    );
+    assert!(
+        !errors.is_empty(),
+        "passing the same `FnOnce` closure twice must be rejected"
+    );
+}
+
+#[test]
+fn live_uncalled_fnonce_closure_passes_scope_exit() {
+    // The closure is borrowed (not moved), so it stays live until the scope
+    // ends, where flow inserts its drop (the heap env is freed by codegen).
+    flow_ok(
+        r#"
+struct Wrap { pub v: i32 }
+fn main() i32 {
+    let w = Wrap { .v = 3 };
+    let c = fn(a: i32) i32 { return a + w.v; };
+    let p = &c;
+    return 0;
+}
+"#,
+    );
+}
+
+#[test]
+fn fnonce_param_called_twice_is_error() {
+    let errors = flow_err(
+        r#"
+fn apply_twice(f: FnOnce(i32) i32, x: i32) i32 {
+    let r = f(x);
+    let s = f(x);
+    return r + s;
+}
+fn main() i32 {
+    return apply_twice(fn(a: i32) i32 { return a + 1; }, 41);
+}
+"#,
+    );
+    assert!(
+        !errors.is_empty(),
+        "calling an `FnOnce` param twice inside the callee must be rejected"
+    );
+}
+
 #[test]
 fn reinitialized_struct_is_usable_again() {
     flow_ok(

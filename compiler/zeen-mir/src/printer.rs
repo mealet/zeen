@@ -550,7 +550,9 @@ impl<'a> MirPrinter<'a> {
                 format!("fn({}) {}", param_strs.join(", "), self.display_type(ret))
             }
 
-            Type::FatFn { params, ret, once } => {
+            Type::FatFn {
+                params, ret, once, ..
+            } => {
                 let param_strs: Vec<String> =
                     params.iter().map(|&p| self.display_type(p)).collect();
                 let keyword = if once { "FnOnce" } else { "Fn" };
