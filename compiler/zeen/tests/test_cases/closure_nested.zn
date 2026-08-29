@@ -1,0 +1,18 @@
+fn outer(a: i32) Fn(i32) i32 {
+    let inner = fn(b: i32) i32 {
+        let scale = fn(c: i32) i32 { return c * 2; };
+        let doubled = scale(b);
+        return doubled + a;
+    };
+    return inner;
+}
+
+fn main() i32 {
+    let f = outer(10);
+    let r1 = f(5);
+    let r2 = outer(100)(1);
+
+    @println("r1={}", r1);
+    @println("r2={}", r2);
+    return 0;
+}

@@ -1,0 +1,11 @@
+fn main() i32 {
+    let n = 5;
+    let add = fn(x: i32) i32 { return x + n; };
+
+    let a = add(10);
+    let b = add(20);
+
+    @println("a={}", a);
+    @println("b={}", b);
+    return 0;
+}
