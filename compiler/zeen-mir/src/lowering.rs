@@ -2719,7 +2719,8 @@ impl<'ctx> MirLowering<'ctx> {
             };
         };
 
-        let Some(method_def) = self.resolve_interface_method(struct_def, iface_name, method_name)
+        let Some(method_def) =
+            self.resolve_interface_method(struct_def, iface_name, method_name, &generic_args)
         else {
             return {
                 let (b, op) = self.lower_expr_to_operand(fb, arg, block);
@@ -2769,12 +2770,14 @@ impl<'ctx> MirLowering<'ctx> {
 
     /// Resolves the `DefId` of the method with `method_name` that implements
     /// `iface_name` for `struct_def`, mirroring the typechecker's
-    /// interface-call resolution.
+    /// interface-call resolution. A concrete specialization for the given
+    /// `generic_args` wins over the generic implementation.
     fn resolve_interface_method(
         &self,
         struct_def: DefId,
         iface_name: &str,
         method_name: &str,
+        generic_args: &[TypeId],
     ) -> Option<DefId> {
         let iface_def = self
             .resolution
@@ -2785,6 +2788,22 @@ impl<'ctx> MirLowering<'ctx> {
                     && self.rodeo.borrow().resolve(&info.name) == iface_name
             })
             .map(|(def, _)| *def)?;
+
+        if let Some(entries) = self.typecheck.impl_registry.get(&(struct_def, iface_def)) {
+            let entry = entries
+                .iter()
+                .find(|e| e.is_specialized && e.object_args.as_slice() == generic_args)
+                .or_else(|| entries.iter().find(|e| !e.is_specialized));
+
+            if let Some(entry) = entry {
+                return entry.methods.iter().copied().find(|&def| {
+                    let Some(info) = self.resolution.defs.get(&def) else {
+                        return false;
+                    };
+                    self.rodeo.borrow().resolve(&info.name) == method_name
+                });
+            }
+        }
 
         let methods = self.resolution.impls.get(&(struct_def, iface_def))?;
         methods.iter().copied().find(|&def| {
