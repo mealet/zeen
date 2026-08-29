@@ -572,11 +572,17 @@ impl<'a> MirPrinter<'a> {
     }
 
     fn resolve_def_name(&self, def_id: DefId) -> String {
-        self.resolution
-            .defs
-            .get(&def_id)
-            .map(|info| self.resolve_spur(info.name))
-            .unwrap_or_else(|| format!("<def#{:?}>", def_id))
+        match def_id {
+            zeen_types::CLOSURE_FAT_DEF => "$fat".to_string(),
+            zeen_types::CLOSURE_FAT_FN_FIELD => "$fn".to_string(),
+            zeen_types::CLOSURE_FAT_ENV_FIELD => "$env".to_string(),
+            _ => self
+                .resolution
+                .defs
+                .get(&def_id)
+                .map(|info| self.resolve_spur(info.name))
+                .unwrap_or_else(|| format!("<def#{:?}>", def_id)),
+        }
     }
 
     fn resolve_spur(&self, spur: lasso::Spur) -> String {
