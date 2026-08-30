@@ -1015,19 +1015,21 @@ impl<'ctx> NameResolver {
         );
 
         let self_param_node = params.first().filter(|p| is_self_param(p));
-        let self_param_id = self_param_node.and_then(|p| {
-            p.name.map(|pname| {
-                self.define_at(
-                    NodeKey::from_param(p),
-                    DefInfo {
-                        name: pname,
-                        kind: DefKind::Param,
-                        span: (p.span, method.source.src()).into(),
-                        decl: None,
-                        is_pub: false,
-                    },
-                )
-            })
+        let self_intern = self.interner_intern("self");
+
+        // The receiver gets a binding even when it is unnamed (`*const self`),
+        // otherwise its parameter def is lost downstream.
+        let self_param_id = self_param_node.map(|p| {
+            self.define_at(
+                NodeKey::from_param(p),
+                DefInfo {
+                    name: p.name.unwrap_or(self_intern),
+                    kind: DefKind::Param,
+                    span: (p.span, method.source.src()).into(),
+                    decl: None,
+                    is_pub: false,
+                },
+            )
         });
 
         self.table.push(ScopeKind::InterfaceMethod {
