@@ -24,7 +24,7 @@ pub struct String {
 
   pub fn from(value: []const char) Self {
     let len = value.len;
-    let capacity = next_capacity(len);
+    let capacity = next_capacity(len + 1);
     let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
 
     let _ = strncpy(ptr, value.ptr, value.len);
@@ -56,13 +56,15 @@ implement Drop : String {
 
 implement Display : String {
   fn display(*const self, out: OutStream) void {
-    @todo()
+    out.write_str_raw(self.ptr, self.len);
   }
 }
 
 implement Debug : String {
   fn debug(*const self, out: OutStream) void {
-    @todo();
+    out.write_str_single('"');
+    out.write_str_raw(self.ptr, self.len);
+    out.write_str_single('"');
   }
 }
 
