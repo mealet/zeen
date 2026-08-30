@@ -1,0 +1,31 @@
+struct Ref[T] {
+  inner: *T,
+
+  pub fn new(value: *T) Self {
+    Self { .inner = value }
+  }
+}
+
+implement[T] Slice : Ref[T] {
+  fn slice(*const self, index: usize) T {
+    *(self.inner + index)
+  }
+}
+
+implement[T] SlicePtr : Ref[T] {
+  fn slice_ptr(*self, index: usize) *T {
+    (self.inner + index)
+  }
+}
+
+fn main() i32 {
+  let arr = [10, 20, 30];
+  let ref = Ref.new(&arr[0]);
+
+  ref[0] = 100;
+  ref[1] = 200;
+  ref[2] += 5;
+
+  @println("{} {} {}", ref[0], ref[1], ref[2]);
+  return 0;
+}
