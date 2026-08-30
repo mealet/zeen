@@ -8,6 +8,7 @@ use zeen_parser::Parser;
 use crate::lowering::{MirLoweringResult, lower_program};
 
 const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
+const CORE_OUT: &str = include_str!("../../../lib/core/out.zn");
 
 fn compile_mir_mode(
     src: &str,
@@ -24,7 +25,7 @@ fn compile_mir_mode(
             std_root: None,
             linked: HashSet::new(),
         },
-        core_files: vec![("core.ops", CORE_OPS)],
+        core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
         mode,
         output: CompilationOutput::EmitMIR,
         target: None,
@@ -368,7 +369,7 @@ fn generic_nested_fn_includes_concrete_args() {
 fn struct_format_arg_is_lowered_to_display_call() {
     let mir = compile_mir_ok(
         "struct Foo {} \
-         implement Display : Foo { fn display(*const self) []const char { return \"foo\"; } } \
+         implement Display : Foo { fn display(*const self, out: OutStream) void { out.write_str(\"foo\"); } } \
          fn main() { let f = Foo {}; @println(\"{}\", f); }",
     );
 
@@ -397,8 +398,8 @@ fn struct_format_arg_is_lowered_to_display_call() {
         .expect("main id");
     let main = &mir.program.functions[&main_id];
 
-    // The format argument is produced by a direct call to `Foo.display`
-    // right before the println macro call.
+    // The display method receives the stdout writer: the call passes the
+    // receiver plus one extra argument.
     let calls_display = main.blocks.iter().any(|b| {
         matches!(
             b.terminator,
@@ -410,20 +411,21 @@ fn struct_format_arg_is_lowered_to_display_call() {
     });
     assert!(calls_display, "expected a call to `Foo.display` in main");
 
-    // println must receive exactly one argument (the display result).
-    let println_has_single_arg = main.blocks.iter().any(|b| {
+    // println itself keeps only the literal parts (the trailing newline):
+    // the struct content is written by the display call.
+    let println_has_no_args = main.blocks.iter().any(|b| {
         matches!(
             b.terminator,
             crate::Terminator::MacroCall {
                 kind: zeen_hir::HirMacroKind::Println,
                 ref arg_types,
                 ..
-            } if arg_types.len() == 1
+            } if arg_types.is_empty()
         )
     });
     assert!(
-        println_has_single_arg,
-        "println must receive a single display-result argument"
+        println_has_no_args,
+        "println must keep only literal parts, struct args go through display"
     );
 }
 
@@ -1150,8 +1152,7 @@ fn generic_bound_method_call_dispatches_to_concrete_impl() {
     // `out.write_str(...)` where `O: StrWriter` must dispatch to the concrete
     // implementation (`MyOut.write_str`), not the bodyless interface method.
     let mir = compile_mir_ok(
-        "interface StrWriter { fn write_str(*self, value: []const char) void; } \
-         struct MyOut {} \
+        "struct MyOut {} \
          implement StrWriter : MyOut { fn write_str(*self, value: []const char) void {} } \
          fn helper[O: StrWriter](out: O) void { out.write_str(\"hi\"); } \
          fn main() { let o = MyOut {}; helper(o); }",

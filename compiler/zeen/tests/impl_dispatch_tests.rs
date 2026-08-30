@@ -46,8 +46,8 @@ struct Val[T] {
 }
 
 implement[T: Display] Display : Val[T] {
-  fn display(*const self) []const char {
-    "val"
+  fn display(*const self, out: OutStream) void {
+    out.write_str("val");
   }
 }
 
@@ -78,8 +78,8 @@ struct Val[T] {
 }
 
 implement Display : Val[i32] {
-  fn display(*const self) []const char {
-    "spec"
+  fn display(*const self, out: OutStream) void {
+    out.write_str("spec");
   }
 }
 
@@ -110,8 +110,8 @@ struct Val[T] {
 }
 
 implement[T: Display] Display : Val[T] {
-  fn display(*const self) []const char {
-    "val"
+  fn display(*const self, out: OutStream) void {
+    out.write_str("val");
   }
 }
 
@@ -142,16 +142,16 @@ struct Val[T] {
 }
 
 implement[T: Display + Eq] Display : Val[T] {
-  fn display(*const self) []const char {
-    "val"
+  fn display(*const self, out: OutStream) void {
+    out.write_str("val");
   }
 }
 
 struct HasDisplay {}
 
 implement Display : HasDisplay {
-  fn display(*const self) []const char {
-    "has-display"
+  fn display(*const self, out: OutStream) void {
+    out.write_str("has-display");
   }
 }
 
@@ -213,20 +213,20 @@ struct Val[T] {
 }
 
 implement[T: Display] Display : Val[T] {
-  fn display(*const self) []const char {
-    "GENERIC"
+  fn display(*const self, out: OutStream) void {
+    out.write_str("GENERIC");
   }
 }
 
 implement Display : Val[i32] {
-  fn display(*const self) []const char {
-    "SPEC-I32"
+  fn display(*const self, out: OutStream) void {
+    out.write_str("SPEC-I32");
   }
 }
 
 implement Display : Val[i32] {
-  fn display(*const self) []const char {
-    "SPEC-I32-DUP"
+  fn display(*const self, out: OutStream) void {
+    out.write_str("SPEC-I32-DUP");
   }
 }
 

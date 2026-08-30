@@ -152,6 +152,10 @@ pub struct MirLowering<'ctx> {
 
     globals: Vec<GlobalDecl>,
     globals_by_def: HashMap<DefId, MirGlobalVarId>,
+
+    /// Lazily resolved stdout writer: the `core.out` `OutStream` struct and
+    /// its zero-sized `TypeId` (used as the `out` sink of `Display`/`Debug`).
+    outstream: Option<(TypeId, DefId)>,
 }
 
 struct GlobalDecl {
@@ -328,6 +332,7 @@ impl<'ctx> MirLowering<'ctx> {
             mode,
             globals: Vec::new(),
             globals_by_def: HashMap::new(),
+            outstream: None,
         }
     }
 
@@ -2802,41 +2807,95 @@ impl<'ctx> MirLowering<'ctx> {
         source: Source,
     ) -> (BlockId, Operand) {
         let format_chunks = self.typecheck.format_specs.get(&hir_id).cloned();
-        let specs = format_chunks.as_deref().map(arg_specs);
-
         let value_exprs: &[Rc<HirExpr>] = if format_chunks.is_some() {
             &args[1..]
         } else {
             args
         };
 
+        if matches!(kind, HirMacroKind::Print | HirMacroKind::Println) {
+            return self.lower_print_macro(
+                fb,
+                kind,
+                format_chunks,
+                value_exprs,
+                hir_id,
+                block,
+                source,
+            );
+        }
+
         let mut block = block;
         let mut operands = Vec::with_capacity(value_exprs.len());
         let mut arg_types = Vec::with_capacity(value_exprs.len());
-        for (i, arg) in value_exprs.iter().enumerate() {
-            let ty = self.expr_type(fb, arg);
-            let spec = specs.as_deref().and_then(|s| s.get(i)).copied();
+        let mut new_chunks: Vec<FormatChunk> = Vec::new();
+        let mut value_idx = 0usize;
 
-            // Struct operands with a `{}` / `{:?}` spec are lowered to a call
-            // to their `display`/`debug` interface method; the returned
-            // `[]const char` slice becomes the format argument.
-            let (b, op, arg_ty) = match (spec, self.typecheck.interner.get(ty).clone()) {
-                (Some(FormatSpec::Display | FormatSpec::Debug), Type::Struct { .. }) => {
-                    let iface = match spec {
-                        Some(FormatSpec::Display) => ("Display", "display"),
-                        _ => ("Debug", "debug"),
-                    };
-                    self.lower_display_format_arg(fb, arg, ty, iface, block)
-                }
-                _ => {
+        match format_chunks.as_deref() {
+            None => {
+                // No format spec (e.g. `@dbg`): all args pass through.
+                for arg in value_exprs {
+                    let ty = self.expr_type(fb, arg);
                     let (b, op) = self.lower_expr_to_operand(fb, arg, block);
-                    (b, op, ty)
+                    block = b;
+                    operands.push(op);
+                    arg_types.push(ty);
                 }
-            };
+            }
+            Some(chunks) => {
+                // Struct args with a `{}` / `{:?}` spec write their
+                // representation through their `display`/`debug` method
+                // directly to stdout; the panicking format keeps only the
+                // non-struct parts. Display output precedes the panic header,
+                // matching the previous lowering order.
+                for chunk in chunks {
+                    match chunk {
+                        FormatChunk::Literal(text) => {
+                            new_chunks.push(FormatChunk::Literal(text.clone()));
+                        }
+                        FormatChunk::Arg(spec) => {
+                            let arg = value_exprs.get(value_idx);
+                            let ty = arg.map(|a| self.expr_type(fb, a));
+                            let err_ty = self.typecheck.interner.error();
+                            let is_struct_display =
+                                matches!(
+                                    self.typecheck.interner.get(ty.unwrap_or(err_ty)),
+                                    Type::Struct { .. }
+                                ) && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
 
-            block = b;
-            operands.push(op);
-            arg_types.push(arg_ty);
+                            if is_struct_display {
+                                let iface = match spec {
+                                    FormatSpec::Debug => ("Debug", "debug"),
+                                    _ => ("Display", "display"),
+                                };
+                                block = self.lower_struct_display_call(
+                                    fb,
+                                    arg.expect("format arg"),
+                                    ty.expect("format arg type"),
+                                    iface,
+                                    block,
+                                );
+                                new_chunks.push(FormatChunk::Literal(String::new()));
+                            } else if let Some(arg) = arg {
+                                let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                                block = b;
+                                operands.push(op);
+                                arg_types.push(ty.expect("format arg type"));
+                                new_chunks.push(FormatChunk::Arg(*spec));
+                            }
+
+                            value_idx += 1;
+                        }
+                    }
+                }
+
+                // Extra args (checked but not formatted) are lowered for side
+                // effects.
+                for arg in value_exprs.iter().skip(value_idx) {
+                    let (b, _) = self.lower_expr_to_operand(fb, arg, block);
+                    block = b;
+                }
+            }
         }
 
         let result_ty = self
@@ -2855,7 +2914,7 @@ impl<'ctx> MirLowering<'ctx> {
             block,
             Terminator::MacroCall {
                 kind,
-                format_chunks,
+                format_chunks: format_chunks.map(|_| new_chunks),
                 args: operands,
                 arg_types,
                 destination: Place::from_local(dest),
@@ -2875,28 +2934,164 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Lowers a `Display`/`Debug` format argument into a call to the struct's
-    /// interface method. The method is resolved from the concrete struct type
-    /// and monomorphized like any other method call; the returned
-    /// `[]const char` slice is passed on to the format macro.
-    fn lower_display_format_arg(
+    /// Lowers `@print`/`@println` by splitting the format into segments:
+    /// struct args become `display`/`debug` calls writing to the stdout
+    /// writer, literal and builtin parts stay in plain print macros between
+    /// them so the output order matches the format string.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_print_macro(
+        &mut self,
+        fb: &mut FnBuilder,
+        kind: HirMacroKind,
+        format_chunks: Option<Vec<FormatChunk>>,
+        value_exprs: &[Rc<HirExpr>],
+        hir_id: HirId,
+        block: BlockId,
+        source: Source,
+    ) -> (BlockId, Operand) {
+        let mut block = block;
+        let mut seg_chunks: Vec<FormatChunk> = Vec::new();
+        let mut seg_operands: Vec<Operand> = Vec::new();
+        let mut seg_types: Vec<TypeId> = Vec::new();
+        let mut value_idx = 0usize;
+
+        if let Some(chunks) = format_chunks.as_deref() {
+            for chunk in chunks {
+                match chunk {
+                    FormatChunk::Literal(text) => {
+                        seg_chunks.push(FormatChunk::Literal(text.clone()));
+                    }
+                    FormatChunk::Arg(spec) => {
+                        let arg = value_exprs.get(value_idx);
+                        let ty = arg.map(|a| self.expr_type(fb, a));
+                        let err_ty = self.typecheck.interner.error();
+                        let is_struct_display =
+                            matches!(
+                                self.typecheck.interner.get(ty.unwrap_or(err_ty)),
+                                Type::Struct { .. }
+                            ) && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
+
+                        if is_struct_display {
+                            if !seg_chunks.is_empty() {
+                                block = self.emit_print_segment(
+                                    fb,
+                                    std::mem::take(&mut seg_chunks),
+                                    std::mem::take(&mut seg_operands),
+                                    std::mem::take(&mut seg_types),
+                                    block,
+                                    &source,
+                                );
+                            }
+
+                            let iface = match spec {
+                                FormatSpec::Debug => ("Debug", "debug"),
+                                _ => ("Display", "display"),
+                            };
+                            block = self.lower_struct_display_call(
+                                fb,
+                                arg.expect("format arg"),
+                                ty.expect("format arg type"),
+                                iface,
+                                block,
+                            );
+                        } else if let Some(arg) = arg {
+                            seg_chunks.push(FormatChunk::Arg(*spec));
+                            let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                            block = b;
+                            seg_operands.push(op);
+                            seg_types.push(ty.expect("format arg type"));
+                        }
+
+                        value_idx += 1;
+                    }
+                }
+            }
+        }
+
+        // Extra args (checked but not formatted) are lowered for side effects.
+        for arg in value_exprs.iter().skip(value_idx) {
+            let (b, _) = self.lower_expr_to_operand(fb, arg, block);
+            block = b;
+        }
+
+        let result_ty = self
+            .typecheck
+            .expr_types
+            .get(&hir_id)
+            .copied()
+            .unwrap_or_else(|| self.typecheck.interner.intern(Type::Void));
+
+        let dest = fb.new_temp(result_ty);
+        let next = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::MacroCall {
+                kind,
+                format_chunks: Some(seg_chunks),
+                args: seg_operands,
+                arg_types: seg_types,
+                destination: Place::from_local(dest),
+                target: Some(next),
+                source: Some(source),
+            },
+        );
+
+        (
+            next,
+            self.place_to_operand(Place::from_local(dest), result_ty, None),
+        )
+    }
+
+    /// Emits one plain print segment (literal text plus builtin args) with no
+    /// struct formatting, returning the continuation block.
+    fn emit_print_segment(
+        &mut self,
+        fb: &mut FnBuilder,
+        chunks: Vec<FormatChunk>,
+        operands: Vec<Operand>,
+        arg_types: Vec<TypeId>,
+        block: BlockId,
+        source: &Source,
+    ) -> BlockId {
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let dest = fb.new_temp(void_ty);
+        let next = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::MacroCall {
+                kind: HirMacroKind::Print,
+                format_chunks: Some(chunks),
+                args: operands,
+                arg_types,
+                destination: Place::from_local(dest),
+                target: Some(next),
+                source: Some(source.clone()),
+            },
+        );
+
+        next
+    }
+
+    /// Lowers a struct `{}`/`{:?}` format argument into a call to the
+    /// struct's `display`/`debug` interface method, passing the stdout writer
+    /// so the method writes its representation directly to the output.
+    fn lower_struct_display_call(
         &mut self,
         fb: &mut FnBuilder,
         arg: &HirExpr,
         obj_ty: TypeId,
         iface: (&str, &str),
         block: BlockId,
-    ) -> (BlockId, Operand, TypeId) {
+    ) -> BlockId {
         let (iface_name, method_name) = iface;
         let Type::Struct {
             def_id: struct_def,
             generic_args,
         } = self.typecheck.interner.get(obj_ty).clone()
         else {
-            return {
-                let (b, op) = self.lower_expr_to_operand(fb, arg, block);
-                (b, op, obj_ty)
-            };
+            return block;
         };
 
         // The checker records which implementation it picked for this
@@ -2911,10 +3106,7 @@ impl<'ctx> MirLowering<'ctx> {
             });
 
         let Some(method_def) = method_def else {
-            return {
-                let (b, op) = self.lower_expr_to_operand(fb, arg, block);
-                (b, op, obj_ty)
-            };
+            return block;
         };
 
         let (block, place) = self.lower_expr_to_place_or_temp(fb, arg, block);
@@ -2926,6 +3118,8 @@ impl<'ctx> MirLowering<'ctx> {
             Some(arg.source.clone()),
             block,
         );
+
+        let (block, writer_operand) = self.outstream_writer_operand(fb, block);
 
         let mono_args = self.substitute_generic_args(fb, &generic_args);
         let owner = self.typecheck.method_owner.get(&method_def).copied();
@@ -2946,15 +3140,69 @@ impl<'ctx> MirLowering<'ctx> {
             block,
             Terminator::Call {
                 func: CallTarget::Direct(mir_fn_id),
-                args: vec![self_operand],
+                args: vec![self_operand, writer_operand],
                 destination: Place::from_local(dest),
                 target: Some(next),
                 source: None,
             },
         );
 
-        let op = self.place_to_operand(Place::from_local(dest), ret_ty, None);
-        (next, op, ret_ty)
+        next
+    }
+
+    /// Resolves the `core.out` `OutStream` struct (the stdout writer type).
+    fn resolve_outstream(&mut self) -> Option<(TypeId, DefId)> {
+        if self.outstream.is_some() {
+            return self.outstream;
+        }
+
+        let struct_def = self.resolution.defs.iter().find_map(|(def, info)| {
+            matches!(info.kind, DefKind::Struct)
+                .then(|| self.rodeo.borrow().resolve(&info.name) == "OutStream")
+                .filter(|found| *found)
+                .map(|_| *def)
+        })?;
+
+        let ty = self.typecheck.interner.intern(Type::Struct {
+            def_id: struct_def,
+            generic_args: Vec::new(),
+        });
+
+        // Core structs are skipped by eager layout registration; the writer
+        // aggregate is synthesized here, so register its layout on demand.
+        self.register_struct_layout(ty, struct_def);
+
+        self.outstream = Some((ty, struct_def));
+        self.outstream
+    }
+
+    /// Builds the stdout writer value (a zero-sized `OutStream` struct).
+    fn outstream_writer_operand(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        let Some((ty, struct_def)) = self.resolve_outstream() else {
+            panic!("core `OutStream` struct is missing: formatting requires `core.out`");
+        };
+
+        let temp = fb.new_temp(ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Struct(struct_def),
+                    operands: Vec::new(),
+                },
+                source: None,
+            },
+        );
+
+        (
+            block,
+            self.place_to_operand(Place::from_local(temp), ty, None),
+        )
     }
 
     /// Resolves the `DefId` of the method with `method_name` that implements
