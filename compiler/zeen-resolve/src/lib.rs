@@ -84,7 +84,7 @@ mod tests {
     use zeen_parser::Parser;
 
     const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
-    const CORE_OUT: &str = include_str!("../../../lib/core/out.zn");
+    const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
 
     #[derive(Debug)]
     struct Fixture {

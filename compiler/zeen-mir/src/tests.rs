@@ -8,7 +8,7 @@ use zeen_parser::Parser;
 use crate::lowering::{MirLoweringResult, lower_program};
 
 const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
-const CORE_OUT: &str = include_str!("../../../lib/core/out.zn");
+const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
 
 fn compile_mir_mode(
     src: &str,
