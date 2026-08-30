@@ -16,3 +16,17 @@ implement StrWriter : OutStream {
     __zeen_stdout_write(value.ptr, value.len);
   }
 }
+
+/// `Display` interface is used to render a structure in format macros
+/// (print, println, panic, etc.). The implementation writes its full
+/// representation into `out` with `write_str`.
+pub interface Display {
+  pub fn display(*const self, out: OutStream) void;
+}
+
+/// `Debug` interface is used to render a structure in debug macros
+/// (dbg, print/println with "{:?}" specifier). The implementation writes its
+/// full (quoted) representation into `out` with `write_str`.
+pub interface Debug {
+  pub fn debug(*const self, out: OutStream) void;
+}
