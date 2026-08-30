@@ -535,6 +535,39 @@ impl<'res> TypeChecker<'res> {
                 })
                 .collect();
 
+            let is_duplicate = self
+                .result
+                .impl_registry
+                .get(&(object_def, iface_def))
+                .is_some_and(|existing| {
+                    existing
+                        .iter()
+                        .any(|e| e.object_args == object_args && e.is_specialized == is_specialized)
+                });
+
+            if is_duplicate {
+                let struct_name = self
+                    .resolution
+                    .defs
+                    .get(&object_def)
+                    .map(|d| self.interner.borrow().resolve(&d.name).into())
+                    .unwrap_or_else(|| "?".into());
+                let iface_name = self
+                    .resolution
+                    .defs
+                    .get(&iface_def)
+                    .map(|d| self.interner.borrow().resolve(&d.name).into())
+                    .unwrap_or_else(|| "?".into());
+
+                self.report(TypeError::DuplicateImpl {
+                    struct_name,
+                    iface_name,
+                    src: source.src(),
+                    span: imp.object_bindings_span,
+                });
+                return;
+            }
+
             self.result
                 .impl_registry
                 .entry((object_def, iface_def))
