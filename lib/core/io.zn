@@ -2,6 +2,8 @@
 /// Used as the `out` sink by `Display`/`Debug` implementations.
 pub interface StrWriter {
   pub fn write_str(*self, value: []const char) void;
+  pub fn write_str_raw(*self, ptr: [*]const char, len: usize) void;
+  pub fn write_str_single(*self, value: char) void;
 }
 
 /// Compiler-provided runtime: writes `len` bytes from `ptr` to stdout.
@@ -14,6 +16,14 @@ pub struct OutStream {}
 implement StrWriter : OutStream {
   pub fn write_str(*self, value: []const char) void {
     __zeen_stdout_write(value.ptr, value.len);
+  }
+
+  pub fn write_str_raw(*self, ptr: [*]const char, len: usize) void {
+    __zeen_stdout_write(ptr, len);
+  }
+
+  pub fn write_str_single(*self, value: char) void {
+    __zeen_stdout_write(@as([*]const char, &value), 1);
   }
 }
 
