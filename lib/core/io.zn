@@ -13,6 +13,8 @@ extern fn __zeen_stdout_write(ptr: [*]const char, len: usize) void;
 /// Compiler-reserved output stream (stdout of the executable).
 pub struct OutStream {}
 
+implement Copy : OutStream {}
+
 implement StrWriter : OutStream {
   pub fn write_str(*self, value: []const char) void {
     __zeen_stdout_write(value.ptr, value.len);
