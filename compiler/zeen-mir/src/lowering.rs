@@ -1845,6 +1845,60 @@ impl<'ctx> MirLowering<'ctx> {
                 let raw_args = resolution.generic_args.clone();
                 let generic_args = self.substitute_generic_args(fb, &raw_args);
 
+                // A call made on a bounded generic parameter records the
+                // interface method (bodyless) as the callee; resolve it to the
+                // concrete implementation once the receiver is monomorphized.
+                let (fn_def, generic_args) = if self
+                    .typecheck
+                    .interface_method_owners
+                    .contains_key(&fn_def)
+                {
+                    match &callee.kind {
+                        HirExprKind::FieldAccess { object, .. } => {
+                            let recv_ty = self.expr_type(fb, object);
+                            if let Type::Struct {
+                                def_id: struct_def,
+                                generic_args: recv_args,
+                            } = self.typecheck.interner.get(recv_ty).clone()
+                            {
+                                let iface_def =
+                                    self.typecheck.interface_method_owners.get(&fn_def).copied();
+                                let method_name = self
+                                    .rodeo
+                                    .borrow()
+                                    .resolve(&self.resolution.defs[&fn_def].name)
+                                    .to_string();
+
+                                if let Some(iface_def) = iface_def {
+                                    let iface_name = self
+                                        .rodeo
+                                        .borrow()
+                                        .resolve(&self.resolution.defs[&iface_def].name)
+                                        .to_string();
+
+                                    if let Some(concrete) = self.resolve_interface_method(
+                                        struct_def,
+                                        &iface_name,
+                                        &method_name,
+                                        &recv_args,
+                                    ) {
+                                        (concrete, recv_args.clone())
+                                    } else {
+                                        (fn_def, generic_args)
+                                    }
+                                } else {
+                                    (fn_def, generic_args)
+                                }
+                            } else {
+                                (fn_def, generic_args)
+                            }
+                        }
+                        _ => (fn_def, generic_args),
+                    }
+                } else {
+                    (fn_def, generic_args)
+                };
+
                 let Some(hir_fn) = self.hir_fns_by_def.get(&fn_def).cloned() else {
                     unreachable!("must been recorded this table");
                 };

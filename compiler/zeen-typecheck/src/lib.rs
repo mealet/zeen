@@ -331,6 +331,9 @@ impl<'res> TypeChecker<'res> {
                     .insert(decl.def_id, i.methods.iter().map(|m| m.def_id).collect());
 
                 for method in &i.methods {
+                    self.result
+                        .interface_method_owners
+                        .insert(method.def_id, decl.def_id);
                     self.declare_signature(method);
                 }
             }
@@ -3540,6 +3543,98 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    /// Resolves a method call made on a bounded generic parameter, e.g.
+    /// `out.write_str(...)` where `out: O` and `O: StrWriter`. The method is
+    /// looked up among the parameter's interface bounds; dispatch to the
+    /// concrete implementation is deferred to MIR after monomorphization.
+    fn try_check_generic_bound_method_call(
+        &mut self,
+        call_id: HirId,
+        object: &HirExpr,
+        field: (Spur, SourceSpan),
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        source: Source,
+    ) -> Option<TypeId> {
+        let (field_name, _field_span) = field;
+
+        let obj_ty = self.synth_expr(object);
+        let Type::GenericParam(g) = self.result.interner.get(obj_ty).clone() else {
+            return None;
+        };
+
+        let bounds = self.ctx.generic_bounds(g).to_vec();
+        let method_name = self.interner.borrow().resolve(&field_name).to_string();
+
+        let mut candidate: Option<DefId> = None;
+        for iface_def in bounds {
+            let Some(methods) = self.interface_methods.get(&iface_def) else {
+                continue;
+            };
+            if let Some(&method_def) = methods
+                .iter()
+                .find(|&&m| self.def_name(m).as_deref() == Some(method_name.as_str()))
+            {
+                candidate = Some(method_def);
+                break;
+            }
+        }
+
+        let method_def = candidate?;
+
+        let sig = &self.fn_sigs[&method_def];
+        let sig_params = sig.params.clone();
+        let sig_ret = sig.ret;
+        let sig_generics = sig.generics.clone();
+        let has_self = sig.self_mode.is_some();
+
+        let expected_args = sig_params.len() - usize::from(has_self);
+        if args.len() != expected_args {
+            self.report(TypeError::ArgCountMismatch {
+                expected: expected_args,
+                found: args.len(),
+                src: source.src(),
+                span: source.span,
+            });
+        }
+
+        let user_params = if has_self {
+            &sig_params[1..]
+        } else {
+            &sig_params[..]
+        };
+
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        for (param_ty, arg) in user_params.iter().zip(args.iter()) {
+            self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+        }
+
+        for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
+            let ty = self.lower_hir_type(explicit);
+            bindings.insert(*g, ty);
+        }
+
+        let resolved_generic_args: Vec<TypeId> = sig_generics
+            .iter()
+            .map(|g| {
+                bindings
+                    .get(g)
+                    .copied()
+                    .unwrap_or_else(|| self.result.interner.error())
+            })
+            .collect();
+
+        self.result.call_resolutions.insert(
+            call_id,
+            CallResolution {
+                fn_def: method_def,
+                generic_args: resolved_generic_args,
+            },
+        );
+
+        Some(self.substitute_generics(sig_ret, &bindings))
+    }
+
     fn try_check_method_call(
         &mut self,
         call_id: HirId,
@@ -3567,6 +3662,19 @@ impl<'res> TypeChecker<'res> {
 
         // Otherwise it is instance call
         let obj_ty = self.synth_expr(object);
+
+        // A call on a generic parameter dispatches to the interface bound that
+        // declares the method (e.g. `out.write_str(...)` where `O: StrWriter`).
+        if matches!(self.result.interner.get(obj_ty), Type::GenericParam(_)) {
+            return self.try_check_generic_bound_method_call(
+                call_id,
+                object,
+                field,
+                args,
+                explicit_generic_args,
+                source,
+            );
+        }
 
         let (struct_def, struct_generic_args, obj_is_ptr, ptr_is_const) =
             match self.result.interner.get(obj_ty).clone() {
