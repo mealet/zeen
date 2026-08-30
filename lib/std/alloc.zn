@@ -1,0 +1,31 @@
+extern fn malloc(size: usize) *void;
+extern fn realloc(ptr: *void, new_size: usize) *void;
+extern fn free(ptr: *void);
+
+/// Main standard library allocator
+pub struct Allocator {
+  pub fn alloc(size: usize) *void {
+    let ptr = malloc(size);
+    
+    if (ptr == nullptr) {
+      @panic("Null pointer appeared on std allocation");
+    };
+    
+    ptr
+  }
+
+  pub fn realloc(ptr: *void, size: usize) *void {
+    let ptr = realloc(ptr, size);
+
+    if (ptr == nullptr) {
+      @panic("Null pointer appeared on std allocation");
+    };
+
+    ptr
+  }
+
+  pub fn dealloc(ptr: *void) {
+    if (ptr != nullptr)
+      free(ptr);
+  }
+}

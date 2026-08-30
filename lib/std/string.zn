@@ -1,0 +1,79 @@
+extern fn strncpy(dest: [*]char, src: [*]const char, size: usize) *char;
+
+use std.alloc;
+
+/// String initial capacity size (initialization on first push).
+const InitialStringCapacity: usize = 8;
+/// Geometry string size progression by formula: Current * StringSizeProgression.
+const StringSizeProgression: usize = 2;
+
+/// Dynamic heap-allocated string.
+pub struct String {
+  ptr: [*]char,
+  len: usize,
+  capacity: usize,
+
+  /// String constructor (without initialization).
+  pub fn new() Self {
+    Self {
+      .ptr = @as([*]char, nullptr),
+      .len = 0,
+      .capacity = 0,
+    }
+  }
+
+  pub fn from(value: []const char) Self {
+    let len = value.len;
+    let capacity = next_capacity(len);
+    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
+
+    let _ = strncpy(ptr, value.ptr, value.len);
+
+    Self {
+      .ptr = ptr,
+      .len = len,
+      .capacity = capacity,
+    }
+  }
+
+  /// Initialization called on first push.
+  fn initialize(*self) {
+    let init_ptr: *char = Allocator.alloc(@sizeof(char) * InitialStringCapacity);
+
+    self.ptr = @as([*]char, init_ptr);
+    self.len = 0;
+    self.capacity = InitialStringCapacity;
+  }
+}
+
+implement Drop : String {
+  fn drop(self) {
+    let self_voided = @as(*void, self.ptr);
+    if (self_voided != nullptr)
+      Allocator.dealloc(self_voided);
+  }
+}
+
+implement Display : String {
+  fn display(*const self, out: OutStream) void {
+    @todo()
+  }
+}
+
+implement Debug : String {
+  fn debug(*const self, out: OutStream) void {
+    @todo();
+  }
+}
+
+// =======| Helper Functions |=======
+
+fn next_capacity(size: usize) usize {
+  let capacity: usize = 8;
+
+  while (capacity < size) {
+    capacity <<= 1;
+  }
+
+  capacity
+}
