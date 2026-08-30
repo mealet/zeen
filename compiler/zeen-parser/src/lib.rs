@@ -225,6 +225,8 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
     pub fn sync(&mut self) {
         self.panic_mode = false;
 
+        let entry = self.current_clone();
+
         loop {
             match self.current().kind {
                 TokenKind::Eof => break,
@@ -236,10 +238,14 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
                 }
             }
         }
+
+        self.ensure_sync_progress(entry);
     }
 
     fn decl_sync(&mut self) {
         self.panic_mode = false;
+
+        let entry = self.current_clone();
 
         loop {
             match self.current().kind {
@@ -266,6 +272,19 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
                     self.advance();
                 }
             }
+        }
+
+        self.ensure_sync_progress(entry);
+    }
+
+    /// A sync loop can stop on the very token the previous parse failed at
+    /// (e.g. a declaration keyword used in a wrong position): retrying from
+    /// it would repeat the same failure forever, so force one step forward.
+    fn ensure_sync_progress(&mut self, entry: Token) {
+        let current = self.current_clone();
+
+        if current.kind == entry.kind && current.span == entry.span {
+            self.advance();
         }
     }
 }

@@ -2236,6 +2236,28 @@ impl<'ctx> MirLowering<'ctx> {
                 expr: inner,
                 op: UnaryOp::Deref,
             } => {
+                // A deref through a struct's `Deref`/`DerefPtr` interface
+                // dispatches to the method; the result is materialized into a
+                // temp local. A `DerefPtr` result is a pointer into the
+                // struct, so the place keeps dereferencing it (writes through
+                // it reach the struct); a `Deref` result is the value itself.
+                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    let result_ty = self.expr_type(fb, expr);
+                    let (block, operand) =
+                        self.lower_operator_method_call(fb, inner, &op_res, block, result_ty);
+
+                    if matches!(
+                        self.typecheck.interner.get(result_ty),
+                        Type::Pointer { .. } | Type::ManyPointer { .. }
+                    ) {
+                        let ptr_local = self.operand_to_local(fb, operand, result_ty, block);
+                        return (block, Place::from_local(ptr_local).deref());
+                    }
+
+                    let temp = self.operand_to_local(fb, operand, result_ty, block);
+                    return (block, Place::from_local(temp));
+                }
+
                 let (block, inner_place) = self.lower_expr_to_place_or_temp(fb, inner, block);
                 (block, inner_place.deref())
             }
@@ -2719,8 +2741,18 @@ impl<'ctx> MirLowering<'ctx> {
             };
         };
 
-        let Some(method_def) = self.resolve_interface_method(struct_def, iface_name, method_name)
-        else {
+        // The checker records which implementation it picked for this
+        // argument; fall back to resolving here for unrecorded cases.
+        let method_def = self
+            .typecheck
+            .format_arg_resolutions
+            .get(&arg.id)
+            .copied()
+            .or_else(|| {
+                self.resolve_interface_method(struct_def, iface_name, method_name, &generic_args)
+            });
+
+        let Some(method_def) = method_def else {
             return {
                 let (b, op) = self.lower_expr_to_operand(fb, arg, block);
                 (b, op, obj_ty)
@@ -2769,12 +2801,14 @@ impl<'ctx> MirLowering<'ctx> {
 
     /// Resolves the `DefId` of the method with `method_name` that implements
     /// `iface_name` for `struct_def`, mirroring the typechecker's
-    /// interface-call resolution.
+    /// interface-call resolution. A concrete specialization for the given
+    /// `generic_args` wins over the generic implementation.
     fn resolve_interface_method(
         &self,
         struct_def: DefId,
         iface_name: &str,
         method_name: &str,
+        generic_args: &[TypeId],
     ) -> Option<DefId> {
         let iface_def = self
             .resolution
@@ -2785,6 +2819,27 @@ impl<'ctx> MirLowering<'ctx> {
                     && self.rodeo.borrow().resolve(&info.name) == iface_name
             })
             .map(|(def, _)| *def)?;
+
+        if let Some(entries) = self.typecheck.impl_registry.get(&(struct_def, iface_def)) {
+            let entry = entries
+                .iter()
+                .find(|e| e.is_specialized && e.object_args.as_slice() == generic_args)
+                .or_else(|| {
+                    entries
+                        .iter()
+                        .find(|e| !e.is_specialized && !e.generic_bounds.is_empty())
+                })
+                .or_else(|| entries.iter().find(|e| !e.is_specialized));
+
+            if let Some(entry) = entry {
+                return entry.methods.iter().copied().find(|&def| {
+                    let Some(info) = self.resolution.defs.get(&def) else {
+                        return false;
+                    };
+                    self.rodeo.borrow().resolve(&info.name) == method_name
+                });
+            }
+        }
 
         let methods = self.resolution.impls.get(&(struct_def, iface_def))?;
         methods.iter().copied().find(|&def| {
@@ -3676,11 +3731,32 @@ impl<'ctx> MirLowering<'ctx> {
                 .get(&owner)
                 .cloned()
                 .unwrap_or_default();
-            struct_generics
+            let mut bindings: HashMap<DefId, TypeId> = struct_generics
                 .iter()
                 .copied()
                 .zip(generic_args.iter().copied())
-                .collect()
+                .collect();
+
+            // An implement block's methods may be written with the block's
+            // own generic parameters (`implement[T] Deref : Holder[T]`):
+            // substitute them through the struct's generic slots.
+            for entries in self.typecheck.impl_registry.values() {
+                for entry in entries {
+                    if !entry.methods.contains(&def_id) {
+                        continue;
+                    }
+
+                    for (arg, &struct_g) in entry.object_args.iter().zip(struct_generics.iter()) {
+                        if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
+                            && let Some(&concrete) = bindings.get(&struct_g)
+                        {
+                            bindings.insert(*imp_g, concrete);
+                        }
+                    }
+                }
+            }
+
+            bindings
         } else {
             HashMap::new()
         };

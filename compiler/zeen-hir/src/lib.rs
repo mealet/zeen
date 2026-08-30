@@ -259,13 +259,20 @@ impl<'res> HirLowering<'res> {
                     .collect();
 
                 let object_bindings_span = object.2.iter().skip(1).fold(
-                    object.2.first().map(|(_, s)| *s).unwrap_or(object.1),
-                    |acc, (_, s)| {
-                        let start = acc.offset().min(s.offset());
-                        let end = (acc.offset() + acc.len()).max(s.offset() + s.len());
+                    object.2.first().map(|slot| slot.span).unwrap_or(object.1),
+                    |acc, slot| {
+                        let start = acc.offset().min(slot.span.offset());
+                        let end =
+                            (acc.offset() + acc.len()).max(slot.span.offset() + slot.span.len());
                         miette::SourceSpan::new(start.into(), end - start)
                     },
                 );
+
+                let object_generic_types: Vec<Rc<HirTypeExpr>> = object
+                    .2
+                    .iter()
+                    .map(|slot| Rc::new(self.lower_type(slot)))
+                    .collect();
 
                 let hir_methods: Vec<Rc<HirDecl>> = methods
                     .iter()
@@ -277,6 +284,7 @@ impl<'res> HirLowering<'res> {
                     interface: interface_def.copied(),
                     object: object_def.copied(),
                     object_generics_bindings: object_bindings,
+                    object_generic_types,
                     object_bindings_span,
                     methods: hir_methods,
                 }))
