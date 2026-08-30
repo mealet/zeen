@@ -231,8 +231,19 @@ fn panic_emits_runtime_call_and_unreachable() {
     let panic_def = fx.def("boom", DefKind::Function);
     let void = fx.void();
     let mut f = fx.fn_builder("boom", panic_def, void);
+    let header_dest = f.temp(void);
     let dest = f.temp(void);
     f.entry("bb0");
+    f.block("bb1");
+    f.set_current("bb0");
+    f.print(
+        "*> thread \"boom\" panicked:\n",
+        vec![],
+        vec![],
+        header_dest,
+        Some("bb1"),
+    );
+    f.set_current("bb1");
     f.panic("boom", vec![], dest);
     f.finish();
 
@@ -254,8 +265,19 @@ fn panic_release_prints_location_without_stack() {
     let panic_def = fx.def("boom", DefKind::Function);
     let void = fx.void();
     let mut f = fx.fn_builder("boom", panic_def, void);
+    let header_dest = f.temp(void);
     let dest = f.temp(void);
     f.entry("bb0");
+    f.block("bb1");
+    f.set_current("bb0");
+    f.print(
+        "*> thread \"boom\" panicked at test.zn:1:\n",
+        vec![],
+        vec![],
+        header_dest,
+        Some("bb1"),
+    );
+    f.set_current("bb1");
     f.panic("boom", vec![], dest);
     f.finish();
 

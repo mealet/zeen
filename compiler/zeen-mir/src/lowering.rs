@@ -2698,8 +2698,11 @@ impl<'ctx> MirLowering<'ctx> {
         let dest = fb.new_temp(void_ty);
         let panic_next = fb.new_block();
 
+        // Header first, message (builtin args only) inside the panic printf.
+        let header_block = self.emit_panic_header_segment(fb, panic_block, source.as_ref());
+
         fb.set_terminator(
-            panic_block,
+            header_block,
             Terminator::MacroCall {
                 kind: HirMacroKind::Panic,
                 format_chunks: Some(vec![
@@ -2778,8 +2781,11 @@ impl<'ctx> MirLowering<'ctx> {
         let dest = fb.new_temp(void_ty);
         let panic_next = fb.new_block();
 
+        // Header first, message inside the panic printf.
+        let header_block = self.emit_panic_header_segment(fb, panic_block, source.as_ref());
+
         fb.set_terminator(
-            panic_block,
+            header_block,
             Terminator::MacroCall {
                 kind: HirMacroKind::Panic,
                 format_chunks: Some(vec![FormatChunk::Literal(
@@ -2843,15 +2849,31 @@ impl<'ctx> MirLowering<'ctx> {
                 }
             }
             Some(chunks) => {
+                let is_panic = matches!(kind, HirMacroKind::Panic);
+
+                if is_panic {
+                    // The header prints first; message parts follow as print
+                    // segments with struct content written at its position,
+                    // then the panic terminator dumps the call stack.
+                    block = self.emit_panic_header_segment(fb, block, Some(&source));
+                }
+
+                let mut seg_chunks: Vec<FormatChunk> = Vec::new();
+                let mut seg_operands: Vec<Operand> = Vec::new();
+                let mut seg_types: Vec<TypeId> = Vec::new();
+
                 // Struct args with a `{}` / `{:?}` spec write their
                 // representation through their `display`/`debug` method
                 // directly to stdout; the panicking format keeps only the
-                // non-struct parts. Display output precedes the panic header,
-                // matching the previous lowering order.
+                // non-struct parts.
                 for chunk in chunks {
                     match chunk {
                         FormatChunk::Literal(text) => {
-                            new_chunks.push(FormatChunk::Literal(text.clone()));
+                            if is_panic {
+                                seg_chunks.push(FormatChunk::Literal(text.clone()));
+                            } else {
+                                new_chunks.push(FormatChunk::Literal(text.clone()));
+                            }
                         }
                         FormatChunk::Arg(spec) => {
                             let arg = value_exprs.get(value_idx);
@@ -2864,6 +2886,17 @@ impl<'ctx> MirLowering<'ctx> {
                                 ) && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
 
                             if is_struct_display {
+                                if is_panic && !seg_chunks.is_empty() {
+                                    block = self.emit_print_segment(
+                                        fb,
+                                        std::mem::take(&mut seg_chunks),
+                                        std::mem::take(&mut seg_operands),
+                                        std::mem::take(&mut seg_types),
+                                        block,
+                                        Some(&source),
+                                    );
+                                }
+
                                 let iface = match spec {
                                     FormatSpec::Debug => ("Debug", "debug"),
                                     _ => ("Display", "display"),
@@ -2875,18 +2908,50 @@ impl<'ctx> MirLowering<'ctx> {
                                     iface,
                                     block,
                                 );
-                                new_chunks.push(FormatChunk::Literal(String::new()));
+
+                                if is_panic {
+                                    seg_chunks.push(FormatChunk::Literal(String::new()));
+                                } else {
+                                    new_chunks.push(FormatChunk::Literal(String::new()));
+                                }
                             } else if let Some(arg) = arg {
                                 let (b, op) = self.lower_expr_to_operand(fb, arg, block);
                                 block = b;
-                                operands.push(op);
-                                arg_types.push(ty.expect("format arg type"));
-                                new_chunks.push(FormatChunk::Arg(*spec));
+
+                                if is_panic {
+                                    seg_chunks.push(FormatChunk::Arg(*spec));
+                                    seg_operands.push(op);
+                                    seg_types.push(ty.expect("format arg type"));
+                                } else {
+                                    operands.push(op);
+                                    arg_types.push(ty.expect("format arg type"));
+                                    new_chunks.push(FormatChunk::Arg(*spec));
+                                }
                             }
 
                             value_idx += 1;
                         }
                     }
+                }
+
+                if is_panic {
+                    // Flush the remaining message parts, then let the panic
+                    // terminator carry only the trailing newline and the call
+                    // stack dump.
+                    if !seg_chunks.is_empty() {
+                        block = self.emit_print_segment(
+                            fb,
+                            seg_chunks,
+                            seg_operands,
+                            seg_types,
+                            block,
+                            Some(&source),
+                        );
+                    }
+
+                    new_chunks.clear();
+                    operands.clear();
+                    arg_types.clear();
                 }
 
                 // Extra args (checked but not formatted) are lowered for side
@@ -2979,7 +3044,7 @@ impl<'ctx> MirLowering<'ctx> {
                                     std::mem::take(&mut seg_operands),
                                     std::mem::take(&mut seg_types),
                                     block,
-                                    &source,
+                                    Some(&source),
                                 );
                             }
 
@@ -3052,7 +3117,7 @@ impl<'ctx> MirLowering<'ctx> {
         operands: Vec<Operand>,
         arg_types: Vec<TypeId>,
         block: BlockId,
-        source: &Source,
+        source: Option<&Source>,
     ) -> BlockId {
         let void_ty = self.typecheck.interner.intern(Type::Void);
         let dest = fb.new_temp(void_ty);
@@ -3067,11 +3132,64 @@ impl<'ctx> MirLowering<'ctx> {
                 arg_types,
                 destination: Place::from_local(dest),
                 target: Some(next),
-                source: Some(source.clone()),
+                source: source.cloned(),
             },
         );
 
         next
+    }
+
+    /// Builds the panic header line printed before the message. Mirrors the
+    /// codegen format: function name plus (in Release) the definition
+    /// location of the panicking function.
+    fn panic_header(&self, fb: &FnBuilder) -> String {
+        let fn_name = self
+            .fn_stack
+            .last()
+            .map(|ctx| ctx.readable_name.clone())
+            .unwrap_or_else(|| "fn".into());
+
+        let (module, line) = match self.resolution.defs.get(&fb.func.source_def) {
+            Some(info) => {
+                let source = &info.span;
+                let offset = source.span.offset();
+                let line = 1 + source
+                    .src()
+                    .inner()
+                    .as_bytes()
+                    .get(..offset)
+                    .map(|prefix| prefix.iter().filter(|&&b| b == b'\n').count())
+                    .unwrap_or(0);
+                (source.src().name().to_string(), line)
+            }
+            None => ("?".to_string(), 0),
+        };
+
+        match self.mode {
+            CompilationMode::Release => {
+                format!("*> thread \"{fn_name}\" panicked at {module}:{line}:\n")
+            }
+            CompilationMode::Debug => format!("*> thread \"{fn_name}\" panicked:\n"),
+        }
+    }
+
+    /// Emits the panic header as a print segment; message parts follow as
+    /// separate segments so struct content lands at its position.
+    fn emit_panic_header_segment(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        source: Option<&Source>,
+    ) -> BlockId {
+        let header = self.panic_header(fb);
+        self.emit_print_segment(
+            fb,
+            vec![FormatChunk::Literal(header)],
+            Vec::new(),
+            Vec::new(),
+            block,
+            source,
+        )
     }
 
     /// Lowers a struct `{}`/`{:?}` format argument into a call to the
