@@ -1,0 +1,21 @@
+struct Foo {
+  pub x: i32
+}
+
+implement Eq : Foo {
+  fn eq(*const self, other: *const Self) bool {
+    (*self).x == (*other).x
+  }
+}
+
+fn main() i32 {
+  let a = Foo { .x = 123 };
+  let b = Foo { .x = 123 };
+  let c = Foo { .x = 456 };
+
+  @println("{}", a == b);
+  @println("{}", a == c);
+  @println("{}", a != b);
+  @println("{}", a != c);
+  return 0;
+}
