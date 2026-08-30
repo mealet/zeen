@@ -59,6 +59,22 @@ pub struct String {
   }
 }
 
+implement Clone : String {
+  fn clone(*const self) Self {
+    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * self.capacity));
+    let len = self.len;
+    let capacity = self.capacity;
+
+    let _ = strncpy(ptr, self.ptr, self.len);
+
+    Self {
+      .ptr = ptr,
+      .len = len,
+      .capacity = capacity
+    }
+  }
+}
+
 implement Drop : String {
   fn drop(self) {
     let self_voided = @as(*void, self.ptr);
