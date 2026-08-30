@@ -1,4 +1,5 @@
 extern fn strncpy(dest: [*]char, src: [*]const char, size: usize) *char;
+extern fn strncat(dest: [*]char, src: [*]const char, size: usize) *char;
 
 use std.alloc;
 
@@ -10,15 +11,28 @@ const StringSizeProgression: usize = 2;
 /// Dynamic heap-allocated string.
 pub struct String {
   ptr: [*]char,
-  len: usize,
-  capacity: usize,
+  _len: usize,
+  _capacity: usize,
 
   /// String constructor (without initialization).
   pub fn new() Self {
     Self {
       .ptr = @as([*]char, nullptr),
-      .len = 0,
-      .capacity = 0,
+      ._len = 0,
+      ._capacity = 0,
+    }
+  }
+
+  /// Constructor with capacity aligned to the next geometry progression
+  /// String's length sequence (8, 16, 32, 64, 128, ...)
+  pub fn with_capacity(capacity: usize) Self {
+    let capacity = next_capacity(capacity);
+    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
+    
+    Self {
+      .ptr = ptr,
+      ._len = 0,
+      ._capacity = capacity,
     }
   }
 
@@ -32,8 +46,8 @@ pub struct String {
 
     Self {
       .ptr = ptr,
-      .len = len,
-      .capacity = capacity,
+      ._len = len,
+      ._capacity = capacity,
     }
   }
 
@@ -44,33 +58,90 @@ pub struct String {
 
     Self {
       .ptr = ptr,
-      .len = len,
-      .capacity = capacity
+      ._len = len,
+      ._capacity = capacity
     }
   }
 
   /// Initialization called on first push.
-  fn initialize(*self) {
+  fn initialize_if_new(*self) {
+    if (self._capacity > 0) {
+      return;
+    };
+
     let init_ptr: *char = Allocator.alloc(@sizeof(char) * InitialStringCapacity);
 
     self.ptr = @as([*]char, init_ptr);
-    self.len = 0;
-    self.capacity = InitialStringCapacity;
+    self._len = 0;
+    self._capacity = InitialStringCapacity;
+  }
+
+  /// String's length getter
+  pub fn len(*const self) usize {
+    self._len
+  }
+
+  /// String's capacity getter
+  pub fn capacity(*const self) usize {
+    self._capacity
+  }
+
+  /// Is empty getter (if len is 0)
+  pub fn is_empty(*const self) bool {
+    self._len == 0
+  }
+
+
+  fn __capacity_extend(*self) {
+    if (self._capacity - 1 < self._len) {
+      self._capacity = next_capacity(self._len + 1);
+
+      let new_ptr = @as(
+        [*]char,
+        Allocator.realloc(
+          @as(*void, self.ptr),
+          self._capacity
+        )
+      );
+
+      self.ptr = new_ptr;
+    };
+  }
+
+  /// Push single character to the String
+  pub fn push(*self, value: char) {
+    self.initialize_if_new();
+    self._len += 1;
+    
+    self.__capacity_extend();
+
+    self.ptr[self._len - 1] = value;
+    self.ptr[self._len] = '\0';
+  }
+
+  pub fn push_str(*self, value: []const char) {
+    self.initialize_if_new();
+    self._len += value.len;
+
+    self.__capacity_extend();
+
+    let _ = strncat(self.ptr, value.ptr, value.len);
+    self.ptr[self._len] = '\0';
   }
 }
 
 implement Clone : String {
   fn clone(*const self) Self {
-    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * self.capacity));
-    let len = self.len;
-    let capacity = self.capacity;
+    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * self._capacity));
+    let len = self._len;
+    let capacity = self._capacity;
 
-    let _ = strncpy(ptr, self.ptr, self.len);
+    let _ = strncpy(ptr, self.ptr, self._len);
 
     Self {
       .ptr = ptr,
-      .len = len,
-      .capacity = capacity
+      ._len = len,
+      ._capacity = capacity
     }
   }
 }
@@ -85,14 +156,14 @@ implement Drop : String {
 
 implement Display : String {
   fn display(*const self, out: OutStream) void {
-    out.write_str_raw(self.ptr, self.len);
+    out.write_str_raw(self.ptr, self._len);
   }
 }
 
 implement Debug : String {
   fn debug(*const self, out: OutStream) void {
     out.write_str_single('"');
-    out.write_str_raw(self.ptr, self.len);
+    out.write_str_raw(self.ptr, self._len);
     out.write_str_single('"');
   }
 }
