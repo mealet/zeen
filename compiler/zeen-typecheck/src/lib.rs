@@ -2984,12 +2984,32 @@ impl<'res> TypeChecker<'res> {
 
             CoerceResult::PinLiteral
             | CoerceResult::AddConst
-            | CoerceResult::ArrayToSlice
             | CoerceResult::ArrayToManyPointer
             | CoerceResult::NeverCoercion
             | CoerceResult::VoidPtrCoercion => {
                 self.result.record_expr_type(id, expected);
                 expected
+            }
+
+            CoerceResult::ArrayToSlice => {
+                // A string literal (`[N]char`) is the one allowed implicit
+                // array→slice coercion: codegen lowers a `ConstValue::Str`
+                // straight into a slice. Any other array (literal or variable)
+                // must be explicitly referenced with `&` to build a
+                // `{ ptr, len }` slice — the implicit path has no MIR/codegen
+                // support and crashes verification.
+                if matches!(&expr.kind, HirExprKind::Literal(Literal::String(_))) {
+                    self.result.record_expr_type(id, expected);
+                    expected
+                } else {
+                    self.report(TypeError::ImplicitArrayToSlice {
+                        expected: self.display_type(expected).into(),
+                        found: self.display_type(actual).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    actual
+                }
             }
 
             CoerceResult::RemoveConst => {
@@ -5954,6 +5974,64 @@ mod tests {
         assert!(
             result.is_ok(),
             "string literals inside array literals should coerce to slices: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn implicit_array_to_slice_is_rejected() {
+        let errors = typecheck(
+            r#"
+            struct Foo {}
+
+            implement BufferWrite : Foo {
+              fn write(*self, value: []const i32) {}
+            }
+
+            interface[T] BufferWrite {
+              pub fn write(*self, value: []const T)
+            }
+
+            fn main() {
+              let a = Foo {};
+              a.write([1, 2, 3]);
+            }
+            "#,
+        )
+        .expect_err("implicit array to slice coercion must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::ImplicitArrayToSlice { .. })),
+            "expected TypeError::ImplicitArrayToSlice, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_reference_builds_slice() {
+        let result = typecheck(
+            r#"
+            struct Foo {}
+
+            interface[T] BufferWrite {
+              pub fn write(*self, value: []const T)
+            }
+
+            implement BufferWrite : Foo {
+              fn write(*self, value: []const i32) {}
+            }
+
+            fn main() {
+              let a = Foo {};
+              a.write(&[1, 2, 3]);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "an explicit `&[...]` should build a slice: {:?}",
             result.err()
         );
     }

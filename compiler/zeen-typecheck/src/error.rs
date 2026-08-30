@@ -543,6 +543,22 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("cannot implicitly convert array `{found}` to slice `{expected}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::implicit_array_to_slice),
+        help("take a reference to build a slice: `&[...]` (or `&array`)")
+    )]
+    ImplicitArrayToSlice {
+        expected: SmolStr,
+        found: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("implement on non-struct type found")]
     #[diagnostic(severity(Error), code(zeen::typecheck::implement_non_struct))]
     ImplementNonStruct {

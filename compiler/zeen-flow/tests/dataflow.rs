@@ -704,7 +704,8 @@ fn slice_is_copy_and_usable_multiple_times() {
     flow_ok(
         r#"
 fn main() {
-    let s: []i32 = [1, 2, 3];
+    let arr: [3]i32 = [1, 2, 3];
+    let s: []i32 = &arr;
     let t = s;
     let u = s;
 }
@@ -720,7 +721,8 @@ fn sum(s: []i32) i32 {
     return s[0];
 }
 fn main() {
-    let s: []i32 = [1, 2, 3];
+    let arr: [3]i32 = [1, 2, 3];
+    let s: []i32 = &arr;
     sum(s);
     sum(s);
 }
@@ -733,7 +735,8 @@ fn slice_element_reads_do_not_copy_the_slice() {
     flow_ok(
         r#"
 fn main() {
-    let s: []i32 = [1, 2, 3];
+    let arr: [3]i32 = [1, 2, 3];
+    let s: []i32 = &arr;
     let a = s[0];
     let b = s[1];
 }
