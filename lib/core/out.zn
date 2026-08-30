@@ -1,9 +1,18 @@
 /// Writer that appends a utf8 string (`[]const char`) into an output buffer.
 /// Used as the `out` sink by `Display`/`Debug` implementations.
 pub interface StrWriter {
-  fn write_str(*self, value: []const char) void;
+  pub fn write_str(*self, value: []const char) void;
 }
 
-/// Compiler-reserved output stream (stdout of the executable). Implemented by
-/// the compiler to satisfy `StrWriter`, so it can be passed as the `out` sink.
+/// Compiler-provided runtime: writes `len` bytes from `ptr` to stdout.
+/// The body is synthesized by the compiler during code generation.
+extern fn __zeen_stdout_write(ptr: [*]const char, len: usize) void;
+
+/// Compiler-reserved output stream (stdout of the executable).
 pub struct OutStream {}
+
+implement StrWriter : OutStream {
+  pub fn write_str(*self, value: []const char) void {
+    __zeen_stdout_write(value.ptr, value.len);
+  }
+}

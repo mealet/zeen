@@ -235,6 +235,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
         self.register_struct_layouts();
         self.declare_externs();
+        self.emit_stdout_write_runtime();
         self.declare_functions();
         self.emit_function_bodies();
         self.emit_main_wrapper();
@@ -344,6 +345,54 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .add_global(self.map_basic_type(decl.ty), None, &decl.symbol_name);
             global.set_linkage(inkwell::module::Linkage::External);
         }
+    }
+
+    /// Defines the body of the core-provided `__zeen_stdout_write` runtime
+    /// (declared as `extern` in `core.out`): writes `len` bytes from `ptr`
+    /// to stdout. Emitted only when the program actually references it.
+    fn emit_stdout_write_runtime(&mut self) {
+        const SYMBOL: &str = "__zeen_stdout_write";
+
+        if self
+            .program
+            .extern_fns
+            .iter()
+            .all(|decl| decl.symbol_name != SYMBOL)
+        {
+            return;
+        }
+
+        let Some(runtime_fn) = self.module.get_function(SYMBOL) else {
+            return;
+        };
+
+        if runtime_fn.count_basic_blocks() > 0 {
+            return;
+        }
+
+        let entry = self.context.append_basic_block(runtime_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let ptr = runtime_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let len = runtime_fn.get_nth_param(1).unwrap().into_int_value();
+
+        let printf = self.get_or_declare_runtime_fn(
+            "printf",
+            self.context.i32_type().into(),
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            true,
+        );
+
+        let format = self.get_str_global("%.*s").as_pointer_value();
+        let len_i32 = self
+            .builder
+            .build_int_truncate(len, self.context.i32_type(), "len.i32")
+            .unwrap();
+
+        self.builder
+            .build_call(printf, &[format.into(), len_i32.into(), ptr.into()], "")
+            .unwrap();
+        self.builder.build_return(None).unwrap();
     }
 
     fn declare_functions(&mut self) {
