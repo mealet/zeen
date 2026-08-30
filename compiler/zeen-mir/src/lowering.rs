@@ -1314,15 +1314,38 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Binary { lhs, rhs, op } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
+                    let rhs_ty = self.expr_type(fb, rhs);
                     let result_ty = self.expr_type(fb, expr);
-                    return self.lower_operator_method_call_with_extra_args(
+                    let (block, call_op) = self.lower_operator_method_call_with_extra_args(
                         fb,
                         lhs,
-                        &[rhs_op],
+                        &[(rhs_op, rhs_ty)],
                         &op_res,
                         block,
                         result_ty,
                     );
+
+                    // `!=` dispatches to `Eq.eq` and negates the result.
+                    if matches!(op, BinaryOp::Ne) {
+                        let temp = fb.new_temp(result_ty);
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::UnaryOp {
+                                    op: UnaryOp::Not,
+                                    operand: call_op,
+                                },
+                                source: Some(expr.source.clone()),
+                            },
+                        );
+                        return (
+                            block,
+                            Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                        );
+                    }
+
+                    return (block, call_op);
                 }
 
                 let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
@@ -1539,12 +1562,13 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::SliceAccess { object, index } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
+                    let index_ty = self.expr_type(fb, index);
                     let result_ty = self.expr_type(fb, expr);
 
                     return self.lower_operator_method_call_with_extra_args(
                         fb,
                         object,
-                        &[index_operand],
+                        &[(index_operand, index_ty)],
                         &op_res,
                         block,
                         result_ty,
@@ -2899,7 +2923,7 @@ impl<'ctx> MirLowering<'ctx> {
         &mut self,
         fb: &mut FnBuilder,
         reciever_expr: &HirExpr,
-        extra_args: &[Operand],
+        extra_args: &[(Operand, TypeId)],
         op_res: &OperatorResolution,
         block: BlockId,
         result_ty: TypeId,
@@ -2922,10 +2946,25 @@ impl<'ctx> MirLowering<'ctx> {
         fb: &mut FnBuilder,
         op_res: &OperatorResolution,
         self_operand: Operand,
-        extra_args: Vec<Operand>,
+        extra_args: Vec<(Operand, TypeId)>,
         block: BlockId,
         result_ty: TypeId,
     ) -> (BlockId, Operand) {
+        // The method's non-self parameters drive whether each operator RHS is
+        // passed by value or by address (`Eq.eq` takes `other: *const Self`).
+        let arg_params: Vec<TypeId> = self
+            .typecheck
+            .def_types
+            .get(&op_res.method_def)
+            .and_then(|ty| match self.typecheck.interner.get(*ty) {
+                Type::Fn { params, .. } if params.len() > 1 => Some(params[1..].to_vec()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let (block, extra_args) =
+            self.lower_operator_args_from_operands(fb, extra_args, &arg_params, block);
+
         let mono_args = self.substitute_generic_args(fb, &op_res.generic_args);
         let mir_fn_id = self.monomorphize_fn(
             op_res.method_def,
@@ -2955,6 +2994,57 @@ impl<'ctx> MirLowering<'ctx> {
             next,
             self.place_to_operand(Place::from_local(dest), result_ty, None),
         )
+    }
+
+    fn lower_operator_args_from_operands(
+        &mut self,
+        fb: &mut FnBuilder,
+        extra_args: Vec<(Operand, TypeId)>,
+        arg_params: &[TypeId],
+        block: BlockId,
+    ) -> (BlockId, Vec<Operand>) {
+        let mut out = Vec::with_capacity(extra_args.len());
+        let mut block = block;
+
+        for (operand, arg_ty) in extra_args {
+            let expected = arg_params.get(out.len()).copied();
+
+            let param_ty = expected.map(|t| self.typecheck.interner.get(t).clone());
+
+            let operand = match param_ty {
+                Some(Type::Pointer { is_const, .. })
+                    if !matches!(
+                        self.typecheck.interner.get(arg_ty),
+                        Type::Pointer { .. } | Type::ManyPointer { .. }
+                    ) =>
+                {
+                    let ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                        inner: arg_ty,
+                        is_const,
+                    });
+                    let local = self.operand_to_local(fb, operand, arg_ty, block);
+                    let temp = fb.new_temp(ptr_ty);
+
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Ref {
+                                place: Place::from_local(local),
+                                is_const,
+                            },
+                            source: None,
+                        },
+                    );
+                    Operand::Move(Place::from_local(temp), None)
+                }
+                _ => operand,
+            };
+
+            out.push(operand);
+        }
+
+        (block, out)
     }
 }
 
@@ -3078,6 +3168,7 @@ impl<'ctx> MirLowering<'ctx> {
 
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&object.id).cloned() {
                     let (block, rhs_operand) = self.lower_expr_to_operand(fb, value, block);
+                    let rhs_ty = self.expr_type(fb, value);
                     let (block, self_operand) = self.lower_place_receiver_operand(
                         fb,
                         place.clone(),
@@ -3090,7 +3181,7 @@ impl<'ctx> MirLowering<'ctx> {
                         fb,
                         &op_res,
                         self_operand,
-                        vec![rhs_operand],
+                        vec![(rhs_operand, rhs_ty)],
                         block,
                         place_ty,
                     );

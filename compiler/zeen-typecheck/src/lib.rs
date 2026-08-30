@@ -4485,7 +4485,15 @@ impl<'res> TypeChecker<'res> {
         for (param_ty, &arg_ty) in sig_params.iter().zip(explicit_args.iter()) {
             let expected = self.substitute_generics(*param_ty, &bindings);
 
-            if !try_coerce(&mut self.result.interner, arg_ty, expected).is_ok() {
+            // An operator RHS whose method parameter is a pointer (`Eq.eq(
+            // other: *const Self)`) is passed by address, not by value: a
+            // value matching the pointee satisfies the pointer parameter.
+            let auto_addr = match self.result.interner.get(expected) {
+                Type::Pointer { inner, .. } => arg_ty == *inner,
+                _ => false,
+            };
+
+            if !auto_addr && !try_coerce(&mut self.result.interner, arg_ty, expected).is_ok() {
                 self.report(TypeError::Mismatch {
                     expected: self.display_type(expected).into(),
                     found: self.display_type(arg_ty).into(),
