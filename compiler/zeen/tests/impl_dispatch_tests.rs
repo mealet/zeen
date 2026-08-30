@@ -47,7 +47,7 @@ struct Val[T] {
 
 implement[T: Display] Display : Val[T] {
   fn display(*const self) []const char {
-    @format("{}", self.inner)
+    "val"
   }
 }
 
@@ -111,7 +111,7 @@ struct Val[T] {
 
 implement[T: Display] Display : Val[T] {
   fn display(*const self) []const char {
-    @format("{}", self.inner)
+    "val"
   }
 }
 
