@@ -23,8 +23,14 @@ fn main() i32 {
   let ref = Ref.new(&a);
 
   *ref = 321;
-
   @println("{}", *ref);
   @println("{}", a);
+
+  *ref += 10;
+  @println("{}", *ref);
+
+  *ref -= 1;
+  @println("{}", *ref);
+
   return 0;
 }
