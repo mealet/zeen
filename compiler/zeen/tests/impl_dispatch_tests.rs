@@ -164,6 +164,81 @@ fn main() {
     );
 }
 
+/// Implementing the same interface for the same instantiation twice is
+/// rejected: `Foo` already implements `Add` by the second block.
+#[test]
+fn duplicate_impl_reported() {
+    compile_fails(
+        "duplicate_impl",
+        r#"
+struct Foo {
+  pub x: i32
+}
+
+implement Add : Foo {
+  fn add(self, other: Self) Self {
+    Self { .x = self.x + other.x }
+  }
+}
+
+implement Add : Foo {
+  fn add(self, other: Self) Self {
+    Self { .x = self.x + other.x }
+  }
+}
+
+fn main() {
+  let a = Foo { .x = 10 };
+  let b = Foo { .x = 5 };
+  @println("{}", (a + b).x);
+}
+"#,
+        "zeen::typechecker::duplicate_impl",
+    );
+}
+
+/// A generic implementation coexists with a specialization, but two
+/// specializations of the same instantiation are still a duplicate.
+#[test]
+fn duplicate_specialization_reported() {
+    compile_fails(
+        "generic_plus_spec",
+        r#"
+struct Val[T] {
+  inner: T,
+
+  pub fn new(value: T) Self {
+    Self { .inner = value }
+  }
+}
+
+implement[T: Display] Display : Val[T] {
+  fn display(*const self) []const char {
+    "GENERIC"
+  }
+}
+
+implement Display : Val[i32] {
+  fn display(*const self) []const char {
+    "SPEC-I32"
+  }
+}
+
+implement Display : Val[i32] {
+  fn display(*const self) []const char {
+    "SPEC-I32-DUP"
+  }
+}
+
+fn main() {
+  let a = Val.new(42);
+  @println("{}", a);
+}
+"#,
+        "zeen::typechecker::duplicate_impl",
+    );
+}
+
 /// The implementing method's signature must match the interface one after
 /// substituting the struct's generics: `Deref::deref` returns `T`, not `i32`.
 #[test]
