@@ -164,6 +164,22 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("`{struct_name}` already implements `{iface_name}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::duplicate_impl),
+        help("an implementation for this exact instantiation already exists")
+    )]
+    DuplicateImpl {
+        struct_name: SmolStr,
+        iface_name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("`{method}` is a static method and cannot be called on an instance")]
     #[diagnostic(
         severity(Error),

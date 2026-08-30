@@ -1,0 +1,15 @@
+struct User {
+  pub id: i32,
+}
+
+implement Debug : User {
+  fn debug(*const self) []const char {
+    "USER"
+  }
+}
+
+fn main() i32 {
+  let u = User { .id = 123 };
+  @println("{:?}", u);
+  return 0;
+}

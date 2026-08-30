@@ -1,0 +1,69 @@
+struct V {
+  pub v: i32,
+
+  pub fn new(v: i32) Self {
+    Self { .v = v }
+  }
+}
+
+implement Copy : V {}
+
+implement Add : V {
+  fn add(self, o: Self) Self { V.new(self.v + o.v) }
+}
+implement Sub : V {
+  fn sub(self, o: Self) Self { V.new(self.v - o.v) }
+}
+implement Mul : V {
+  fn mul(self, o: Self) Self { V.new(self.v * o.v) }
+}
+implement Div : V {
+  fn div(self, o: Self) Self { V.new(self.v / o.v) }
+}
+implement Mod : V {
+  fn mod(self, o: Self) Self { V.new(self.v % o.v) }
+}
+implement BitAnd : V {
+  fn bit_and(self, o: Self) Self { V.new(self.v & o.v) }
+}
+implement BitOr : V {
+  fn bit_or(self, o: Self) Self { V.new(self.v | o.v) }
+}
+implement BitXor : V {
+  fn bit_xor(self, o: Self) Self { V.new(self.v ^ o.v) }
+}
+implement BitShl : V {
+  fn bit_shl(self, o: Self) Self { V.new(self.v << o.v) }
+}
+implement BitShr : V {
+  fn bit_shr(self, o: Self) Self { V.new(self.v >> o.v) }
+}
+implement Neg : V {
+  fn neg(self) Self { V.new(-self.v) }
+}
+implement Not : V {
+  fn not(self) Self { V.new(-self.v) }
+}
+implement BitNot : V {
+  fn bit_not(self) Self { V.new(~self.v) }
+}
+
+fn main() i32 {
+  let a = V.new(5);
+  let b = V.new(3);
+
+  @println("{}", (a + b).v);
+  @println("{}", (a - b).v);
+  @println("{}", (a * b).v);
+  @println("{}", (a / b).v);
+  @println("{}", (a % b).v);
+  @println("{}", (a & b).v);
+  @println("{}", (a | b).v);
+  @println("{}", (a ^ b).v);
+  @println("{}", (a << b).v);
+  @println("{}", (a >> b).v);
+  @println("{}", (-a).v);
+  @println("{}", (!a).v);
+  @println("{}", (~a).v);
+  return 0;
+}
