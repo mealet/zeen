@@ -121,6 +121,17 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
         }
 
         (
+            Type::ManyPointer {
+                inner: from_inner, ..
+            },
+            Type::ManyPointer {
+                inner: to_inner, ..
+            },
+        ) if from_inner == interner.void() || to_inner == interner.void() => {
+            CoerceResult::VoidPtrCoercion
+        }
+
+        (
             Type::Array {
                 element: from_elem, ..
             },
