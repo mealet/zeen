@@ -2266,19 +2266,47 @@ impl<'ctx> MirLowering<'ctx> {
                 // struct, so the place keeps dereferencing it (writes through
                 // it reach the struct); a `Deref` result is the value itself.
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    // A `DerefPtr`-resolved deref (`*ref = v` in an assign)
+                    // returns a pointer into the struct, so the place keeps
+                    // dereferencing it; a `Deref`-resolved one yields the value
+                    // itself. Decided from the method's own return type, since
+                    // the recorded expr type is already unwrapped to the pointee.
                     let result_ty = self.expr_type(fb, expr);
-                    let (block, operand) =
-                        self.lower_operator_method_call(fb, inner, &op_res, block, result_ty);
+                    let is_pointer = self
+                        .typecheck
+                        .def_types
+                        .get(&op_res.method_def)
+                        .is_some_and(|ty| {
+                            matches!(
+                                self.typecheck.interner.get(*ty),
+                                Type::Fn { ret, .. }
+                                    if matches!(
+                                        self.typecheck.interner.get(*ret),
+                                        Type::Pointer { .. } | Type::ManyPointer { .. }
+                                    )
+                            )
+                        });
 
-                    if matches!(
-                        self.typecheck.interner.get(result_ty),
-                        Type::Pointer { .. } | Type::ManyPointer { .. }
-                    ) {
-                        let ptr_local = self.operand_to_local(fb, operand, result_ty, block);
+                    // The deref pointer is a pointer to the unwrapped pointee,
+                    // rebuilt concretely so generics resolve to the right size.
+                    let call_ty = if is_pointer {
+                        self.typecheck.interner.intern(Type::Pointer {
+                            inner: result_ty,
+                            is_const: false,
+                        })
+                    } else {
+                        result_ty
+                    };
+
+                    let (block, operand) =
+                        self.lower_operator_method_call(fb, inner, &op_res, block, call_ty);
+
+                    if is_pointer {
+                        let ptr_local = self.operand_to_local(fb, operand, call_ty, block);
                         return (block, Place::from_local(ptr_local).deref());
                     }
 
-                    let temp = self.operand_to_local(fb, operand, result_ty, block);
+                    let temp = self.operand_to_local(fb, operand, call_ty, block);
                     return (block, Place::from_local(temp));
                 }
 
