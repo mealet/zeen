@@ -512,6 +512,10 @@ impl<'ctx> NameResolver {
                 self.table.push(ScopeKind::Block);
                 self.declare_generics(generics, &decl.source.src);
 
+                let implement_generic_names: HashSet<Spur> = generics
+                    .map(|gs| gs.iter().map(|g| g.name.0).collect())
+                    .unwrap_or_default();
+
                 let interface_def = self.table.lookup_type(interface.0);
 
                 if interface_def.is_none() {
@@ -547,25 +551,25 @@ impl<'ctx> NameResolver {
                     ),
                 );
 
-                for (idx, (binding_name, binding_span)) in object_bindings.iter().enumerate() {
-                    let resolution = match self.table.lookup_type(*binding_name) {
-                        Some(def_id) => Resolution::Def(def_id),
-                        None => {
-                            let name = self.interner_resolve(binding_name);
+                for (idx, slot) in object_bindings.iter().enumerate() {
+                    // Resolve the slot type so HIR can lower concrete slots.
+                    self.resolve_type(slot);
 
-                            self.report(ResolveError::UnresolvedType {
-                                name,
-                                src: decl.source.src(),
-                                span: *binding_span,
-                            });
-
-                            Resolution::Error
-                        }
-                    };
-
-                    self.result
-                        .implement_generic_bindings
-                        .insert(BindingSlotKey(decl as *const _ as usize, idx), resolution);
+                    // A bare generic-parameter name of this implement keeps
+                    // the binding form (`Box[T]`); everything else is a
+                    // concrete specialization slot (`Box[i32]`).
+                    if let TypeKind::Named {
+                        name,
+                        generic_args: None,
+                    } = slot.kind
+                        && implement_generic_names.contains(&name)
+                        && let Some(def_id) = self.table.lookup_type(name)
+                    {
+                        self.result.implement_generic_bindings.insert(
+                            BindingSlotKey(decl as *const _ as usize, idx),
+                            Resolution::Def(def_id),
+                        );
+                    }
                 }
 
                 let mut methods_ids = Vec::new();

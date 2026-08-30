@@ -774,6 +774,18 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     ) -> BasicValueEnum<'ctx> {
         match rvalue {
             Rvalue::Use(operand) => {
+                // A string literal stored into an array/slice slot must be
+                // materialized as the slot's value (null-terminated bytes or
+                // `{ ptr, len }`), not as a raw pointer to the global.
+                if matches!(operand, Operand::Constant(ConstValue::Str(_), _))
+                    && matches!(
+                        self.typecheck.interner.get(expected_ty),
+                        Type::Array { .. } | Type::Slice { .. }
+                    )
+                {
+                    return self.cast_op(operand, expected_ty, func);
+                }
+
                 let value = self.operand_value(operand, Some(expected_ty), func);
 
                 // Copy/move operands keep their own width, so a plain store
@@ -1371,6 +1383,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     },
                     ConstValue::Void => unreachable!("cannot cast a void constant"),
                 };
+
+                // Identical source and target types need no cast machinery.
+                if *self.typecheck.interner.get(target) == src_ty {
+                    return self.const_value(c, Some(target), func);
+                }
+
                 let value = self.const_value(c, None, func);
                 self.cast_value(value, &src_ty, target)
             }
@@ -1378,6 +1396,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let src_ty = self
                     .operand_type(operand, func)
                     .expect("typed cast operand");
+
+                // Identical source and target types need no cast machinery.
+                if src_ty == target {
+                    return self.operand_value(operand, Some(src_ty), func);
+                }
 
                 // `[N]T -> [*]T`: the operand is a loaded array value, so use
                 // the address of its storage instead of a value cast.
@@ -1761,6 +1784,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             CallTarget::Indirect(_) => Vec::new(),
         };
 
+        let is_variadic_extern = match target {
+            CallTarget::Extern(idx) => self.program.extern_fns[*idx].is_variadic,
+            _ => false,
+        };
+
         let arg_values: Vec<BasicMetadataValueEnum<'ctx>> = args
             .iter()
             .enumerate()
@@ -1774,6 +1802,29 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     let value = self.operand_value(arg, Some(*param_ty), func);
                     return value.into();
                 }
+
+                // Variadic args have no declared parameter type: an array
+                // decays to a pointer to its storage and a slice passes its
+                // data pointer (C varargs ABI).
+                if is_variadic_extern && let Some(arg_ty) = self.operand_type(arg, func) {
+                    match self.typecheck.interner.get(arg_ty).clone() {
+                        Type::Array { .. } => {
+                            if let Operand::Copy(place, _) | Operand::Move(place, _) = arg {
+                                return self.place_ptr(place, func).into();
+                            }
+                        }
+                        Type::Slice { .. } => {
+                            let value = self.operand_value(arg, Some(arg_ty), func);
+                            let ptr = self
+                                .builder
+                                .build_extract_value(value.into_struct_value(), 0, "slice.ptr")
+                                .unwrap();
+                            return ptr.into();
+                        }
+                        _ => {}
+                    }
+                }
+
                 let ty = self.operand_type(arg, func);
                 self.operand_value(arg, ty, func).into()
             })

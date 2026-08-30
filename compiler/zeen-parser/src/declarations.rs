@@ -5,7 +5,7 @@ use crate::{
 
 use smallvec::SmallVec;
 
-use zeen_ast::{Declaration, DeclarationKind, declarations};
+use zeen_ast::{Declaration, DeclarationKind, TypeExpr, declarations};
 use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
 pub struct DeclParser<'tok, 'ctx, 'pr> {
@@ -570,18 +570,19 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let object_slice =
             self.p.src[object_span.offset()..object_span.offset() + object_span.len()].to_owned();
 
-        let mut generic_bindings: Vec<(lasso::Spur, miette::SourceSpan)> = Vec::new();
+        let mut generic_bindings: Vec<&'ctx TypeExpr<'ctx>> = Vec::new();
 
         if self.p.eat(TokenKind::OpenBracket) {
             while !(self.p.at(TokenKind::CloseBracket) || self.p.at(TokenKind::Eof)) {
-                let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
-                let name_span = name_token.span;
-                let name_slice =
-                    self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+                let mut type_parser = TypeParser::new(self.p);
 
-                let name = (self.p.get_or_intern(name_slice), name_span);
+                let Some(ty) = type_parser.parse() else {
+                    break;
+                };
 
-                generic_bindings.push(name);
+                generic_bindings.push(ty);
+
+                let _ = self.p.eat(TokenKind::Comma);
             }
 
             let _ = self.p.expect(TokenKind::CloseBracket, "]");

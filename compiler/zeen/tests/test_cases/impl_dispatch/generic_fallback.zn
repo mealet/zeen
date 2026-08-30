@@ -1,0 +1,23 @@
+struct Tag[T] {
+  value: T,
+
+  pub fn new(value: T) Self {
+    Self { .value = value }
+  }
+}
+
+implement[T: Display] Display : Tag[T] {
+  fn display(*const self) []const char {
+    "TAGGED"
+  }
+}
+
+fn main() {
+  let a = Tag.new(1);
+  let b = Tag.new(0.5);
+  let c = Tag.new(Tag.new(1));
+
+  @println("{}", a);
+  @println("{}", b);
+  @println("{}", c);
+}
