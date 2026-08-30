@@ -1820,6 +1820,26 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         next: Option<BlockId>,
         func: &MirFunction,
     ) {
+        // A bodyless interface method whose receiver monomorphized to a
+        // builtin/enum type (`self.value.display(out)` for `T: Display` with
+        // `T = i32`) has no implementation to dispatch to: render the value
+        // straight into stdout like format macros do.
+        if let CallTarget::Direct(id) = target {
+            let source_def = self.program.functions[id].source_def;
+            if self
+                .typecheck
+                .interface_method_owners
+                .contains_key(&source_def)
+                && self.emit_builtin_interface_method(*id, args, func)
+            {
+                if let Some(next) = next {
+                    let block = self.blocks[&next];
+                    self.builder.build_unconditional_branch(block).unwrap();
+                }
+                return;
+            }
+        }
+
         // Coerce each argument to the callee's declared parameter type: a
         // constant like `123` defaults to `i32`, but the parameter may be
         // `usize`/`i64`, so the value must be widened before the call.
@@ -1937,6 +1957,159 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             let block = self.blocks[&next];
             self.builder.build_unconditional_branch(block).unwrap();
         }
+    }
+
+    /// Emits a bodyless interface method call (`Display::display` /
+    /// `Debug::debug`) whose receiver monomorphized to a builtin or enum
+    /// type as a direct stdout write. Returns `false` when the receiver is
+    /// not a builtin/enum, leaving the call to the normal path.
+    fn emit_builtin_interface_method(
+        &mut self,
+        fn_id: MirFunctionId,
+        args: &[Operand],
+        func: &MirFunction,
+    ) -> bool {
+        let Some(recv) = args.first() else {
+            return false;
+        };
+
+        let is_debug = {
+            let source_def = self.program.functions[&fn_id].source_def;
+            self.typecheck
+                .interface_method_owners
+                .get(&source_def)
+                .and_then(|iface| self.resolution.defs.get(iface))
+                .map(|info| self.resolve_spur(info.name) == "Debug")
+                .unwrap_or(false)
+        };
+
+        let recv_ty = match self.operand_type(recv, func) {
+            Some(ty) => ty,
+            None => return false,
+        };
+
+        // The receiver is always passed by pointer (`*const self` / `*self`).
+        let pointee = match self.typecheck.interner.get(recv_ty).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+            _ => return false,
+        };
+
+        let value = self.operand_value(recv, Some(recv_ty), func);
+        let ptr = match value {
+            BasicValueEnum::PointerValue(ptr) => ptr,
+            _ => return false,
+        };
+
+        let str_spec = |is_debug: bool| {
+            if is_debug {
+                "\"%s\"".to_string()
+            } else {
+                "%s".to_string()
+            }
+        };
+
+        let (specifier, value): (String, BasicValueEnum<'ctx>) =
+            match self.typecheck.interner.get(pointee).clone() {
+                Type::Enum { def_id } => {
+                    let elem_ty = self.map_basic_type(pointee);
+                    let disc = self
+                        .builder
+                        .build_load(elem_ty, ptr, "")
+                        .unwrap()
+                        .into_int_value();
+                    let name_ptr = self.enum_variant_name_ptr(def_id, disc);
+
+                    let specifier = if is_debug {
+                        format!("{}.%s", self.enum_name(def_id).replace('%', "%%"))
+                    } else {
+                        "%s".to_string()
+                    };
+                    (specifier, name_ptr.into())
+                }
+
+                Type::Builtin(BuiltinType::bool) => {
+                    let val = self
+                        .builder
+                        .build_load(self.map_basic_type(pointee), ptr, "")
+                        .unwrap()
+                        .into_int_value();
+                    let true_ptr = self.get_str_global("true").as_pointer_value();
+                    let false_ptr = self.get_str_global("false").as_pointer_value();
+                    let str_ptr = self
+                        .builder
+                        .build_select(val, true_ptr, false_ptr, "bool.str")
+                        .unwrap();
+                    ("%s".to_string(), str_ptr)
+                }
+
+                Type::Builtin(BuiltinType::char) => {
+                    let val = self
+                        .builder
+                        .build_load(self.map_basic_type(pointee), ptr, "")
+                        .unwrap();
+                    ("%c".to_string(), val)
+                }
+
+                Type::Builtin(b) if builtin_is_float(b) => {
+                    let val = self
+                        .builder
+                        .build_load(self.map_basic_type(pointee), ptr, "")
+                        .unwrap();
+                    // printf-family variadic calls widen `f32` to `f64`.
+                    let val = if b == BuiltinType::f32 {
+                        self.builder
+                            .build_float_ext(val.into_float_value(), self.context.f64_type(), "")
+                            .unwrap()
+                    } else {
+                        val.into_float_value()
+                    };
+                    ("%f".to_string(), val.into())
+                }
+
+                Type::Builtin(b) if builtin_is_integer(b) => {
+                    let val = self
+                        .builder
+                        .build_load(self.map_basic_type(pointee), ptr, "")
+                        .unwrap();
+                    ("%d".to_string(), val)
+                }
+
+                // String data: a `[*]const char` or a `[N]char` behind the
+                // receiver pointer already is a C string, print it as is.
+                Type::ManyPointer { inner, .. }
+                    if matches!(
+                        self.typecheck.interner.get(inner).clone(),
+                        Type::Builtin(BuiltinType::char)
+                    ) =>
+                {
+                    (str_spec(is_debug), ptr.into())
+                }
+
+                Type::Array { element, .. }
+                    if matches!(
+                        self.typecheck.interner.get(element).clone(),
+                        Type::Builtin(BuiltinType::char)
+                    ) =>
+                {
+                    (str_spec(is_debug), ptr.into())
+                }
+
+                _ => return false,
+            };
+
+        let printf = self.get_or_declare_runtime_fn(
+            "printf",
+            self.context.i32_type().into(),
+            &[self.context.ptr_type(AddressSpace::default()).into()],
+            true,
+        );
+        let fmt_ptr = self.get_str_global(&specifier).as_pointer_value();
+
+        self.builder
+            .build_call(printf, &[fmt_ptr.into(), value.into()], "")
+            .unwrap();
+
+        true
     }
 
     fn map_fn_pointer_type(&self, ty: TypeId) -> FunctionType<'ctx> {
