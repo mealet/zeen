@@ -48,3 +48,15 @@ pub struct Option[T] {
     f()
   }
 }
+
+implement[T: Debug] Debug : Option[T] {
+  fn debug(*const self, out: OutStream) {
+    if (self._is_some) {
+      out.write_str("Some(");
+      self.value.debug(out);
+      out.write_str_single(')');
+    } else {
+      out.write_str("None");
+    };
+  }
+}
