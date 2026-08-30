@@ -1,6 +1,11 @@
 /// Empty marker to tell compiler that structure can be copied (simple load instructions).
 pub interface Copy {}
 
+/// Clone structure method (simply interface without compiler markers).
+pub interface Clone {
+  pub fn clone(*const self) Self
+}
+
 /// Automatic function to free struct resources after it goes out of scope
 pub interface Drop {
   fn drop(self) void;
