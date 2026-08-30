@@ -535,6 +535,39 @@ impl<'res> TypeChecker<'res> {
                 })
                 .collect();
 
+            let is_duplicate = self
+                .result
+                .impl_registry
+                .get(&(object_def, iface_def))
+                .is_some_and(|existing| {
+                    existing
+                        .iter()
+                        .any(|e| e.object_args == object_args && e.is_specialized == is_specialized)
+                });
+
+            if is_duplicate {
+                let struct_name = self
+                    .resolution
+                    .defs
+                    .get(&object_def)
+                    .map(|d| self.interner.borrow().resolve(&d.name).into())
+                    .unwrap_or_else(|| "?".into());
+                let iface_name = self
+                    .resolution
+                    .defs
+                    .get(&iface_def)
+                    .map(|d| self.interner.borrow().resolve(&d.name).into())
+                    .unwrap_or_else(|| "?".into());
+
+                self.report(TypeError::DuplicateImpl {
+                    struct_name,
+                    iface_name,
+                    src: source.src(),
+                    span: imp.object_bindings_span,
+                });
+                return;
+            }
+
             self.result
                 .impl_registry
                 .entry((object_def, iface_def))
@@ -4485,7 +4518,15 @@ impl<'res> TypeChecker<'res> {
         for (param_ty, &arg_ty) in sig_params.iter().zip(explicit_args.iter()) {
             let expected = self.substitute_generics(*param_ty, &bindings);
 
-            if !try_coerce(&mut self.result.interner, arg_ty, expected).is_ok() {
+            // An operator RHS whose method parameter is a pointer (`Eq.eq(
+            // other: *const Self)`) is passed by address, not by value: a
+            // value matching the pointee satisfies the pointer parameter.
+            let auto_addr = match self.result.interner.get(expected) {
+                Type::Pointer { inner, .. } => arg_ty == *inner,
+                _ => false,
+            };
+
+            if !auto_addr && !try_coerce(&mut self.result.interner, arg_ty, expected).is_ok() {
                 self.report(TypeError::Mismatch {
                     expected: self.display_type(expected).into(),
                     found: self.display_type(arg_ty).into(),

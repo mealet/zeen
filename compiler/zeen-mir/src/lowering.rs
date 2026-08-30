@@ -1314,15 +1314,38 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Binary { lhs, rhs, op } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
+                    let rhs_ty = self.expr_type(fb, rhs);
                     let result_ty = self.expr_type(fb, expr);
-                    return self.lower_operator_method_call_with_extra_args(
+                    let (block, call_op) = self.lower_operator_method_call_with_extra_args(
                         fb,
                         lhs,
-                        &[rhs_op],
+                        &[(rhs_op, rhs_ty)],
                         &op_res,
                         block,
                         result_ty,
                     );
+
+                    // `!=` dispatches to `Eq.eq` and negates the result.
+                    if matches!(op, BinaryOp::Ne) {
+                        let temp = fb.new_temp(result_ty);
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::UnaryOp {
+                                    op: UnaryOp::Not,
+                                    operand: call_op,
+                                },
+                                source: Some(expr.source.clone()),
+                            },
+                        );
+                        return (
+                            block,
+                            Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                        );
+                    }
+
+                    return (block, call_op);
                 }
 
                 let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
@@ -1539,12 +1562,13 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::SliceAccess { object, index } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
+                    let index_ty = self.expr_type(fb, index);
                     let result_ty = self.expr_type(fb, expr);
 
                     return self.lower_operator_method_call_with_extra_args(
                         fb,
                         object,
-                        &[index_operand],
+                        &[(index_operand, index_ty)],
                         &op_res,
                         block,
                         result_ty,
@@ -2193,6 +2217,58 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::SliceAccess { object, index } => {
+                // An access through a struct's `Slice`/`SlicePtr` interface
+                // dispatches to the method instead of indexing native storage.
+                // A `SlicePtr` result (`ref[i] = v` in an assign) is a pointer
+                // into the struct, so the place keeps dereferencing it; a
+                // `Slice` result is the value itself.
+                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    let result_ty = self.expr_type(fb, expr);
+                    let is_pointer = self
+                        .typecheck
+                        .def_types
+                        .get(&op_res.method_def)
+                        .is_some_and(|ty| {
+                            matches!(
+                                self.typecheck.interner.get(*ty),
+                                Type::Fn { ret, .. }
+                                    if matches!(
+                                        self.typecheck.interner.get(*ret),
+                                        Type::Pointer { .. } | Type::ManyPointer { .. }
+                                    )
+                            )
+                        });
+
+                    let call_ty = if is_pointer {
+                        self.typecheck.interner.intern(Type::Pointer {
+                            inner: result_ty,
+                            is_const: false,
+                        })
+                    } else {
+                        result_ty
+                    };
+
+                    let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
+                    let index_ty = self.expr_type(fb, index);
+
+                    let (block, operand) = self.lower_operator_method_call_with_extra_args(
+                        fb,
+                        object,
+                        &[(index_operand, index_ty)],
+                        &op_res,
+                        block,
+                        call_ty,
+                    );
+
+                    if is_pointer {
+                        let ptr_local = self.operand_to_local(fb, operand, call_ty, block);
+                        return (block, Place::from_local(ptr_local).deref());
+                    }
+
+                    let temp = self.operand_to_local(fb, operand, call_ty, block);
+                    return (block, Place::from_local(temp));
+                }
+
                 let obj_ty = self.expr_type(fb, object);
                 let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
@@ -2242,19 +2318,47 @@ impl<'ctx> MirLowering<'ctx> {
                 // struct, so the place keeps dereferencing it (writes through
                 // it reach the struct); a `Deref` result is the value itself.
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    // A `DerefPtr`-resolved deref (`*ref = v` in an assign)
+                    // returns a pointer into the struct, so the place keeps
+                    // dereferencing it; a `Deref`-resolved one yields the value
+                    // itself. Decided from the method's own return type, since
+                    // the recorded expr type is already unwrapped to the pointee.
                     let result_ty = self.expr_type(fb, expr);
-                    let (block, operand) =
-                        self.lower_operator_method_call(fb, inner, &op_res, block, result_ty);
+                    let is_pointer = self
+                        .typecheck
+                        .def_types
+                        .get(&op_res.method_def)
+                        .is_some_and(|ty| {
+                            matches!(
+                                self.typecheck.interner.get(*ty),
+                                Type::Fn { ret, .. }
+                                    if matches!(
+                                        self.typecheck.interner.get(*ret),
+                                        Type::Pointer { .. } | Type::ManyPointer { .. }
+                                    )
+                            )
+                        });
 
-                    if matches!(
-                        self.typecheck.interner.get(result_ty),
-                        Type::Pointer { .. } | Type::ManyPointer { .. }
-                    ) {
-                        let ptr_local = self.operand_to_local(fb, operand, result_ty, block);
+                    // The deref pointer is a pointer to the unwrapped pointee,
+                    // rebuilt concretely so generics resolve to the right size.
+                    let call_ty = if is_pointer {
+                        self.typecheck.interner.intern(Type::Pointer {
+                            inner: result_ty,
+                            is_const: false,
+                        })
+                    } else {
+                        result_ty
+                    };
+
+                    let (block, operand) =
+                        self.lower_operator_method_call(fb, inner, &op_res, block, call_ty);
+
+                    if is_pointer {
+                        let ptr_local = self.operand_to_local(fb, operand, call_ty, block);
                         return (block, Place::from_local(ptr_local).deref());
                     }
 
-                    let temp = self.operand_to_local(fb, operand, result_ty, block);
+                    let temp = self.operand_to_local(fb, operand, call_ty, block);
                     return (block, Place::from_local(temp));
                 }
 
@@ -2899,7 +3003,7 @@ impl<'ctx> MirLowering<'ctx> {
         &mut self,
         fb: &mut FnBuilder,
         reciever_expr: &HirExpr,
-        extra_args: &[Operand],
+        extra_args: &[(Operand, TypeId)],
         op_res: &OperatorResolution,
         block: BlockId,
         result_ty: TypeId,
@@ -2922,10 +3026,25 @@ impl<'ctx> MirLowering<'ctx> {
         fb: &mut FnBuilder,
         op_res: &OperatorResolution,
         self_operand: Operand,
-        extra_args: Vec<Operand>,
+        extra_args: Vec<(Operand, TypeId)>,
         block: BlockId,
         result_ty: TypeId,
     ) -> (BlockId, Operand) {
+        // The method's non-self parameters drive whether each operator RHS is
+        // passed by value or by address (`Eq.eq` takes `other: *const Self`).
+        let arg_params: Vec<TypeId> = self
+            .typecheck
+            .def_types
+            .get(&op_res.method_def)
+            .and_then(|ty| match self.typecheck.interner.get(*ty) {
+                Type::Fn { params, .. } if params.len() > 1 => Some(params[1..].to_vec()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let (block, extra_args) =
+            self.lower_operator_args_from_operands(fb, extra_args, &arg_params, block);
+
         let mono_args = self.substitute_generic_args(fb, &op_res.generic_args);
         let mir_fn_id = self.monomorphize_fn(
             op_res.method_def,
@@ -2955,6 +3074,57 @@ impl<'ctx> MirLowering<'ctx> {
             next,
             self.place_to_operand(Place::from_local(dest), result_ty, None),
         )
+    }
+
+    fn lower_operator_args_from_operands(
+        &mut self,
+        fb: &mut FnBuilder,
+        extra_args: Vec<(Operand, TypeId)>,
+        arg_params: &[TypeId],
+        block: BlockId,
+    ) -> (BlockId, Vec<Operand>) {
+        let mut out = Vec::with_capacity(extra_args.len());
+        let mut block = block;
+
+        for (operand, arg_ty) in extra_args {
+            let expected = arg_params.get(out.len()).copied();
+
+            let param_ty = expected.map(|t| self.typecheck.interner.get(t).clone());
+
+            let operand = match param_ty {
+                Some(Type::Pointer { is_const, .. })
+                    if !matches!(
+                        self.typecheck.interner.get(arg_ty),
+                        Type::Pointer { .. } | Type::ManyPointer { .. }
+                    ) =>
+                {
+                    let ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                        inner: arg_ty,
+                        is_const,
+                    });
+                    let local = self.operand_to_local(fb, operand, arg_ty, block);
+                    let temp = fb.new_temp(ptr_ty);
+
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Ref {
+                                place: Place::from_local(local),
+                                is_const,
+                            },
+                            source: None,
+                        },
+                    );
+                    Operand::Move(Place::from_local(temp), None)
+                }
+                _ => operand,
+            };
+
+            out.push(operand);
+        }
+
+        (block, out)
     }
 }
 
@@ -3076,8 +3246,21 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, place) = self.lower_expr_to_place(fb, object, block);
                 let place_ty = self.place_type(fb, &place);
 
-                if let Some(op_res) = self.typecheck.operator_resolutions.get(&object.id).cloned() {
+                // A deref target (`*ref += v`) is not a compound-assign on a
+                // struct interface: `operator_resolutions[object.id]` holds the
+                // `DerefPtr` resolution that produced the place, so routing it
+                // through the interface path would call `deref_ptr` with the
+                // RHS as a bogus argument. Fall through to the builtin flow,
+                // which reads the pointee, applies the binary op and writes it
+                // back through the same deref place.
+                let is_deref_target = matches!(place.projection.last(), Some(PlaceElem::Deref));
+
+                if !is_deref_target
+                    && let Some(op_res) =
+                        self.typecheck.operator_resolutions.get(&object.id).cloned()
+                {
                     let (block, rhs_operand) = self.lower_expr_to_operand(fb, value, block);
+                    let rhs_ty = self.expr_type(fb, value);
                     let (block, self_operand) = self.lower_place_receiver_operand(
                         fb,
                         place.clone(),
@@ -3090,7 +3273,7 @@ impl<'ctx> MirLowering<'ctx> {
                         fb,
                         &op_res,
                         self_operand,
-                        vec![rhs_operand],
+                        vec![(rhs_operand, rhs_ty)],
                         block,
                         place_ty,
                     );
