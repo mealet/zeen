@@ -1962,7 +1962,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         destination: &Place,
         target: Option<BlockId>,
         func: &MirFunction,
-        fn_id: MirFunctionId,
+        _fn_id: MirFunctionId,
         source: &Option<Source>,
     ) {
         match kind {
@@ -2013,15 +2013,17 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 );
 
                 if self.options.mode == CompilationMode::Debug {
-                    // Print the panic header (with the panicking function's
-                    // name) and message, then dump the shadow-stack call frames
-                    // (see `emit_panic_runtime`) and abort. The panicking
-                    // function's own frame is still on the stack because the
-                    // prologue frame is only popped by a `Return`.
-                    let (fn_name, ..) = self.panic_parts(func, fn_id);
-                    let message = format!("*> thread \"{fn_name}\" panicked:\n{format}\n");
-                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
-                        vec![self.get_str_global(&message).as_pointer_value().into()];
+                    // Print the message (the header line has already been
+                    // emitted by a separate print segment), then dump the
+                    // shadow-stack call frames (see `emit_panic_runtime`) and
+                    // abort. The panicking function's own frame is still on
+                    // the stack because the prologue frame is only popped by
+                    // a `Return`.
+                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                        self.get_str_global(&format!("{format}\n"))
+                            .as_pointer_value()
+                            .into(),
+                    ];
                     call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
                     self.builder.build_call(printf, &call_args, "").unwrap();
 
@@ -2033,13 +2035,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     );
                     self.builder.build_call(panic_stack, &[], "").unwrap();
                 } else {
-                    // Release: the panic site is known at compile time, so
-                    // print `module:line` inline with the message and exit.
-                    let (fn_name, module, line) = self.panic_parts(func, fn_id);
-                    let message =
-                        format!("*> thread \"{fn_name}\" panicked at {module}:{line}:\n{format}\n");
-                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
-                        vec![self.get_str_global(&message).as_pointer_value().into()];
+                    // Release: print the message and exit.
+                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                        self.get_str_global(&format!("{format}\n"))
+                            .as_pointer_value()
+                            .into(),
+                    ];
                     call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
                     self.builder.build_call(printf, &call_args, "").unwrap();
                     self.builder
