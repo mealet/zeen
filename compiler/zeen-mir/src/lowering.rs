@@ -3194,7 +3194,19 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, place) = self.lower_expr_to_place(fb, object, block);
                 let place_ty = self.place_type(fb, &place);
 
-                if let Some(op_res) = self.typecheck.operator_resolutions.get(&object.id).cloned() {
+                // A deref target (`*ref += v`) is not a compound-assign on a
+                // struct interface: `operator_resolutions[object.id]` holds the
+                // `DerefPtr` resolution that produced the place, so routing it
+                // through the interface path would call `deref_ptr` with the
+                // RHS as a bogus argument. Fall through to the builtin flow,
+                // which reads the pointee, applies the binary op and writes it
+                // back through the same deref place.
+                let is_deref_target = matches!(place.projection.last(), Some(PlaceElem::Deref));
+
+                if !is_deref_target
+                    && let Some(op_res) =
+                        self.typecheck.operator_resolutions.get(&object.id).cloned()
+                {
                     let (block, rhs_operand) = self.lower_expr_to_operand(fb, value, block);
                     let rhs_ty = self.expr_type(fb, value);
                     let (block, self_operand) = self.lower_place_receiver_operand(
