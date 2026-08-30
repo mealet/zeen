@@ -2217,6 +2217,58 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::SliceAccess { object, index } => {
+                // An access through a struct's `Slice`/`SlicePtr` interface
+                // dispatches to the method instead of indexing native storage.
+                // A `SlicePtr` result (`ref[i] = v` in an assign) is a pointer
+                // into the struct, so the place keeps dereferencing it; a
+                // `Slice` result is the value itself.
+                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    let result_ty = self.expr_type(fb, expr);
+                    let is_pointer = self
+                        .typecheck
+                        .def_types
+                        .get(&op_res.method_def)
+                        .is_some_and(|ty| {
+                            matches!(
+                                self.typecheck.interner.get(*ty),
+                                Type::Fn { ret, .. }
+                                    if matches!(
+                                        self.typecheck.interner.get(*ret),
+                                        Type::Pointer { .. } | Type::ManyPointer { .. }
+                                    )
+                            )
+                        });
+
+                    let call_ty = if is_pointer {
+                        self.typecheck.interner.intern(Type::Pointer {
+                            inner: result_ty,
+                            is_const: false,
+                        })
+                    } else {
+                        result_ty
+                    };
+
+                    let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
+                    let index_ty = self.expr_type(fb, index);
+
+                    let (block, operand) = self.lower_operator_method_call_with_extra_args(
+                        fb,
+                        object,
+                        &[(index_operand, index_ty)],
+                        &op_res,
+                        block,
+                        call_ty,
+                    );
+
+                    if is_pointer {
+                        let ptr_local = self.operand_to_local(fb, operand, call_ty, block);
+                        return (block, Place::from_local(ptr_local).deref());
+                    }
+
+                    let temp = self.operand_to_local(fb, operand, call_ty, block);
+                    return (block, Place::from_local(temp));
+                }
+
                 let obj_ty = self.expr_type(fb, object);
                 let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
