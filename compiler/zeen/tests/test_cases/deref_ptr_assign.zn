@@ -1,0 +1,30 @@
+struct Ref[T] {
+  inner: *T,
+
+  pub fn new(value: *T) Self {
+    Self { .inner = value }
+  }
+}
+
+implement[T] Deref : Ref[T] {
+  fn deref(*const self) T {
+    *self.inner
+  }
+}
+
+implement[T] DerefPtr : Ref[T] {
+  fn deref_ptr(*self) *T {
+    self.inner
+  }
+}
+
+fn main() i32 {
+  let a = 123;
+  let ref = Ref.new(&a);
+
+  *ref = 321;
+
+  @println("{}", *ref);
+  @println("{}", a);
+  return 0;
+}
