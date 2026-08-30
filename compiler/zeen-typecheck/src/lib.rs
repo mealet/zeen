@@ -2104,13 +2104,15 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirMacroKind::Format => {
-                self.check_format_macro(call_id, args, source);
+                // Disabled until `std.string` provides a heap string with a
+                // `StrWriter` implementation to format into.
+                self.report(TypeError::MacroNotImplemented {
+                    name: "format".into(),
+                    src: source.src(),
+                    span: source.span,
+                });
 
-                let char_ty = self.result.interner.builtin(BuiltinType::char);
-                self.result.interner.intern(Type::Slice {
-                    element: char_ty,
-                    is_const: true,
-                })
+                self.result.interner.error()
             }
 
             HirMacroKind::Panic => {

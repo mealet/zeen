@@ -428,6 +428,21 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("`@{name}` macro is not implemented yet")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::macro_not_implemented),
+        help("this macro will be available once the std library provides a string writer")
+    )]
+    MacroNotImplemented {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("type `{ty_name}` has no implementation for `{name}` interface")]
     #[diagnostic(severity(Error), code(zeen::typechecker::interface_not_implemented))]
     InterfaceNotImplemented {
