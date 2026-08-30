@@ -1144,3 +1144,27 @@ fn consuming_call_of_concrete_env_calls_drop_function() {
         "a consuming call must invoke the fat drop function on the consumed value"
     );
 }
+
+#[test]
+fn generic_bound_method_call_dispatches_to_concrete_impl() {
+    // `out.write_str(...)` where `O: StrWriter` must dispatch to the concrete
+    // implementation (`MyOut.write_str`), not the bodyless interface method.
+    let mir = compile_mir_ok(
+        "interface StrWriter { fn write_str(*self, value: []const char) void; } \
+         struct MyOut {} \
+         implement StrWriter : MyOut { fn write_str(*self, value: []const char) void {} } \
+         fn helper[O: StrWriter](out: O) void { out.write_str(\"hi\"); } \
+         fn main() { let o = MyOut {}; helper(o); }",
+    );
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+
+    assert!(
+        names.iter().any(|n| n == "MyOut.write_str"),
+        "expected `MyOut.write_str` in MIR function names, got {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n == "write_str"),
+        "bare interface method `write_str` must not be emitted, got {names:?}"
+    );
+}

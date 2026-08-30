@@ -53,6 +53,12 @@ pub struct TypeCheckResult {
     /// `{:?}`), keyed by the argument expression. Recorded so MIR dispatches
     /// to the same implementation the checker picked.
     pub format_arg_resolutions: HashMap<HirId, DefId>,
+
+    /// Every method declared directly inside an `interface` block, mapped to
+    /// the interface that owns it (`write_str` -> `StrWriter`). Used by MIR to
+    /// dispatch a call made on a bounded generic parameter to the concrete
+    /// implementation once the receiver is monomorphized.
+    pub interface_method_owners: HashMap<DefId, DefId>,
 }
 
 /// A single `implement` block registered for a `(struct, interface)` pair.
