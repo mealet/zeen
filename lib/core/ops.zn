@@ -8,6 +8,16 @@ pub interface Debug {
   fn debug(*const self) []const char;
 }
 
+/// Writer that appends a utf8 string (`[]const char`) into an output buffer.
+/// Used as the `out` sink by `Display`/`Debug` implementations.
+pub interface StrWriter {
+  fn write_str(*self, value: []const char) void;
+}
+
+/// Compiler-reserved output stream (stdout of the executable). Implemented by
+/// the compiler to satisfy `StrWriter`, so it can be passed as the `out` sink.
+pub struct OutStream {}
+
 /// Empty marker to tell compiler that structure can be copied (simple load instructions).
 pub interface Copy {}
 
