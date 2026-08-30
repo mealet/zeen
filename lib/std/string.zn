@@ -22,6 +22,7 @@ pub struct String {
     }
   }
 
+  /// Allocate new String instance from provided slice
   pub fn from(value: []const char) Self {
     let len = value.len;
     let capacity = next_capacity(len + 1);
@@ -33,6 +34,18 @@ pub struct String {
       .ptr = ptr,
       .len = len,
       .capacity = capacity,
+    }
+  }
+
+  /// UNSAFE: Construct string from raw parts.
+  /// UNSAFE: Assume that provided pointer is heap allocated, it will be freed.
+  pub fn from_raw_parts(ptr: *void, len: usize, capacity: usize) Self {
+    let ptr = @as([*]char, ptr);
+
+    Self {
+      .ptr = ptr,
+      .len = len,
+      .capacity = capacity
     }
   }
 
