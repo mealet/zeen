@@ -1903,7 +1903,14 @@ impl<'res> TypeChecker<'res> {
                 callee,
                 args,
                 generic_args,
-            } => self.check_call(expr.id, callee, args, generic_args, expr.source.clone()),
+            } => self.check_call(
+                expr.id,
+                callee,
+                args,
+                generic_args,
+                expr.source.clone(),
+                None,
+            ),
 
             HirExprKind::If {
                 condition,
@@ -2988,6 +2995,23 @@ impl<'res> TypeChecker<'res> {
                 struct_ty
             }
 
+            HirExprKind::Call {
+                callee,
+                args,
+                generic_args,
+            } => {
+                let ty = self.check_call(
+                    expr.id,
+                    callee,
+                    args,
+                    generic_args,
+                    expr.source.clone(),
+                    Some(expected),
+                );
+                self.result.record_expr_type(expr.id, ty);
+                ty
+            }
+
             _ => self.synth_expr(expr),
         };
 
@@ -3379,6 +3403,7 @@ impl<'res> TypeChecker<'res> {
         args: &[Rc<HirExpr>],
         explicit_generic_args: &[Rc<HirTypeExpr>],
         source: Source,
+        expected: Option<TypeId>,
     ) -> TypeId {
         if let HirExprKind::FieldAccess { object, field } = &callee.kind
             && let Some(result) = self.try_check_method_call(
@@ -3388,6 +3413,7 @@ impl<'res> TypeChecker<'res> {
                 args,
                 explicit_generic_args,
                 source.clone(),
+                expected,
             )
         {
             return result;
@@ -3450,6 +3476,13 @@ impl<'res> TypeChecker<'res> {
             let arg_ty = self.synth_expr(arg);
             let arg_ty = self.default_literal(arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
+        }
+
+        // An expected type in the same shape as the return type pins the
+        // call's generics (e.g. `let a: Gen[i32] = make_gen();`). It is the
+        // lowest-priority source: explicit and inferred bindings stay intact.
+        if let Some(expected) = expected {
+            self.seed_inference_bindings(sig_ret, expected, &mut bindings);
         }
 
         for g in &sig_generics {
@@ -3637,6 +3670,7 @@ impl<'res> TypeChecker<'res> {
         Some(self.substitute_generics(sig_ret, &bindings))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn try_check_method_call(
         &mut self,
         call_id: HirId,
@@ -3645,6 +3679,7 @@ impl<'res> TypeChecker<'res> {
         args: &[Rc<HirExpr>],
         explicit_generic_args: &[Rc<HirTypeExpr>],
         source: Source,
+        expected: Option<TypeId>,
     ) -> Option<TypeId> {
         let (field_name, field_span) = field;
 
@@ -3659,6 +3694,7 @@ impl<'res> TypeChecker<'res> {
                 args,
                 explicit_generic_args,
                 &source,
+                expected,
             );
         }
 
@@ -3919,6 +3955,7 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_associated_fn_call(
         &mut self,
         caller: (HirId, &HirExpr),
@@ -3927,6 +3964,7 @@ impl<'res> TypeChecker<'res> {
         args: &[Rc<HirExpr>],
         explicit_generic_args: &[Rc<HirTypeExpr>],
         source: &Source,
+        expected: Option<TypeId>,
     ) -> Option<TypeId> {
         let (call_id, caller_expr) = caller;
         let (field_name, field_span) = field;
@@ -3953,6 +3991,12 @@ impl<'res> TypeChecker<'res> {
         let sig_ret = self.fn_sigs[&method_def_id].ret;
         let sig_generics = self.fn_sigs[&method_def_id].generics.clone();
 
+        let struct_generics = self
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
+
         if args.len() != sig_params.len() {
             self.report(TypeError::ArgCountMismatch {
                 expected: sig_params.len(),
@@ -3964,13 +4008,30 @@ impl<'res> TypeChecker<'res> {
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
 
-        for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
+        // Explicit call-site arguments bind the struct's generics first (there
+        // is no receiver to provide them), then the method's own.
+        let bind_order: Vec<DefId> = struct_generics
+            .iter()
+            .copied()
+            .chain(sig_generics.iter().copied())
+            .collect();
+
+        for (g, explicit) in bind_order.iter().zip(explicit_generic_args.iter()) {
             let ty = self.lower_hir_type(explicit);
             bindings.insert(*g, ty);
         }
 
         for (param_ty, arg) in sig_params.iter().zip(args.iter()) {
             self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+        }
+
+        // The expected type (annotated `let`, return position, argument
+        // position) usually pins the struct's generics for `Self`-returning
+        // methods (`let a: Option[i32] = Option.None();`); the return type is
+        // matched structurally against it. It is the lowest-priority source:
+        // explicit call-site arguments and argument inference stay intact.
+        if let Some(expected) = expected {
+            self.seed_inference_bindings(sig_ret, expected, &mut bindings);
         }
 
         for g in &sig_generics {
@@ -4021,12 +4082,6 @@ impl<'res> TypeChecker<'res> {
         }
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
-
-        let struct_generics = self
-            .struct_generics
-            .get(&struct_def)
-            .cloned()
-            .unwrap_or_default();
 
         for g in &struct_generics {
             if !bindings.contains_key(g) {
@@ -4105,6 +4160,72 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    /// Seeds generic bindings by walking a generic-containing type (`pattern`,
+    /// e.g. a call's return type) against the expected type in parallel. Only
+    /// new bindings are inserted: explicit call-site arguments and argument
+    /// inference win over expected-derived ones. A `GenericParam` on the
+    /// expected side carries no information and is skipped.
+    fn seed_inference_bindings(
+        &mut self,
+        pattern: TypeId,
+        expected: TypeId,
+        bindings: &mut HashMap<DefId, TypeId>,
+    ) {
+        match (
+            self.result.interner.get(pattern).clone(),
+            self.result.interner.get(expected).clone(),
+        ) {
+            (Type::GenericParam(g), Type::GenericParam(e)) if g == e => {}
+
+            (Type::GenericParam(g), _) => {
+                bindings.entry(g).or_insert(expected);
+            }
+
+            (
+                Type::Struct {
+                    def_id: p_def,
+                    generic_args: p_args,
+                },
+                Type::Struct {
+                    def_id: e_def,
+                    generic_args: e_args,
+                },
+            ) if p_def == e_def => {
+                for (p, e) in p_args.iter().zip(e_args.iter()) {
+                    self.seed_inference_bindings(*p, *e, bindings);
+                }
+            }
+
+            (Type::Pointer { inner: p, .. }, Type::Pointer { inner: e, .. })
+            | (Type::ManyPointer { inner: p, .. }, Type::ManyPointer { inner: e, .. }) => {
+                self.seed_inference_bindings(p, e, bindings)
+            }
+
+            (Type::Array { element: p, .. }, Type::Array { element: e, .. })
+            | (Type::Slice { element: p, .. }, Type::Slice { element: e, .. }) => {
+                self.seed_inference_bindings(p, e, bindings)
+            }
+
+            (
+                Type::Fn {
+                    params: p_params,
+                    ret: p_ret,
+                },
+                Type::Fn {
+                    params: e_params,
+                    ret: e_ret,
+                },
+            ) => {
+                for (p, e) in p_params.iter().zip(e_params.iter()) {
+                    self.seed_inference_bindings(*p, *e, bindings);
+                }
+                self.seed_inference_bindings(p_ret, e_ret, bindings);
+            }
+
+            _ => {}
+        }
+    }
+
     fn infer_or_check_arg(
         &mut self,
         param_ty: TypeId,
@@ -4112,7 +4233,13 @@ impl<'res> TypeChecker<'res> {
         bindings: &mut HashMap<DefId, TypeId>,
         source: Source,
     ) {
-        if self.type_contains_generic(param_ty) {
+        // Generics already pinned by the receiver, expected type or explicit
+        // call-site arguments make the parameter concrete: check the argument
+        // against it instead of inferring (a defaulted literal would wrongly
+        // conflict with the pinned type).
+        let substituted = self.substitute_generics(param_ty, bindings);
+
+        if self.type_contains_generic(substituted) {
             let arg_ty = self.synth_expr(arg);
             let arg_ty = self.default_literal(arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
@@ -4133,7 +4260,6 @@ impl<'res> TypeChecker<'res> {
                 });
             }
         } else {
-            let substituted = self.substitute_generics(param_ty, bindings);
             self.check_expr(arg, substituted, false);
         }
     }
@@ -6067,6 +6193,115 @@ mod tests {
                 .any(|err| matches!(err, TypeError::Mismatch { found, .. }
             if found.as_str().contains("error"))),
             "expected no cascade mismatch mentioning `error`, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn annotated_let_pins_associated_call_generics() {
+        let result = typecheck(
+            r#"
+            struct Opt[T] {
+              inner: *T,
+
+              pub fn none() Self {
+                Self { .inner = @uninit() }
+              }
+
+              pub fn get_or(*const self, default: T) T {
+                if (@unreachable()) { return default; };
+                default
+              }
+            }
+
+            fn main() {
+              let a: Opt[i32] = Opt.none();
+              let v: i32 = a.get_or(5);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "annotated `let` must pin the associated call's generics: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn explicit_call_site_args_bind_associated_struct_generics() {
+        let result = typecheck(
+            r#"
+            struct Opt[T] {
+              inner: *T,
+
+              pub fn none() Self {
+                Self { .inner = @uninit() }
+              }
+            }
+
+            fn main() {
+              let a = Opt.none#[i32]();
+              let b: Opt[i32] = a;
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "explicit call-site args must bind the struct's generics: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn annotated_let_pins_plain_fn_return_generics() {
+        let result = typecheck(
+            r#"
+            struct Gen[T] {
+              v: T,
+            }
+
+            fn make_gen[T]() Gen[T] {
+              Gen { .v = @uninit() }
+            }
+
+            fn main() {
+              let a: Gen[i32] = make_gen();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "annotated `let` must pin a plain fn call's return generics: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn literal_argument_coerces_to_receiver_pinned_generic() {
+        let result = typecheck(
+            r#"
+            struct Opt[T] {
+              v: T,
+
+              pub fn get_or(*const self, default: T) T {
+                if (@unreachable()) { return default; };
+                default
+              }
+            }
+
+            fn main() {
+              let a = Opt { .v = b'\0' };
+              let b: u8 = a.get_or(7);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "a literal argument must coerce to the receiver-pinned generic: {:?}",
+            result.err()
         );
     }
 
