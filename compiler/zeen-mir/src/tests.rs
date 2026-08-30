@@ -1153,7 +1153,11 @@ fn generic_bound_method_call_dispatches_to_concrete_impl() {
     // implementation (`MyOut.write_str`), not the bodyless interface method.
     let mir = compile_mir_ok(
         "struct MyOut {} \
-         implement StrWriter : MyOut { fn write_str(*self, value: []const char) void {} } \
+         implement StrWriter : MyOut { \
+           fn write_str(*self, value: []const char) void {} \
+           fn write_str_raw(*self, ptr: [*]const char, len: usize) void {} \
+           fn write_str_single(*self, value: char) void {} \
+         } \
          fn helper[O: StrWriter](out: O) void { out.write_str(\"hi\"); } \
          fn main() { let o = MyOut {}; helper(o); }",
     );
