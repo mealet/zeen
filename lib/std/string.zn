@@ -223,7 +223,7 @@ pub struct String {
   }
 
   /// Get character by index (out of bounds returns `None`)
-  pub fn get(*self, index: usize) Option[char] {
+  pub fn get(*const self, index: usize) Option[char] {
     if (
       self._capacity < 1
       || self._len < 1
@@ -446,6 +446,36 @@ implement Debug : String {
     out.write_str_single('"');
     out.write_str_raw(self.ptr, self._len);
     out.write_str_single('"');
+  }
+}
+
+implement Eq : String {
+  fn eq(*const self, other: *const Self) bool {
+    if (self._len != other._len) {
+      return false;
+    };
+
+    return strncmp(self.ptr, other.ptr, self._len) == 0;
+  }
+}
+
+implement StrWriter : String {
+  fn write_str(*self, value: []const char) void {
+    self.push_str(value);
+  }
+
+  fn write_str_raw(*self, ptr: [*]const char, len: usize) void {
+    let cursor = @as(*const char, ptr);
+    let end = cursor + len;
+
+    while (cursor != end) {
+      self.push(*cursor);
+      cursor += 1;
+    }
+  }
+
+  fn write_str_single(*self, value: char) void {
+    self.push(value);
   }
 }
 
