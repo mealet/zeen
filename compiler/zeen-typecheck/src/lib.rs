@@ -142,6 +142,7 @@ impl<'res> TypeChecker<'res> {
     pub fn finish(mut self) -> Result<TypeCheckResult, Vec<TypeError>> {
         self.result.struct_generics = self.struct_generics;
         self.result.enum_variants = self.enum_variants;
+        self.result.interface_registry = self.interface_registry.into_name_map();
 
         if self.errors.is_empty() {
             return Ok(self.result);
@@ -3381,17 +3382,9 @@ impl<'res> TypeChecker<'res> {
 
     fn type_is_copy(&self, ty: TypeId) -> bool {
         match self.result.interner.get(ty).clone() {
-            Type::Struct { def_id, .. } => self
-                .result
-                .struct_info
-                .get(&def_id)
-                .map(|info| info.capabalities.is_copy)
-                .unwrap_or(false),
-            Type::Array { element, .. } => self.type_is_copy(element),
-            // `Fn` closure values (all-Copy captures or none) are Copy — the
-            // inline environment is duplicated with the value. `FnOnce` owns
-            // a non-Copy capture, so it is move-only.
-            Type::FatFn { once, .. } => !once,
+            Type::Struct { .. } | Type::Array { .. } | Type::FatFn { .. } => {
+                self.result.is_copy(ty)
+            }
             _ => true,
         }
     }
