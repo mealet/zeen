@@ -752,16 +752,9 @@ impl<'ctx> DataFlow<'ctx> {
             | Type::Void
             | Type::Never
             | Type::Error => true,
-            Type::Struct { def_id, .. } => self
-                .typecheck
-                .struct_info
-                .get(&def_id)
-                .map(|info| info.capabalities.is_copy)
-                .unwrap_or(false),
-            // `Fn` closure values duplicate their inline env on copy;
-            // `FnOnce` owns a non-Copy capture and is move-only.
-            Type::FatFn { once, .. } => !once,
-            Type::Array { element, .. } => self.type_is_copy(element),
+            Type::Struct { .. } | Type::FatFn { .. } | Type::Array { .. } => {
+                self.typecheck.is_copy(ty)
+            }
             Type::Slice { .. } => true,
             _ => false,
         }

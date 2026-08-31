@@ -923,16 +923,11 @@ impl<'ctx> MirLowering<'ctx> {
             // `Fn` closure values (all-Copy captures or none) are Copy: the
             // inline environment is duplicated with the value. `FnOnce` owns
             // a non-Copy capture, so it is move-only.
-            Type::FatFn { once, .. } => !once,
+            Type::FatFn { .. } => self.typecheck.is_copy(ty),
 
-            Type::Struct { def_id, .. } => self
-                .typecheck
-                .struct_info
-                .get(&def_id)
-                .map(|info| info.capabalities.is_copy)
-                .unwrap_or(false),
+            Type::Struct { .. } => self.typecheck.is_copy(ty),
 
-            Type::Array { element, .. } => self.mir_type_is_copy(element),
+            Type::Array { .. } => self.typecheck.is_copy(ty),
 
             Type::Slice { .. } => true,
 
