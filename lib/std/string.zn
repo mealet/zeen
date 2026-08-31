@@ -376,6 +376,25 @@ pub struct String {
     self._len = new_len;
     self._capacity = new_capacity;
   }
+
+  pub fn reverse(*self) {
+    if (self._capacity < 1 || self._len < 1) {
+      return;
+    };
+
+    let len = self._len;
+    let start: usize = 0;
+    let end: usize = len - 1;
+
+    while (start < end) {
+      let temp: char = self.ptr[start];
+      self.ptr[start] = self.ptr[end];
+      self.ptr[end] = temp;
+
+      start += 1;
+      end -= 1;
+    }
+  }
 }
 
 // ===| String Interfaces Implementations |===
