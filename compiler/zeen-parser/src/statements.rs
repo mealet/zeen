@@ -411,7 +411,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
         let mut kind = StatementKind::Expr(expr);
 
-        if self.p.at(TokenKind::CloseBrace) {
+        if self.expect_optional_semicolon && self.p.at(TokenKind::CloseBrace) {
             kind = StatementKind::TrailingExpr(expr);
         } else {
             self.expect_optional_semicolon()?;
@@ -809,6 +809,39 @@ mod tests {
                         ..
                     }
                 },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn if_single_branch_without_semicolon_is_expr_stmt() {
+        const SRC: &str = "{ if (ptr != nullptr) free(ptr) }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, _stmt_parser);
+        let mut stmt_parser = StmtParser::new(&mut parser).with_optional_semicolon(true);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block {
+                        trailing: Some(Expression {
+                            kind: ExpressionKind::If {
+                                then_block: Statement {
+                                    kind: StatementKind::Expr(..),
+                                    ..
+                                },
+                                ..
+                            },
+                            ..
+                        }),
+                        ..
+                    },
+                    ..
+                }),
                 ..
             }
         );
