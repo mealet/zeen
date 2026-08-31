@@ -49,6 +49,8 @@ pub struct Option[T] {
   }
 }
 
+implement[T: Copy] Copy : Option[T]  {}
+
 implement[T: Debug] Debug : Option[T] {
   fn debug(*const self, out: OutStream) {
     if (self._is_some) {
