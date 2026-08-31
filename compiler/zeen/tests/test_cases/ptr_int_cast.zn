@@ -1,0 +1,9 @@
+fn main() i32 {
+  let x: i32 = 42;
+  let p: *i32 = &x;
+  let addr: usize = @as(usize, p);
+  let p2: *i32 = @as(*i32, addr);
+  @println("nonzero: {}", addr != 0);
+  @println("value: {}", *p2);
+  return 0;
+}
