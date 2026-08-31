@@ -1,4 +1,6 @@
 extern fn strlen(str: [*]const char) usize;
+extern fn strncmp(str1: [*]const char, str2: [*]const char, size: usize) i32;
+
 extern fn strncpy(dest: [*]char, src: [*]const char, size: usize) *char;
 extern fn strncat(dest: [*]char, src: [*]const char, size: usize) *char;
 
@@ -60,6 +62,10 @@ pub struct String {
 
   /// UNSAFE: Constructs String from cstr, you must assume that provided sequence ends with '\0'
   pub fn from_cstr(value: [*]const char) Self {
+    if (@as(*void, value) == nullptr) {
+      @panic("Null pointer in argument `from_cstr` constructor");
+    };
+    
     let len = strlen(value);
     let capacity = next_capacity(len + 1);
     let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
@@ -290,6 +296,10 @@ pub struct String {
   }
 
   pub fn find_cstr(*const self, value: [*]const char) Option[usize] {
+    if (@as(*void, value) == nullptr) {
+      return Option#[usize].None();
+    };
+
     let entrance = strstr(self.ptr, value);
 
     if (entrance == nullptr) {
@@ -317,6 +327,54 @@ pub struct String {
       *cursor = tolower(*cursor);
       cursor += 1;
     }
+  }
+
+  pub fn replace(*self, from: [*]const char, to: [*]const char) {
+    if (
+      @as(*void, from) == nullptr ||
+      @as(*void, to) == nullptr
+    ) {
+      return;
+    };
+
+    let src_len = self._len;
+    let from_len = strlen(from);
+    let to_len = strlen(to);
+
+    if (from_len == 0) {
+      return;
+    };
+
+    let temp: *char = Allocator.alloc(src_len * 2 + 1);
+
+    let src_ptr = @as(*char, self.ptr);
+    let temp_ptr = temp;
+
+    while (*src_ptr != '\0') {
+      if (strncmp(@as([*]char, src_ptr), from, from_len) == 0) {
+        let _ = strncpy(@as([*]char, temp_ptr), to, to_len);
+        temp_ptr += to_len;
+        src_ptr += from_len;
+      } else {
+        *temp_ptr = *src_ptr;
+        temp_ptr += 1;
+        src_ptr += 1;
+      };
+    };
+
+    *temp_ptr = '\0';
+
+    let new_len = @as(usize, temp_ptr - temp);
+    let new_capacity = next_capacity(new_len);
+    let new_ptr = @as([*]char, Allocator.realloc(@as(*void, self.ptr), new_capacity));
+
+    let _ = strncpy(new_ptr, @as([*]const char, temp), new_len);
+
+    Allocator.dealloc(temp);
+
+    self.ptr = new_ptr;
+    self._len = new_len;
+    self._capacity = new_capacity;
   }
 }
 
