@@ -395,6 +395,18 @@ pub struct String {
       end -= 1;
     }
   }
+
+  pub fn clear(*self) {
+    self.ptr[0] = '\0';
+    self._len = 0;
+  }
+
+  pub fn truncate(*self, new_len: usize) {
+    if (new_len > self._len) { return; };
+
+    self._len = new_len;
+    self.ptr[self._len] = '\0';
+  }
 }
 
 // ===| String Interfaces Implementations |===
