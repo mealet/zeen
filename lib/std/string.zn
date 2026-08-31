@@ -143,6 +143,19 @@ pub struct String {
     let _ = strncat(self.ptr, value.ptr, value._len);
     self.ptr[self._len] = '\0';
   }
+
+  /// Remove last character and return it
+  pub fn pop(*self) Option[char] {
+    if (self._capacity < 1 || self._len < 1) {
+      return Option#[char].None();
+    };
+
+    self._len -= 1;
+    let output = self.ptr[self._len];
+    self.ptr[self._len] = '\0';
+
+    Option.Some(output)
+  }
 }
 
 implement Clone : String {
