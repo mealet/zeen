@@ -525,6 +525,37 @@ fn format_returns_a_slice() {
 }
 
 #[test]
+fn char_display_uses_percent_c_and_debug_wraps_in_quotes() {
+    // Build a `@format` call with a single char arg so codegen picks the
+    // printf specifier for char (`%c` for Display, `'%c'` for Debug).
+    for (spec, expected) in [(FormatSpec::Display, "%c"), (FormatSpec::Debug, "\'%c\'")] {
+        let mut fx = Fixture::new();
+        let fmt_def = fx.def("fmt", DefKind::Function);
+        let void = fx.void();
+        let char_ty = fx.char();
+
+        let mut f = fx.fn_builder("fmt", fmt_def, void);
+        let dest = f.temp(void);
+        f.entry("bb0");
+        f.block("bb1");
+        f.set_current("bb0");
+        f.format(
+            vec![FormatChunk::Arg(spec)],
+            vec![Operand::Constant(ConstValue::Char('o'), None)],
+            vec![char_ty],
+            dest,
+            Some("bb1"),
+        );
+        f.set_current("bb1");
+        f.ret_void();
+        f.finish();
+
+        let ir = compile(&fx, CompilationMode::Debug);
+        assert!(ir.contains(expected), "{ir}");
+    }
+}
+
+#[test]
 fn string_constant_coerces_to_slice_argument() {
     let mut fx = Fixture::new();
     let char = fx.char();

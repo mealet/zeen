@@ -2845,6 +2845,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     (ConstValue::Float(_), _) => "%f".to_string(),
                     (ConstValue::Str(_), FormatSpec::Debug) => "\"%s\"".to_string(),
                     (ConstValue::Str(_), _) => "%s".to_string(),
+                    (ConstValue::Char(_), FormatSpec::Debug) => "'%c'".to_string(),
                     (ConstValue::Char(_), _) => "%c".to_string(),
                     (ConstValue::Bool(b), _) => {
                         let s = if *b { "true" } else { "false" };
@@ -2908,10 +2909,17 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     FormatSpec::Display => self.display_specifier(ty),
                     FormatSpec::Debug => {
                         let base = self.display_specifier(ty);
-                        if base == "%s" {
-                            "\"%s\"".to_string()
-                        } else {
-                            base
+                        match base.as_str() {
+                            "%s" => "\"%s\"".to_string(),
+                            // Debug chars print as `'a'` (single quotes).
+                            _ if matches!(
+                                self.typecheck.interner.get(ty).clone(),
+                                Type::Builtin(BuiltinType::char)
+                            ) =>
+                            {
+                                "'%c'".to_string()
+                            }
+                            _ => base,
                         }
                     }
                     FormatSpec::Hex => "%x".to_string(),
@@ -2929,6 +2937,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     fn display_specifier(&self, ty: TypeId) -> String {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(BuiltinType::bool) => "%s".into(),
+            Type::Builtin(BuiltinType::char) => "%c".into(),
             Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral => "%f".into(),
             Type::Builtin(b) if builtin_is_integer(b) => "%d".into(),
             Type::Pointer { inner, .. }
