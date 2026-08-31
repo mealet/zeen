@@ -1,5 +1,12 @@
+extern fn strlen(str: [*]const char) usize;
 extern fn strncpy(dest: [*]char, src: [*]const char, size: usize) *char;
 extern fn strncat(dest: [*]char, src: [*]const char, size: usize) *char;
+
+extern fn strchr(str: [*]const char, ch: char) *char;
+extern fn strstr(str1: [*]const char, str2: [*]const char) *char;
+
+extern fn toupper(char) char;
+extern fn tolower(char) char;
 
 use std.alloc;
 
@@ -43,6 +50,21 @@ pub struct String {
     let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
 
     let _ = strncpy(ptr, value.ptr, value.len);
+
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity,
+    }
+  }
+
+  /// UNSAFE: Constructs String from cstr, you must assume that provided sequence ends with '\0'
+  pub fn from_cstr(value: [*]const char) Self {
+    let len = strlen(value);
+    let capacity = next_capacity(len + 1);
+    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
+
+    let _ = strncpy(ptr, value, len);
 
     Self {
       .ptr = ptr,
@@ -221,6 +243,80 @@ pub struct String {
     self.ptr[index] = value;
 
     output
+  }
+
+  pub fn contains(*const self, value: char) bool {
+    if (self._capacity < 1 || self._len < 1) {
+      return false;
+    };
+
+    return strchr(self.ptr, value) != nullptr;
+  }
+
+  pub fn contains_str(*const self, value: []const char) bool {
+    if (self._capacity < 1 || self._len < 1) {
+      return false;
+    };
+
+    return strstr(self.ptr, value.ptr) != nullptr;
+  }
+
+  pub fn contains_cstr(*const self, value: [*]const char) bool {
+    if (self._capacity < 1 || self._len < 1) {
+      return false;
+    };
+
+    return strstr(self.ptr, value) != nullptr;
+  }
+
+  pub fn find(*const self, value: char) Option[usize] {
+    let entrance = strchr(self.ptr, value);
+
+    if (entrance == nullptr) {
+      return Option#[usize].None();
+    };
+
+    Option.Some(@as(usize, entrance - self.ptr))
+  }
+
+  pub fn find_str(*const self, value: []const char) Option[usize] {
+    let entrance = strstr(self.ptr, value.ptr);
+
+    if (entrance == nullptr) {
+      return Option#[usize].None();
+    };
+
+    Option.Some(@as(usize, entrance - self.ptr))   
+  }
+
+  pub fn find_cstr(*const self, value: [*]const char) Option[usize] {
+    let entrance = strstr(self.ptr, value);
+
+    if (entrance == nullptr) {
+      return Option#[usize].None();
+    };
+
+    Option.Some(@as(usize, entrance - self.ptr))   
+  }
+
+  pub fn to_uppercase(*self) {
+    let cursor = @as(*char, self.ptr);
+    let end = @as(*char, self.ptr + self._len);
+
+    while (cursor != end) {
+      *cursor = toupper(*cursor);
+      cursor += 1;
+    }
+  }
+
+  pub fn to_lowercase(*self) {
+    let cursor = @as(*char, self.ptr);
+    let end = @as(*char, self.ptr + self._len);
+
+    while (cursor != end) {
+      *cursor = tolower(*cursor);
+      cursor += 1;
+    }
   }
 }
 
