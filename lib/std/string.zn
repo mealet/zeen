@@ -119,6 +119,7 @@ pub struct String {
     self.ptr[self._len] = '\0';
   }
 
+  /// Push string slice to the String instance
   pub fn push_str(*self, value: []const char) {
     self.initialize_if_new();
     self._len += value.len;
