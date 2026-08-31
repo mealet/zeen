@@ -193,6 +193,35 @@ pub struct String {
 
     Option.Some(output)
   }
+
+  /// Get character by index (out of bounds returns `None`)
+  pub fn get(*self, index: usize) Option[char] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option#[char].None();
+    };
+
+    Option.Some(self.ptr[index])
+  }
+
+  /// Set character by index and return old (out of bounds returns `None`)
+  pub fn set(*self, index: usize, value: char) Option[char] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option#[char].None();
+    };
+
+    let output = Option.Some(self.ptr[index]);
+    self.ptr[index] = value;
+
+    output
+  }
 }
 
 // ===| String Interfaces Implementations |===
