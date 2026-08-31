@@ -129,6 +129,20 @@ pub struct String {
     let _ = strncat(self.ptr, value.ptr, value.len);
     self.ptr[self._len] = '\0';
   }
+
+  /// Push another dynamic String content to current (through reference)
+  pub fn push_string(*self, value: *Self) {
+    if (value == nullptr)
+      @panic("Null pointer value in `String.push_string`");
+
+    self.initialize_if_new();
+    self._len += value._len;
+
+    self.__capacity_extend();
+
+    let _ = strncat(self.ptr, value.ptr, value._len);
+    self.ptr[self._len] = '\0';
+  }
 }
 
 implement Clone : String {
