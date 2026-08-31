@@ -156,7 +156,46 @@ pub struct String {
 
     Option.Some(output)
   }
+
+  /// Remove character by provided index and return it
+  pub fn remove(*self, index: usize) Option[char] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option#[char].None();
+    };
+
+    if (index == self._len - 1) {
+      return self.pop();
+    };
+
+    let cursor = @as(*char, self.ptr);
+    let end = @as(*char, self.ptr + self._len);
+
+    cursor += index;
+    let output: char = *cursor;
+
+    let left = cursor;
+    let right = cursor;
+
+    right += 1;
+
+    while (right != end) {
+      *left = *right;
+
+      left += 1;
+      right += 1;
+    };
+
+    *left = '\0';
+
+    Option.Some(output)
+  }
 }
+
+// ===| String Interfaces Implementations |===
 
 implement Clone : String {
   fn clone(*const self) Self {
@@ -196,7 +235,7 @@ implement Debug : String {
   }
 }
 
-// =======| Helper Functions |=======
+// ===| Helper Functions |===
 
 fn next_capacity(size: usize) usize {
   let capacity: usize = 8;
