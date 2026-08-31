@@ -2128,7 +2128,19 @@ impl<'res> TypeChecker<'res> {
                 self.result.interner.never()
             }
 
-            HirMacroKind::Unreachable | HirMacroKind::Todo => self.result.interner.never(),
+            HirMacroKind::Unreachable | HirMacroKind::Todo => {
+                if !args.is_empty() {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                }
+                self.result.interner.never()
+            }
 
             HirMacroKind::Dbg => {
                 if args.len() != 1 {

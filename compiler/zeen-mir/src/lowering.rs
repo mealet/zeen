@@ -2095,7 +2095,7 @@ impl<'ctx> MirLowering<'ctx> {
                 }
 
                 HirMacroKind::Unreachable | HirMacroKind::Todo => {
-                    self.lower_diverging_macro(fb, kind.0, block)
+                    self.lower_diverging_macro(fb, kind.0, block, &expr.source)
                 }
 
                 HirMacroKind::Uninit => (block, Operand::Constant(ConstValue::Void, None)),
@@ -3374,7 +3374,14 @@ impl<'ctx> MirLowering<'ctx> {
         fb: &mut FnBuilder,
         kind: HirMacroKind,
         block: BlockId,
+        source: &Source,
     ) -> (BlockId, Operand) {
+        let message = match kind {
+            HirMacroKind::Todo => "not implemented yet",
+            HirMacroKind::Unreachable => "entered unreachable code",
+            _ => unreachable!("lower_diverging_macro called with {kind:?}"),
+        };
+
         let void_ty = self.typecheck.interner.intern(Type::Void);
         let dest = fb.new_temp(void_ty);
         let next = fb.new_block();
@@ -3383,12 +3390,15 @@ impl<'ctx> MirLowering<'ctx> {
             block,
             Terminator::MacroCall {
                 kind,
-                format_chunks: None,
+                format_chunks: Some(vec![
+                    FormatChunk::Literal(self.panic_header(fb)),
+                    FormatChunk::Literal(message.to_string()),
+                ]),
                 args: Vec::new(),
                 arg_types: Vec::new(),
                 destination: Place::from_local(dest),
                 target: None,
-                source: None,
+                source: Some(source.clone()),
             },
         );
 

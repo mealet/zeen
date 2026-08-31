@@ -2358,6 +2358,54 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
 
             HirMacroKind::Unreachable | HirMacroKind::Todo => {
+                let (format, values) =
+                    self.build_format(chunks.unwrap_or(&[]), args, arg_types, func);
+
+                let printf = self.get_or_declare_runtime_fn(
+                    "printf",
+                    self.context.i32_type().into(),
+                    &[self.context.ptr_type(AddressSpace::default()).into()],
+                    true,
+                );
+                let exit = self.get_or_declare_runtime_fn(
+                    "exit",
+                    self.context.void_type().into(),
+                    &[self.context.i32_type().into()],
+                    false,
+                );
+
+                if self.options.mode == CompilationMode::Debug {
+                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                        self.get_str_global(&format!("{format}\n"))
+                            .as_pointer_value()
+                            .into(),
+                    ];
+                    call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
+                    self.builder.build_call(printf, &call_args, "").unwrap();
+
+                    let panic_stack = self.get_or_declare_runtime_fn(
+                        "zeen.panic_stack",
+                        self.context.void_type().into(),
+                        &[],
+                        false,
+                    );
+                    self.builder.build_call(panic_stack, &[], "").unwrap();
+                } else {
+                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                        self.get_str_global(&format!("{format}\n"))
+                            .as_pointer_value()
+                            .into(),
+                    ];
+                    call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
+                    self.builder.build_call(printf, &call_args, "").unwrap();
+                    self.builder
+                        .build_call(
+                            exit,
+                            &[self.context.i32_type().const_int(1, false).into()],
+                            "",
+                        )
+                        .unwrap();
+                }
                 self.builder.build_unreachable().unwrap();
             }
 
