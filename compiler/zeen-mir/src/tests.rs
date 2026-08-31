@@ -452,6 +452,55 @@ fn slice_struct_field_registers_slice_layout() {
 }
 
 #[test]
+fn referenced_generic_struct_registers_layout() {
+    // A monomorphized struct that is only referenced (as a local annotation /
+    // constructor return) but never materialized by a struct literal must
+    // still get a layout; before the fix codegen panicked with
+    // "no struct type registered".
+    let mir = compile_mir_ok(
+        "struct Foo[T] { \
+             pub fn new(value: T) Self { @todo() } \
+         } \
+         fn main() { let a: Foo[i32] = Foo.new(123); }",
+    );
+
+    let has_foo_i32 = mir.program.struct_layouts.values().any(|layout| {
+        matches!(
+            layout.generic_args.as_slice(),
+            [zeen_types::TypeId(_)] // one generic arg: i32
+        )
+    });
+    assert!(
+        has_foo_i32,
+        "expected a registered layout for the monomorphized `Foo[i32]`"
+    );
+}
+
+#[test]
+fn diverging_tail_expression_keeps_unreachable() {
+    // A non-void function whose body is just `@todo()` must not get a
+    // type-incorrect `Return(Void)` fused into its (dead) tail block; it
+    // should end with `Unreachable`.
+    let mir = compile_mir_ok(
+        "struct Foo {} \
+         fn make() Foo { @todo() } \
+         fn main() { let a = make(); }",
+    );
+
+    let make_id = fn_id_by_name(&mir, "make").expect("make missing");
+    let make = &mir.program.functions[&make_id];
+
+    let ends_unreachable = make
+        .blocks
+        .iter()
+        .any(|b| matches!(b.terminator, Terminator::Unreachable));
+    assert!(
+        ends_unreachable,
+        "a diverging tail expression must end the function with `Unreachable`"
+    );
+}
+
+#[test]
 fn discarded_expression_results_warn() {
     let mir = compile_mir_ok(
         "fn foo() i32 { 123 } \

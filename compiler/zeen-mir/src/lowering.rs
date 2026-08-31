@@ -4220,8 +4220,10 @@ impl<'ctx> MirLowering<'ctx> {
 
         let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args, owner_struct, fat_args);
         for local in &mir_func.locals {
-            if matches!(self.typecheck.interner.get(local.ty), Type::Slice { .. }) {
-                self.register_slice_layout(local.ty);
+            match self.typecheck.interner.get(local.ty).clone() {
+                Type::Slice { .. } => self.register_slice_layout(local.ty),
+                Type::Struct { def_id, .. } => self.register_struct_layout(local.ty, def_id),
+                _ => {}
             }
         }
         self.program.functions.insert(id, mir_func);
@@ -4506,7 +4508,22 @@ impl<'ctx> MirLowering<'ctx> {
                         Some(t) => {
                             let (block, operand) = self.lower_expr_to_operand(&mut fb, t, cur);
 
-                            if matches!(fb.func.block(block).terminator, Terminator::Unreachable) {
+                            // A diverging trailing expression (`@todo()`, `@panic`)
+                            // closes `cur` with a `target: None` terminator and the
+                            // returned block is dead. Fusing a `Return` into it would
+                            // produce a type-incorrect `ret void` for non-void returns.
+                            let cur_diverges = matches!(
+                                fb.func.block(cur).terminator,
+                                Terminator::MacroCall { target: None, .. }
+                                    | Terminator::Call { target: None, .. }
+                            );
+
+                            if !cur_diverges
+                                && matches!(
+                                    fb.func.block(block).terminator,
+                                    Terminator::Unreachable
+                                )
+                            {
                                 let operand = self.normalize_return_operand(&fb, operand);
                                 fb.set_terminator(block, Terminator::Return(operand));
                             };
