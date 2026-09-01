@@ -52,13 +52,13 @@ pub struct Option[T] {
 implement[T: Copy] Copy : Option[T]  {}
 
 implement[T: Debug] Debug : Option[T] {
-  fn debug[W: StrWriter](*const self, out: W) {
+  fn debug[W: StrWriter](*const self, out: *W) {
     if (self._is_some) {
-      out.write_str("Some(");
+      (*out).write_str("Some(");
       self.value.debug(out);
-      out.write_str_single(')');
+      (*out).write_str_single(')');
     } else {
-      out.write_str("None");
+      (*out).write_str("None");
     };
   }
 }

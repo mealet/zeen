@@ -370,7 +370,7 @@ fn generic_nested_fn_includes_concrete_args() {
 fn struct_format_arg_is_lowered_to_display_call() {
     let mir = compile_mir_ok(
         "struct Foo {} \
-         implement Display : Foo { fn display(*const self, out: OutStream) void { out.write_str(\"foo\"); } } \
+         implement Display : Foo { fn display[W: StrWriter](*const self, out: *W) void { (*out).write_str(\"foo\"); } } \
          fn main() { let f = Foo {}; @println(\"{}\", f); }",
     );
 

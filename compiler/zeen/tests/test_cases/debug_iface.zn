@@ -3,8 +3,8 @@ struct User {
 }
 
 implement Debug : User {
-  fn debug(*const self, out: OutStream) void {
-    out.write_str("\"USER\"");
+  fn debug[W: StrWriter](*const self, out: *W) void {
+    (*out).write_str("\"USER\"");
   }
 }
 
