@@ -282,7 +282,18 @@ impl<'ctx> NameResolver {
 
     fn declare_toplevel(&mut self, decl: &'ctx Declaration<'ctx>) {
         match decl.kind {
-            DeclarationKind::FnDecl { name, is_pub, .. } => {
+            DeclarationKind::FnDecl {
+                name,
+                is_pub,
+                is_extern,
+                body,
+                ..
+            } => {
+                // A bare `extern fn` (no body) declares an external symbol:
+                // it is reachable across modules like a C declaration, even
+                // when duplicated by user code (`extern fn malloc` vs std).
+                let is_pub = is_pub || (is_extern && body.is_none());
+
                 let def_id = self.define_at(
                     NodeKey::from_decl(decl),
                     DefInfo {

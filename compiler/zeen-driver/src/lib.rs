@@ -36,6 +36,7 @@ impl MietteDriver {
 pub struct CompilationContext {
     pub paths: PathsConfig,
     pub core_files: Vec<(&'static str, &'static str)>,
+    pub std_files: Vec<(&'static str, &'static str)>,
     pub mode: CompilationMode,
     pub output: CompilationOutput,
     /// Target triple being compiled for (`None` = host).

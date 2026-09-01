@@ -22,6 +22,7 @@ fn flow_errors(src: &str) -> Vec<FlowError> {
             linked: HashSet::new(),
         },
         core_files: vec![("core.ops", CORE_OPS)],
+        std_files: vec![],
         mode: CompilationMode::Debug,
         output: CompilationOutput::EmitMIR,
         target: None,
