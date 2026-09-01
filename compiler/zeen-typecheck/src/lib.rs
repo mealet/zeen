@@ -4851,6 +4851,9 @@ impl<'res> TypeChecker<'res> {
         };
         let iface_params_raw = iface_sig.params.clone();
         let iface_ret_raw = iface_sig.ret;
+        // Generic slots of the interface method (e.g. `display[T: StrWriter]`)
+        // unify against the impl method's matching slot or concrete type below.
+        let iface_method_generics: Vec<DefId> = iface_sig.generics.clone();
 
         let Some(impl_sig) = self.fn_sigs.get(&impl_method_def) else {
             return;
@@ -4864,15 +4867,26 @@ impl<'res> TypeChecker<'res> {
             .collect();
         let impl_ret = self.substitute_generics(impl_ret_raw, &impl_subst);
 
-        // An interface generic not covered by the struct's own generics (a
-        // non-generic impl of a generic interface, `implement Deref : Foo`)
-        // is inferred from the impl method's corresponding type.
+        // Interface generics not bound by the struct's slots (non-generic impl)
+        // and method generic slots are inferred from the impl method's types.
+        let mut all_iface_generics = iface_generics.clone();
+        all_iface_generics.extend(iface_method_generics.iter().copied());
         for (&iface_param, &impl_param) in iface_params_raw.iter().zip(impl_params.iter()) {
             let iface_param = self.substitute_self(iface_param, self_struct_ty);
-            self.unify_iface_generics(iface_param, impl_param, &iface_generics, &mut generic_subst);
+            self.unify_iface_generics(
+                iface_param,
+                impl_param,
+                &all_iface_generics,
+                &mut generic_subst,
+            );
         }
         let iface_ret_raw = self.substitute_self(iface_ret_raw, self_struct_ty);
-        self.unify_iface_generics(iface_ret_raw, impl_ret, &iface_generics, &mut generic_subst);
+        self.unify_iface_generics(
+            iface_ret_raw,
+            impl_ret,
+            &all_iface_generics,
+            &mut generic_subst,
+        );
 
         let iface_params: Vec<TypeId> = iface_params_raw
             .iter()
