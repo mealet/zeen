@@ -2098,6 +2098,22 @@ impl<'res> TypeChecker<'res> {
 
     // >> Macros
 
+    /// Resolves the heap `String` struct of `std.string`, the type
+    /// `@format` returns.
+    fn resolve_string_type(&mut self) -> Option<TypeId> {
+        let string_def = self.resolution.defs.iter().find_map(|(def, info)| {
+            matches!(info.kind, DefKind::Struct)
+                .then(|| self.interner.borrow().resolve(&info.name) == "String")
+                .filter(|found| *found)
+                .map(|_| *def)
+        })?;
+
+        Some(self.result.interner.intern(Type::Struct {
+            def_id: string_def,
+            generic_args: Vec::new(),
+        }))
+    }
+
     fn check_macro_call(
         &mut self,
         call_id: HirId,
@@ -2112,15 +2128,21 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirMacroKind::Format => {
-                // Disabled until `std.string` provides a heap string with a
-                // `StrWriter` implementation to format into.
-                self.report(TypeError::MacroNotImplemented {
-                    name: "format".into(),
-                    src: source.src(),
-                    span: source.span,
-                });
+                // Formats into a heap `String` returned by the macro.
+                self.check_format_macro(call_id, args, source.clone());
 
-                self.result.interner.error()
+                match self.resolve_string_type() {
+                    Some(ty) => ty,
+                    None => {
+                        self.report(TypeError::MacroNotImplemented {
+                            name: "format".into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+
+                        self.result.interner.error()
+                    }
+                }
             }
 
             HirMacroKind::Panic => {
