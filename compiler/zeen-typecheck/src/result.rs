@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use zeen_ast::Source;
 use zeen_hir::HirId;
 use zeen_resolve::DefId;
-use zeen_types::{StructTypeInfo, TypeId, TypeInterner};
+use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
 
 use crate::closure_alloc::ClosureAllocKind;
 use crate::format_str::FormatChunk;
@@ -19,6 +19,9 @@ pub struct TypeCheckResult {
     pub operator_resolutions: HashMap<HirId, OperatorResolution>,
     pub struct_info: HashMap<DefId, StructTypeInfo>,
     pub struct_generics: HashMap<DefId, Vec<DefId>>,
+    /// Interface names -> their `DefId`, so downstream passes (MIR, flow) can
+    /// resolve capabilities like `Copy` per concrete instantiation.
+    pub interface_registry: HashMap<String, DefId>,
     pub enum_variants: HashMap<DefId, Vec<DefId>>,
     pub method_owner: HashMap<DefId, DefId>,
     pub const_bindings: HashMap<DefId, bool>,
@@ -53,6 +56,12 @@ pub struct TypeCheckResult {
     /// `{:?}`), keyed by the argument expression. Recorded so MIR dispatches
     /// to the same implementation the checker picked.
     pub format_arg_resolutions: HashMap<HirId, DefId>,
+
+    /// Every method declared directly inside an `interface` block, mapped to
+    /// the interface that owns it (`write_str` -> `StrWriter`). Used by MIR to
+    /// dispatch a call made on a bounded generic parameter to the concrete
+    /// implementation once the receiver is monomorphized.
+    pub interface_method_owners: HashMap<DefId, DefId>,
 }
 
 /// A single `implement` block registered for a `(struct, interface)` pair.
@@ -74,6 +83,174 @@ pub struct ImplEntry {
 impl TypeCheckResult {
     pub fn record_expr_type(&mut self, id: HirId, ty: TypeId) {
         self.expr_types.insert(id, ty);
+    }
+
+    /// Whether a concrete type is `Copy`, decided per instantiation so that
+    /// bounded implementations like `implement[T: Copy] Copy : Option[T]`
+    /// only make `Option[T]` copyable when `T` itself is copyable.
+    ///
+    /// The generic-bound cases mirror `TypeChecker::applicable_impl` but use
+    /// this Copy-specific predicate for the bounds, since a builtin is always
+    /// Copy even though it does not declare a `Copy` interface impl.
+    pub fn is_copy(&self, ty: TypeId) -> bool {
+        match self.interner.get(ty).clone() {
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let Some(copy_iface) = self.interface_registry.get("Copy").copied() else {
+                    return false;
+                };
+                self.applicable_copy_impl(def_id, copy_iface, &generic_args)
+            }
+            Type::Array { element, .. } => self.is_copy(element),
+            // `Fn` closure values (all-Copy captures or none) are Copy: the
+            // inline environment is duplicated with the value; `FnOnce` owns a
+            // non-Copy capture so it is move-only.
+            Type::FatFn { once, .. } => !once,
+            Type::Slice { .. } => true,
+            // Builtins, pointers, fn pointers, enums, void, never, error.
+            _ => true,
+        }
+    }
+
+    fn applicable_copy_impl(
+        &self,
+        struct_def: DefId,
+        copy_iface: DefId,
+        generic_args: &[TypeId],
+    ) -> bool {
+        let Some(entries) = self.impl_registry.get(&(struct_def, copy_iface)) else {
+            return false;
+        };
+
+        // A concrete specialization always wins.
+        if entries
+            .iter()
+            .any(|e| e.is_specialized && e.object_args == generic_args)
+        {
+            return true;
+        }
+
+        let struct_generics = self
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
+
+        // Bounded generic impls require the concrete args to satisfy their
+        // bounds (`implement[T: Copy] Copy : Option[T]`).
+        for entry in entries
+            .iter()
+            .filter(|e| !e.is_specialized && !e.generic_bounds.is_empty())
+        {
+            let applies = entry.generic_bounds.iter().all(|(imp_g, ifaces)| {
+                let Some((_, struct_slot)) =
+                    entry.generic_bindings.iter().find(|(g, _)| g == imp_g)
+                else {
+                    return true;
+                };
+                let Some(index) = struct_generics.iter().position(|g| g == struct_slot) else {
+                    return true;
+                };
+                let Some(concrete) = generic_args.get(index).copied() else {
+                    return true;
+                };
+                // A Copy bound is satisfied exactly when the concrete argument
+                // is itself Copy. Non-Copy bounds are checked against the
+                // plain interface satisfaction path.
+                ifaces.iter().all(|&iface| {
+                    if iface == copy_iface {
+                        self.is_copy(concrete)
+                    } else {
+                        self.satisfies_interface(concrete, iface)
+                    }
+                })
+            });
+
+            if applies {
+                return true;
+            }
+        }
+
+        // A boundless wildcard implementation applies to every instantiation.
+        entries
+            .iter()
+            .any(|e| !e.is_specialized && e.generic_bounds.is_empty())
+    }
+
+    /// Whether a concrete (or interface) type satisfies the given interface.
+    /// Used to validate non-`Copy` bounds on a `Copy` implementation.
+    fn satisfies_interface(&self, ty: TypeId, iface_def: DefId) -> bool {
+        match self.interner.get(ty).clone() {
+            Type::Error => true,
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => self.applicable_interface(def_id, iface_def, &generic_args),
+            _ => false,
+        }
+    }
+
+    /// Selects the applicable implementation for `(struct_def, iface_def)` at
+    /// a concrete instantiation, reusing `applicable_copy_impl` for `Copy` so
+    /// builtins and bounded `Copy` impls are handled consistently.
+    fn applicable_interface(
+        &self,
+        struct_def: DefId,
+        iface_def: DefId,
+        generic_args: &[TypeId],
+    ) -> bool {
+        let Some(entries) = self.impl_registry.get(&(struct_def, iface_def)) else {
+            return false;
+        };
+
+        if entries
+            .iter()
+            .any(|e| e.is_specialized && e.object_args == generic_args)
+        {
+            return true;
+        }
+
+        let struct_generics = self
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
+
+        for entry in entries
+            .iter()
+            .filter(|e| !e.is_specialized && !e.generic_bounds.is_empty())
+        {
+            let applies = entry.generic_bounds.iter().all(|(imp_g, ifaces)| {
+                let Some((_, struct_slot)) =
+                    entry.generic_bindings.iter().find(|(g, _)| g == imp_g)
+                else {
+                    return true;
+                };
+                let Some(index) = struct_generics.iter().position(|g| g == struct_slot) else {
+                    return true;
+                };
+                let Some(concrete) = generic_args.get(index).copied() else {
+                    return true;
+                };
+                ifaces.iter().all(|&iface| {
+                    if iface == iface_def {
+                        false
+                    } else {
+                        self.satisfies_interface(concrete, iface)
+                    }
+                })
+            });
+
+            if applies {
+                return true;
+            }
+        }
+
+        entries
+            .iter()
+            .any(|e| !e.is_specialized && e.generic_bounds.is_empty())
     }
 }
 

@@ -43,6 +43,15 @@ pub struct Args {
     )]
     pub target: Option<String>,
 
+    /// `--std` flag to specify the std library root directory. Overrides the
+    /// `ZEEN_STD` environment variable and the default `~/.zeen/std` location.
+    #[arg(
+        long = "std",
+        value_name = "PATH",
+        help = "Path to the std library root (default: $ZEEN_STD or ~/.zeen/std)"
+    )]
+    pub std: Option<PathBuf>,
+
     /// `--targets-list` flag to print all supported target triples
     #[arg(long = "targets-list", action, help = "List supported target triples")]
     pub targets_list: bool,

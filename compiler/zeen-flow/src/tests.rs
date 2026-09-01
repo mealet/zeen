@@ -22,6 +22,7 @@ fn flow_errors(src: &str) -> Vec<FlowError> {
             linked: HashSet::new(),
         },
         core_files: vec![("core.ops", CORE_OPS)],
+        std_files: vec![],
         mode: CompilationMode::Debug,
         output: CompilationOutput::EmitMIR,
         target: None,
@@ -196,5 +197,50 @@ fn returning_global_ref_is_allowed() {
     assert!(
         !has_escaping_borrow(&errors),
         "unexpected escaping-borrow error, got {errors:?}"
+    );
+}
+
+#[test]
+fn bounded_copy_impl_leaves_non_copy_instances_move_only() {
+    // `implement[T: Copy] Copy : Pair[T]` must only make `Pair[T]` copyable
+    // when `T` is itself Copy; a double move of `Pair[Foo]` (Foo not Copy)
+    // must be rejected.
+    let errors = flow_errors(
+        "struct Pair[T] { pub value: T } \
+         implement[T: Copy] Copy : Pair[T] {} \
+         struct Foo {} \
+         fn main() { \
+             let a = Pair { .value = Foo {} }; \
+             let b = a; \
+             let c = a; \
+         }",
+    );
+
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, FlowError::UseAfterMove { .. })),
+        "expected use-after-move for the non-Copy `Pair[Foo]`, got {errors:?}"
+    );
+}
+
+#[test]
+fn bounded_copy_impl_keeps_copy_instances_copyable() {
+    // The same bounded impl must still allow double use when `T` is Copy.
+    let errors = flow_errors(
+        "struct Pair[T] { pub value: T } \
+         implement[T: Copy] Copy : Pair[T] {} \
+         fn main() { \
+             let a = Pair { .value = 1 }; \
+             let b = a; \
+             let c = a; \
+         }",
+    );
+
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, FlowError::UseAfterMove { .. })),
+        "unexpected use-after-move for the Copy `Pair[i32]`, got {errors:?}"
     );
 }

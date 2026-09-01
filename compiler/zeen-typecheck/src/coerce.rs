@@ -121,6 +121,17 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
         }
 
         (
+            Type::ManyPointer {
+                inner: from_inner, ..
+            },
+            Type::ManyPointer {
+                inner: to_inner, ..
+            },
+        ) if from_inner == interner.void() || to_inner == interner.void() => {
+            CoerceResult::VoidPtrCoercion
+        }
+
+        (
             Type::Array {
                 element: from_elem, ..
             },
@@ -363,6 +374,9 @@ pub fn verify_cast(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> boo
 
         // ptr <-> ptr
         (a, b) if is_pointer(a) && is_pointer(b) => true,
+
+        // ptr <-> integer (e.g. `*T -> usize` and `usize -> *T`)
+        (a, b) if (is_pointer(a) && is_int_only(b)) || (is_int_only(a) && is_pointer(b)) => true,
 
         // fn <-> ptr
         (a, b) if is_fn(a) && is_pointer(b) => true,
@@ -765,6 +779,20 @@ mod tests {
         assert!(!verify_cast(&mut it, bool_id, ptr));
         let void = it.void();
         assert!(!verify_cast(&mut it, void, ptr));
+    }
+
+    #[test]
+    fn verify_cast_accepts_pointer_to_integer_and_back() {
+        let mut it = TypeInterner::new();
+        let i32 = it.intern(builtin(BuiltinType::i32));
+        let usize_ty = it.intern(builtin(BuiltinType::usize));
+        let i32_ptr = it.intern(Type::Pointer {
+            inner: i32,
+            is_const: false,
+        });
+
+        assert!(verify_cast(&mut it, i32_ptr, usize_ty));
+        assert!(verify_cast(&mut it, usize_ty, i32_ptr));
     }
 
     #[test]

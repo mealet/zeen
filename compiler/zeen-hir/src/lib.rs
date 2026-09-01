@@ -575,13 +575,23 @@ impl<'res> HirLowering<'res> {
             },
 
             ExpressionKind::Call { callee, args } => {
-                let generic_args = match callee.kind {
-                    ExpressionKind::Ident {
-                        generic_args: Some(gargs),
-                        ..
-                    } => gargs.iter().map(|t| Rc::new(self.lower_type(t))).collect(),
-                    _ => Vec::new(),
+                // Explicit generic args may sit on the callee ident
+                // (`make#[T](...)`) or on the field of a method access
+                // (`Type.make#[T](...)`).
+                let callee_args: Option<&[&zeen_ast::TypeExpr<'_>]> = match callee.kind {
+                    ExpressionKind::Ident { generic_args, .. } => generic_args,
+                    ExpressionKind::FieldAccess { field, .. } => match field.kind {
+                        ExpressionKind::Ident { generic_args, .. } => generic_args,
+                        _ => None,
+                    },
+                    _ => None,
                 };
+
+                let generic_args = callee_args
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|t| Rc::new(self.lower_type(t)))
+                    .collect();
 
                 HirExprKind::Call {
                     callee: Rc::new(self.lower_expr(callee)),
@@ -947,6 +957,7 @@ mod tests {
                 linked: HashSet::new(),
             },
             core_files: vec![("core.ops", CORE_OPS)],
+            std_files: vec![],
             mode: CompilationMode::Debug,
             output: CompilationOutput::EmitMIR,
             target: None,
