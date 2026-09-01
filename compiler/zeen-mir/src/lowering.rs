@@ -1882,7 +1882,7 @@ impl<'ctx> MirLowering<'ctx> {
                                         &method_name,
                                         &recv_args,
                                     ) {
-                                        (concrete, recv_args.clone())
+                                        (concrete, generic_args.clone())
                                     } else {
                                         (fn_def, generic_args)
                                     }
@@ -2896,12 +2896,21 @@ impl<'ctx> MirLowering<'ctx> {
                                     FormatSpec::Debug => ("Debug", "debug"),
                                     _ => ("Display", "display"),
                                 };
+                                let (block_w, writer_operand) =
+                                    self.outstream_writer_operand(fb, block);
+                                block = block_w;
+                                let writer_ty = self
+                                    .resolve_outstream()
+                                    .expect("core `OutStream` struct is missing")
+                                    .0;
                                 block = self.lower_struct_display_call(
                                     fb,
                                     arg.expect("format arg"),
                                     ty.expect("format arg type"),
                                     iface,
                                     block,
+                                    writer_ty,
+                                    writer_operand,
                                 );
 
                                 if is_panic {
@@ -3047,12 +3056,21 @@ impl<'ctx> MirLowering<'ctx> {
                                 FormatSpec::Debug => ("Debug", "debug"),
                                 _ => ("Display", "display"),
                             };
+                            let (block_w, writer_operand) =
+                                self.outstream_writer_operand(fb, block);
+                            block = block_w;
+                            let writer_ty = self
+                                .resolve_outstream()
+                                .expect("core `OutStream` struct is missing")
+                                .0;
                             block = self.lower_struct_display_call(
                                 fb,
                                 arg.expect("format arg"),
                                 ty.expect("format arg type"),
                                 iface,
                                 block,
+                                writer_ty,
+                                writer_operand,
                             );
                         } else if let Some(arg) = arg {
                             seg_chunks.push(FormatChunk::Arg(*spec));
@@ -3188,8 +3206,9 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     /// Lowers a struct `{}`/`{:?}` format argument into a call to the
-    /// struct's `display`/`debug` interface method, passing the stdout writer
-    /// so the method writes its representation directly to the output.
+    /// struct's `display`/`debug` interface method, passing the given writer
+    /// so the method writes its representation directly into it.
+    #[allow(clippy::too_many_arguments)]
     fn lower_struct_display_call(
         &mut self,
         fb: &mut FnBuilder,
@@ -3197,6 +3216,8 @@ impl<'ctx> MirLowering<'ctx> {
         obj_ty: TypeId,
         iface: (&str, &str),
         block: BlockId,
+        writer_ty: TypeId,
+        writer_operand: Operand,
     ) -> BlockId {
         let (iface_name, method_name) = iface;
         let Type::Struct {
@@ -3232,9 +3253,13 @@ impl<'ctx> MirLowering<'ctx> {
             block,
         );
 
-        let (block, writer_operand) = self.outstream_writer_operand(fb, block);
-
-        let mono_args = self.substitute_generic_args(fb, &generic_args);
+        // The writer is the `display`/`debug` method's generic parameter:
+        // bind it explicitly so `W` is substituted at codegen.
+        let method_has_generics = !self.hir_fns_by_def[&method_def].generics.is_empty();
+        let mut mono_args = self.substitute_generic_args(fb, &generic_args);
+        if method_has_generics {
+            mono_args.push(writer_ty);
+        }
         let owner = self.typecheck.method_owner.get(&method_def).copied();
         let mir_fn_id = self.monomorphize_fn(method_def, mono_args, owner, &[]);
 
@@ -4329,11 +4354,62 @@ impl<'ctx> MirLowering<'ctx> {
     ) -> MirFunction {
         let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
         let bindings: HashMap<DefId, TypeId> = if !generic_defs.is_empty() {
-            generic_defs
-                .iter()
-                .copied()
-                .zip(generic_args.iter().copied())
-                .collect()
+            if let Some(owner) = owner_struct {
+                // Generic methods are called with their struct's generics
+                // first, then the method's own (`[T, W]` for
+                // `Option[T].debug[W]`); split and bind both.
+                let struct_generics = self
+                    .typecheck
+                    .struct_generics
+                    .get(&owner)
+                    .cloned()
+                    .unwrap_or_default();
+                let struct_count = struct_generics.len();
+                let struct_args: Vec<TypeId> =
+                    generic_args.iter().take(struct_count).copied().collect();
+                let method_args: Vec<TypeId> =
+                    generic_args.iter().skip(struct_count).copied().collect();
+
+                let mut bindings: HashMap<DefId, TypeId> = struct_generics
+                    .iter()
+                    .copied()
+                    .zip(struct_args.iter().copied())
+                    .collect();
+
+                // An implement block's methods may be written with the block's
+                // own generic parameters (`implement[T] Deref : Holder[T]`):
+                // substitute them through the struct's generic slots.
+                for entries in self.typecheck.impl_registry.values() {
+                    for entry in entries {
+                        if !entry.methods.contains(&def_id) {
+                            continue;
+                        }
+
+                        for (arg, &struct_g) in entry.object_args.iter().zip(struct_generics.iter())
+                        {
+                            if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
+                                && let Some(&concrete) = bindings.get(&struct_g)
+                            {
+                                bindings.insert(*imp_g, concrete);
+                            }
+                        }
+                    }
+                }
+
+                bindings.extend(
+                    generic_defs
+                        .iter()
+                        .copied()
+                        .zip(method_args.iter().copied()),
+                );
+                bindings
+            } else {
+                generic_defs
+                    .iter()
+                    .copied()
+                    .zip(generic_args.iter().copied())
+                    .collect()
+            }
         } else if let Some(owner) = owner_struct {
             let struct_generics = self
                 .typecheck
