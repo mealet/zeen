@@ -52,7 +52,7 @@ pub struct Option[T] {
 implement[T: Copy] Copy : Option[T]  {}
 
 implement[T: Debug] Debug : Option[T] {
-  fn debug(*const self, out: OutStream) {
+  fn debug[W: StrWriter](*const self, out: W) {
     if (self._is_some) {
       out.write_str("Some(");
       self.value.debug(out);

@@ -436,13 +436,13 @@ implement Drop : String {
 }
 
 implement Display : String {
-  fn display(*const self, out: OutStream) void {
+  fn display[W: StrWriter](*const self, out: W) void {
     out.write_str_raw(self.ptr, self._len);
   }
 }
 
 implement Debug : String {
-  fn debug(*const self, out: OutStream) void {
+  fn debug[W: StrWriter](*const self, out: W) void {
     out.write_str_single('"');
     out.write_str_raw(self.ptr, self._len);
     out.write_str_single('"');
