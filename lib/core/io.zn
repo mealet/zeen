@@ -29,16 +29,13 @@ implement StrWriter : OutStream {
   }
 }
 
-/// `Display` interface is used to render a structure in format macros
-/// (print, println, panic, etc.). The implementation writes its full
-/// representation into `out` with `write_str`.
+/// Render a structure in format macros (print, println, panic, format).
+/// The writer is generic - both `OutStream` and heap `String` work.
 pub interface Display {
-  pub fn display(*const self, out: OutStream) void;
+  pub fn display[T: StrWriter](*const self, out: T) void;
 }
 
-/// `Debug` interface is used to render a structure in debug macros
-/// (dbg, print/println with "{:?}" specifier). The implementation writes its
-/// full (quoted) representation into `out` with `write_str`.
+/// Render a structure in debug macros (dbg, "{:?}" specifier).
 pub interface Debug {
-  pub fn debug(*const self, out: OutStream) void;
+  pub fn debug[T: StrWriter](*const self, out: T) void;
 }
