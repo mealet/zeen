@@ -251,6 +251,7 @@ pub struct String {
     output
   }
 
+  /// `true` if string contains provided character
   pub fn contains(*const self, value: char) bool {
     if (self._capacity < 1 || self._len < 1) {
       return false;
@@ -259,6 +260,7 @@ pub struct String {
     return strchr(self.ptr, value) != nullptr;
   }
 
+  /// `true` if string contains provided string slice
   pub fn contains_str(*const self, value: []const char) bool {
     if (self._capacity < 1 || self._len < 1) {
       return false;
@@ -267,6 +269,7 @@ pub struct String {
     return strstr(self.ptr, value.ptr) != nullptr;
   }
 
+  /// `true` if string contains provided cstr
   pub fn contains_cstr(*const self, value: [*]const char) bool {
     if (self._capacity < 1 || self._len < 1) {
       return false;
@@ -275,6 +278,9 @@ pub struct String {
     return strstr(self.ptr, value) != nullptr;
   }
 
+  /// Finds character in string:
+  /// * `Some(usize)` - if found, returns position
+  /// * `None` - if not found
   pub fn find(*const self, value: char) Option[usize] {
     let entrance = strchr(self.ptr, value);
 
@@ -285,6 +291,9 @@ pub struct String {
     Option.Some(@as(usize, entrance - self.ptr))
   }
 
+  /// Finds string slice in string:
+  /// * `Some(usize)` - if found, returns first character position
+  /// * `None` - if not found
   pub fn find_str(*const self, value: []const char) Option[usize] {
     let entrance = strstr(self.ptr, value.ptr);
 
@@ -295,6 +304,9 @@ pub struct String {
     Option.Some(@as(usize, entrance - self.ptr))   
   }
 
+  /// Finds cstr slice in string:
+  /// * `Some(usize)` - if found, returns first character position
+  /// * `None` - if not found
   pub fn find_cstr(*const self, value: [*]const char) Option[usize] {
     if (@as(*void, value) == nullptr) {
       return Option#[usize].None();
@@ -309,6 +321,7 @@ pub struct String {
     Option.Some(@as(usize, entrance - self.ptr))   
   }
 
+  /// Converts whole string to uppercase
   pub fn to_uppercase(*self) {
     let cursor = @as(*char, self.ptr);
     let end = @as(*char, self.ptr + self._len);
@@ -319,6 +332,7 @@ pub struct String {
     }
   }
 
+  /// Converts whole string to lowercase 
   pub fn to_lowercase(*self) {
     let cursor = @as(*char, self.ptr);
     let end = @as(*char, self.ptr + self._len);
@@ -329,6 +343,7 @@ pub struct String {
     }
   }
 
+  /// Find every `from` string entrance and replace with `to`
   pub fn replace(*self, from: [*]const char, to: [*]const char) {
     if (
       @as(*void, from) == nullptr ||
@@ -377,6 +392,7 @@ pub struct String {
     self._capacity = new_capacity;
   }
 
+  /// Reverse characters order in string
   pub fn reverse(*self) {
     if (self._capacity < 1 || self._len < 1) {
       return;
@@ -396,11 +412,13 @@ pub struct String {
     }
   }
 
+  /// Clear string (capacity saves)
   pub fn clear(*self) {
     self.ptr[0] = '\0';
     self._len = 0;
   }
 
+  /// Truncate string with new length (capacity saves)
   pub fn truncate(*self, new_len: usize) {
     if (new_len > self._len) { return; };
 
