@@ -30,12 +30,13 @@ implement StrWriter : OutStream {
 }
 
 /// Render a structure in format macros (print, println, panic, format).
-/// The writer is generic - both `OutStream` and heap `String` work.
+/// The writer is generic and passed by pointer, so mutable writers (the
+/// heap `String`) accumulate output across multiple arguments.
 pub interface Display {
-  pub fn display[T: StrWriter](*const self, out: T) void;
+  pub fn display[T: StrWriter](*const self, out: *T) void;
 }
 
 /// Render a structure in debug macros (dbg, "{:?}" specifier).
 pub interface Debug {
-  pub fn debug[T: StrWriter](*const self, out: T) void;
+  pub fn debug[T: StrWriter](*const self, out: *T) void;
 }

@@ -436,16 +436,16 @@ implement Drop : String {
 }
 
 implement Display : String {
-  fn display[W: StrWriter](*const self, out: W) void {
-    out.write_str_raw(self.ptr, self._len);
+  fn display[W: StrWriter](*const self, out: *W) void {
+    (*out).write_str_raw(self.ptr, self._len);
   }
 }
 
 implement Debug : String {
-  fn debug[W: StrWriter](*const self, out: W) void {
-    out.write_str_single('"');
-    out.write_str_raw(self.ptr, self._len);
-    out.write_str_single('"');
+  fn debug[W: StrWriter](*const self, out: *W) void {
+    (*out).write_str_single('"');
+    (*out).write_str_raw(self.ptr, self._len);
+    (*out).write_str_single('"');
   }
 }
 

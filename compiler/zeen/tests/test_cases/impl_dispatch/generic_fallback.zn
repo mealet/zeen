@@ -7,8 +7,8 @@ struct Tag[T] {
 }
 
 implement[T: Display] Display : Tag[T] {
-  fn display(*const self, out: OutStream) void {
-    out.write_str("TAGGED");
+  fn display[W: StrWriter](*const self, out: *W) void {
+    (*out).write_str("TAGGED");
   }
 }
 

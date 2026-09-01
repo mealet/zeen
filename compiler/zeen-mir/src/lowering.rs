@@ -156,6 +156,9 @@ pub struct MirLowering<'ctx> {
     /// Lazily resolved stdout writer: the `core.out` `OutStream` struct and
     /// its zero-sized `TypeId` (used as the `out` sink of `Display`/`Debug`).
     outstream: Option<(TypeId, DefId)>,
+
+    /// Lazily resolved `std.string` `String` struct (the `@format` writer).
+    format_string: Option<(TypeId, DefId)>,
 }
 
 struct GlobalDecl {
@@ -333,6 +336,7 @@ impl<'ctx> MirLowering<'ctx> {
             globals: Vec::new(),
             globals_by_def: HashMap::new(),
             outstream: None,
+            format_string: None,
         }
     }
 
@@ -1946,7 +1950,20 @@ impl<'ctx> MirLowering<'ctx> {
                 if let HirExprKind::FieldAccess { object, .. } = &callee.kind
                     && has_self_param
                 {
-                    let (b, self_operand) = self.lower_receiver_operand(fb, object, fn_def, block);
+                    let recv_ty = self.expr_type(fb, object);
+                    let object = object.clone();
+                    if let Some(chain) = self.try_lower_builtin_display(
+                        fb,
+                        block,
+                        &object,
+                        recv_ty,
+                        fn_def,
+                        args,
+                        Some(expr.source.clone()),
+                    ) {
+                        return chain;
+                    }
+                    let (b, self_operand) = self.lower_receiver_operand(fb, &object, fn_def, block);
                     block = b;
                     arg_operands.push(self_operand);
                 }
@@ -2826,6 +2843,10 @@ impl<'ctx> MirLowering<'ctx> {
             );
         }
 
+        if matches!(kind, HirMacroKind::Format) {
+            return self.lower_format_macro(fb, format_chunks, value_exprs, hir_id, block, source);
+        }
+
         let mut block = block;
         let mut operands = Vec::with_capacity(value_exprs.len());
         let mut arg_types = Vec::with_capacity(value_exprs.len());
@@ -2896,13 +2917,9 @@ impl<'ctx> MirLowering<'ctx> {
                                     FormatSpec::Debug => ("Debug", "debug"),
                                     _ => ("Display", "display"),
                                 };
-                                let (block_w, writer_operand) =
+                                let (block_w, writer_place, writer_ty) =
                                     self.outstream_writer_operand(fb, block);
                                 block = block_w;
-                                let writer_ty = self
-                                    .resolve_outstream()
-                                    .expect("core `OutStream` struct is missing")
-                                    .0;
                                 block = self.lower_struct_display_call(
                                     fb,
                                     arg.expect("format arg"),
@@ -2910,7 +2927,7 @@ impl<'ctx> MirLowering<'ctx> {
                                     iface,
                                     block,
                                     writer_ty,
-                                    writer_operand,
+                                    writer_place,
                                 );
 
                                 if is_panic {
@@ -3056,13 +3073,9 @@ impl<'ctx> MirLowering<'ctx> {
                                 FormatSpec::Debug => ("Debug", "debug"),
                                 _ => ("Display", "display"),
                             };
-                            let (block_w, writer_operand) =
+                            let (block_w, writer_place, writer_ty) =
                                 self.outstream_writer_operand(fb, block);
                             block = block_w;
-                            let writer_ty = self
-                                .resolve_outstream()
-                                .expect("core `OutStream` struct is missing")
-                                .0;
                             block = self.lower_struct_display_call(
                                 fb,
                                 arg.expect("format arg"),
@@ -3070,7 +3083,7 @@ impl<'ctx> MirLowering<'ctx> {
                                 iface,
                                 block,
                                 writer_ty,
-                                writer_operand,
+                                writer_place,
                             );
                         } else if let Some(arg) = arg {
                             seg_chunks.push(FormatChunk::Arg(*spec));
@@ -3205,9 +3218,379 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
+    /// Lowers `@format`: builds a heap `String` by writing literal and builtin
+    /// segments (each rendered with a `Format` macro into a stack slice, then
+    /// appended via `StrWriter::write_str`) and struct args (rendered through
+    /// their `display`/`debug` method straight into the same `String`).
+    #[allow(clippy::too_many_arguments)]
+    fn lower_format_macro(
+        &mut self,
+        fb: &mut FnBuilder,
+        format_chunks: Option<Vec<FormatChunk>>,
+        value_exprs: &[Rc<HirExpr>],
+        hir_id: HirId,
+        block: BlockId,
+        source: Source,
+    ) -> (BlockId, Operand) {
+        let mut block = block;
+
+        // The accumulated output lives in a freshly allocated `String`.
+        let (block_w, writer_place, writer_ty) = self.string_writer_place(fb, block);
+        block = block_w;
+
+        let mut seg_chunks: Vec<FormatChunk> = Vec::new();
+        let mut seg_operands: Vec<Operand> = Vec::new();
+        let mut seg_types: Vec<TypeId> = Vec::new();
+        let mut value_idx = 0usize;
+
+        if let Some(chunks) = format_chunks.as_deref() {
+            for chunk in chunks {
+                match chunk {
+                    FormatChunk::Literal(text) => {
+                        seg_chunks.push(FormatChunk::Literal(text.clone()));
+                    }
+                    FormatChunk::Arg(spec) => {
+                        let arg = value_exprs.get(value_idx);
+                        let ty = arg.map(|a| self.expr_type(fb, a));
+                        let err_ty = self.typecheck.interner.error();
+                        let is_struct_display =
+                            matches!(
+                                self.typecheck.interner.get(ty.unwrap_or(err_ty)),
+                                Type::Struct { .. }
+                            ) && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
+
+                        if is_struct_display {
+                            if !seg_chunks.is_empty() {
+                                block = self.emit_string_segment(
+                                    fb,
+                                    std::mem::take(&mut seg_chunks),
+                                    std::mem::take(&mut seg_operands),
+                                    std::mem::take(&mut seg_types),
+                                    writer_ty,
+                                    writer_place.clone(),
+                                    block,
+                                    Some(&source),
+                                );
+                            }
+
+                            let iface = match spec {
+                                FormatSpec::Debug => ("Debug", "debug"),
+                                _ => ("Display", "display"),
+                            };
+                            block = self.lower_struct_display_call(
+                                fb,
+                                arg.expect("format arg"),
+                                ty.expect("format arg type"),
+                                iface,
+                                block,
+                                writer_ty,
+                                writer_place.clone(),
+                            );
+                        } else if let Some(arg) = arg {
+                            seg_chunks.push(FormatChunk::Arg(*spec));
+                            let (b, op) = self.lower_expr_to_operand(fb, arg, block);
+                            block = b;
+                            seg_operands.push(op);
+                            seg_types.push(ty.expect("format arg type"));
+                        }
+
+                        value_idx += 1;
+                    }
+                }
+            }
+        }
+
+        // Extra args (checked but not formatted) are lowered for side effects.
+        for arg in value_exprs.iter().skip(value_idx) {
+            let (b, _) = self.lower_expr_to_operand(fb, arg, block);
+            block = b;
+        }
+
+        if !seg_chunks.is_empty() {
+            block = self.emit_string_segment(
+                fb,
+                std::mem::take(&mut seg_chunks),
+                std::mem::take(&mut seg_operands),
+                std::mem::take(&mut seg_types),
+                writer_ty,
+                writer_place.clone(),
+                block,
+                Some(&source),
+            );
+        }
+
+        (block, self.place_to_operand(writer_place, writer_ty, None))
+    }
+
+    /// Renders literal/builtin segments with a `Format` macro into a stack
+    /// slice, then appends it to the writer `String` via `write_str`.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_string_segment(
+        &mut self,
+        fb: &mut FnBuilder,
+        chunks: Vec<FormatChunk>,
+        operands: Vec<Operand>,
+        arg_types: Vec<TypeId>,
+        writer_ty: TypeId,
+        writer_place: Place,
+        block: BlockId,
+        source: Option<&Source>,
+    ) -> BlockId {
+        let char_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::char));
+        let slice_ty = self.typecheck.interner.intern(Type::Slice {
+            element: char_ty,
+            is_const: true,
+        });
+        let seg_dest = fb.new_temp(slice_ty);
+        let after_render = fb.new_block();
+        let next = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::MacroCall {
+                kind: HirMacroKind::Format,
+                format_chunks: Some(chunks),
+                args: operands,
+                arg_types,
+                destination: Place::from_local(seg_dest),
+                target: Some(after_render),
+                source: source.cloned(),
+            },
+        );
+
+        let slice_op = self.place_to_operand(Place::from_local(seg_dest), slice_ty, None);
+        let (block_addr, writer_addr) =
+            self.addr_of_operand(fb, after_render, writer_place, writer_ty);
+        let Some(write_str_def) =
+            self.resolve_interface_method_by_def(writer_ty, "StrWriter", "write_str")
+        else {
+            panic!("writer `StrWriter.write_str` implementation is missing");
+        };
+        let owner_struct = match self.typecheck.interner.get(writer_ty).clone() {
+            Type::Struct { def_id, .. } => def_id,
+            _ => panic!("format writer must be a struct"),
+        };
+        let write_str_id = self.monomorphize_fn(write_str_def, Vec::new(), Some(owner_struct), &[]);
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let dest = fb.new_temp(void_ty);
+
+        fb.set_terminator(
+            block_addr,
+            Terminator::Call {
+                func: CallTarget::Direct(write_str_id),
+                args: vec![writer_addr, slice_op],
+                destination: Place::from_local(dest),
+                target: Some(next),
+                source: None,
+            },
+        );
+
+        next
+    }
+
+    /// Creates a fresh empty `String` (`{ nullptr, 0, 0 }`) as the writer and
+    /// returns its temp local together with its `TypeId`.
+    fn string_writer_place(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+    ) -> (BlockId, Place, TypeId) {
+        let Some((ty, struct_def)) = self.resolve_string_struct() else {
+            panic!("core `String` struct is missing: `@format` requires `std.string`");
+        };
+
+        let temp = fb.new_temp(ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Struct(struct_def),
+                    operands: vec![
+                        Operand::Constant(ConstValue::NullPtr, None),
+                        Operand::Constant(ConstValue::Int(0), None),
+                        Operand::Constant(ConstValue::Int(0), None),
+                    ],
+                },
+                source: None,
+            },
+        );
+
+        (block, Place::from_local(temp), ty)
+    }
+
+    /// Builds `&place` as a monomorphic pointer operand.
+    fn addr_of_operand(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        place: Place,
+        ty: TypeId,
+    ) -> (BlockId, Operand) {
+        let ptr_ty = self.typecheck.interner.intern(Type::ManyPointer {
+            inner: ty,
+            is_const: false,
+        });
+        let addr_temp = fb.new_temp(ptr_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(addr_temp),
+                rvalue: Rvalue::Ref {
+                    place,
+                    is_const: false,
+                },
+                source: None,
+            },
+        );
+
+        (
+            block,
+            self.place_to_operand(Place::from_local(addr_temp), ptr_ty, None),
+        )
+    }
+
+    /// Lowers a `debug`/`display` call on a builtin receiver (`self.x.debug(out)`
+    /// where `x: i32`) into a `Format` macro render of the value followed by a
+    /// `write_str` append into the writer, so builtins written inside struct
+    /// `Display`/`Debug` implementations land in the writer (stdout or a heap
+    /// `String`) instead of leaking straight to stdout.
+    #[allow(clippy::too_many_arguments)]
+    fn try_lower_builtin_display(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        object: &Rc<HirExpr>,
+        recv_ty: TypeId,
+        fn_def: DefId,
+        args: &[Rc<HirExpr>],
+        source: Option<Source>,
+    ) -> Option<(BlockId, Operand)> {
+        let method_name = {
+            let r = self.rodeo.borrow();
+            r.resolve(&self.resolution.defs[&fn_def].name).to_string()
+        };
+        let spec = match method_name.as_str() {
+            "debug" => FormatSpec::Debug,
+            "display" => FormatSpec::Display,
+            _ => return None,
+        };
+
+        let recv_sub = self.substitute_fn_type(fb, recv_ty);
+        let recv_ty_inner = self.typecheck.interner.get(recv_sub).clone();
+        if !matches!(recv_ty_inner, Type::Builtin(_)) {
+            return None;
+        }
+
+        let (block, value_op) = self.lower_expr_to_operand(fb, object, block);
+        let (block, writer_op) = self.lower_expr_to_operand(fb, &args[0], block);
+
+        let writer_ty = self.expr_type(fb, &args[0]);
+        let writer_struct_ty = match self.typecheck.interner.get(writer_ty).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+            _ => return None,
+        };
+
+        let write_str_def =
+            self.resolve_interface_method_by_def(writer_struct_ty, "StrWriter", "write_str")?;
+        let owner_struct = match self.typecheck.interner.get(writer_struct_ty).clone() {
+            Type::Struct { def_id, .. } => def_id,
+            _ => return None,
+        };
+        let write_str_id = self.monomorphize_fn(write_str_def, Vec::new(), Some(owner_struct), &[]);
+
+        let char_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::char));
+        let slice_ty = self.typecheck.interner.intern(Type::Slice {
+            element: char_ty,
+            is_const: true,
+        });
+        let seg_dest = fb.new_temp(slice_ty);
+        let after_render = fb.new_block();
+        let next = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::MacroCall {
+                kind: HirMacroKind::Format,
+                format_chunks: Some(vec![FormatChunk::Arg(spec)]),
+                args: vec![value_op],
+                arg_types: vec![recv_ty],
+                destination: Place::from_local(seg_dest),
+                target: Some(after_render),
+                source: source.clone(),
+            },
+        );
+
+        let slice_op = self.place_to_operand(Place::from_local(seg_dest), slice_ty, None);
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let dest = fb.new_temp(void_ty);
+
+        fb.set_terminator(
+            after_render,
+            Terminator::Call {
+                func: CallTarget::Direct(write_str_id),
+                args: vec![writer_op, slice_op],
+                destination: Place::from_local(dest),
+                target: Some(next),
+                source,
+            },
+        );
+
+        Some((next, Operand::Constant(ConstValue::Void, None)))
+    }
+
+    /// Resolves the `std.string` `String` struct (the heap string writer).
+    fn resolve_string_struct(&mut self) -> Option<(TypeId, DefId)> {
+        if self.format_string.is_some() {
+            return self.format_string;
+        }
+
+        let struct_def = self.resolution.defs.iter().find_map(|(def, info)| {
+            matches!(info.kind, DefKind::Struct)
+                .then(|| self.rodeo.borrow().resolve(&info.name) == "String")
+                .filter(|found| *found)
+                .map(|_| *def)
+        })?;
+
+        let ty = self.typecheck.interner.intern(Type::Struct {
+            def_id: struct_def,
+            generic_args: Vec::new(),
+        });
+
+        self.register_struct_layout(ty, struct_def);
+
+        self.format_string = Some((ty, struct_def));
+        self.format_string
+    }
+
+    /// Resolves the implementing `DefId` of an interface method for the
+    /// struct type `ty` by its interface and method names.
+    fn resolve_interface_method_by_def(
+        &mut self,
+        ty: TypeId,
+        iface_name: &str,
+        method_name: &str,
+    ) -> Option<DefId> {
+        let Type::Struct {
+            def_id,
+            generic_args,
+        } = self.typecheck.interner.get(ty).clone()
+        else {
+            return None;
+        };
+        self.resolve_interface_method(def_id, iface_name, method_name, &generic_args)
+    }
+
     /// Lowers a struct `{}`/`{:?}` format argument into a call to the
-    /// struct's `display`/`debug` interface method, passing the given writer
-    /// so the method writes its representation directly into it.
+    /// struct's `display`/`debug` interface method, passing a pointer to the
+    /// given writer so the method writes its representation into it.
     #[allow(clippy::too_many_arguments)]
     fn lower_struct_display_call(
         &mut self,
@@ -3217,8 +3600,28 @@ impl<'ctx> MirLowering<'ctx> {
         iface: (&str, &str),
         block: BlockId,
         writer_ty: TypeId,
-        writer_operand: Operand,
+        writer_place: Place,
     ) -> BlockId {
+        // `display[T: StrWriter](*const self, out: *T)` takes the writer by
+        // pointer; build `&writer` as the second argument.
+        let writer_ptr_ty = self.typecheck.interner.intern(Type::ManyPointer {
+            inner: writer_ty,
+            is_const: false,
+        });
+        let writer_addr_temp = fb.new_temp(writer_ptr_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(writer_addr_temp),
+                rvalue: Rvalue::Ref {
+                    place: writer_place,
+                    is_const: false,
+                },
+                source: None,
+            },
+        );
+        let writer_operand =
+            self.place_to_operand(Place::from_local(writer_addr_temp), writer_ptr_ty, None);
         let (iface_name, method_name) = iface;
         let Type::Struct {
             def_id: struct_def,
@@ -3314,12 +3717,13 @@ impl<'ctx> MirLowering<'ctx> {
         self.outstream
     }
 
-    /// Builds the stdout writer value (a zero-sized `OutStream` struct).
+    /// Builds the stdout writer value (a zero-sized `OutStream` struct),
+    /// returning its temp local so callers can take its address.
     fn outstream_writer_operand(
         &mut self,
         fb: &mut FnBuilder,
         block: BlockId,
-    ) -> (BlockId, Operand) {
+    ) -> (BlockId, Place, TypeId) {
         let Some((ty, struct_def)) = self.resolve_outstream() else {
             panic!("core `OutStream` struct is missing: formatting requires `core.out`");
         };
@@ -3337,10 +3741,7 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        (
-            block,
-            self.place_to_operand(Place::from_local(temp), ty, None),
-        )
+        (block, Place::from_local(temp), ty)
     }
 
     /// Resolves the `DefId` of the method with `method_name` that implements
