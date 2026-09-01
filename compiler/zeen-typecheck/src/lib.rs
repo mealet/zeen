@@ -5645,6 +5645,7 @@ mod tests {
                 linked: HashSet::new(),
             },
             core_files: Vec::new(),
+            std_files: Vec::new(),
             mode: CompilationMode::Debug,
             output: CompilationOutput::Binary,
             target: target.map(|triple| triple.to_string()),

@@ -26,6 +26,7 @@ fn compile_mir_mode(
             linked: HashSet::new(),
         },
         core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
+        std_files: vec![],
         mode,
         output: CompilationOutput::EmitMIR,
         target: None,
