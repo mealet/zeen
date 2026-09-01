@@ -69,12 +69,19 @@ impl<'ctx> IncludeResolver<'ctx> {
         miette::NamedSource::new(self.filename.as_str(), src_ref)
     }
 
+    /// Returns `true` if `raw` is a built-in module path (e.g. `std.alloc`)
+    /// already injected into `self.modules`.
+    fn is_builtin_module(&self, raw: &str) -> bool {
+        self.modules.contains_key(Path::new(raw))
+    }
+
     pub fn resolve_core_injects(
         &mut self,
         root_path: PathBuf,
         root_decls: &'ctx [&'ctx Declaration<'ctx>],
         root_named_src: NamedSource<Arc<String>>,
         core_files: &[(&'static str, &'static str)],
+        std_files: &[(&'static str, &'static str)],
     ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
         let root_canonical = canonicalize_best_effort(&root_path);
 
@@ -91,6 +98,24 @@ impl<'ctx> IncludeResolver<'ctx> {
         let mut out: Vec<&'ctx Declaration<'ctx>> = Vec::new();
 
         for (name, content) in core_files {
+            let source = Arc::new(content.to_string());
+            let filename = Rc::new(name.to_string());
+
+            let parsed_module = self.parse_module(Arc::clone(&source), filename)?;
+            parsed_module.iter().for_each(|decl| out.push(decl));
+
+            self.modules.insert(
+                Path::new(name).to_path_buf(),
+                RawModule {
+                    decls: parsed_module,
+                    canonical_path: Path::new(name).to_path_buf(),
+                    named_src: NamedSource::new(name, source),
+                    is_core: true,
+                },
+            );
+        }
+
+        for (name, content) in std_files {
             let source = Arc::new(content.to_string());
             let filename = Rc::new(name.to_string());
 
@@ -222,6 +247,11 @@ impl<'ctx> IncludeResolver<'ctx> {
             };
 
             let raw = self.interner_resolve(&module.0);
+
+            if self.is_builtin_module(&raw) {
+                continue;
+            }
+
             let target = match resolve_use_path(
                 &raw,
                 current_canonical,
@@ -332,6 +362,10 @@ impl<'ctx> IncludeResolver<'ctx> {
                 DeclarationKind::Use { module } => {
                     let raw = self.interner_resolve(&module.0);
 
+                    if self.is_builtin_module(&raw) {
+                        continue;
+                    }
+
                     let Ok(target) = resolve_use_path(
                         &raw,
                         canonical,
@@ -352,6 +386,20 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
             }
         }
+    }
+
+    /// A bare `extern fn` (no body) is a declaration only: repeated
+    /// declarations of the same symbol are harmless, like redeclaring a
+    /// libc function in C when std modules are injected.
+    fn is_bare_extern_fn(decl: &Declaration<'ctx>) -> bool {
+        matches!(
+            decl.kind,
+            DeclarationKind::FnDecl {
+                is_extern: true,
+                body: None,
+                ..
+            }
+        )
     }
 
     fn check_collisions(&mut self, merged: &[&'ctx Declaration<'ctx>]) {
@@ -390,6 +438,10 @@ impl<'ctx> IncludeResolver<'ctx> {
             let (ns, name, span, _) = entry;
 
             if let Some((first_span, first_decl)) = seen.get(&(ns, name)) {
+                if Self::is_bare_extern_fn(first_decl) && Self::is_bare_extern_fn(decl) {
+                    continue;
+                }
+
                 let name = self.interner_resolve(&entry.1);
 
                 let first_definition = {

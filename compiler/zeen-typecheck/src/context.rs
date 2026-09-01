@@ -89,6 +89,10 @@ impl InterfaceRegistry {
     pub fn get(&self, name: &str) -> Option<DefId> {
         self.by_name.get(name).copied()
     }
+
+    pub fn into_name_map(self) -> std::collections::HashMap<String, DefId> {
+        self.by_name
+    }
 }
 
 #[cfg(test)]

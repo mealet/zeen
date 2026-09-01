@@ -33,6 +33,7 @@ pub fn resolve<'ctx>(
     context: &'ctx mut CompilationContext,
 ) -> Result<ResolvedProgram<'ctx>, Vec<ResolveError>> {
     let core_files = context.core_files.clone();
+    let std_files = context.std_files.clone();
 
     let mut include_resolver = include_resolver::IncludeResolver::new(
         Rc::clone(&filename),
@@ -47,6 +48,7 @@ pub fn resolve<'ctx>(
         entry_program,
         miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
         &core_files,
+        &std_files,
     )?;
 
     let resolved_program = include_resolver.resolve(
@@ -84,6 +86,7 @@ mod tests {
     use zeen_parser::Parser;
 
     const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
+    const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
 
     #[derive(Debug)]
     struct Fixture {
@@ -117,7 +120,8 @@ mod tests {
                 std_root: None,
                 linked: HashSet::new(),
             },
-            core_files: vec![("core.ops", CORE_OPS)],
+            core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
+            std_files: vec![],
             mode: CompilationMode::Debug,
             output: CompilationOutput::EmitMIR,
             target: None,
@@ -212,7 +216,26 @@ mod tests {
     fn implement_names_tie_interface_and_object() {
         let fx = resolve_ok("struct Foo {} implement Foo : Copy {}");
 
-        let entries: Vec<_> = fx.resolution.implement_names.values().collect();
+        // The core library contributes its own implementations; only the
+        // user's implementation is asserted here.
+        let is_user_entry = |(iface, _): &(Resolution, Resolution)| match iface {
+            Resolution::Def(def_id) => {
+                fx.resolution
+                    .defs
+                    .get(def_id)
+                    .map(|info| fx.name(info))
+                    .as_deref()
+                    == Some("Foo")
+            }
+            _ => false,
+        };
+
+        let entries: Vec<_> = fx
+            .resolution
+            .implement_names
+            .values()
+            .filter(|entry| is_user_entry(entry))
+            .collect();
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0].0, Resolution::Def(_)));
         assert!(matches!(entries[0].1, Resolution::Def(_)));

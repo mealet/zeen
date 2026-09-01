@@ -1,0 +1,34 @@
+use std.string;
+
+struct User[T] {
+  pub name: String,
+  pub id: T,
+}
+
+implement[T: Debug] Debug : User[T] {
+  fn debug[W: StrWriter](*const self, out: *W) void {
+    (*out).write_str("User(");
+    self.name.debug(out);
+    (*out).write_str(", ");
+    self.id.debug(out);
+    (*out).write_str_single(')');
+  }
+}
+
+fn main() i32 {
+  let u = User { .name = String.from("alice"), .id = 77 };
+
+  let a = @format("hello {} and {}", 40 + 2, "world");
+  @println("{}", a);
+
+  let b = @format("user: {:?}", u);
+  @println("{}", b);
+
+  let c = @format("{:?}", Option.Some(u.name));
+  @println("{}", c);
+
+  let d = @format("{:?}", Option.Some(u.id));
+  @println("{}", d);
+
+  return 0;
+}

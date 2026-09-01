@@ -142,6 +142,7 @@ impl<'res> TypeChecker<'res> {
     pub fn finish(mut self) -> Result<TypeCheckResult, Vec<TypeError>> {
         self.result.struct_generics = self.struct_generics;
         self.result.enum_variants = self.enum_variants;
+        self.result.interface_registry = self.interface_registry.into_name_map();
 
         if self.errors.is_empty() {
             return Ok(self.result);
@@ -331,6 +332,9 @@ impl<'res> TypeChecker<'res> {
                     .insert(decl.def_id, i.methods.iter().map(|m| m.def_id).collect());
 
                 for method in &i.methods {
+                    self.result
+                        .interface_method_owners
+                        .insert(method.def_id, decl.def_id);
                     self.declare_signature(method);
                 }
             }
@@ -1900,7 +1904,14 @@ impl<'res> TypeChecker<'res> {
                 callee,
                 args,
                 generic_args,
-            } => self.check_call(expr.id, callee, args, generic_args, expr.source.clone()),
+            } => self.check_call(
+                expr.id,
+                callee,
+                args,
+                generic_args,
+                expr.source.clone(),
+                None,
+            ),
 
             HirExprKind::If {
                 condition,
@@ -2087,6 +2098,22 @@ impl<'res> TypeChecker<'res> {
 
     // >> Macros
 
+    /// Resolves the heap `String` struct of `std.string`, the type
+    /// `@format` returns.
+    fn resolve_string_type(&mut self) -> Option<TypeId> {
+        let string_def = self.resolution.defs.iter().find_map(|(def, info)| {
+            matches!(info.kind, DefKind::Struct)
+                .then(|| self.interner.borrow().resolve(&info.name) == "String")
+                .filter(|found| *found)
+                .map(|_| *def)
+        })?;
+
+        Some(self.result.interner.intern(Type::Struct {
+            def_id: string_def,
+            generic_args: Vec::new(),
+        }))
+    }
+
     fn check_macro_call(
         &mut self,
         call_id: HirId,
@@ -2101,13 +2128,21 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirMacroKind::Format => {
-                self.check_format_macro(call_id, args, source);
+                // Formats into a heap `String` returned by the macro.
+                self.check_format_macro(call_id, args, source.clone());
 
-                let char_ty = self.result.interner.builtin(BuiltinType::char);
-                self.result.interner.intern(Type::Slice {
-                    element: char_ty,
-                    is_const: true,
-                })
+                match self.resolve_string_type() {
+                    Some(ty) => ty,
+                    None => {
+                        self.report(TypeError::MacroNotImplemented {
+                            name: "format".into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+
+                        self.result.interner.error()
+                    }
+                }
             }
 
             HirMacroKind::Panic => {
@@ -2115,7 +2150,19 @@ impl<'res> TypeChecker<'res> {
                 self.result.interner.never()
             }
 
-            HirMacroKind::Unreachable | HirMacroKind::Todo => self.result.interner.never(),
+            HirMacroKind::Unreachable | HirMacroKind::Todo => {
+                if !args.is_empty() {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                }
+                self.result.interner.never()
+            }
 
             HirMacroKind::Dbg => {
                 if args.len() != 1 {
@@ -2983,6 +3030,23 @@ impl<'res> TypeChecker<'res> {
                 struct_ty
             }
 
+            HirExprKind::Call {
+                callee,
+                args,
+                generic_args,
+            } => {
+                let ty = self.check_call(
+                    expr.id,
+                    callee,
+                    args,
+                    generic_args,
+                    expr.source.clone(),
+                    Some(expected),
+                );
+                self.result.record_expr_type(expr.id, ty);
+                ty
+            }
+
             _ => self.synth_expr(expr),
         };
 
@@ -3352,17 +3416,9 @@ impl<'res> TypeChecker<'res> {
 
     fn type_is_copy(&self, ty: TypeId) -> bool {
         match self.result.interner.get(ty).clone() {
-            Type::Struct { def_id, .. } => self
-                .result
-                .struct_info
-                .get(&def_id)
-                .map(|info| info.capabalities.is_copy)
-                .unwrap_or(false),
-            Type::Array { element, .. } => self.type_is_copy(element),
-            // `Fn` closure values (all-Copy captures or none) are Copy — the
-            // inline environment is duplicated with the value. `FnOnce` owns
-            // a non-Copy capture, so it is move-only.
-            Type::FatFn { once, .. } => !once,
+            Type::Struct { .. } | Type::Array { .. } | Type::FatFn { .. } => {
+                self.result.is_copy(ty)
+            }
             _ => true,
         }
     }
@@ -3374,6 +3430,7 @@ impl<'res> TypeChecker<'res> {
         args: &[Rc<HirExpr>],
         explicit_generic_args: &[Rc<HirTypeExpr>],
         source: Source,
+        expected: Option<TypeId>,
     ) -> TypeId {
         if let HirExprKind::FieldAccess { object, field } = &callee.kind
             && let Some(result) = self.try_check_method_call(
@@ -3383,6 +3440,7 @@ impl<'res> TypeChecker<'res> {
                 args,
                 explicit_generic_args,
                 source.clone(),
+                expected,
             )
         {
             return result;
@@ -3445,6 +3503,13 @@ impl<'res> TypeChecker<'res> {
             let arg_ty = self.synth_expr(arg);
             let arg_ty = self.default_literal(arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
+        }
+
+        // An expected type in the same shape as the return type pins the
+        // call's generics (e.g. `let a: Gen[i32] = make_gen();`). It is the
+        // lowest-priority source: explicit and inferred bindings stay intact.
+        if let Some(expected) = expected {
+            self.seed_inference_bindings(sig_ret, expected, &mut bindings);
         }
 
         for g in &sig_generics {
@@ -3540,6 +3605,99 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    /// Resolves a method call made on a bounded generic parameter, e.g.
+    /// `out.write_str(...)` where `out: O` and `O: StrWriter`. The method is
+    /// looked up among the parameter's interface bounds; dispatch to the
+    /// concrete implementation is deferred to MIR after monomorphization.
+    fn try_check_generic_bound_method_call(
+        &mut self,
+        call_id: HirId,
+        object: &HirExpr,
+        field: (Spur, SourceSpan),
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        source: Source,
+    ) -> Option<TypeId> {
+        let (field_name, _field_span) = field;
+
+        let obj_ty = self.synth_expr(object);
+        let Type::GenericParam(g) = self.result.interner.get(obj_ty).clone() else {
+            return None;
+        };
+
+        let bounds = self.ctx.generic_bounds(g).to_vec();
+        let method_name = self.interner.borrow().resolve(&field_name).to_string();
+
+        let mut candidate: Option<DefId> = None;
+        for iface_def in bounds {
+            let Some(methods) = self.interface_methods.get(&iface_def) else {
+                continue;
+            };
+            if let Some(&method_def) = methods
+                .iter()
+                .find(|&&m| self.def_name(m).as_deref() == Some(method_name.as_str()))
+            {
+                candidate = Some(method_def);
+                break;
+            }
+        }
+
+        let method_def = candidate?;
+
+        let sig = &self.fn_sigs[&method_def];
+        let sig_params = sig.params.clone();
+        let sig_ret = sig.ret;
+        let sig_generics = sig.generics.clone();
+        let has_self = sig.self_mode.is_some();
+
+        let expected_args = sig_params.len() - usize::from(has_self);
+        if args.len() != expected_args {
+            self.report(TypeError::ArgCountMismatch {
+                expected: expected_args,
+                found: args.len(),
+                src: source.src(),
+                span: source.span,
+            });
+        }
+
+        let user_params = if has_self {
+            &sig_params[1..]
+        } else {
+            &sig_params[..]
+        };
+
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        for (param_ty, arg) in user_params.iter().zip(args.iter()) {
+            self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+        }
+
+        for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
+            let ty = self.lower_hir_type(explicit);
+            bindings.insert(*g, ty);
+        }
+
+        let resolved_generic_args: Vec<TypeId> = sig_generics
+            .iter()
+            .map(|g| {
+                bindings
+                    .get(g)
+                    .copied()
+                    .unwrap_or_else(|| self.result.interner.error())
+            })
+            .collect();
+
+        self.result.call_resolutions.insert(
+            call_id,
+            CallResolution {
+                fn_def: method_def,
+                generic_args: resolved_generic_args,
+            },
+        );
+
+        Some(self.substitute_generics(sig_ret, &bindings))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn try_check_method_call(
         &mut self,
         call_id: HirId,
@@ -3548,6 +3706,7 @@ impl<'res> TypeChecker<'res> {
         args: &[Rc<HirExpr>],
         explicit_generic_args: &[Rc<HirTypeExpr>],
         source: Source,
+        expected: Option<TypeId>,
     ) -> Option<TypeId> {
         let (field_name, field_span) = field;
 
@@ -3562,11 +3721,25 @@ impl<'res> TypeChecker<'res> {
                 args,
                 explicit_generic_args,
                 &source,
+                expected,
             );
         }
 
         // Otherwise it is instance call
         let obj_ty = self.synth_expr(object);
+
+        // A call on a generic parameter dispatches to the interface bound that
+        // declares the method (e.g. `out.write_str(...)` where `O: StrWriter`).
+        if matches!(self.result.interner.get(obj_ty), Type::GenericParam(_)) {
+            return self.try_check_generic_bound_method_call(
+                call_id,
+                object,
+                field,
+                args,
+                explicit_generic_args,
+                source,
+            );
+        }
 
         let (struct_def, struct_generic_args, obj_is_ptr, ptr_is_const) =
             match self.result.interner.get(obj_ty).clone() {
@@ -3809,6 +3982,7 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_associated_fn_call(
         &mut self,
         caller: (HirId, &HirExpr),
@@ -3817,6 +3991,7 @@ impl<'res> TypeChecker<'res> {
         args: &[Rc<HirExpr>],
         explicit_generic_args: &[Rc<HirTypeExpr>],
         source: &Source,
+        expected: Option<TypeId>,
     ) -> Option<TypeId> {
         let (call_id, caller_expr) = caller;
         let (field_name, field_span) = field;
@@ -3843,6 +4018,12 @@ impl<'res> TypeChecker<'res> {
         let sig_ret = self.fn_sigs[&method_def_id].ret;
         let sig_generics = self.fn_sigs[&method_def_id].generics.clone();
 
+        let struct_generics = self
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
+
         if args.len() != sig_params.len() {
             self.report(TypeError::ArgCountMismatch {
                 expected: sig_params.len(),
@@ -3854,13 +4035,30 @@ impl<'res> TypeChecker<'res> {
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
 
-        for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
+        // Explicit call-site arguments bind the struct's generics first (there
+        // is no receiver to provide them), then the method's own.
+        let bind_order: Vec<DefId> = struct_generics
+            .iter()
+            .copied()
+            .chain(sig_generics.iter().copied())
+            .collect();
+
+        for (g, explicit) in bind_order.iter().zip(explicit_generic_args.iter()) {
             let ty = self.lower_hir_type(explicit);
             bindings.insert(*g, ty);
         }
 
         for (param_ty, arg) in sig_params.iter().zip(args.iter()) {
             self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+        }
+
+        // The expected type (annotated `let`, return position, argument
+        // position) usually pins the struct's generics for `Self`-returning
+        // methods (`let a: Option[i32] = Option.None();`); the return type is
+        // matched structurally against it. It is the lowest-priority source:
+        // explicit call-site arguments and argument inference stay intact.
+        if let Some(expected) = expected {
+            self.seed_inference_bindings(sig_ret, expected, &mut bindings);
         }
 
         for g in &sig_generics {
@@ -3911,12 +4109,6 @@ impl<'res> TypeChecker<'res> {
         }
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
-
-        let struct_generics = self
-            .struct_generics
-            .get(&struct_def)
-            .cloned()
-            .unwrap_or_default();
 
         for g in &struct_generics {
             if !bindings.contains_key(g) {
@@ -3995,6 +4187,72 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    /// Seeds generic bindings by walking a generic-containing type (`pattern`,
+    /// e.g. a call's return type) against the expected type in parallel. Only
+    /// new bindings are inserted: explicit call-site arguments and argument
+    /// inference win over expected-derived ones. A `GenericParam` on the
+    /// expected side carries no information and is skipped.
+    fn seed_inference_bindings(
+        &mut self,
+        pattern: TypeId,
+        expected: TypeId,
+        bindings: &mut HashMap<DefId, TypeId>,
+    ) {
+        match (
+            self.result.interner.get(pattern).clone(),
+            self.result.interner.get(expected).clone(),
+        ) {
+            (Type::GenericParam(g), Type::GenericParam(e)) if g == e => {}
+
+            (Type::GenericParam(g), _) => {
+                bindings.entry(g).or_insert(expected);
+            }
+
+            (
+                Type::Struct {
+                    def_id: p_def,
+                    generic_args: p_args,
+                },
+                Type::Struct {
+                    def_id: e_def,
+                    generic_args: e_args,
+                },
+            ) if p_def == e_def => {
+                for (p, e) in p_args.iter().zip(e_args.iter()) {
+                    self.seed_inference_bindings(*p, *e, bindings);
+                }
+            }
+
+            (Type::Pointer { inner: p, .. }, Type::Pointer { inner: e, .. })
+            | (Type::ManyPointer { inner: p, .. }, Type::ManyPointer { inner: e, .. }) => {
+                self.seed_inference_bindings(p, e, bindings)
+            }
+
+            (Type::Array { element: p, .. }, Type::Array { element: e, .. })
+            | (Type::Slice { element: p, .. }, Type::Slice { element: e, .. }) => {
+                self.seed_inference_bindings(p, e, bindings)
+            }
+
+            (
+                Type::Fn {
+                    params: p_params,
+                    ret: p_ret,
+                },
+                Type::Fn {
+                    params: e_params,
+                    ret: e_ret,
+                },
+            ) => {
+                for (p, e) in p_params.iter().zip(e_params.iter()) {
+                    self.seed_inference_bindings(*p, *e, bindings);
+                }
+                self.seed_inference_bindings(p_ret, e_ret, bindings);
+            }
+
+            _ => {}
+        }
+    }
+
     fn infer_or_check_arg(
         &mut self,
         param_ty: TypeId,
@@ -4002,7 +4260,13 @@ impl<'res> TypeChecker<'res> {
         bindings: &mut HashMap<DefId, TypeId>,
         source: Source,
     ) {
-        if self.type_contains_generic(param_ty) {
+        // Generics already pinned by the receiver, expected type or explicit
+        // call-site arguments make the parameter concrete: check the argument
+        // against it instead of inferring (a defaulted literal would wrongly
+        // conflict with the pinned type).
+        let substituted = self.substitute_generics(param_ty, bindings);
+
+        if self.type_contains_generic(substituted) {
             let arg_ty = self.synth_expr(arg);
             let arg_ty = self.default_literal(arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
@@ -4023,7 +4287,6 @@ impl<'res> TypeChecker<'res> {
                 });
             }
         } else {
-            let substituted = self.substitute_generics(param_ty, bindings);
             self.check_expr(arg, substituted, false);
         }
     }
@@ -4610,6 +4873,9 @@ impl<'res> TypeChecker<'res> {
         };
         let iface_params_raw = iface_sig.params.clone();
         let iface_ret_raw = iface_sig.ret;
+        // Generic slots of the interface method (e.g. `display[T: StrWriter]`)
+        // unify against the impl method's matching slot or concrete type below.
+        let iface_method_generics: Vec<DefId> = iface_sig.generics.clone();
 
         let Some(impl_sig) = self.fn_sigs.get(&impl_method_def) else {
             return;
@@ -4623,15 +4889,26 @@ impl<'res> TypeChecker<'res> {
             .collect();
         let impl_ret = self.substitute_generics(impl_ret_raw, &impl_subst);
 
-        // An interface generic not covered by the struct's own generics (a
-        // non-generic impl of a generic interface, `implement Deref : Foo`)
-        // is inferred from the impl method's corresponding type.
+        // Interface generics not bound by the struct's slots (non-generic impl)
+        // and method generic slots are inferred from the impl method's types.
+        let mut all_iface_generics = iface_generics.clone();
+        all_iface_generics.extend(iface_method_generics.iter().copied());
         for (&iface_param, &impl_param) in iface_params_raw.iter().zip(impl_params.iter()) {
             let iface_param = self.substitute_self(iface_param, self_struct_ty);
-            self.unify_iface_generics(iface_param, impl_param, &iface_generics, &mut generic_subst);
+            self.unify_iface_generics(
+                iface_param,
+                impl_param,
+                &all_iface_generics,
+                &mut generic_subst,
+            );
         }
         let iface_ret_raw = self.substitute_self(iface_ret_raw, self_struct_ty);
-        self.unify_iface_generics(iface_ret_raw, impl_ret, &iface_generics, &mut generic_subst);
+        self.unify_iface_generics(
+            iface_ret_raw,
+            impl_ret,
+            &all_iface_generics,
+            &mut generic_subst,
+        );
 
         let iface_params: Vec<TypeId> = iface_params_raw
             .iter()
@@ -5390,6 +5667,7 @@ mod tests {
                 linked: HashSet::new(),
             },
             core_files: Vec::new(),
+            std_files: Vec::new(),
             mode: CompilationMode::Debug,
             output: CompilationOutput::Binary,
             target: target.map(|triple| triple.to_string()),
@@ -5957,6 +6235,115 @@ mod tests {
                 .any(|err| matches!(err, TypeError::Mismatch { found, .. }
             if found.as_str().contains("error"))),
             "expected no cascade mismatch mentioning `error`, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn annotated_let_pins_associated_call_generics() {
+        let result = typecheck(
+            r#"
+            struct Opt[T] {
+              inner: *T,
+
+              pub fn none() Self {
+                Self { .inner = @uninit() }
+              }
+
+              pub fn get_or(*const self, default: T) T {
+                if (@unreachable()) { return default; };
+                default
+              }
+            }
+
+            fn main() {
+              let a: Opt[i32] = Opt.none();
+              let v: i32 = a.get_or(5);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "annotated `let` must pin the associated call's generics: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn explicit_call_site_args_bind_associated_struct_generics() {
+        let result = typecheck(
+            r#"
+            struct Opt[T] {
+              inner: *T,
+
+              pub fn none() Self {
+                Self { .inner = @uninit() }
+              }
+            }
+
+            fn main() {
+              let a = Opt.none#[i32]();
+              let b: Opt[i32] = a;
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "explicit call-site args must bind the struct's generics: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn annotated_let_pins_plain_fn_return_generics() {
+        let result = typecheck(
+            r#"
+            struct Gen[T] {
+              v: T,
+            }
+
+            fn make_gen[T]() Gen[T] {
+              Gen { .v = @uninit() }
+            }
+
+            fn main() {
+              let a: Gen[i32] = make_gen();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "annotated `let` must pin a plain fn call's return generics: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn literal_argument_coerces_to_receiver_pinned_generic() {
+        let result = typecheck(
+            r#"
+            struct Opt[T] {
+              v: T,
+
+              pub fn get_or(*const self, default: T) T {
+                if (@unreachable()) { return default; };
+                default
+              }
+            }
+
+            fn main() {
+              let a = Opt { .v = b'\0' };
+              let b: u8 = a.get_or(7);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "a literal argument must coerce to the receiver-pinned generic: {:?}",
+            result.err()
         );
     }
 

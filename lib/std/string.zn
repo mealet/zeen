@@ -1,0 +1,510 @@
+extern fn strlen(str: [*]const char) usize;
+extern fn strncmp(str1: [*]const char, str2: [*]const char, size: usize) i32;
+
+extern fn strncpy(dest: [*]char, src: [*]const char, size: usize) *char;
+extern fn strncat(dest: [*]char, src: [*]const char, size: usize) *char;
+
+extern fn strchr(str: [*]const char, ch: char) *char;
+extern fn strstr(str1: [*]const char, str2: [*]const char) *char;
+
+extern fn toupper(char) char;
+extern fn tolower(char) char;
+
+use std.alloc;
+
+/// String initial capacity size (initialization on first push).
+const InitialStringCapacity: usize = 8;
+/// Geometry string size progression by formula: Current * StringSizeProgression.
+const StringSizeProgression: usize = 2;
+
+/// Dynamic heap-allocated string.
+pub struct String {
+  ptr: [*]char,
+  _len: usize,
+  _capacity: usize,
+
+  /// String constructor (without initialization).
+  pub fn new() Self {
+    Self {
+      .ptr = @as([*]char, nullptr),
+      ._len = 0,
+      ._capacity = 0,
+    }
+  }
+
+  /// Constructor with capacity aligned to the next geometry progression
+  /// String's length sequence (8, 16, 32, 64, 128, ...)
+  pub fn with_capacity(capacity: usize) Self {
+    let capacity = next_capacity(capacity);
+    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
+    
+    Self {
+      .ptr = ptr,
+      ._len = 0,
+      ._capacity = capacity,
+    }
+  }
+
+  /// Allocate new String instance from provided slice
+  pub fn from(value: []const char) Self {
+    let len = value.len;
+    let capacity = next_capacity(len + 1);
+    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
+
+    let _ = strncpy(ptr, value.ptr, value.len);
+
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity,
+    }
+  }
+
+  /// UNSAFE: Constructs String from cstr, you must assume that provided sequence ends with '\0'
+  pub fn from_cstr(value: [*]const char) Self {
+    if (@as(*void, value) == nullptr) {
+      @panic("Null pointer in argument `from_cstr` constructor");
+    };
+    
+    let len = strlen(value);
+    let capacity = next_capacity(len + 1);
+    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
+
+    let _ = strncpy(ptr, value, len);
+
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity,
+    }
+  }
+
+  /// UNSAFE: Construct string from raw parts.
+  /// UNSAFE: Assume that provided pointer is heap allocated, it will be freed.
+  pub fn from_raw_parts(ptr: *void, len: usize, capacity: usize) Self {
+    let ptr = @as([*]char, ptr);
+
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity
+    }
+  }
+
+  /// Initialization called on first push.
+  fn initialize_if_new(*self) {
+    if (self._capacity > 0) {
+      return;
+    };
+
+    let init_ptr: *char = Allocator.alloc(@sizeof(char) * InitialStringCapacity);
+
+    self.ptr = @as([*]char, init_ptr);
+    self._len = 0;
+    self._capacity = InitialStringCapacity;
+  }
+
+  /// String's length getter
+  pub fn len(*const self) usize {
+    self._len
+  }
+
+  /// String's capacity getter
+  pub fn capacity(*const self) usize {
+    self._capacity
+  }
+
+  /// Is empty getter (if len is 0)
+  pub fn is_empty(*const self) bool {
+    self._len == 0
+  }
+
+
+  fn __capacity_extend(*self) {
+    if (self._capacity - 1 < self._len) {
+      self._capacity = next_capacity(self._len + 1);
+
+      let new_ptr = @as(
+        [*]char,
+        Allocator.realloc(
+          @as(*void, self.ptr),
+          self._capacity
+        )
+      );
+
+      self.ptr = new_ptr;
+    };
+  }
+
+  /// Push single character to the String
+  pub fn push(*self, value: char) {
+    self.initialize_if_new();
+    self._len += 1;
+    
+    self.__capacity_extend();
+
+    self.ptr[self._len - 1] = value;
+    self.ptr[self._len] = '\0';
+  }
+
+  /// Push string slice to the String instance
+  pub fn push_str(*self, value: []const char) {
+    self.initialize_if_new();
+    self._len += value.len;
+
+    self.__capacity_extend();
+
+    let _ = strncat(self.ptr, value.ptr, value.len);
+    self.ptr[self._len] = '\0';
+  }
+
+  /// Push another dynamic String content to current (through reference)
+  pub fn push_string(*self, value: *Self) {
+    if (value == nullptr)
+      @panic("Null pointer value in `String.push_string`");
+
+    self.initialize_if_new();
+    self._len += value._len;
+
+    self.__capacity_extend();
+
+    let _ = strncat(self.ptr, value.ptr, value._len);
+    self.ptr[self._len] = '\0';
+  }
+
+  /// Remove last character and return it
+  pub fn pop(*self) Option[char] {
+    if (self._capacity < 1 || self._len < 1) {
+      return Option#[char].None();
+    };
+
+    self._len -= 1;
+    let output = self.ptr[self._len];
+    self.ptr[self._len] = '\0';
+
+    Option.Some(output)
+  }
+
+  /// Remove character by provided index and return it
+  pub fn remove(*self, index: usize) Option[char] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option#[char].None();
+    };
+
+    if (index == self._len - 1) {
+      return self.pop();
+    };
+
+    let cursor = @as(*char, self.ptr);
+    let end = @as(*char, self.ptr + self._len);
+
+    cursor += index;
+    let output: char = *cursor;
+
+    let left = cursor;
+    let right = cursor;
+
+    right += 1;
+
+    while (right != end) {
+      *left = *right;
+
+      left += 1;
+      right += 1;
+    };
+
+    *left = '\0';
+
+    Option.Some(output)
+  }
+
+  /// Get character by index (out of bounds returns `None`)
+  pub fn get(*const self, index: usize) Option[char] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option#[char].None();
+    };
+
+    Option.Some(self.ptr[index])
+  }
+
+  /// Set character by index and return old (out of bounds returns `None`)
+  pub fn set(*self, index: usize, value: char) Option[char] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option#[char].None();
+    };
+
+    let output = Option.Some(self.ptr[index]);
+    self.ptr[index] = value;
+
+    output
+  }
+
+  /// `true` if string contains provided character
+  pub fn contains(*const self, value: char) bool {
+    if (self._capacity < 1 || self._len < 1) {
+      return false;
+    };
+
+    return strchr(self.ptr, value) != nullptr;
+  }
+
+  /// `true` if string contains provided string slice
+  pub fn contains_str(*const self, value: []const char) bool {
+    if (self._capacity < 1 || self._len < 1) {
+      return false;
+    };
+
+    return strstr(self.ptr, value.ptr) != nullptr;
+  }
+
+  /// `true` if string contains provided cstr
+  pub fn contains_cstr(*const self, value: [*]const char) bool {
+    if (self._capacity < 1 || self._len < 1) {
+      return false;
+    };
+
+    return strstr(self.ptr, value) != nullptr;
+  }
+
+  /// Finds character in string:
+  /// * `Some(usize)` - if found, returns position
+  /// * `None` - if not found
+  pub fn find(*const self, value: char) Option[usize] {
+    let entrance = strchr(self.ptr, value);
+
+    if (entrance == nullptr) {
+      return Option#[usize].None();
+    };
+
+    Option.Some(@as(usize, entrance - self.ptr))
+  }
+
+  /// Finds string slice in string:
+  /// * `Some(usize)` - if found, returns first character position
+  /// * `None` - if not found
+  pub fn find_str(*const self, value: []const char) Option[usize] {
+    let entrance = strstr(self.ptr, value.ptr);
+
+    if (entrance == nullptr) {
+      return Option#[usize].None();
+    };
+
+    Option.Some(@as(usize, entrance - self.ptr))   
+  }
+
+  /// Finds cstr slice in string:
+  /// * `Some(usize)` - if found, returns first character position
+  /// * `None` - if not found
+  pub fn find_cstr(*const self, value: [*]const char) Option[usize] {
+    if (@as(*void, value) == nullptr) {
+      return Option#[usize].None();
+    };
+
+    let entrance = strstr(self.ptr, value);
+
+    if (entrance == nullptr) {
+      return Option#[usize].None();
+    };
+
+    Option.Some(@as(usize, entrance - self.ptr))   
+  }
+
+  /// Converts whole string to uppercase
+  pub fn to_uppercase(*self) {
+    let cursor = @as(*char, self.ptr);
+    let end = @as(*char, self.ptr + self._len);
+
+    while (cursor != end) {
+      *cursor = toupper(*cursor);
+      cursor += 1;
+    }
+  }
+
+  /// Converts whole string to lowercase 
+  pub fn to_lowercase(*self) {
+    let cursor = @as(*char, self.ptr);
+    let end = @as(*char, self.ptr + self._len);
+
+    while (cursor != end) {
+      *cursor = tolower(*cursor);
+      cursor += 1;
+    }
+  }
+
+  /// Find every `from` string entrance and replace with `to`
+  pub fn replace(*self, from: [*]const char, to: [*]const char) {
+    if (
+      @as(*void, from) == nullptr ||
+      @as(*void, to) == nullptr
+    ) {
+      return;
+    };
+
+    let src_len = self._len;
+    let from_len = strlen(from);
+    let to_len = strlen(to);
+
+    if (from_len == 0) {
+      return;
+    };
+
+    let temp: *char = Allocator.alloc(src_len * 2 + 1);
+
+    let src_ptr = @as(*char, self.ptr);
+    let temp_ptr = temp;
+
+    while (*src_ptr != '\0') {
+      if (strncmp(@as([*]char, src_ptr), from, from_len) == 0) {
+        let _ = strncpy(@as([*]char, temp_ptr), to, to_len);
+        temp_ptr += to_len;
+        src_ptr += from_len;
+      } else {
+        *temp_ptr = *src_ptr;
+        temp_ptr += 1;
+        src_ptr += 1;
+      };
+    };
+
+    *temp_ptr = '\0';
+
+    let new_len = @as(usize, temp_ptr - temp);
+    let new_capacity = next_capacity(new_len);
+    let new_ptr = @as([*]char, Allocator.realloc(@as(*void, self.ptr), new_capacity));
+
+    let _ = strncpy(new_ptr, @as([*]const char, temp), new_len);
+
+    Allocator.dealloc(temp);
+
+    self.ptr = new_ptr;
+    self._len = new_len;
+    self._capacity = new_capacity;
+  }
+
+  /// Reverse characters order in string
+  pub fn reverse(*self) {
+    if (self._capacity < 1 || self._len < 1) {
+      return;
+    };
+
+    let len = self._len;
+    let start: usize = 0;
+    let end: usize = len - 1;
+
+    while (start < end) {
+      let temp: char = self.ptr[start];
+      self.ptr[start] = self.ptr[end];
+      self.ptr[end] = temp;
+
+      start += 1;
+      end -= 1;
+    }
+  }
+
+  /// Clear string (capacity saves)
+  pub fn clear(*self) {
+    self.ptr[0] = '\0';
+    self._len = 0;
+  }
+
+  /// Truncate string with new length (capacity saves)
+  pub fn truncate(*self, new_len: usize) {
+    if (new_len > self._len) { return; };
+
+    self._len = new_len;
+    self.ptr[self._len] = '\0';
+  }
+}
+
+// ===| String Interfaces Implementations |===
+
+implement Clone : String {
+  fn clone(*const self) Self {
+    let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * self._capacity));
+    let len = self._len;
+    let capacity = self._capacity;
+
+    let _ = strncpy(ptr, self.ptr, self._len);
+
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity
+    }
+  }
+}
+
+implement Drop : String {
+  fn drop(self) {
+    let self_voided = @as(*void, self.ptr);
+    if (self_voided != nullptr)
+      Allocator.dealloc(self_voided);
+  }
+}
+
+implement Display : String {
+  fn display[W: StrWriter](*const self, out: *W) void {
+    (*out).write_str_raw(self.ptr, self._len);
+  }
+}
+
+implement Debug : String {
+  fn debug[W: StrWriter](*const self, out: *W) void {
+    (*out).write_str_single('"');
+    (*out).write_str_raw(self.ptr, self._len);
+    (*out).write_str_single('"');
+  }
+}
+
+implement Eq : String {
+  fn eq(*const self, other: *const Self) bool {
+    if (self._len != other._len) {
+      return false;
+    };
+
+    return strncmp(self.ptr, other.ptr, self._len) == 0;
+  }
+}
+
+implement StrWriter : String {
+  fn write_str(*self, value: []const char) void {
+    self.push_str(value);
+  }
+
+  fn write_str_raw(*self, ptr: [*]const char, len: usize) void {
+    let cursor = @as(*const char, ptr);
+    let end = cursor + len;
+
+    while (cursor != end) {
+      self.push(*cursor);
+      cursor += 1;
+    }
+  }
+
+  fn write_str_single(*self, value: char) void {
+    self.push(value);
+  }
+}
+
+// ===| Helper Functions |===
+
+fn next_capacity(size: usize) usize {
+  let capacity: usize = 8;
+
+  while (capacity < size) {
+    capacity <<= 1;
+  }
+
+  capacity
+}

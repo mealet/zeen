@@ -110,3 +110,38 @@ fn explicit_host_target_compiles_and_runs() {
 
     let _ = fs::remove_file(&binary);
 }
+
+#[test]
+fn std_flag_with_missing_directory_fails() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/test_cases/hello_world.zn");
+
+    let output = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .arg(&source)
+        .arg("/dev/null")
+        .args(["--std", "/nonexistent/zeen-std-path"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("std library directory not found"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn help_mentions_std_flag() {
+    let output = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--std <PATH>"), "missing --std in help");
+}

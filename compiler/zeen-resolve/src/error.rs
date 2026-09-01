@@ -59,8 +59,14 @@ pub enum ResolveError {
         span: SourceSpan,
     },
 
-    #[error("standard library is not configured")]
-    #[diagnostic(severity(Error), code(zeen::resolver::std_not_configured))]
+    #[error("standard library is not installed or not configured")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::resolver::std_not_configured),
+        help(
+            "pass `--std <path>` or set `ZEEN_STD` to the std library root, or install it to `~/.zeen/std` (see https://github.com/mealet/zeen)"
+        )
+    )]
     StdlibNotConfigured {
         #[source_code]
         src: NamedSource<Arc<String>>,

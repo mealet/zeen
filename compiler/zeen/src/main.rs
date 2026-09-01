@@ -1,6 +1,7 @@
 use clap::{CommandFactory, Parser};
 use std::{
-    cell::RefCell, collections::HashSet, io::Write, path::Path, process::exit, rc::Rc, sync::Arc,
+    cell::RefCell, collections::HashSet, env, io::Write, path::Path, process::exit, rc::Rc,
+    sync::Arc,
 };
 use zeen_driver::{CompilationContext, CompilationOutput, MietteDriver, PathsConfig};
 
@@ -8,6 +9,7 @@ mod cli;
 mod targets;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
+include!(concat!(env!("OUT_DIR"), "/std_files.rs"));
 
 fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
     if path
@@ -21,6 +23,43 @@ fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
     name.push(".");
     name.push(ext);
     std::path::PathBuf::from(name)
+}
+
+/// Resolves the std library root directory: the `--std` flag, then the
+/// `ZEEN_STD` environment variable, then the default `~/.zeen/std`
+/// installation. An explicitly configured path must exist; when nothing is
+/// configured the compiler keeps running and reports on `use std.*` usage
+/// instead.
+fn resolve_std_root(explicit: Option<&Path>) -> Result<Option<std::path::PathBuf>, String> {
+    const REPO: &str = "https://github.com/mealet/zeen";
+
+    if let Some(path) = explicit {
+        return if path.is_dir() {
+            Ok(Some(path.to_path_buf()))
+        } else {
+            Err(format!(
+                "std library directory not found at `{}` (set by --std); install the std library, see {REPO}",
+                path.display()
+            ))
+        };
+    }
+
+    if let Some(env_path) = env::var_os("ZEEN_STD") {
+        let path = std::path::PathBuf::from(env_path);
+        return if path.is_dir() {
+            Ok(Some(path))
+        } else {
+            Err(format!(
+                "`ZEEN_STD` points to `{}` which does not exist or is not a directory; see {REPO}",
+                path.display()
+            ))
+        };
+    }
+
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+    Ok(home
+        .map(|home| Path::new(&home).join(".zeen").join("std"))
+        .filter(|path| path.is_dir()))
 }
 
 fn main() {
@@ -149,13 +188,22 @@ fn main() {
         .expect("must work")
         .into();
 
+    let std_root = match resolve_std_root(args.std.as_deref()) {
+        Ok(path) => path,
+        Err(message) => {
+            cli::println_error(message);
+            exit(1);
+        }
+    };
+
     let mut context = CompilationContext {
         paths: PathsConfig {
             project_root,
-            std_root: None,
+            std_root,
             linked: HashSet::new(),
         },
         core_files: CORE_FILES.iter().map(|file| file.to_basic()).collect(),
+        std_files: STD_FILES.iter().map(|file| file.to_basic()).collect(),
         mode: args.mode,
         output: args.emit,
         target: Some(target_triple.clone()),

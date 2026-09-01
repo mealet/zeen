@@ -1,0 +1,64 @@
+pub struct Option[T] {
+  value: T,
+  _is_some: bool,
+
+  pub fn Some(value: T) Self {
+    Self {
+      .value = value,
+      ._is_some = true
+    }
+  }
+
+  pub fn None() Self {
+    Self {
+      .value = @uninit(),
+      ._is_some = false,
+    }
+  }
+
+  pub fn is_some(*const self) bool {
+    self._is_some
+  }
+
+  pub fn is_none(*const self) bool {
+    !self._is_some
+  }
+
+  pub fn unwrap(self) T {
+    if (self.is_none()) {
+      @panic("Called `unwrap()` on `None` option");
+    };
+
+    self.value
+  }
+
+  pub fn unwrap_or(self, default: T) T {
+    if (self.is_some()) {
+      return self.value;
+    };
+
+    default
+  }
+
+  pub fn unwrap_or_else(self, f: FnOnce() T) T {
+    if (self.is_some()) {
+      return self.value;
+    };   
+
+    f()
+  }
+}
+
+implement[T: Copy] Copy : Option[T]  {}
+
+implement[T: Debug] Debug : Option[T] {
+  fn debug[W: StrWriter](*const self, out: *W) {
+    if (self._is_some) {
+      (*out).write_str("Some(");
+      self.value.debug(out);
+      (*out).write_str_single(')');
+    } else {
+      (*out).write_str("None");
+    };
+  }
+}
