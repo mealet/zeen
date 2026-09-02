@@ -124,7 +124,7 @@
         },
         {
           "name": "constant.numeric.integer.zeen",
-          "match": "\\b[0-9]+\\b"
+          "match": "\\b[0-9]+(?:_[0-9]+)*\\b"
         }
       ]
     },
@@ -185,6 +185,17 @@
           }
         },
         {
+          "match": "\\b(alias)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.alias.zeen"
+            },
+            "2": {
+              "name": "entity.name.type.alias.zeen"
+            }
+          }
+        },
+        {
           "name": "keyword.declaration.implement.zeen",
           "match": "\\bimplement\\b"
         }
@@ -195,11 +206,11 @@
       "patterns": [
         {
           "name": "keyword.control.zeen",
-          "match": "\\b(?:if|else|while|for|loop|break|continue|return|switch|case|default)\\b"
+          "match": "\\b(?:if|else|while|for|break|continue|return|switch)\\b"
         },
         {
           "name": "keyword.declaration.zeen",
-          "match": "\\b(?:fn|struct|interface|enum|implement|let|var)\\b"
+          "match": "\\b(?:fn|struct|interface|enum|implement|alias|let)\\b"
         },
         {
           "name": "keyword.module.zeen",
@@ -252,6 +263,14 @@
     "function-types": {
       "patterns": [
         {
+          "match": "\\bFnOnce\\s*(?=\\()",
+          "name": "storage.type.function.fatonce.zeen"
+        },
+        {
+          "match": "\\bFn\\s*(?=\\()",
+          "name": "storage.type.function.fat.zeen"
+        },
+        {
           "match": "\\bfn\\s*(?=\\()",
           "name": "storage.type.function.zeen"
         }
@@ -285,6 +304,10 @@
         {
           "name": "constant.language.boolean.zeen",
           "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.zeen",
+          "match": "\\bnullptr\\b"
         }
       ]
     },
