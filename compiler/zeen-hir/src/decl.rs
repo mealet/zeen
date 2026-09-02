@@ -31,6 +31,7 @@ pub enum HirDeclKind {
     ExternVar {
         name: (Spur, SourceSpan),
         ty: Rc<HirTypeExpr>,
+        is_pub: bool,
     },
 
     GlobalVar {
