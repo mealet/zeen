@@ -1,0 +1,23 @@
+alias Meters = f64;
+alias Counter = i32;
+
+fn main() i32 {
+  let a: Counter = 42;
+  let b: i32 = 42;
+
+  if (a != b) {
+    @println("alias broke type identity");
+    return 1;
+  };
+
+  let distance: Meters = 3.5;
+  let d2: f64 = 3.5;
+
+  if (distance != d2) {
+    @println("alias broke type identity");
+    return 1;
+  };
+
+  @println("{} {} {:.1} {:.1}", a, b, distance, d2);
+  return 0;
+}
