@@ -1,0 +1,11 @@
+alias Printable[T: Display] = T;
+
+fn printVal[T: Display](x: Printable[T]) {
+  @println("{}", x);
+}
+
+fn main() i32 {
+  let a: Printable[i32] = 42;
+  printVal(a);
+  return 0;
+}

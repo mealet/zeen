@@ -181,6 +181,7 @@ pub enum CompilerKeyword {
     Use,
     Struct,
     Enum,
+    Alias,
 
     Interface,
     Implement,
@@ -219,6 +220,7 @@ impl CompilerKeyword {
             "use" => Some(CompilerKeyword::Use),
             "struct" => Some(CompilerKeyword::Struct),
             "enum" => Some(CompilerKeyword::Enum),
+            "alias" => Some(CompilerKeyword::Alias),
 
             "interface" => Some(CompilerKeyword::Interface),
             "implement" => Some(CompilerKeyword::Implement),

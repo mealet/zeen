@@ -1,0 +1,31 @@
+alias Ptr[T] = *T;
+alias PairT[A, B] = Pair[A, B];
+
+struct Pair[A, B] {
+  pub first: A,
+  pub second: B,
+}
+
+struct Box[T] {
+  pub inner: Ptr[T],
+}
+
+fn swap[K, V](p: PairT[K, V]) PairT[V, K] {
+  return Pair { .first = p.second, .second = p.first };
+}
+
+fn main() i32 {
+  let value = 123;
+  let b: Box[i32] = Box { .inner = &value };
+
+  if (*b.inner != 123) {
+    @println("generic pointer alias failed");
+    return 1;
+  };
+
+  let p: PairT[i32, f64] = Pair { .first = 1, .second = 2.5 };
+  let s: PairT[f64, i32] = swap(p);
+
+  @println("{} {:.1} {}", *b.inner, s.first, s.second);
+  return 0;
+}

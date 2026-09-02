@@ -1,0 +1,16 @@
+interface Showable {}
+
+alias Comparable[T: Showable] = T;
+
+struct V {
+  pub v: i32,
+}
+
+implement Showable : V {}
+
+fn main() i32 {
+  let x: Comparable[V] = V { .v = 5 };
+  let y: V = x;
+  @println("{}", y.v);
+  return 0;
+}

@@ -1,0 +1,6 @@
+pub alias Counter = i32;
+pub alias BoxT[T] = Box[T];
+
+pub struct Box[T] {
+  pub value: T,
+}

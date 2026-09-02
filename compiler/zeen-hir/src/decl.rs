@@ -26,6 +26,8 @@ pub enum HirDeclKind {
     Implement(Rc<HirImplement>),
     Enum(Rc<HirEnum>),
 
+    Alias(Rc<HirAlias>),
+
     ExternVar {
         name: (Spur, SourceSpan),
         ty: Rc<HirTypeExpr>,
@@ -146,4 +148,14 @@ pub struct HirEnumVariant {
     pub def_id: DefId,
     pub name: Spur,
     pub span: SourceSpan,
+}
+
+// -> Alias
+
+#[derive(Debug, Clone)]
+pub struct HirAlias {
+    pub name: (Spur, SourceSpan),
+    pub is_pub: bool,
+    pub generics: Vec<HirGenericParam>,
+    pub ty: Rc<HirTypeExpr>,
 }

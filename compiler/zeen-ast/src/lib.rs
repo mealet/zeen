@@ -3,7 +3,7 @@ pub mod expressions;
 pub mod statements;
 pub mod types;
 
-pub use declarations::{Declaration, DeclarationKind};
+pub use declarations::{AliasDecl, Declaration, DeclarationKind};
 pub use expressions::{Expression, ExpressionKind};
 pub use statements::{Statement, StatementKind};
 pub use types::{TypeExpr, TypeKind};

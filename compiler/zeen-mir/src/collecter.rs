@@ -47,6 +47,7 @@ fn collect_from_decl(decl: &HirDecl, map: &mut HashMap<DefId, Rc<HirFn>>) {
             }
         }
         HirDeclKind::Enum(_)
+        | HirDeclKind::Alias(_)
         | HirDeclKind::ExternVar { .. }
         | HirDeclKind::GlobalVar { .. }
         | HirDeclKind::ExternLink

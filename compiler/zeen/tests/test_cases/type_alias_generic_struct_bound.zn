@@ -1,0 +1,15 @@
+alias Printable[T: Display] = T;
+
+struct DisplayBox[T: Display] {
+  inner: Printable[T],
+
+  pub fn print(*const self) {
+    @println("{}", self.inner);
+  }
+}
+
+fn main() i32 {
+  let b: DisplayBox[i32] = DisplayBox { .inner = 7 };
+  b.print();
+  return 0;
+}

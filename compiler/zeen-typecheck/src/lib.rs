@@ -72,6 +72,18 @@ pub struct TypeChecker<'res> {
     struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
     enum_variants: HashMap<DefId, Vec<DefId>>,
 
+    type_aliases: HashMap<DefId, AliasDef>,
+
+    /// Alias defs currently being expanded, to catch infinite recursive aliases.
+    in_progress_aliases: HashSet<DefId>,
+
+    /// Declared interface bounds of every generic parameter, keyed by the
+    /// generic parameter's `DefId`. Collected from structs, fn/method
+    /// signatures and implement blocks so alias bound checks can consult a
+    /// generic parameter's bounds even while lowering a signature (Pass 1),
+    /// where no function context is active.
+    all_generic_bounds: HashMap<DefId, Vec<DefId>>,
+
     method_owning_interface: HashMap<DefId, DefId>,
 
     extracting_typename: bool,
@@ -85,6 +97,13 @@ struct FnSignature {
     self_mode: Option<SelfMode>,
     is_pub: bool,
     is_variadic: bool,
+}
+
+#[derive(Clone)]
+struct AliasDef {
+    generics: Vec<DefId>,
+    generic_bounds: HashMap<DefId, Vec<DefId>>,
+    ty: Rc<HirTypeExpr>,
 }
 
 struct InterfaceCallResult {
@@ -134,6 +153,9 @@ impl<'res> TypeChecker<'res> {
             struct_generics: HashMap::new(),
             struct_methods: HashMap::new(),
             enum_variants: HashMap::new(),
+            type_aliases: HashMap::new(),
+            in_progress_aliases: HashSet::new(),
+            all_generic_bounds: HashMap::new(),
             method_owning_interface: HashMap::new(),
             extracting_typename: false,
         }
@@ -192,6 +214,11 @@ impl<'res> TypeChecker<'res> {
             if let HirDeclKind::Struct(s) = &decl.kind {
                 self.struct_generics
                     .insert(decl.def_id, s.generics.iter().map(|g| g.def_id).collect());
+
+                for generic in &s.generics {
+                    self.all_generic_bounds
+                        .insert(generic.def_id, generic.bounds.clone());
+                }
             }
         }
 
@@ -361,6 +388,21 @@ impl<'res> TypeChecker<'res> {
                 self.result.def_types.insert(decl.def_id, ty_id);
             }
 
+            HirDeclKind::Alias(alias) => {
+                self.type_aliases.insert(
+                    decl.def_id,
+                    AliasDef {
+                        generics: alias.generics.iter().map(|g| g.def_id).collect(),
+                        generic_bounds: alias
+                            .generics
+                            .iter()
+                            .map(|g| (g.def_id, g.bounds.clone()))
+                            .collect(),
+                        ty: alias.ty.clone(),
+                    },
+                );
+            }
+
             HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {}
             HirDeclKind::GlobalVar { ty, is_const, .. } => {
                 let ty_id = self.lower_hir_type(ty);
@@ -393,6 +435,12 @@ impl<'res> TypeChecker<'res> {
             .iter()
             .map(|g| (g.def_id, g.bounds.clone()))
             .collect();
+
+        for (g, bounds) in &generic_bounds {
+            self.all_generic_bounds
+                .entry(*g)
+                .or_insert_with(|| bounds.clone());
+        }
 
         let self_mode = hir_fn.params.first().and_then(|p| self_mode_of(&p.ty.kind));
         let params_len = hir_fn.params.len();
@@ -471,6 +519,11 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn declare_implement_signature(&mut self, imp: &zeen_hir::HirImplement, source: Source) {
+        for generic in &imp.generics {
+            self.all_generic_bounds
+                .insert(generic.def_id, generic.bounds.clone());
+        }
+
         for method in &imp.methods {
             self.declare_signature(method);
 
@@ -702,6 +755,96 @@ impl<'res> TypeChecker<'res> {
         (self.lower_hir_type_inner(ty), false)
     }
 
+    fn lower_alias_ref(&mut self, def_id: DefId, args: Vec<TypeId>, ty: &HirTypeExpr) -> TypeId {
+        let Some(alias) = self.type_aliases.get(&def_id).cloned() else {
+            return self.result.interner.error();
+        };
+
+        if args.len() != alias.generics.len() {
+            let interner = self.interner.borrow();
+            let name = interner.resolve(&self.resolution.defs[&def_id].name).into();
+            drop(interner);
+
+            self.report(TypeError::GenericArgCountMismatch {
+                name,
+                expected: alias.generics.len(),
+                found: args.len(),
+                src: ty.source.src(),
+                span: ty.source.span,
+            });
+
+            return self.result.interner.error();
+        }
+
+        if !self.in_progress_aliases.insert(def_id) {
+            let interner = self.interner.borrow();
+            let name: smol_str::SmolStr =
+                interner.resolve(&self.resolution.defs[&def_id].name).into();
+            drop(interner);
+
+            self.report(TypeError::InfiniteRecursiveType {
+                ty: format!("alias `{name}`").into(),
+                src: ty.source.src(),
+                span: ty.source.span,
+            });
+
+            return self.result.interner.error();
+        }
+
+        let bindings: HashMap<DefId, TypeId> =
+            alias.generics.iter().copied().zip(args.clone()).collect();
+
+        for (g, concrete_ty) in alias.generics.iter().copied().zip(args.iter().copied()) {
+            for iface_def in alias.generic_bounds.get(&g).cloned().unwrap_or_default() {
+                let satisfied = match self.result.interner.get(concrete_ty).clone() {
+                    Type::GenericParam(gen_def) => {
+                        self.generic_param_satisfies_interface(gen_def, iface_def)
+                    }
+                    _ => self.type_satisfies_interface(concrete_ty, iface_def),
+                };
+
+                if !satisfied {
+                    let interner = self.interner.borrow();
+                    let generic = interner.resolve(&self.resolution.defs[&g].name).into();
+                    let bound = interner
+                        .resolve(&self.resolution.defs[&iface_def].name)
+                        .into();
+                    let ty_display: smol_str::SmolStr = self.display_type(concrete_ty).into();
+                    drop(interner);
+
+                    self.report(TypeError::GenericBoundNotSatisfied {
+                        generic,
+                        bound,
+                        ty: ty_display,
+                        src: ty.source.src(),
+                        span: ty.source.span,
+                    });
+                }
+            }
+        }
+
+        let body_id = self.lower_hir_type(&alias.ty);
+
+        self.in_progress_aliases.remove(&def_id);
+
+        if body_id == self.result.interner.error() {
+            return body_id;
+        }
+
+        zeen_types::substitute_generics(&mut self.result.interner, body_id, &bindings)
+    }
+
+    /// Whether a generic parameter's declared bounds include `iface_def`.
+    /// Unlike `type_satisfies_interface`'s `GenericParam` arm, this consults a
+    /// global map of declared bounds so it works while lowering signatures
+    /// (Pass 1), where no function context is active.
+    fn generic_param_satisfies_interface(&self, gen_def: DefId, iface_def: DefId) -> bool {
+        self.all_generic_bounds
+            .get(&gen_def)
+            .map(|bounds| bounds.contains(&iface_def))
+            .unwrap_or(false)
+    }
+
     fn lower_hir_type_inner(&mut self, ty: &HirTypeExpr) -> TypeId {
         match &ty.kind {
             HirTypeKind::Builtin(builtin) => self.result.interner.builtin(*builtin),
@@ -756,6 +899,8 @@ impl<'res> TypeChecker<'res> {
                     Some(DefKind::Enum) => {
                         self.result.interner.intern(Type::Enum { def_id: *def_id })
                     }
+
+                    Some(DefKind::TypeAlias) => self.lower_alias_ref(*def_id, args, ty),
 
                     _ => {
                         let struct_generics = self
@@ -1053,6 +1198,7 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Enum(_)
+            | HirDeclKind::Alias(_)
             | HirDeclKind::ExternVar { .. }
             | HirDeclKind::ExternLink
             | HirDeclKind::ExternInclude => {}
@@ -1158,6 +1304,10 @@ impl<'res> TypeChecker<'res> {
                 generic_bindings
                     .entry(generic)
                     .or_insert_with(|| self.result.interner.intern(Type::GenericParam(generic)));
+
+                if let Some(bounds) = self.all_generic_bounds.get(&generic).cloned() {
+                    generic_bounds.entry(generic).or_insert(bounds);
+                }
             }
         }
 
