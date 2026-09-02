@@ -17,6 +17,7 @@ pub struct c_lldiv_t {
 pub extern fn malloc(size: usize) *void;
 pub extern fn calloc(count: usize, size: usize) *void;
 pub extern fn realloc(ptr: *void, size: usize) *void;
+pub extern fn free(ptr: *void);
 
 // process control
 pub extern fn exit(code: i32) void;
