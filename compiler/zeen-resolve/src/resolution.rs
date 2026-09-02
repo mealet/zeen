@@ -85,6 +85,7 @@ pub enum DefKind {
     InterfaceSelfPlaceholder,
     Enum,
     EnumVariant,
+    TypeAlias,
     Variable { is_const: bool },
     Param,
     Field,

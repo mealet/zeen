@@ -111,7 +111,7 @@ pub enum HirMacroKind {
 
     Print,   // @print("format", ...) -> void
     Println, // @println("format", ...) -> void
-    Format,  // @format("format", ...) -> *char
+    Format,  // @format("format", ...) -> String (from `std.string`)
 
     Panic,       // @panic("format", ...) -> never
     Unreachable, // @unreachable() -> never

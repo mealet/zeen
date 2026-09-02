@@ -32,8 +32,8 @@ pub struct HirModule {
 // =========| Public Exports |=========
 
 pub use decl::{
-    HirDecl, HirDeclKind, HirEnum, HirEnumVariant, HirField, HirFn, HirGenericParam, HirImplement,
-    HirInterface, HirParam, HirStruct,
+    HirAlias, HirDecl, HirDeclKind, HirEnum, HirEnumVariant, HirField, HirFn, HirGenericParam,
+    HirImplement, HirInterface, HirParam, HirStruct,
 };
 
 pub use expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind};
@@ -318,6 +318,13 @@ impl<'res> HirLowering<'res> {
                 name,
                 ty: Rc::new(self.lower_type(ty)),
             },
+
+            DeclarationKind::Alias(alias) => HirDeclKind::Alias(Rc::new(HirAlias {
+                name: alias.name,
+                is_pub: alias.is_pub,
+                generics: self.lower_generics(alias.generics),
+                ty: Rc::new(self.lower_type(alias.ty)),
+            })),
 
             DeclarationKind::GlobalVar {
                 name,
