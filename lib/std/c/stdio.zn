@@ -1,0 +1,50 @@
+pub struct c_FILE {}
+
+// standard streams
+pub extern let stdin: *c_FILE;
+pub extern let stdout: *c_FILE;
+pub extern let stderr: *c_FILE;
+
+// file operations
+pub extern fn fopen(filename: [*]const char, mode: [*]const char) *c_FILE;
+pub extern fn freopen(filename: [*]const char, mode: [*]const char, stream: *c_FILE) *c_FILE;
+pub extern fn fclose(stream: *c_FILE) i32;
+pub extern fn fflush(stream: *c_FILE) i32;
+pub extern fn remove(filename: [*]const char) i32;
+pub extern fn rename(old_name: [*]const char, new_name: [*]const char) i32;
+
+// formatted I/O
+pub extern fn printf(fmt: [*]const char, ...) i32;
+pub extern fn fprintf(stream: *c_FILE, fmt: [*]const char, ...) i32;
+pub extern fn sprintf(buf: [*]char, fmt: [*]const char, ...) i32;
+pub extern fn snprintf(buf: [*]char, n: usize, fmt: [*]const char, ...) i32;
+pub extern fn scanf(fmt: [*]const char, ...) i32;
+pub extern fn fscanf(stream: *c_FILE, fmt: [*]const char, ...) i32;
+pub extern fn sscanf(str: [*]const char, fmt: [*]const char, ...) i32;
+
+// char I/O
+pub extern fn fgetc(stream: *c_FILE) i32;
+pub extern fn getc(stream: *c_FILE) i32;
+pub extern fn getchar() i32;
+pub extern fn fputc(ch: char, stream: *c_FILE) i32;
+pub extern fn putc(ch: char, stream: *c_FILE) i32;
+pub extern fn putchar(ch: char) i32;
+pub extern fn ungetc(ch: char, stream: *c_FILE) i32;
+
+// line / block I/O
+pub extern fn fgets(buf: [*]char, n: i32, stream: *c_FILE) *char;
+pub extern fn fputs(str: [*]const char, stream: *c_FILE) i32;
+pub extern fn puts(str: [*]const char) i32;
+pub extern fn fread(ptr: *void, size: usize, count: usize, stream: *c_FILE) usize;
+pub extern fn fwrite(ptr: [*]const void, size: usize, count: usize, stream: *c_FILE) usize;
+
+// positioning
+pub extern fn fseek(stream: *c_FILE, offset: isize, origin: i32) i32;
+pub extern fn ftell(stream: *c_FILE) isize;
+pub extern fn rewind(stream: *c_FILE) void;
+
+// error handling
+pub extern fn feof(stream: *c_FILE) i32;
+pub extern fn ferror(stream: *c_FILE) i32;
+pub extern fn clearerr(stream: *c_FILE) void;
+pub extern fn perror(str: [*]const char) void;
