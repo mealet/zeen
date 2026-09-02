@@ -72,6 +72,11 @@ pub struct TypeChecker<'res> {
     struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
     enum_variants: HashMap<DefId, Vec<DefId>>,
 
+    type_aliases: HashMap<DefId, AliasDef>,
+
+    /// Alias defs currently being expanded, to catch infinite recursive aliases.
+    in_progress_aliases: HashSet<DefId>,
+
     method_owning_interface: HashMap<DefId, DefId>,
 
     extracting_typename: bool,
@@ -85,6 +90,13 @@ struct FnSignature {
     self_mode: Option<SelfMode>,
     is_pub: bool,
     is_variadic: bool,
+}
+
+#[derive(Clone)]
+struct AliasDef {
+    generics: Vec<DefId>,
+    generic_bounds: HashMap<DefId, Vec<DefId>>,
+    ty: Rc<HirTypeExpr>,
 }
 
 struct InterfaceCallResult {
@@ -134,6 +146,8 @@ impl<'res> TypeChecker<'res> {
             struct_generics: HashMap::new(),
             struct_methods: HashMap::new(),
             enum_variants: HashMap::new(),
+            type_aliases: HashMap::new(),
+            in_progress_aliases: HashSet::new(),
             method_owning_interface: HashMap::new(),
             extracting_typename: false,
         }
@@ -359,6 +373,21 @@ impl<'res> TypeChecker<'res> {
             HirDeclKind::ExternVar { ty, .. } => {
                 let ty_id = self.lower_hir_type(ty);
                 self.result.def_types.insert(decl.def_id, ty_id);
+            }
+
+            HirDeclKind::Alias(alias) => {
+                self.type_aliases.insert(
+                    decl.def_id,
+                    AliasDef {
+                        generics: alias.generics.iter().map(|g| g.def_id).collect(),
+                        generic_bounds: alias
+                            .generics
+                            .iter()
+                            .map(|g| (g.def_id, g.bounds.clone()))
+                            .collect(),
+                        ty: alias.ty.clone(),
+                    },
+                );
             }
 
             HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {}
@@ -702,6 +731,78 @@ impl<'res> TypeChecker<'res> {
         (self.lower_hir_type_inner(ty), false)
     }
 
+    fn lower_alias_ref(&mut self, def_id: DefId, args: Vec<TypeId>, ty: &HirTypeExpr) -> TypeId {
+        let Some(alias) = self.type_aliases.get(&def_id).cloned() else {
+            return self.result.interner.error();
+        };
+
+        if args.len() != alias.generics.len() {
+            let interner = self.interner.borrow();
+            let name = interner.resolve(&self.resolution.defs[&def_id].name).into();
+            drop(interner);
+
+            self.report(TypeError::GenericArgCountMismatch {
+                name,
+                expected: alias.generics.len(),
+                found: args.len(),
+                src: ty.source.src(),
+                span: ty.source.span,
+            });
+
+            return self.result.interner.error();
+        }
+
+        if !self.in_progress_aliases.insert(def_id) {
+            let interner = self.interner.borrow();
+            let name: smol_str::SmolStr =
+                interner.resolve(&self.resolution.defs[&def_id].name).into();
+            drop(interner);
+
+            self.report(TypeError::InfiniteRecursiveType {
+                ty: format!("alias `{name}`").into(),
+                src: ty.source.src(),
+                span: ty.source.span,
+            });
+
+            return self.result.interner.error();
+        }
+
+        let bindings: HashMap<DefId, TypeId> =
+            alias.generics.iter().copied().zip(args.clone()).collect();
+
+        for (g, concrete_ty) in alias.generics.iter().copied().zip(args.iter().copied()) {
+            for iface_def in alias.generic_bounds.get(&g).cloned().unwrap_or_default() {
+                if !self.type_satisfies_interface(concrete_ty, iface_def) {
+                    let interner = self.interner.borrow();
+                    let generic = interner.resolve(&self.resolution.defs[&g].name).into();
+                    let bound = interner
+                        .resolve(&self.resolution.defs[&iface_def].name)
+                        .into();
+                    let ty_display: smol_str::SmolStr = self.display_type(concrete_ty).into();
+                    drop(interner);
+
+                    self.report(TypeError::GenericBoundNotSatisfied {
+                        generic,
+                        bound,
+                        ty: ty_display,
+                        src: ty.source.src(),
+                        span: ty.source.span,
+                    });
+                }
+            }
+        }
+
+        let body_id = self.lower_hir_type(&alias.ty);
+
+        self.in_progress_aliases.remove(&def_id);
+
+        if body_id == self.result.interner.error() {
+            return body_id;
+        }
+
+        zeen_types::substitute_generics(&mut self.result.interner, body_id, &bindings)
+    }
+
     fn lower_hir_type_inner(&mut self, ty: &HirTypeExpr) -> TypeId {
         match &ty.kind {
             HirTypeKind::Builtin(builtin) => self.result.interner.builtin(*builtin),
@@ -756,6 +857,8 @@ impl<'res> TypeChecker<'res> {
                     Some(DefKind::Enum) => {
                         self.result.interner.intern(Type::Enum { def_id: *def_id })
                     }
+
+                    Some(DefKind::TypeAlias) => self.lower_alias_ref(*def_id, args, ty),
 
                     _ => {
                         let struct_generics = self
@@ -1053,6 +1156,7 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Enum(_)
+            | HirDeclKind::Alias(_)
             | HirDeclKind::ExternVar { .. }
             | HirDeclKind::ExternLink
             | HirDeclKind::ExternInclude => {}

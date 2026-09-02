@@ -402,6 +402,21 @@ impl<'ctx> NameResolver {
                 self.table.declare_value(name.0, def_id);
             }
 
+            DeclarationKind::Alias(alias) => {
+                let def_id = self.define_at(
+                    NodeKey::from_decl(decl),
+                    DefInfo {
+                        name: alias.name.0,
+                        kind: DefKind::TypeAlias,
+                        span: (alias.name.1, decl.source.src()).into(),
+                        decl: Some(NodeKey::from_decl(decl)),
+                        is_pub: alias.is_pub,
+                    },
+                );
+
+                self.table.declare_type(alias.name.0, def_id);
+            }
+
             DeclarationKind::GlobalVar {
                 name,
                 is_const,
@@ -605,6 +620,15 @@ impl<'ctx> NameResolver {
 
             DeclarationKind::EnumDecl { .. } => {
                 // nothing to resolve (for now at least)
+            }
+
+            DeclarationKind::Alias(alias) => {
+                self.table.push(ScopeKind::Block);
+                self.declare_generics(alias.generics, &decl.source.src);
+
+                self.resolve_type(alias.ty);
+
+                self.table.pop();
             }
 
             DeclarationKind::ExternVar { ty, .. } => {

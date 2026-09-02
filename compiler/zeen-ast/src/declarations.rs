@@ -89,6 +89,16 @@ pub enum DeclarationKind<'arena> {
     Use {
         module: (Spur, SourceSpan),
     },
+
+    Alias(AliasDecl<'arena>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AliasDecl<'arena> {
+    pub name: (Spur, SourceSpan),
+    pub is_pub: bool,
+    pub generics: Option<&'arena [GenericType<'arena>]>,
+    pub ty: &'arena TypeExpr<'arena>,
 }
 
 // Fn
