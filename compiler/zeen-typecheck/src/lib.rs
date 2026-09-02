@@ -771,6 +771,13 @@ impl<'res> TypeChecker<'res> {
             alias.generics.iter().copied().zip(args.clone()).collect();
 
         for (g, concrete_ty) in alias.generics.iter().copied().zip(args.iter().copied()) {
+            if matches!(
+                self.result.interner.get(concrete_ty).clone(),
+                Type::GenericParam(_)
+            ) {
+                continue;
+            }
+
             for iface_def in alias.generic_bounds.get(&g).cloned().unwrap_or_default() {
                 if !self.type_satisfies_interface(concrete_ty, iface_def) {
                     let interner = self.interner.borrow();
