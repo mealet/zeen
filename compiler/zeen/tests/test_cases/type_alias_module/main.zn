@@ -1,0 +1,16 @@
+use lib;
+
+fn main() i32 {
+  let c: Counter = 7;
+  let d: i32 = 7;
+
+  if (c != d) {
+    @println("imported alias broke type identity");
+    return 1;
+  };
+
+  let b: BoxT[i32] = Box { .value = 11 };
+
+  @println("{} {}", c, b.value);
+  return 0;
+}
