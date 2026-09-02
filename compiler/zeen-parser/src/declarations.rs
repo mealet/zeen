@@ -76,6 +76,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             }
             TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
+            TokenKind::Keyword(CompilerKeyword::Alias) => self.parse_alias(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Use) => self.parse_use(),
             TokenKind::Keyword(CompilerKeyword::Interface) => {
                 self.parse_interface(start_span, is_pub)
@@ -193,6 +194,51 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 is_pub: is_pub.0,
                 is_extern: is_extern.0,
             },
+            source: (span, self.p.named_src()).into(),
+        });
+
+        Some(decl)
+    }
+
+    fn parse_alias(
+        &mut self,
+        _start_span: miette::SourceSpan,
+        is_pub: IsPub,
+    ) -> Option<&'ctx Declaration<'ctx>> {
+        let alias_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Alias), "alias")?;
+
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+        let name = (self.p.get_or_intern(name_slice), name_span);
+
+        let generics = {
+            let mut type_parser = TypeParser::new(self.p);
+
+            // will give Option::None if not at bracket token
+            type_parser.parse_generics_declarations()
+        };
+
+        let _ = self.p.expect(TokenKind::Eq, "=")?;
+
+        let mut type_parser = TypeParser::new(self.p);
+        let ty = type_parser.parse()?;
+
+        let _ = self.p.eat(TokenKind::Semicolon);
+
+        let span = alias_kw.merge_span(ty.span);
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::Alias(declarations::AliasDecl {
+                name,
+                is_pub: is_pub.0,
+                generics,
+                ty,
+            }),
             source: (span, self.p.named_src()).into(),
         });
 
@@ -1630,6 +1676,101 @@ mod tests {
                         ..
                     }],
                 },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn alias_decl_plain() {
+        const SRC: &str = "alias Meters = f64;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Alias(declarations::AliasDecl {
+                    name: _,
+                    is_pub: false,
+                    generics: None,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::f64),
+                        ..
+                    },
+                }),
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn alias_decl_public() {
+        const SRC: &str = "pub alias Meters = f64;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Alias(declarations::AliasDecl {
+                    name: _,
+                    is_pub: true,
+                    generics: None,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::f64),
+                        ..
+                    },
+                }),
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn alias_decl_with_generics() {
+        const SRC: &str = "alias Ptr[T] = *T;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Alias(declarations::AliasDecl {
+                    name: _,
+                    is_pub: false,
+                    generics: Some([declarations::GenericType {
+                        name: _,
+                        interfaces: None
+                    }]),
+                    ty: TypeExpr {
+                        kind: TypeKind::SinglePointer(_),
+                        ..
+                    },
+                }),
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn alias_decl_with_bounds() {
+        const SRC: &str = "alias Printable[T: Display] = T;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Alias(declarations::AliasDecl {
+                    name: _,
+                    is_pub: false,
+                    generics: Some([declarations::GenericType {
+                        name: _,
+                        interfaces: Some(_)
+                    }]),
+                    ty: TypeExpr { .. },
+                }),
                 ..
             }])
         );
