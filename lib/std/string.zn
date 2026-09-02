@@ -1,14 +1,5 @@
-extern fn strlen(str: [*]const char) usize;
-extern fn strncmp(str1: [*]const char, str2: [*]const char, size: usize) i32;
-
-extern fn strncpy(dest: [*]char, src: [*]const char, size: usize) *char;
-extern fn strncat(dest: [*]char, src: [*]const char, size: usize) *char;
-
-extern fn strchr(str: [*]const char, ch: char) *char;
-extern fn strstr(str1: [*]const char, str2: [*]const char) *char;
-
-extern fn toupper(char) char;
-extern fn tolower(char) char;
+use std.c.string;
+use std.c.ctype;
 
 use std.alloc;
 
@@ -327,7 +318,7 @@ pub struct String {
     let end = @as(*char, self.ptr + self._len);
 
     while (cursor != end) {
-      *cursor = toupper(*cursor);
+      *cursor = @as(char, toupper(@as(i32, *cursor)));
       cursor += 1;
     }
   }
@@ -338,7 +329,7 @@ pub struct String {
     let end = @as(*char, self.ptr + self._len);
 
     while (cursor != end) {
-      *cursor = tolower(*cursor);
+      *cursor = @as(char, toupper(@as(i32, *cursor)));
       cursor += 1;
     }
   }
