@@ -43,7 +43,10 @@ impl<'a> MirPrinter<'a> {
     fn print_program(&self) -> String {
         let mut out = String::new();
 
-        for ext_var in &self.program.extern_vars {
+        for ext_var in &self.program.global_vars {
+            if !ext_var.is_extern {
+                continue;
+            }
             let _ = writeln!(
                 out,
                 "extern let {}: {};",
@@ -51,11 +54,14 @@ impl<'a> MirPrinter<'a> {
                 self.display_type(ext_var.ty)
             );
         }
-        if !self.program.extern_vars.is_empty() {
+        if self.program.global_vars.iter().any(|g| g.is_extern) {
             out.push('\n');
         }
 
         for global in &self.program.global_vars {
+            if global.is_extern {
+                continue;
+            }
             let kw = if global.is_const { "const" } else { "let" };
             let _ = writeln!(
                 out,
