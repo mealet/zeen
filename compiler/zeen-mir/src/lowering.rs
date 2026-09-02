@@ -106,10 +106,7 @@ pub fn lower_program<'ctx>(
     lowering.register_fat_drop_functions();
 
     let warnings = std::mem::take(&mut lowering.warnings);
-    let mut program = lowering.finish()?;
-    let extern_vars = crate::collecter::collect_extern_vars(module, typecheck, &rodeo);
-
-    program.extern_vars = extern_vars;
+    let program = lowering.finish()?;
 
     Ok(MirLoweringResult {
         program,
@@ -385,6 +382,35 @@ impl<'ctx> MirLowering<'ctx> {
                 ty,
                 is_const: *is_const,
                 is_pub: *is_pub,
+                is_extern: false,
+            });
+        }
+
+        for decl in &self.module.decls {
+            let HirDeclKind::ExternVar {
+                name, ty, is_pub, ..
+            } = &decl.kind
+            else {
+                continue;
+            };
+
+            let ty = self
+                .typecheck
+                .def_types
+                .get(&decl.def_id)
+                .copied()
+                .unwrap_or_else(|| self.typecheck.interner.intern(Type::Error));
+            let symbol_name = self.rodeo.borrow().resolve(&name.0).to_string();
+
+            let id = MirGlobalVarId(self.program.global_vars.len() as u32);
+            self.globals_by_def.insert(decl.def_id, id);
+            self.program.global_vars.push(MirGlobalVar {
+                def_id: decl.def_id,
+                symbol_name,
+                ty,
+                is_const: false,
+                is_pub: *is_pub,
+                is_extern: true,
             });
         }
     }

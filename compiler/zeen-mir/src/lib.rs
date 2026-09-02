@@ -46,7 +46,6 @@ pub struct MirProgram {
 
     pub extern_fns: Vec<ExternFnDecl>,
     pub extern_exports: HashMap<MirFunctionId, String>,
-    pub extern_vars: Vec<ExternVarDecl>,
 
     pub global_vars: Vec<MirGlobalVar>,
     pub init_globals_fn: Option<MirFunctionId>,
@@ -59,6 +58,9 @@ pub struct MirGlobalVar {
     pub ty: TypeId,
     pub is_const: bool,
     pub is_pub: bool,
+    /// True when the variable is an externally-defined symbol (`extern let`):
+    /// codegen emits an external reference instead of a definition.
+    pub is_extern: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -67,12 +69,6 @@ pub struct ExternFnDecl {
     pub param_types: Vec<TypeId>,
     pub ret_ty: TypeId,
     pub is_variadic: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExternVarDecl {
-    pub symbol_name: String,
-    pub ty: TypeId,
 }
 
 #[derive(Debug, Clone)]
