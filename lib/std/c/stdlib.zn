@@ -1,0 +1,58 @@
+pub struct c_div_t {
+  pub quot: i32,
+  pub rem: i32
+}
+
+pub struct c_ldiv_t {
+  pub quot: isize,
+  pub rem: isize,
+}
+
+pub struct c_lldiv_t {
+  pub quot: i64,
+  pub rem: i64,
+}
+
+// memory
+pub extern fn malloc(size: usize) *void;
+pub extern fn calloc(count: usize, size: usize) *void;
+pub extern fn realloc(ptr: *void, size: usize) *void;
+
+// process control
+pub extern fn exit(code: i32) void;
+pub extern fn abort() void;
+pub extern fn atexit(func: fn() void) i32;
+pub extern fn system(command: *char) i32;
+
+// conversion
+pub extern fn atoi(str: *char) i32;
+pub extern fn atol(str: *char) isize;
+pub extern fn atoll(str: *char) i64;
+pub extern fn atof(str: *char) f64;
+pub extern fn strtof(str: *char, endptr: **char) f32;
+pub extern fn strtod(str: *char, endptr: **char) f64;
+pub extern fn strtol(str: *char, endptr: **char, base: i32) isize;
+pub extern fn strtoul(str: *char, endptr: **char, base: i32) usize;
+
+// search & sort
+pub extern fn qsort(base: *void, count: usize, size: usize, cmp: fn(*void, *void) i32) void;
+pub extern fn bsearch(key: *void, base: *void, count: usize, size: usize, cmp: fn(*void, *void) i32) *void;
+
+// random
+pub extern fn rand() i32;
+pub extern fn srand(seed: u32) void;
+
+// div
+pub extern fn div(numer: i32, denom: i32) c_div_t;
+pub extern fn ldiv(numer: isize, denom: isize) c_ldiv_t;
+pub extern fn lldiv(numer: i64, denom: i64) c_lldiv_t;
+
+// environment
+pub extern fn getenv(name: *char) *char;
+pub extern fn setenv(name: *char, value: *char, overwrite: i32) i32;
+pub extern fn unsetenv(name: *char) i32;
+
+// misc
+pub extern fn abs(n: i32) i32;
+pub extern fn labs(n: isize) isize;
+pub extern fn llabs(n: i64) i64;
