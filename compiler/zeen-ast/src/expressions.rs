@@ -95,6 +95,36 @@ pub enum ExpressionKind<'arena> {
     },
 
     Type(&'arena crate::types::TypeExpr<'arena>),
+
+    /// Compile-time target constant (`@var[os]`), resolved by the preprocessor.
+    TargetVar(TargetVarKind),
+}
+
+/// Target information provided at compile time via `@var[name]`.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum TargetVarKind {
+    Os,
+    Arch,
+    Env,
+    Target,
+    Family,
+    Debug,
+    Release,
+}
+
+impl TargetVarKind {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "os" => Some(Self::Os),
+            "arch" => Some(Self::Arch),
+            "env" => Some(Self::Env),
+            "target" => Some(Self::Target),
+            "family" => Some(Self::Family),
+            "debug" => Some(Self::Debug),
+            "release" => Some(Self::Release),
+            _ => None,
+        }
+    }
 }
 
 // Literal
