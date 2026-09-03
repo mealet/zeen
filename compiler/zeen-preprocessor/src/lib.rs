@@ -8,8 +8,8 @@ use smallvec::SmallVec;
 use zeen_ast::declarations::{AliasDecl, FnParam, GenericType, StructField};
 use zeen_ast::expressions::Literal;
 use zeen_ast::{
-    Declaration, DeclarationKind, DirectiveValue, Expression, ExpressionKind,
-    PreprocessorDirective, Statement, StatementKind, TypeExpr, TypeKind,
+    Declaration, DeclarationKind, DirectiveValue, ExprConditionalBlock, Expression, ExpressionKind,
+    PreprocessorDirective, Statement, StatementKind, StmtConditionalBlock, TypeExpr, TypeKind,
 };
 use zeen_driver::{CompilationMode, Target};
 
@@ -345,6 +345,42 @@ impl<'a> Preprocessor<'a> {
         })
     }
 
+    /// Resolves a statement list, flattening statement-level conditional blocks
+    /// into the statements of the single matching branch.
+    fn resolve_stmt_list(&mut self, stmts: &'a [&'a Statement<'a>]) -> &'a [&'a Statement<'a>] {
+        let mut out: SmallVec<[&'a Statement<'a>; 8]> = SmallVec::new();
+        for s in stmts {
+            if let StatementKind::ConditionalBlock(block) = s.kind {
+                self.expand_stmt_conditional(block, &mut out);
+            } else {
+                out.push(self.resolve_stmt(s));
+            }
+        }
+        self.alloc_slice(&out)
+    }
+
+    fn expand_stmt_conditional(
+        &mut self,
+        block: &'a StmtConditionalBlock<'a>,
+        out: &mut SmallVec<[&'a Statement<'a>; 8]>,
+    ) {
+        let mut current = Some(block);
+        while let Some(b) = current {
+            if b.bare_else || self.matches(b.directive, b.values) {
+                let stmts = self.resolve_stmt_list(b.stmts);
+                out.extend_from_slice(stmts);
+                return;
+            }
+            current = match b.else_block {
+                Some(else_stmt) => match else_stmt.kind {
+                    StatementKind::ConditionalBlock(else_block) => Some(else_block),
+                    _ => None,
+                },
+                None => None,
+            };
+        }
+    }
+
     fn resolve_stmt_kind(&mut self, stmt: &'a Statement<'a>) -> StatementKind<'a> {
         match stmt.kind {
             StatementKind::Let {
@@ -398,10 +434,17 @@ impl<'a> Preprocessor<'a> {
             }
 
             StatementKind::FnDecl(decl) => StatementKind::FnDecl(self.resolve_decl(decl)),
+
+            StatementKind::ConditionalBlock(_) => {
+                unreachable!("conditional statements are expanded by resolve_stmt_list")
+            }
         }
     }
 
     fn resolve_expr(&mut self, expr: &'a Expression<'a>) -> &'a Expression<'a> {
+        if let ExpressionKind::ConditionalBlock(block) = expr.kind {
+            return self.expand_expr_conditional(block);
+        }
         let kind = self.resolve_expr_kind(expr);
         if kind == expr.kind {
             return expr;
@@ -410,6 +453,28 @@ impl<'a> Preprocessor<'a> {
             kind,
             span: expr.span,
         })
+    }
+
+    /// Replaces an expression-level conditional block with the body of the
+    /// single matching branch.
+    fn expand_expr_conditional(
+        &mut self,
+        block: &'a ExprConditionalBlock<'a>,
+    ) -> &'a Expression<'a> {
+        let mut current = Some(block);
+        while let Some(b) = current {
+            if b.bare_else || self.matches(b.directive, b.values) {
+                return self.resolve_expr(b.body);
+            }
+            current = match b.else_block {
+                Some(else_expr) => match else_expr.kind {
+                    ExpressionKind::ConditionalBlock(else_block) => Some(else_block),
+                    _ => None,
+                },
+                None => None,
+            };
+        }
+        unreachable!("conditional expression has no matching branch or else")
     }
 
     fn resolve_expr_kind(&mut self, expr: &'a Expression<'a>) -> ExpressionKind<'a> {
@@ -490,14 +555,10 @@ impl<'a> Preprocessor<'a> {
                 len: self.resolve_expr(len),
             },
 
-            ExpressionKind::Block { stmts, trailing } => {
-                let fixed: SmallVec<[&'a Statement<'a>; 8]> =
-                    stmts.iter().map(|s| self.resolve_stmt(s)).collect();
-                ExpressionKind::Block {
-                    stmts: self.alloc_slice(&fixed),
-                    trailing: trailing.map(|e| self.resolve_expr(e)),
-                }
-            }
+            ExpressionKind::Block { stmts, trailing } => ExpressionKind::Block {
+                stmts: self.resolve_stmt_list(stmts),
+                trailing: trailing.map(|e| self.resolve_expr(e)),
+            },
 
             ExpressionKind::Closure {
                 params,
@@ -510,6 +571,10 @@ impl<'a> Preprocessor<'a> {
             },
 
             ExpressionKind::Type(ty) => ExpressionKind::Type(self.resolve_type(ty)),
+
+            ExpressionKind::ConditionalBlock(_) => {
+                unreachable!("conditional expressions are expanded by resolve_expr")
+            }
         }
     }
 
@@ -687,6 +752,80 @@ mod tests {
         assert!(matches!(
             value.unwrap().kind,
             ExpressionKind::Literal(zeen_ast::expressions::Literal::Bool(true))
+        ));
+    }
+
+    #[test]
+    fn statement_conditional_selects_matching_branch() {
+        let (decls, _) = run(
+            "fn main() { @os[linux] { let a: i32 = 1; } else { let a: i32 = 2; } }",
+            linux(),
+            CompilationMode::Debug,
+        );
+        let DeclarationKind::FnDecl { body, .. } = decls[0].kind else {
+            panic!("expected fn decl");
+        };
+        let Statement { kind, .. } = body.unwrap();
+        let StatementKind::Expr(expr) = kind else {
+            panic!("expected expr stmt: {kind:?}");
+        };
+        let ExpressionKind::Block { stmts, .. } = expr.kind else {
+            panic!("expected block expr: {expr:?}");
+        };
+        assert_eq!(stmts.len(), 1);
+        assert!(matches!(stmts[0].kind, StatementKind::Let { .. }));
+    }
+
+    #[test]
+    fn statement_conditional_takes_else_when_guard_fails() {
+        let (decls, interner) = run(
+            "fn main() { @os[windows] { let a: i32 = 1; } else { let b: i32 = 2; } }",
+            linux(),
+            CompilationMode::Debug,
+        );
+        let DeclarationKind::FnDecl { body, .. } = decls[0].kind else {
+            panic!("expected fn decl");
+        };
+        let Statement { kind, .. } = body.unwrap();
+        let StatementKind::Expr(expr) = kind else {
+            panic!("expected expr stmt: {kind:?}");
+        };
+        let ExpressionKind::Block { stmts, .. } = expr.kind else {
+            panic!("expected block expr: {expr:?}");
+        };
+        assert_eq!(stmts.len(), 1);
+        let StatementKind::Let { name, .. } = stmts[0].kind else {
+            panic!("expected let stmt");
+        };
+        assert_eq!(interner.resolve(&name), "b");
+    }
+
+    #[test]
+    fn expression_conditional_selects_matching_branch() {
+        let (decls, _) = run(
+            "fn main() { let x: i32 = @os[linux] { 10 } else { 20 }; }",
+            linux(),
+            CompilationMode::Debug,
+        );
+        let DeclarationKind::FnDecl { body, .. } = decls[0].kind else {
+            panic!("expected fn decl");
+        };
+        let Statement { kind, .. } = body.unwrap();
+        let StatementKind::Expr(expr) = kind else {
+            panic!("expected expr stmt: {kind:?}");
+        };
+        let ExpressionKind::Block { stmts, .. } = expr.kind else {
+            panic!("expected block expr: {expr:?}");
+        };
+        let StatementKind::Let { value, .. } = stmts[0].kind else {
+            panic!("expected let stmt");
+        };
+        let ExpressionKind::Block { trailing, .. } = value.unwrap().kind else {
+            panic!("expected block expr value: {:?}", value.unwrap().kind);
+        };
+        assert!(matches!(
+            trailing.unwrap().kind,
+            ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(10))
         ));
     }
 }

@@ -6,9 +6,11 @@ use crate::{
     type_parser::TypeParser,
 };
 
+use smallvec::SmallVec;
+
 use zeen_ast::{
-    Expression, TypeExpr,
-    statements::{Statement, StatementKind},
+    Expression, PreprocessorDirective, TypeExpr,
+    statements::{Statement, StatementKind, StmtConditionalBlock},
 };
 use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
@@ -60,6 +62,10 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
                 self.parse_fn_decl()
             }
 
+            TokenKind::PreprocessorIdent
+            | TokenKind::PreprocessorDebug
+            | TokenKind::PreprocessorRelease => self.parse_conditional_stmt(),
+
             _ => self.parse_expr_or_assign(),
         }
     }
@@ -98,6 +104,100 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             return Some(());
         }
         Some(())
+    }
+}
+
+impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
+    /// Parses a statement-level preprocessor guard: `@os[linux] { stmts }`
+    /// followed by an optional `else @os[...] { stmts }` / `else { stmts }`
+    /// chain. The whole statement is replaced by the matching branch's
+    /// statements during preprocessing.
+    pub fn parse_conditional_stmt(&mut self) -> Option<&'ctx Statement<'ctx>> {
+        let start_token = self.p.current_clone();
+        let start_span = start_token.span;
+
+        let name_slice =
+            self.p.src[start_span.offset() + 1..start_span.offset() + start_span.len()].to_owned();
+
+        let directive = match self.p.parse_preprocessor_directive() {
+            Some(d) => d,
+            None => {
+                self.p.report(ParserError::SyntaxError {
+                    label: format!("unknown preprocessor directive `@{name_slice}`").into(),
+                    help: Some(
+                        "expected one of os, arch, env, target, family, debug, release".into(),
+                    ),
+                    src: self.p.named_src(),
+                    span: start_span,
+                });
+                return None;
+            }
+        };
+
+        let _ = self.p.advance_not_eof()?;
+
+        let values = self.p.parse_directive_values(directive)?;
+        let stmts = self.parse_directive_stmt_block()?;
+        let else_block = self.parse_directive_stmt_else()?;
+
+        let block = self.p.arena.alloc(StmtConditionalBlock {
+            directive,
+            values,
+            stmts,
+            bare_else: false,
+            else_block,
+        });
+
+        let span = start_token.merge_span(self.p.current().span);
+
+        Some(self.p.arena.alloc(Statement {
+            kind: StatementKind::ConditionalBlock(block),
+            span,
+        }))
+    }
+
+    fn parse_directive_stmt_block(&mut self) -> Option<&'ctx [&'ctx Statement<'ctx>]> {
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut buffer: SmallVec<[&'ctx Statement<'ctx>; 8]> = SmallVec::new();
+        while !self.p.at(TokenKind::CloseBrace) && !self.p.at(TokenKind::Eof) {
+            let mut stmt_parser = StmtParser::new(self.p).with_optional_semicolon(true);
+            if let Some(stmt) = stmt_parser.parse() {
+                buffer.push(stmt);
+            }
+            if self.p.panic_mode {
+                break;
+            }
+        }
+
+        let _ = self.p.expect(TokenKind::CloseBrace, "}")?;
+        Some(self.p.arena.alloc_slice_copy(&buffer))
+    }
+
+    fn parse_directive_stmt_else(&mut self) -> Option<Option<&'ctx Statement<'ctx>>> {
+        if !self.p.at(TokenKind::Keyword(CompilerKeyword::Else)) {
+            return Some(None);
+        }
+
+        let _ = self.p.advance_not_eof()?;
+
+        if self.p.at(TokenKind::OpenBrace) {
+            let stmts = self.parse_directive_stmt_block()?;
+            let block = self.p.arena.alloc(StmtConditionalBlock {
+                directive: PreprocessorDirective::Debug,
+                values: self.p.arena.alloc_slice_copy(&[]),
+                stmts,
+                bare_else: true,
+                else_block: None,
+            });
+            let stmt = self.p.arena.alloc(Statement {
+                kind: StatementKind::ConditionalBlock(block),
+                span: self.p.current().span,
+            });
+            return Some(Some(stmt));
+        }
+
+        self.parse_conditional_stmt().map(Some)
     }
 }
 

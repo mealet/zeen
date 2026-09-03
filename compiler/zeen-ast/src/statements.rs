@@ -2,7 +2,7 @@ use lasso::Spur;
 use miette::SourceSpan;
 
 use crate::{
-    declarations::Declaration,
+    declarations::{Declaration, DirectiveValue, PreprocessorDirective},
     expressions::{self, Expression},
     types::TypeExpr,
 };
@@ -67,4 +67,21 @@ pub enum StatementKind<'arena> {
     /// Only visible from the enclosing function; MIR lowers it as a standalone
     /// function named `<parent>-><name>`.
     FnDecl(&'arena Declaration<'arena>),
+
+    /// A statement block guarded by a target condition (`@os[linux] { stmt; }`).
+    /// Resolved by the preprocessor: the whole statement is replaced by the
+    /// statements of the single matching branch.
+    ConditionalBlock(&'arena StmtConditionalBlock<'arena>),
+}
+
+/// A `@name[values] { stmts }` guard at statement level with an optional `else`.
+/// `else_block` is either another statement conditional (else-if) or a bare-else
+/// statement holding the fallback statements.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct StmtConditionalBlock<'arena> {
+    pub directive: PreprocessorDirective,
+    pub values: &'arena [DirectiveValue<'arena>],
+    pub stmts: &'arena [&'arena Statement<'arena>],
+    pub bare_else: bool,
+    pub else_block: Option<&'arena Statement<'arena>>,
 }

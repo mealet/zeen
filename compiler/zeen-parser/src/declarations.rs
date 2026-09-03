@@ -5,11 +5,7 @@ use crate::{
 
 use smallvec::SmallVec;
 
-use miette::SourceSpan;
-
-use zeen_ast::{
-    Declaration, DeclarationKind, DirectiveValue, PreprocessorDirective, TypeExpr, declarations,
-};
+use zeen_ast::{Declaration, DeclarationKind, PreprocessorDirective, TypeExpr, declarations};
 use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
 pub struct DeclParser<'tok, 'ctx, 'pr> {
@@ -116,11 +112,10 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let start_token = self.p.current_clone();
         let start_span = start_token.span;
 
-        let name_span = start_span;
         let name_slice =
-            self.p.src[name_span.offset() + 1..name_span.offset() + name_span.len()].to_owned();
+            self.p.src[start_span.offset() + 1..start_span.offset() + start_span.len()].to_owned();
 
-        let directive = match PreprocessorDirective::from_name(&name_slice) {
+        let directive = match self.p.parse_preprocessor_directive() {
             Some(d) => d,
             None => {
                 self.p.report(ParserError::SyntaxError {
@@ -129,7 +124,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                         "expected one of os, arch, env, target, family, debug, release".into(),
                     ),
                     src: self.p.named_src(),
-                    span: name_span,
+                    span: start_span,
                 });
                 return None;
             }
@@ -137,7 +132,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let _ = self.p.advance_not_eof()?;
 
-        let values = self.parse_directive_values(directive)?;
+        let values = self.p.parse_directive_values(directive)?;
         let body = self.parse_directive_body()?;
         let else_block = self.parse_directive_else()?;
 
@@ -155,59 +150,6 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             kind: DeclarationKind::ConditionalBlock(block),
             source: (span, self.p.named_src()).into(),
         }))
-    }
-
-    fn parse_directive_values(
-        &mut self,
-        directive: PreprocessorDirective,
-    ) -> Option<&'ctx [DirectiveValue<'ctx>]> {
-        let is_bool = matches!(
-            directive,
-            PreprocessorDirective::Debug | PreprocessorDirective::Release
-        );
-        if is_bool {
-            return Some(self.p.arena.alloc_slice_copy(&[]));
-        }
-
-        let open = self.p.expect(TokenKind::OpenBracket, "[")?;
-        let open_end = open.span.offset() + open.span.len();
-
-        while !self.p.at(TokenKind::CloseBracket) && !self.p.at(TokenKind::Eof) {
-            let _ = self.p.advance_not_eof()?;
-        }
-
-        let close = self.p.expect(TokenKind::CloseBracket, "]")?;
-        let close_start = close.span.offset();
-
-        let raw = &self.p.src[open_end..close_start];
-
-        let mut buffer: SmallVec<[DirectiveValue; 4]> = SmallVec::new();
-        let mut rest = raw;
-        let mut base = 0;
-        loop {
-            let end = rest.find('|').map_or(rest.len(), |i| i);
-            let part = &rest[..end];
-            let ts = part.find(|c: char| !c.is_whitespace());
-            if let Some(ts) = ts {
-                let trimmed = &part[ts..];
-                let te = trimmed
-                    .rfind(|c: char| !c.is_whitespace())
-                    .map(|idx| idx + 1)
-                    .unwrap_or(trimmed.len());
-                let value = &trimmed[..te];
-                buffer.push(DirectiveValue {
-                    value: self.p.arena.alloc_str(value),
-                    span: SourceSpan::new((open_end + base + ts).into(), value.len()),
-                });
-            }
-            if end == rest.len() {
-                break;
-            }
-            base += end + 1;
-            rest = &rest[end + 1..];
-        }
-
-        Some(self.p.arena.alloc_slice_copy(&buffer))
     }
 
     fn parse_directive_body(&mut self) -> Option<&'ctx [&'ctx Declaration<'ctx>]> {
@@ -1972,8 +1914,8 @@ mod tests {
                 kind: DeclarationKind::ConditionalBlock(zeen_ast::ConditionalBlock {
                     directive: PreprocessorDirective::Os,
                     values: [
-                        DirectiveValue { value: "linux", .. },
-                        DirectiveValue { value: "macos", .. }
+                        zeen_ast::DirectiveValue { value: "linux", .. },
+                        zeen_ast::DirectiveValue { value: "macos", .. }
                     ],
                     body: [_],
                     bare_else: false,
