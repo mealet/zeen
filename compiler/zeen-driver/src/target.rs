@@ -7,6 +7,7 @@ pub struct Target {
     pub arch: String,
     pub os: String,
     pub env: String,
+    pub family: String,
 }
 
 impl Target {
@@ -16,12 +17,14 @@ impl Target {
         let _vendor = parts.next().unwrap_or("unknown");
         let os = parts.next().unwrap_or("unknown").to_owned();
         let env = parts.next().unwrap_or_default().to_owned();
+        let family = Self::derive_family(&os, &arch);
 
         Self {
             triple: triple.to_owned(),
             arch,
             os,
             env,
+            family,
         }
     }
 
@@ -51,12 +54,14 @@ impl Target {
         } else {
             format!("{arch}-{vendor}-{os}-{env}")
         };
+        let family = Self::derive_family(os, arch);
 
         Self {
             triple,
             arch: arch.to_owned(),
             os: os.to_owned(),
             env: env.to_owned(),
+            family,
         }
     }
 
@@ -66,6 +71,18 @@ impl Target {
 
     pub fn is_wasm(&self) -> bool {
         self.arch == "wasm32" || self.arch == "wasm64"
+    }
+
+    /// Derives the platform family from the OS and architecture.
+    fn derive_family(os: &str, arch: &str) -> String {
+        match os {
+            "linux" | "macos" | "darwin" | "freebsd" | "openbsd" | "netbsd" | "dragonfly" => {
+                "unix".into()
+            }
+            "windows" => "windows".into(),
+            _ if arch == "wasm32" || arch == "wasm64" => "wasm".into(),
+            _ => String::new(),
+        }
     }
 
     fn on_musl(arch: &str) -> bool {
@@ -94,6 +111,7 @@ mod tests {
         assert_eq!(target.arch, "x86_64");
         assert_eq!(target.os, "windows");
         assert_eq!(target.env, "msvc");
+        assert_eq!(target.family, "windows");
         assert!(target.is_windows());
     }
 
@@ -103,6 +121,7 @@ mod tests {
         assert_eq!(target.arch, "x86_64");
         assert_eq!(target.os, "darwin");
         assert_eq!(target.env, "");
+        assert_eq!(target.family, "unix");
         assert!(!target.is_windows());
     }
 
@@ -111,6 +130,13 @@ mod tests {
         let target = Target::parse("wasm32-unknown-wasip1");
         assert!(target.is_wasm());
         assert_eq!(target.os, "wasip1");
+        assert_eq!(target.family, "wasm");
+    }
+
+    #[test]
+    fn linux_family_is_unix() {
+        let target = Target::parse("x86_64-unknown-linux-gnu");
+        assert_eq!(target.family, "unix");
     }
 
     #[test]
