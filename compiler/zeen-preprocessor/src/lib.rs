@@ -364,12 +364,22 @@ impl<'a> Preprocessor<'a> {
         block: &'a StmtConditionalBlock<'a>,
         out: &mut SmallVec<[&'a Statement<'a>; 8]>,
     ) {
+        if let Some(branch) = self.matched_stmt_branch(block) {
+            let stmts = self.resolve_stmt_list(branch);
+            out.extend_from_slice(stmts);
+        }
+    }
+
+    /// Returns the statements of the single matching branch of a statement-level
+    /// conditional, walking the `else if` / `else` chain.
+    fn matched_stmt_branch(
+        &self,
+        block: &'a StmtConditionalBlock<'a>,
+    ) -> Option<&'a [&'a Statement<'a>]> {
         let mut current = Some(block);
         while let Some(b) = current {
             if b.bare_else || self.matches(b.directive, b.values) {
-                let stmts = self.resolve_stmt_list(b.stmts);
-                out.extend_from_slice(stmts);
-                return;
+                return Some(b.stmts);
             }
             current = match b.else_block {
                 Some(else_stmt) => match else_stmt.kind {
@@ -379,6 +389,30 @@ impl<'a> Preprocessor<'a> {
                 None => None,
             };
         }
+        None
+    }
+
+    /// Expands a statement-level conditional used as a single statement body
+    /// (e.g. the body of an `if`/`while`/`for`). The matching branch is resolved
+    /// and wrapped back into a block expression statement.
+    fn expand_stmt_conditional_single(
+        &mut self,
+        block: &'a StmtConditionalBlock<'a>,
+        span: miette::SourceSpan,
+    ) -> Option<&'a Statement<'a>> {
+        let branch = self.matched_stmt_branch(block)?;
+        let stmts = self.resolve_stmt_list(branch);
+        let expr = self.arena.alloc(Expression {
+            kind: ExpressionKind::Block {
+                stmts,
+                trailing: None,
+            },
+            span,
+        });
+        Some(self.arena.alloc(Statement {
+            kind: StatementKind::Expr(expr),
+            span,
+        }))
     }
 
     fn resolve_stmt_kind(&mut self, stmt: &'a Statement<'a>) -> StatementKind<'a> {
@@ -435,8 +469,17 @@ impl<'a> Preprocessor<'a> {
 
             StatementKind::FnDecl(decl) => StatementKind::FnDecl(self.resolve_decl(decl)),
 
-            StatementKind::ConditionalBlock(_) => {
-                unreachable!("conditional statements are expanded by resolve_stmt_list")
+            StatementKind::ConditionalBlock(block) => {
+                match self.expand_stmt_conditional_single(block, stmt.span) {
+                    Some(s) => s.kind,
+                    None => StatementKind::Expr(self.arena.alloc(Expression {
+                        kind: ExpressionKind::Block {
+                            stmts: &[],
+                            trailing: None,
+                        },
+                        span: stmt.span,
+                    })),
+                }
             }
         }
     }
@@ -827,5 +870,38 @@ mod tests {
             trailing.unwrap().kind,
             ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(10))
         ));
+    }
+
+    #[test]
+    fn conditional_as_while_body_expands_to_block() {
+        let (decls, _) = run(
+            "fn main() { let n: i32 = 0; while (n < 1) @os[linux] { let x: i32 = 1; } ; }",
+            linux(),
+            CompilationMode::Debug,
+        );
+        let DeclarationKind::FnDecl { body, .. } = decls[0].kind else {
+            panic!("expected fn decl");
+        };
+        let Statement { kind, .. } = body.unwrap();
+        let StatementKind::Expr(Expression {
+            kind: ExpressionKind::Block { stmts, .. },
+            ..
+        }) = kind
+        else {
+            panic!("expected block expr stmt: {kind:?}");
+        };
+        assert_eq!(stmts.len(), 2);
+        let StatementKind::While { block, .. } = stmts[1].kind else {
+            panic!("expected while in body");
+        };
+        let StatementKind::Expr(Expression {
+            kind: ExpressionKind::Block { stmts: inner, .. },
+            ..
+        }) = block.kind
+        else {
+            panic!("expected block while body: {:?}", block.kind);
+        };
+        assert_eq!(inner.len(), 1);
+        assert!(matches!(inner[0].kind, StatementKind::Let { .. }));
     }
 }
