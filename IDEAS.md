@@ -18,7 +18,8 @@ List of ideas for future language infrastructure (may be implemented before v1.0
 > ----
 > 
 > fn main() {
->   @println("@var[os_linux]");
+>   let is_linux: bool = @var[is_os_linux];
+>   @println("{}", is_linux);
 > }
 > ```
 
