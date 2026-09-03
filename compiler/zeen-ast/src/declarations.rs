@@ -134,11 +134,13 @@ pub struct DirectiveValue<'arena> {
 
 /// A `@name[values] { body }` guard with an optional `else` branch.
 /// `else_block` is either another `ConditionalBlock` or `None` for a bare else.
+/// A `bare_else` block takes its body unconditionally.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConditionalBlock<'arena> {
     pub directive: PreprocessorDirective,
     pub values: &'arena [DirectiveValue<'arena>],
     pub body: &'arena [&'arena Declaration<'arena>],
+    pub bare_else: bool,
     pub else_block: Option<&'arena Declaration<'arena>>,
 }
 

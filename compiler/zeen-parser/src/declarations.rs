@@ -5,7 +5,11 @@ use crate::{
 
 use smallvec::SmallVec;
 
-use zeen_ast::{Declaration, DeclarationKind, TypeExpr, declarations};
+use miette::SourceSpan;
+
+use zeen_ast::{
+    Declaration, DeclarationKind, DirectiveValue, PreprocessorDirective, TypeExpr, declarations,
+};
 use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
 pub struct DeclParser<'tok, 'ctx, 'pr> {
@@ -85,6 +89,10 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             }
             TokenKind::Keyword(CompilerKeyword::Implement) => self.parse_implement(start_span),
 
+            TokenKind::PreprocessorIdent
+            | TokenKind::PreprocessorDebug
+            | TokenKind::PreprocessorRelease => self.parse_conditional_block(is_pub),
+
             _ => {
                 self.p.report(ParserError::UnknownDeclaration {
                     token_kind: format!("{:?}", self.p.current.kind).into(),
@@ -97,6 +105,153 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 None
             }
         }
+    }
+}
+
+impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
+    pub(crate) fn parse_conditional_block(
+        &mut self,
+        _is_pub: IsPub,
+    ) -> Option<&'ctx Declaration<'ctx>> {
+        let start_token = self.p.current_clone();
+        let start_span = start_token.span;
+
+        let name_span = start_span;
+        let name_slice =
+            self.p.src[name_span.offset() + 1..name_span.offset() + name_span.len()].to_owned();
+
+        let directive = match PreprocessorDirective::from_name(&name_slice) {
+            Some(d) => d,
+            None => {
+                self.p.report(ParserError::SyntaxError {
+                    label: format!("unknown preprocessor directive `@{name_slice}`").into(),
+                    help: Some(
+                        "expected one of os, arch, env, target, family, debug, release".into(),
+                    ),
+                    src: self.p.named_src(),
+                    span: name_span,
+                });
+                return None;
+            }
+        };
+
+        let _ = self.p.advance_not_eof()?;
+
+        let values = self.parse_directive_values(directive)?;
+        let body = self.parse_directive_body()?;
+        let else_block = self.parse_directive_else()?;
+
+        let block = self.p.arena.alloc(zeen_ast::ConditionalBlock {
+            directive,
+            values,
+            body,
+            bare_else: false,
+            else_block,
+        });
+
+        let span = start_token.merge_span(self.p.current().span);
+
+        Some(self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::ConditionalBlock(block),
+            source: (span, self.p.named_src()).into(),
+        }))
+    }
+
+    fn parse_directive_values(
+        &mut self,
+        directive: PreprocessorDirective,
+    ) -> Option<&'ctx [DirectiveValue<'ctx>]> {
+        let is_bool = matches!(
+            directive,
+            PreprocessorDirective::Debug | PreprocessorDirective::Release
+        );
+        if is_bool {
+            return Some(self.p.arena.alloc_slice_copy(&[]));
+        }
+
+        let open = self.p.expect(TokenKind::OpenBracket, "[")?;
+        let open_end = open.span.offset() + open.span.len();
+
+        while !self.p.at(TokenKind::CloseBracket) && !self.p.at(TokenKind::Eof) {
+            let _ = self.p.advance_not_eof()?;
+        }
+
+        let close = self.p.expect(TokenKind::CloseBracket, "]")?;
+        let close_start = close.span.offset();
+
+        let raw = &self.p.src[open_end..close_start];
+
+        let mut buffer: SmallVec<[DirectiveValue; 4]> = SmallVec::new();
+        let mut rest = raw;
+        let mut base = 0;
+        loop {
+            let end = rest.find('|').map_or(rest.len(), |i| i);
+            let part = &rest[..end];
+            let ts = part.find(|c: char| !c.is_whitespace());
+            if let Some(ts) = ts {
+                let trimmed = &part[ts..];
+                let te = trimmed
+                    .rfind(|c: char| !c.is_whitespace())
+                    .map(|idx| idx + 1)
+                    .unwrap_or(trimmed.len());
+                let value = &trimmed[..te];
+                buffer.push(DirectiveValue {
+                    value: self.p.arena.alloc_str(value),
+                    span: SourceSpan::new((open_end + base + ts).into(), value.len()),
+                });
+            }
+            if end == rest.len() {
+                break;
+            }
+            base += end + 1;
+            rest = &rest[end + 1..];
+        }
+
+        Some(self.p.arena.alloc_slice_copy(&buffer))
+    }
+
+    fn parse_directive_body(&mut self) -> Option<&'ctx [&'ctx Declaration<'ctx>]> {
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut buffer: SmallVec<[&'ctx Declaration<'ctx>; 8]> = SmallVec::new();
+        while !self.p.at(TokenKind::CloseBrace) && !self.p.at(TokenKind::Eof) {
+            let mut decl_parser = DeclParser::new(self.p);
+            if let Some(decl) = decl_parser.parse() {
+                buffer.push(decl);
+            }
+            if self.p.panic_mode {
+                break;
+            }
+        }
+
+        let _ = self.p.expect(TokenKind::CloseBrace, "}")?;
+        Some(self.p.arena.alloc_slice_copy(&buffer))
+    }
+
+    fn parse_directive_else(&mut self) -> Option<Option<&'ctx Declaration<'ctx>>> {
+        if !self.p.at(TokenKind::Keyword(CompilerKeyword::Else)) {
+            return Some(None);
+        }
+
+        let _ = self.p.advance_not_eof()?;
+
+        if self.p.at(TokenKind::OpenBrace) {
+            let body = self.parse_directive_body()?;
+            let block = self.p.arena.alloc(zeen_ast::ConditionalBlock {
+                directive: PreprocessorDirective::Debug,
+                values: self.p.arena.alloc_slice_copy(&[]),
+                body,
+                bare_else: true,
+                else_block: None,
+            });
+            let decl = self.p.arena.alloc(Declaration {
+                kind: DeclarationKind::ConditionalBlock(block),
+                source: (self.p.current().span, self.p.named_src()).into(),
+            });
+            return Some(Some(decl));
+        }
+
+        self.parse_conditional_block(IsPub(false)).map(Some)
     }
 }
 
@@ -1799,6 +1954,58 @@ mod tests {
                         interfaces: Some(_)
                     }]),
                     ty: TypeExpr { .. },
+                }),
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn conditional_block_parses() {
+        const SRC: &str = "@os[linux | macos] { fn a(); }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ConditionalBlock(zeen_ast::ConditionalBlock {
+                    directive: PreprocessorDirective::Os,
+                    values: [
+                        DirectiveValue { value: "linux", .. },
+                        DirectiveValue { value: "macos", .. }
+                    ],
+                    body: [_],
+                    bare_else: false,
+                    else_block: None,
+                }),
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn conditional_block_with_else() {
+        const SRC: &str = "@os[windows] { fn a(); } else { fn b(); }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ConditionalBlock(zeen_ast::ConditionalBlock {
+                    directive: PreprocessorDirective::Os,
+                    values: [_],
+                    body: [_],
+                    bare_else: false,
+                    else_block: Some(Declaration {
+                        kind: DeclarationKind::ConditionalBlock(zeen_ast::ConditionalBlock {
+                            bare_else: true,
+                            body: [_],
+                            ..
+                        }),
+                        ..
+                    }),
                 }),
                 ..
             }])
