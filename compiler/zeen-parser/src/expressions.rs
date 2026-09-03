@@ -316,6 +316,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             // <-- keywords
             TokenKind::Ident => self.parse_ident_or_struct_init(),
             TokenKind::MacroIdent => self.parse_macro_call(),
+            TokenKind::PreprocessorVar => self.parse_target_var(),
 
             TokenKind::OpenParen => self.parse_grouped(),
             TokenKind::OpenBracket => self.parse_array_init(),
@@ -868,6 +869,40 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 args,
             },
             span: macro_ident.merge_span(close_paren.span),
+        });
+
+        Some(expr)
+    }
+
+    fn parse_target_var(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let var_token = self.p.expect(TokenKind::PreprocessorVar, "@var")?;
+        let _ = self.p.expect(TokenKind::OpenBracket, "[")?;
+
+        let name_token = self.p.expect(TokenKind::Ident, "variable name")?;
+        let name_span = name_token.span;
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+        let kind = match zeen_ast::expressions::TargetVarKind::from_name(&name_slice) {
+            Some(kind) => kind,
+            None => {
+                self.p.report(ParserError::SyntaxError {
+                    label: format!("unknown target variable `{name_slice}`").into(),
+                    help: Some(
+                        "expected one of os, arch, env, target, family, debug, release".into(),
+                    ),
+                    src: self.p.named_src(),
+                    span: name_span,
+                });
+                return None;
+            }
+        };
+
+        let close_bracket = self.p.expect(TokenKind::CloseBracket, "]")?;
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::TargetVar(kind),
+            span: var_token.merge_span(close_bracket.span),
         });
 
         Some(expr)
@@ -2173,5 +2208,18 @@ mod tests {
         };
 
         assert!(trailing.is_some());
+    }
+
+    #[test]
+    fn target_var_expr() {
+        const SRC: &str = "@var[target]";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        assert!(matches!(
+            parsed.kind,
+            ExpressionKind::TargetVar(zeen_ast::expressions::TargetVarKind::Target)
+        ));
     }
 }

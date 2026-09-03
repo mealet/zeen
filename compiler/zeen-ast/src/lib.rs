@@ -3,7 +3,10 @@ pub mod expressions;
 pub mod statements;
 pub mod types;
 
-pub use declarations::{AliasDecl, Declaration, DeclarationKind};
+pub use declarations::{
+    AliasDecl, ConditionalBlock, Declaration, DeclarationKind, DirectiveValue,
+    PreprocessorDirective,
+};
 pub use expressions::{Expression, ExpressionKind};
 pub use statements::{Statement, StatementKind};
 pub use types::{TypeExpr, TypeKind};
