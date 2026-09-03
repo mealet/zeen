@@ -1,0 +1,37 @@
+pub struct c_lconv {
+  pub decimal_point: [*]const char,
+  pub thousands_sep: [*]const char,
+  pub grouping: [*]const char,
+  pub int_curr_symbol: [*]const char,
+  pub currency_symbol: [*]const char,
+  pub mon_decimal_point: [*]const char,
+  pub mon_thousands_sep: [*]const char,
+  pub mon_grouping: [*]const char,
+  pub positive_sign: [*]const char,
+  pub negative_sign: [*]const char,
+
+  pub int_frac_digits: char,
+  pub frac_digits: char,
+  pub p_cs_precedes: char,
+  pub p_sep_by_space: char,
+  pub n_cs_precedes: char,
+  pub n_sep_by_space: char,
+  pub p_sign_posn: char,
+  pub n_sign_posn: char,
+  pub int_p_cs_precedes: char,
+  pub int_p_sep_by_space: char,
+  pub int_n_cs_precedes: char,
+  pub int_n_sep_by_space: char,
+  pub int_p_sign_posn: char,
+  pub int_n_sign_posn: char
+}
+
+pub const LC_ALL: i32 = 6;
+pub const LC_COLLATE: i32 = 3;
+pub const LC_CTYPE: i32 = 0;
+pub const LC_MONETARY: i32 = 4;
+pub const LC_NUMERIC: i32 = 1;
+pub const LC_TIME: i32 = 2;
+
+pub extern fn setlocale(category: i32, locale: [*]const char) *char;
+pub extern fn localeconv() *c_lconv;

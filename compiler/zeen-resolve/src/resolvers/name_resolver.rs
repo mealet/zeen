@@ -387,7 +387,7 @@ impl<'ctx> NameResolver {
                 }
             }
 
-            DeclarationKind::ExternVar { name, .. } => {
+            DeclarationKind::ExternVar { name, is_pub, .. } => {
                 let def_id = self.define_at(
                     NodeKey::from_decl(decl),
                     DefInfo {
@@ -395,7 +395,7 @@ impl<'ctx> NameResolver {
                         kind: DefKind::ExternVar,
                         span: (name.1, decl.source.src()).into(),
                         decl: Some(NodeKey::from_decl(decl)),
-                        is_pub: false,
+                        is_pub,
                     },
                 );
 

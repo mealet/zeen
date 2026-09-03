@@ -314,9 +314,10 @@ impl<'res> HirLowering<'res> {
                 }))
             }
 
-            DeclarationKind::ExternVar { name, ty } => HirDeclKind::ExternVar {
+            DeclarationKind::ExternVar { name, ty, is_pub } => HirDeclKind::ExternVar {
                 name,
                 ty: Rc::new(self.lower_type(ty)),
+                is_pub,
             },
 
             DeclarationKind::Alias(alias) => HirDeclKind::Alias(Rc::new(HirAlias {

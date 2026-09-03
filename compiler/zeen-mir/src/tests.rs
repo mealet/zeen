@@ -565,6 +565,47 @@ fn const_global_is_marked_const() {
 }
 
 #[test]
+fn extern_var_is_registered_as_extern_global() {
+    let mir = compile_mir_ok("extern let flag: i32; fn main() { let x = flag; }");
+
+    let global = mir
+        .program
+        .global_vars
+        .iter()
+        .find(|g| g.symbol_name == "flag")
+        .expect("expected extern global");
+    assert!(global.is_extern, "expected is_extern true");
+
+    let main = mir
+        .program
+        .function_names
+        .iter()
+        .find(|(_, name)| *name == "main")
+        .expect("main function")
+        .0;
+    let main_fn = &mir.program.functions[main];
+    let flag_idx = mir
+        .program
+        .global_vars
+        .iter()
+        .position(|g| g.symbol_name == "flag")
+        .expect("flag global");
+    let read_uses_global_place = main_fn.blocks.iter().any(|b| {
+        b.statements.iter().any(
+            |s| matches!(
+                s,
+                crate::MirStatement::Assign { rvalue: crate::Rvalue::Use(crate::Operand::Copy(place, _)), .. }
+                if matches!(place.projection.first(), Some(crate::PlaceElem::Global(id)) if id.0 as usize == flag_idx)
+            ),
+        )
+    });
+    assert!(
+        read_uses_global_place,
+        "expected reading extern var to load its global place"
+    );
+}
+
+#[test]
 fn global_depends_on_another_init_order() {
     let mir = compile_mir_ok(
         "let a: i32 = 1; \

@@ -68,6 +68,7 @@ pub enum DeclarationKind<'arena> {
     ExternVar {
         name: (Spur, SourceSpan),
         ty: &'arena TypeExpr<'arena>,
+        is_pub: bool,
     },
 
     GlobalVar {
