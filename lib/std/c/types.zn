@@ -1,0 +1,100 @@
+// ==> long / unsigned long
+
+// Exports:
+
+// long => c_long
+// unsigned long => c_ulong
+
+@os[windows] {
+  pub alias c_long = i32;
+  pub alias c_ulong = u32;
+} else {
+  @arch[i686 | wasm32] {
+    pub alias c_long = i32;
+    pub alias c_ulong = u32;
+  } else {
+    pub alias c_long = i64;
+    pub alias c_ulong = u64;
+  }
+}
+
+// ==> fundamental integers
+
+// Exports:
+
+// char => c_char
+// signed char => c_schar
+// unsigned char => c_uchar
+
+// short => c_short
+// unsigned short => c_ushort
+// int => c_int
+// unsigned int => c_uint
+// long long => c_longlong
+// unsigned long long => c_ulonglong
+
+@arch[aarch64] {
+  @os[macos] {
+    pub alias c_char = i8;
+  } else {
+    pub alias c_char = u8;
+  }
+} else {
+  pub alias c_char = i8;
+}
+
+pub alias c_schar = i8;
+pub alias c_uchar = u8;
+
+pub alias c_short = i16;
+pub alias c_ushort = u16;
+
+pub alias c_int = i32;
+pub alias c_uint = u32;
+
+pub alias c_longlong = i64;
+pub alias c_ulonglong = u64;
+
+// ==> floats
+
+// Exports:
+
+// float => c_float
+// double => c_double
+
+pub alias c_float = f32;
+pub alias c_double = f64;
+
+// ==> pointers
+
+// Exports:
+
+// size_t => c_size_t
+// ptrdiff_t => c_ptrdiff_t
+// intptr_t => c_intptr_t
+// uintptr_t => c_uintptr_t
+
+pub alias c_size_t = usize;
+pub alias c_ptrdiff_t = isize;
+pub alias c_intptr_t = isize;
+pub alias c_uintptr_t = usize;
+
+// ==> wide char
+
+// Exports:
+// wchar_t => c_wchar_t
+
+@os[windows] {
+  pub alias c_wchar_t = u16;
+} else {
+  pub alias c_wchar_t = u32;
+}
+
+// ==> ssize_t (posix)
+
+// Exports:
+// ssize_t => c_ssize_t
+
+@os[windows] {} else {
+  pub alias c_ssize_t = isize;
+}
