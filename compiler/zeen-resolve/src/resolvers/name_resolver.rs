@@ -760,6 +760,8 @@ impl<'ctx> NameResolver {
 
             ExpressionKind::TargetVar(_) => {}
 
+            ExpressionKind::ConditionalBlock(_) => {}
+
             ExpressionKind::Literal(_) => {}
         }
     }
@@ -806,6 +808,8 @@ impl<'ctx> NameResolver {
 
             StatementKind::Break | StatementKind::Continue => {}
             StatementKind::TrailingExpr(_) => panic!("that was not supposed to happen"),
+
+            StatementKind::ConditionalBlock(_) => {}
         }
     }
 
@@ -1293,6 +1297,8 @@ impl<'ctx> NameResolver {
             }
 
             StatementKind::TrailingExpr(_) => panic!("that was not supposed to happen"),
+
+            StatementKind::ConditionalBlock(_) => {}
         }
     }
 
@@ -1426,6 +1432,8 @@ impl<'ctx> NameResolver {
             }
 
             ExpressionKind::TargetVar(_) => {}
+
+            ExpressionKind::ConditionalBlock(_) => {}
         }
     }
 

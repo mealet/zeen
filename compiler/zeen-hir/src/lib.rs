@@ -541,6 +541,10 @@ impl<'res> HirLowering<'res> {
             }
 
             StatementKind::TrailingExpr(_) => unreachable!(),
+
+            StatementKind::ConditionalBlock(_) => {
+                unreachable!("preprocessor must resolve conditional statements")
+            }
         };
 
         HirStmt {
@@ -742,6 +746,10 @@ impl<'res> HirLowering<'res> {
 
             ExpressionKind::TargetVar(_) => {
                 unreachable!("preprocessor must resolve target vars")
+            }
+
+            ExpressionKind::ConditionalBlock(_) => {
+                unreachable!("preprocessor must resolve conditional expressions")
             }
         };
 

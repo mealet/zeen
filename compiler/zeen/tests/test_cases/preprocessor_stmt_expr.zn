@@ -1,0 +1,12 @@
+fn main() {
+    @os[linux] {
+        let a: i32 = 1;
+    }
+    else @os[windows] {
+        let a: i32 = 2;
+    }
+
+    let x: i32 = @os[linux] { 10 } else { 20 };
+    @println("a={} x={}", a, x);
+    return;
+}

@@ -7,8 +7,8 @@ pub use declarations::{
     AliasDecl, ConditionalBlock, Declaration, DeclarationKind, DirectiveValue,
     PreprocessorDirective,
 };
-pub use expressions::{Expression, ExpressionKind};
-pub use statements::{Statement, StatementKind};
+pub use expressions::{ExprConditionalBlock, Expression, ExpressionKind};
+pub use statements::{Statement, StatementKind, StmtConditionalBlock};
 pub use types::{TypeExpr, TypeKind};
 
 use miette::{NamedSource, SourceSpan};
