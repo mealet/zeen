@@ -448,6 +448,7 @@ impl<'ctx> NameResolver {
             DeclarationKind::ExternLink { .. } => {}
             DeclarationKind::ImplementDecl { .. } => {}
             DeclarationKind::Use { .. } => {}
+            DeclarationKind::ConditionalBlock(_) => {}
         }
     }
 
@@ -656,6 +657,7 @@ impl<'ctx> NameResolver {
 
             DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => {}
             DeclarationKind::Use { .. } => {}
+            DeclarationKind::ConditionalBlock(_) => {}
         }
     }
 
@@ -755,6 +757,8 @@ impl<'ctx> NameResolver {
             }
 
             ExpressionKind::Closure { body, .. } => self.collect_global_stmt_deps(body, out),
+
+            ExpressionKind::TargetVar(_) => {}
 
             ExpressionKind::Literal(_) => {}
         }
@@ -1420,6 +1424,8 @@ impl<'ctx> NameResolver {
             } => {
                 self.resolve_closure(expr, params, return_type, body);
             }
+
+            ExpressionKind::TargetVar(_) => {}
         }
     }
 

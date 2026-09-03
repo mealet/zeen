@@ -344,6 +344,9 @@ impl<'res> HirLowering<'res> {
             DeclarationKind::ExternLink { .. } => HirDeclKind::ExternLink,
             DeclarationKind::ExternInclude { .. } => HirDeclKind::ExternInclude,
             DeclarationKind::Use { .. } => return None,
+            DeclarationKind::ConditionalBlock(_) => {
+                unreachable!("preprocessor must resolve conditional blocks")
+            }
         };
 
         Some(Rc::new(HirDecl {
@@ -735,6 +738,10 @@ impl<'res> HirLowering<'res> {
                 });
 
                 HirExprKind::Closure { def_id, def }
+            }
+
+            ExpressionKind::TargetVar(_) => {
+                unreachable!("preprocessor must resolve target vars")
             }
         };
 

@@ -92,6 +92,54 @@ pub enum DeclarationKind<'arena> {
     },
 
     Alias(AliasDecl<'arena>),
+
+    /// A declaration block guarded by a target condition (`@os[linux] { ... }`).
+    /// Resolved by the preprocessor: only one branch survives.
+    ConditionalBlock(&'arena ConditionalBlock<'arena>),
+}
+
+/// Target condition in a `@name[...]` preprocessor directive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreprocessorDirective {
+    Os,
+    Arch,
+    Env,
+    Target,
+    Family,
+    Debug,
+    Release,
+}
+
+impl PreprocessorDirective {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "os" => Some(Self::Os),
+            "arch" => Some(Self::Arch),
+            "env" => Some(Self::Env),
+            "target" => Some(Self::Target),
+            "family" => Some(Self::Family),
+            "debug" => Some(Self::Debug),
+            "release" => Some(Self::Release),
+            _ => None,
+        }
+    }
+}
+
+/// A single value inside a directive's `[...]`, e.g. `linux` in `@os[linux | macos]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DirectiveValue<'arena> {
+    pub value: &'arena str,
+    pub span: SourceSpan,
+}
+
+/// A `@name[values] { body }` guard with an optional `else` branch.
+/// `else_block` is either another `ConditionalBlock` or `None` for a bare else.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConditionalBlock<'arena> {
+    pub directive: PreprocessorDirective,
+    pub values: &'arena [DirectiveValue<'arena>],
+    pub body: &'arena [&'arena Declaration<'arena>],
+    pub else_block: Option<&'arena Declaration<'arena>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
