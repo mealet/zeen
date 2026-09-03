@@ -241,6 +241,11 @@ fn main() {
         exit(1);
     });
 
+    cli::println_info("Preprocessing", "conditional declarations for target");
+
+    let target = zeen_driver::Target::parse(&target_triple);
+    let program = zeen_preprocessor::resolve(program, &bump, &rodeo, &target, context.mode);
+
     cli::println_info(
         "Resolving",
         format!("program ({} declarations)", program.len()),

@@ -767,6 +767,7 @@ dependencies = [
  "zeen-linker",
  "zeen-mir",
  "zeen-parser",
+ "zeen-preprocessor",
  "zeen-resolve",
  "zeen-typecheck",
 ]
@@ -891,6 +892,21 @@ dependencies = [
  "thiserror",
  "zeen-ast",
  "zeen-lexer",
+]
+
+[[package]]
+name = "zeen-preprocessor"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "miette",
+ "smallvec",
+ "smol_str",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-lexer",
+ "zeen-parser",
 ]
 
 [[package]]
