@@ -25,6 +25,11 @@ pub enum TokenKind {
     MacroIdent, // print!
     Ref,        // &expr
 
+    PreprocessorIdent,   // @os, @arch, ... followed by `[`
+    PreprocessorVar,     // @var
+    PreprocessorDebug,   // @debug (no brackets)
+    PreprocessorRelease, // @release (no brackets)
+
     Keyword(CompilerKeyword),
     Type(CompilerType),
     Literal { kind: LiteralKind },

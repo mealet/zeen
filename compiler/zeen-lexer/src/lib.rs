@@ -252,8 +252,18 @@ impl<'inp> Tokenizer<'inp> {
 
             '@' => {
                 if is_ident_start(self.first()) {
+                    let rest = self.as_str();
                     let _ = self.ident();
-                    TokenKind::MacroIdent
+                    let name = &rest[..rest.len() - self.as_str().len()];
+                    match name {
+                        "var" => TokenKind::PreprocessorVar,
+                        "debug" if self.first() != '[' => TokenKind::PreprocessorDebug,
+                        "release" if self.first() != '[' => TokenKind::PreprocessorRelease,
+                        "os" | "arch" | "env" | "target" | "family" if self.first() == '[' => {
+                            TokenKind::PreprocessorIdent
+                        }
+                        _ => TokenKind::MacroIdent,
+                    }
                 } else {
                     TokenKind::AtSign
                 }
