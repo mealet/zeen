@@ -45,6 +45,10 @@ jobs:
     - name: Install Nextest
       uses: taiki-e/install-action@nextest
 
+    # Setup Zeen Standard Library
+    - name: Set ZEEN_STD
+      run: echo "ZEEN_STD=$GITHUB_WORKSPACE/lib/std" >> "$GITHUB_ENV"
+
     # Run tests
     - name: Packages Tests
       run: cargo nextest run
