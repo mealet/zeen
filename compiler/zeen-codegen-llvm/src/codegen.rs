@@ -163,24 +163,28 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         for (id, gv) in program.global_vars.iter().enumerate() {
             let llvm_ty = Self::simple_type(context, typecheck, gv.ty);
             let global = module.add_global(llvm_ty, None, &gv.symbol_name);
-            global.set_constant(false);
-            match llvm_ty {
-                BasicTypeEnum::IntType(t) => {
-                    global.set_initializer(&t.const_zero());
+            if gv.is_extern {
+                global.set_linkage(inkwell::module::Linkage::External);
+            } else {
+                global.set_constant(false);
+                match llvm_ty {
+                    BasicTypeEnum::IntType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    BasicTypeEnum::FloatType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    BasicTypeEnum::PointerType(t) => {
+                        global.set_initializer(&t.const_null());
+                    }
+                    BasicTypeEnum::ArrayType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    BasicTypeEnum::StructType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    _ => {}
                 }
-                BasicTypeEnum::FloatType(t) => {
-                    global.set_initializer(&t.const_zero());
-                }
-                BasicTypeEnum::PointerType(t) => {
-                    global.set_initializer(&t.const_null());
-                }
-                BasicTypeEnum::ArrayType(t) => {
-                    global.set_initializer(&t.const_zero());
-                }
-                BasicTypeEnum::StructType(t) => {
-                    global.set_initializer(&t.const_zero());
-                }
-                _ => {}
             }
             global_vars.insert(MirGlobalVarId(id as u32), global);
         }
@@ -337,13 +341,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     Some(inkwell::module::Linkage::External),
                 );
             }
-        }
-
-        for decl in &self.program.extern_vars {
-            let global =
-                self.module
-                    .add_global(self.map_basic_type(decl.ty), None, &decl.symbol_name);
-            global.set_linkage(inkwell::module::Linkage::External);
         }
     }
 

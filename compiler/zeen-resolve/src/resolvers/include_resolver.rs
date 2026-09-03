@@ -426,8 +426,8 @@ impl<'ctx> IncludeResolver<'ctx> {
                 DeclarationKind::EnumDecl { name, is_pub, .. } => {
                     (NamespaceTag::Value, name.0, name.1, is_pub)
                 }
-                DeclarationKind::ExternVar { name, .. } => {
-                    (NamespaceTag::Value, name.0, name.1, false)
+                DeclarationKind::ExternVar { name, is_pub, .. } => {
+                    (NamespaceTag::Value, name.0, name.1, is_pub)
                 }
                 DeclarationKind::GlobalVar { name, is_pub, .. } => {
                     (NamespaceTag::Value, name.0, name.1, is_pub)

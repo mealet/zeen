@@ -50,7 +50,9 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                     }
                     TokenKind::Keyword(CompilerKeyword::Link) => self.parse_link(start_span),
                     TokenKind::Keyword(CompilerKeyword::Include) => self.parse_include(start_span),
-                    TokenKind::Keyword(CompilerKeyword::Let) => self.parse_let(start_span),
+                    TokenKind::Keyword(CompilerKeyword::Let) => {
+                        self.parse_let(start_span, is_pub.0)
+                    }
 
                     _ => {
                         self.p.report(ParserError::SyntaxError {
@@ -734,7 +736,11 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         Some(decl)
     }
 
-    fn parse_let(&mut self, start_span: miette::SourceSpan) -> Option<&'ctx Declaration<'ctx>> {
+    fn parse_let(
+        &mut self,
+        start_span: miette::SourceSpan,
+        is_pub: bool,
+    ) -> Option<&'ctx Declaration<'ctx>> {
         let _let_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Let), "let")?;
@@ -754,7 +760,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let _ = self.p.expect(TokenKind::Semicolon, ";")?;
 
         let decl = self.p.arena.alloc(Declaration {
-            kind: DeclarationKind::ExternVar { name, ty },
+            kind: DeclarationKind::ExternVar { name, ty, is_pub },
             source: (ty.merge_span(start_span), self.p.named_src()).into(),
         });
 
@@ -1329,7 +1335,30 @@ mod tests {
                     ty: TypeExpr {
                         kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
                         ..
-                    }
+                    },
+                    is_pub: _,
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn pub_let_decl() {
+        const SRC: &str = "pub extern let abcd: i32;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ExternVar {
+                    name: _,
+                    ty: TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    },
+                    is_pub: true,
                 },
                 ..
             }])

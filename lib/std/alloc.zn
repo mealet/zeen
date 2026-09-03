@@ -1,6 +1,4 @@
-extern fn malloc(size: usize) *void;
-extern fn realloc(ptr: *void, new_size: usize) *void;
-extern fn free(ptr: *void);
+use std.c.stdlib;
 
 /// Main standard library allocator
 pub struct Allocator {
