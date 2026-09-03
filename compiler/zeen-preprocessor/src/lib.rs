@@ -601,10 +601,7 @@ mod tests {
     fn keeps_matching_block() {
         let (decls, _) = run("@os[linux] { fn a() {} }", linux(), CompilationMode::Debug);
         assert_eq!(decls.len(), 1);
-        assert!(matches!(
-            decls[0].kind,
-            DeclarationKind::FnDecl { name: _, .. }
-        ));
+        assert!(matches!(decls[0].kind, DeclarationKind::FnDecl { .. }));
     }
 
     #[test]
@@ -625,10 +622,7 @@ mod tests {
             CompilationMode::Debug,
         );
         assert_eq!(decls.len(), 1);
-        assert!(matches!(
-            decls[0].kind,
-            DeclarationKind::FnDecl { name: _, .. }
-        ));
+        assert!(matches!(decls[0].kind, DeclarationKind::FnDecl { .. }));
     }
 
     #[test]
@@ -639,10 +633,7 @@ mod tests {
             CompilationMode::Debug,
         );
         assert_eq!(decls.len(), 1);
-        assert!(matches!(
-            decls[0].kind,
-            DeclarationKind::FnDecl { name: _, .. }
-        ));
+        assert!(matches!(decls[0].kind, DeclarationKind::FnDecl { .. }));
     }
 
     #[test]
