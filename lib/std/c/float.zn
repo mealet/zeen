@@ -1,0 +1,26 @@
+use std.c.types;
+
+// float (IEEE 754 single)
+pub const FLT_MANT_DIG: c_int = 24;
+pub const FLT_DIG: c_int = 6;
+pub const FLT_MIN_EXP: c_int = -125;
+pub const FLT_MAX_EXP: c_int = 128;
+pub const FLT_RADIX: c_int = 2;
+
+pub const FLT_MIN: f32 = 0.00000000000000000000000000000000000001175494;
+pub const FLT_MAX: f32 = 340282346638528859811704183484516925440.0;
+pub const FLT_EPSILON: f32 = 0.00000011920928955078125;
+
+// double (IEEE 754 double)
+//
+// NOTE: DBL_MAX (~1.7976931348623157e308) and DBL_MIN (~2.2250738585072014e-308)
+// are omitted because Zeen float literals don't support exponent notation yet;
+// they can't be written cleanly as plain decimals. Revisit once scientific
+// notation literals land.
+pub const DBL_MANT_DIG: c_int = 53;
+pub const DBL_DIG: c_int = 15;
+pub const DBL_MIN_EXP: c_int = -1021;
+pub const DBL_MAX_EXP: c_int = 1024;
+pub const DBL_RADIX: c_int = 2;
+
+pub const DBL_EPSILON: f64 = 0.0000000000000002220446049250313;

@@ -1,0 +1,12 @@
+use std.c.types;
+
+// NULL pointer constant. Zeen's null literal is `nullptr`.
+pub const NULL: *void = nullptr;
+
+// The type with the greatest fundamental alignment. Good enough for allocating
+// storage with C's alignment rules on common targets.
+pub struct max_align_t {
+  pub i: c_longlong,
+  pub d: c_double,
+  pub p: *void,
+}
