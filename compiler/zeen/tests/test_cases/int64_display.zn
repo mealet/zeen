@@ -1,0 +1,22 @@
+pub const LONG_MAX: i64 = 9223372036854775807;
+pub const LONG_MIN: i64 = ~LONG_MAX;
+
+fn main() i32 {
+  let max: i64 = 9223372036854775807;
+  let min: i64 = ~max;
+  let u: u64 = ~0;
+  let u32v: u32 = 4294967295;
+  let neg: i32 = -42;
+  let tiny: i16 = -32768;
+  @println("{}", max);
+  @println("{}", min);
+  @println("{}", u);
+  @println("{}", u32v);
+  @println("{}", neg);
+  @println("{}", tiny);
+  @println("{} {}", LONG_MAX, LONG_MIN);
+  @println("{}", 2147483648);
+  @println("{}", -2147483648);
+  @println("{}", 9223372036854775807);
+  return 0;
+}

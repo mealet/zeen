@@ -2317,6 +2317,19 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 };
                 let (specifier, value) = self.debug_operand(arg, func);
 
+                // A plain integer constant is displayed 64-bit wide so a large
+                // literal isn't truncated to `int`, but `value` is kept in its
+                // original type since it's stored back as the `@dbg` result.
+                let (display_value, specifier) =
+                    if let Operand::Constant(ConstValue::Int(n), _) = arg {
+                        (
+                            self.context.i64_type().const_int(*n as u64, true).into(),
+                            "%lld".to_string(),
+                        )
+                    } else {
+                        (value, specifier)
+                    };
+
                 let source = source.clone().expect("unhandled None source");
 
                 let debug_source = &source.src.inner()
@@ -2341,7 +2354,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let format = format!("[{debug_location}]> `{debug_inner}` = {specifier}\n");
                 let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
                     vec![self.get_str_global(&format).as_pointer_value().into()];
-                call_args.push(value.into());
+                call_args.push(display_value.into());
                 self.builder.build_call(printf, &call_args, "").unwrap();
 
                 let dest_ty = self.place_type(destination, func);
@@ -2784,13 +2797,29 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
                     // printf-family variadic calls apply default argument
                     // promotion, so an `f32` argument must be widened to the
-                    // `f64` that `%f` reads.
+                    // `f64` that `%f` reads.  Similarly, sub-`int` integer
+                    // types (i8, i16) must be sign/zero-extended to `i32`.
                     let value = match value.get_type() {
                         BasicTypeEnum::FloatType(t) if t.get_bit_width() == 32 => self
                             .builder
                             .build_float_ext(value.into_float_value(), self.context.f64_type(), "")
                             .unwrap()
                             .into(),
+                        BasicTypeEnum::IntType(t) if t.get_bit_width() < 32 => {
+                            let iv = value.into_int_value();
+                            let signed = arg_ty.is_none_or(|t| self.is_signed(t));
+                            if signed {
+                                self.builder
+                                    .build_int_s_extend(iv, self.context.i32_type(), "")
+                                    .unwrap()
+                                    .into()
+                            } else {
+                                self.builder
+                                    .build_int_z_extend(iv, self.context.i32_type(), "")
+                                    .unwrap()
+                                    .into()
+                            }
+                        }
                         _ => value,
                     };
 
@@ -2834,7 +2863,20 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
         let (specifier, value) = match (operand, spec) {
             (Operand::Constant(c, _), _) => {
-                let value = self.const_value(c, None, func);
+                if let ConstValue::Int(n) = c {
+                    let (len, signed, value) = self.int_format_arg(*n, arg_ty, func);
+                    let specifier = match spec {
+                        FormatSpec::Hex => format!("%{len}x"),
+                        FormatSpec::Oct => format!("%{len}o"),
+                        FormatSpec::Bin => format!("%{len}x"),
+                        _ => format!("%{len}{}", if signed { "d" } else { "u" }),
+                    };
+                    return (specifier, value);
+                }
+                let value = match arg_ty {
+                    Some(t) => self.const_value(c, Some(t), func),
+                    None => self.const_value(c, None, func),
+                };
                 let specifier = match (c, spec) {
                     (ConstValue::Float(_), FormatSpec::Float { precision }) => {
                         format!("%.{precision}f")
@@ -2849,9 +2891,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         let ptr = self.get_str_global(s).as_pointer_value();
                         return ("%s".to_string(), ptr.into());
                     }
-                    (ConstValue::Int(_), FormatSpec::Hex) => "%x".to_string(),
-                    (ConstValue::Int(_), FormatSpec::Oct) => "%o".to_string(),
-                    (ConstValue::Int(_), FormatSpec::Bin) => "%x".to_string(),
                     _ => "%d".to_string(),
                 };
                 (specifier, value)
@@ -2931,12 +2970,59 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         (specifier, value)
     }
 
+    /// Length prefix for an integer printf specifier, chosen from the value's
+    /// actual (platform-dependent) emitted width. 64-bit values need `ll` so
+    /// printf reads them back correctly on both LP64 (Linux/macOS) and LLP64
+    /// (Windows) ABIs; narrower values are promoted to `int` by varargs and
+    /// need no prefix.
+    fn int_spec_width(&self, ty: TypeId) -> &'static str {
+        let width = self.map_basic_type(ty).into_int_type().get_bit_width();
+        if width >= 64 { "ll" } else { "" }
+    }
+
+    /// Decides width/sign for displaying an integer constant and returns the
+    /// value to hand to printf.  Typed constants use their type's width;
+    /// unpinned literal constants (`IntLiteral`, defaulting to i32) are
+    /// widened to 64-bit when their value doesn't fit in 32 bits so large
+    /// literals aren't truncated to `int`.
+    fn int_format_arg(
+        &mut self,
+        n: i128,
+        ty: Option<TypeId>,
+        func: &MirFunction,
+    ) -> (String, bool, BasicValueEnum<'ctx>) {
+        let is_intliteral = ty
+            .map(|t| matches!(self.typecheck.interner.get(t).clone(), Type::IntLiteral))
+            .unwrap_or(false);
+        let ty_width = ty.map(|t| self.map_basic_type(t).into_int_type().get_bit_width());
+        let value_wide = n < (i32::MIN as i128) || n > (i32::MAX as i128);
+        let wide = match ty_width {
+            Some(w) if w >= 64 => true,
+            Some(_) => is_intliteral && value_wide,
+            None => value_wide,
+        };
+        let signed = match ty {
+            Some(t) if !is_intliteral => self.is_signed(t),
+            _ => true,
+        };
+        let len = if wide { "ll" } else { "" }.to_string();
+        let value = if wide {
+            self.context.i64_type().const_int(n as u64, true).into()
+        } else {
+            self.const_value(&ConstValue::Int(n), ty, func)
+        };
+        (len, signed, value)
+    }
+
     fn display_specifier(&self, ty: TypeId) -> String {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(BuiltinType::bool) => "%s".into(),
             Type::Builtin(BuiltinType::char) => "%c".into(),
             Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral => "%f".into(),
-            Type::Builtin(b) if builtin_is_integer(b) => "%d".into(),
+            Type::Builtin(b) if builtin_is_integer(b) => {
+                let conv = if self.is_signed(ty) { "d" } else { "u" };
+                format!("%{}{}", self.int_spec_width(ty), conv)
+            }
             Type::Pointer { inner, .. }
             | Type::ManyPointer { inner, .. }
             | Type::Slice { element: inner, .. }
