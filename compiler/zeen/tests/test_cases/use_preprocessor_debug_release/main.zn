@@ -1,6 +1,6 @@
 use lib;
 
 fn main() {
-    @println("{}", arch_id());
+    @println("{}", get_value());
     return;
 }
