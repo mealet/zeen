@@ -1,0 +1,6 @@
+use lib;
+
+fn main() {
+    @println("{}", lib.arch_id());
+    return;
+}
