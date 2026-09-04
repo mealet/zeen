@@ -1,21 +1,32 @@
 use std.c.types;
 
-pub alias c_time_t = isize;
-pub alias c_clock_t = isize;
+// `time_t` is a platform-dependent integer: on POSIX it is `long`, on
+// Windows (MSVC) it is always a 64-bit `__int64`.  `clock_t` is `long` on
+// both (so it matches `c_long` per target).
+@os[windows] {
+  pub alias c_time_t = i64;
+} else {
+  pub alias c_time_t = c_long;
+}
+pub alias c_clock_t = c_long;
 
 pub struct c_tm {
-  pub tm_sec: i32,
-  pub tm_min: i32,
-  pub tm_hour: i32,
-  pub tm_mday: i32,
-  pub tm_mon: i32,
-  pub tm_year: i32,
-  pub tm_wday: i32,
-  pub tm_yday: i32,
-  pub tm_isdst: i32
+  pub tm_sec: c_int,
+  pub tm_min: c_int,
+  pub tm_hour: c_int,
+  pub tm_mday: c_int,
+  pub tm_mon: c_int,
+  pub tm_year: c_int,
+  pub tm_wday: c_int,
+  pub tm_yday: c_int,
+  pub tm_isdst: c_int
 }
 
-pub const CLOCKS_PER_SEC: c_clock_t = 1000000;
+@os[windows] {
+  pub const CLOCKS_PER_SEC: c_clock_t = 1000;
+} else {
+  pub const CLOCKS_PER_SEC: c_clock_t = 1000000;
+}
 
 // time queries
 pub extern fn time(timer: *c_time_t) c_time_t;

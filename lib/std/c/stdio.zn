@@ -10,43 +10,43 @@ pub extern let stderr: *c_FILE;
 // file operations
 pub extern fn fopen(filename: [*]const char, mode: [*]const char) *c_FILE;
 pub extern fn freopen(filename: [*]const char, mode: [*]const char, stream: *c_FILE) *c_FILE;
-pub extern fn fclose(stream: *c_FILE) i32;
-pub extern fn fflush(stream: *c_FILE) i32;
-pub extern fn remove(filename: [*]const char) i32;
-pub extern fn rename(old_name: [*]const char, new_name: [*]const char) i32;
+pub extern fn fclose(stream: *c_FILE) c_int;
+pub extern fn fflush(stream: *c_FILE) c_int;
+pub extern fn remove(filename: [*]const char) c_int;
+pub extern fn rename(old_name: [*]const char, new_name: [*]const char) c_int;
 
 // formatted I/O
-pub extern fn printf(fmt: [*]const char, ...) i32;
-pub extern fn fprintf(stream: *c_FILE, fmt: [*]const char, ...) i32;
-pub extern fn sprintf(buf: [*]char, fmt: [*]const char, ...) i32;
-pub extern fn snprintf(buf: [*]char, n: c_size_t, fmt: [*]const char, ...) i32;
-pub extern fn scanf(fmt: [*]const char, ...) i32;
-pub extern fn fscanf(stream: *c_FILE, fmt: [*]const char, ...) i32;
-pub extern fn sscanf(str: [*]const char, fmt: [*]const char, ...) i32;
+pub extern fn printf(fmt: [*]const char, ...) c_int;
+pub extern fn fprintf(stream: *c_FILE, fmt: [*]const char, ...) c_int;
+pub extern fn sprintf(buf: [*]char, fmt: [*]const char, ...) c_int;
+pub extern fn snprintf(buf: [*]char, n: c_size_t, fmt: [*]const char, ...) c_int;
+pub extern fn scanf(fmt: [*]const char, ...) c_int;
+pub extern fn fscanf(stream: *c_FILE, fmt: [*]const char, ...) c_int;
+pub extern fn sscanf(str: [*]const char, fmt: [*]const char, ...) c_int;
 
 // char I/O
-pub extern fn fgetc(stream: *c_FILE) i32;
-pub extern fn getc(stream: *c_FILE) i32;
-pub extern fn getchar() i32;
-pub extern fn fputc(ch: char, stream: *c_FILE) i32;
-pub extern fn putc(ch: char, stream: *c_FILE) i32;
-pub extern fn putchar(ch: char) i32;
-pub extern fn ungetc(ch: char, stream: *c_FILE) i32;
+pub extern fn fgetc(stream: *c_FILE) c_int;
+pub extern fn getc(stream: *c_FILE) c_int;
+pub extern fn getchar() c_int;
+pub extern fn fputc(ch: c_int, stream: *c_FILE) c_int;
+pub extern fn putc(ch: c_int, stream: *c_FILE) c_int;
+pub extern fn putchar(ch: c_int) c_int;
+pub extern fn ungetc(ch: c_int, stream: *c_FILE) c_int;
 
 // line / block I/O
 pub extern fn fgets(buf: [*]char, n: c_int, stream: *c_FILE) *char;
-pub extern fn fputs(str: [*]const char, stream: *c_FILE) i32;
-pub extern fn puts(str: [*]const char) i32;
+pub extern fn fputs(str: [*]const char, stream: *c_FILE) c_int;
+pub extern fn puts(str: [*]const char) c_int;
 pub extern fn fread(ptr: *void, size: c_size_t, count: c_size_t, stream: *c_FILE) c_size_t;
 pub extern fn fwrite(ptr: [*]const void, size: c_size_t, count: c_size_t, stream: *c_FILE) c_size_t;
 
 // positioning
-pub extern fn fseek(stream: *c_FILE, offset: c_long, origin: i32) i32;
+pub extern fn fseek(stream: *c_FILE, offset: c_long, origin: c_int) c_int;
 pub extern fn ftell(stream: *c_FILE) c_long;
 pub extern fn rewind(stream: *c_FILE) void;
 
 // error handling
-pub extern fn feof(stream: *c_FILE) i32;
-pub extern fn ferror(stream: *c_FILE) i32;
+pub extern fn feof(stream: *c_FILE) c_int;
+pub extern fn ferror(stream: *c_FILE) c_int;
 pub extern fn clearerr(stream: *c_FILE) void;
 pub extern fn perror(str: [*]const char) void;
