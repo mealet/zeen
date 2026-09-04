@@ -1,19 +1,21 @@
+use std.c.types;
+
 // memory
-pub extern fn memcpy(dest: *void, src: [*]const void, n: usize) *void;
-pub extern fn memmove(dest: *void, src: [*]const void, n: usize) *void;
-pub extern fn memset(dest: *void, value: i32, n: usize) *void;
-pub extern fn memcmp(a: [*]const void, b: [*]const void, n: usize) i32;
-pub extern fn memchr(ptr: [*]const void, value: i32, n: usize) *void;
+pub extern fn memcpy(dest: *void, src: [*]const void, n: c_size_t) *void;
+pub extern fn memmove(dest: *void, src: [*]const void, n: c_size_t) *void;
+pub extern fn memset(dest: *void, value: i32, n: c_size_t) *void;
+pub extern fn memcmp(a: [*]const void, b: [*]const void, n: c_size_t) i32;
+pub extern fn memchr(ptr: [*]const void, value: i32, n: c_size_t) *void;
 
 // string copy / concat
 pub extern fn strcpy(dest: [*]char, src: [*]const char) *char;
-pub extern fn strncpy(dest: [*]char, src: [*]const char, n: usize) *char;
+pub extern fn strncpy(dest: [*]char, src: [*]const char, n: c_size_t) *char;
 pub extern fn strcat(dest: [*]char, src: [*]const char) *char;
-pub extern fn strncat(dest: [*]char, src: [*]const char, n: usize) *char;
+pub extern fn strncat(dest: [*]char, src: [*]const char, n: c_size_t) *char;
 
 // comparison
 pub extern fn strcmp(a: [*]const char, b: [*]const char) i32;
-pub extern fn strncmp(a: [*]const char, b: [*]const char, n: usize) i32;
+pub extern fn strncmp(a: [*]const char, b: [*]const char, n: c_size_t) i32;
 pub extern fn strcoll(a: [*]const char, b: [*]const char) i32;
 
 // search
@@ -21,14 +23,14 @@ pub extern fn strchr(str: [*]const char, ch: char) *char;
 pub extern fn strrchr(str: [*]const char, ch: char) *char;
 pub extern fn strstr(haystack: [*]const char, needle: [*]const char) *char;
 pub extern fn strpbrk(str: [*]const char, accept: [*]const char) *char;
-pub extern fn strspn(str: [*]const char, accept: [*]const char) usize;
-pub extern fn strcspn(str: [*]const char, reject: [*]const char) usize;
+pub extern fn strspn(str: [*]const char, accept: [*]const char) c_size_t;
+pub extern fn strcspn(str: [*]const char, reject: [*]const char) c_size_t;
 pub extern fn strtok(str: [*]char, delim: [*]const char) *char;
 
 // length / duplication
-pub extern fn strlen(str: [*]const char) usize;
+pub extern fn strlen(str: [*]const char) c_size_t;
 pub extern fn strdup(str: [*]const char) *char;
-pub extern fn strndup(str: [*]const char, n: usize) *char;
+pub extern fn strndup(str: [*]const char, n: c_size_t) *char;
 
 // misc
 pub extern fn strerror(errnum: i32) *char;

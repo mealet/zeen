@@ -1,3 +1,5 @@
+use std.c.types;
+
 pub alias c_time_t = isize;
 pub alias c_clock_t = isize;
 
@@ -26,4 +28,4 @@ pub extern fn gmtime(timer: *const c_time_t) *c_tm;
 pub extern fn localtime(timer: *const c_time_t) *c_tm;
 pub extern fn asctime(tm: *const c_tm) *char;
 pub extern fn ctime(timer: *const c_time_t) *char;
-pub extern fn strftime( buf: [*]char, max_size: usize, fmt: [*]const char, tm: *const c_tm) usize;
+pub extern fn strftime( buf: [*]char, max_size: c_size_t, fmt: [*]const char, tm: *const c_tm) c_size_t;

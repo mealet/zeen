@@ -1,22 +1,24 @@
+use std.c.types;
+
 pub struct c_div_t {
   pub quot: i32,
   pub rem: i32
 }
 
 pub struct c_ldiv_t {
-  pub quot: isize,
-  pub rem: isize,
+  pub quot: c_long,
+  pub rem: c_long,
 }
 
 pub struct c_lldiv_t {
-  pub quot: i64,
-  pub rem: i64,
+  pub quot: c_longlong,
+  pub rem: c_longlong,
 }
 
 // memory
-pub extern fn malloc(size: usize) *void;
-pub extern fn calloc(count: usize, size: usize) *void;
-pub extern fn realloc(ptr: *void, size: usize) *void;
+pub extern fn malloc(size: c_size_t) *void;
+pub extern fn calloc(count: c_size_t, size: c_size_t) *void;
+pub extern fn realloc(ptr: *void, size: c_size_t) *void;
 pub extern fn free(ptr: *void);
 
 // process control
@@ -27,27 +29,27 @@ pub extern fn system(command: [*]const char) i32;
 
 // conversion
 pub extern fn atoi(str: [*]const char) i32;
-pub extern fn atol(str: [*]const char) isize;
-pub extern fn atoll(str: [*]const char) i64;
+pub extern fn atol(str: [*]const char) c_long;
+pub extern fn atoll(str: [*]const char) c_longlong;
 pub extern fn atof(str: [*]const char) f64;
 
 pub extern fn strtof(str: [*]const char, endptr: **char) f32;
 pub extern fn strtod(str: [*]const char, endptr: **char) f64;
-pub extern fn strtol(str: [*]const char, endptr: **char, base: i32) isize;
-pub extern fn strtoul(str: [*]const char, endptr: **char, base: i32) usize;
+pub extern fn strtol(str: [*]const char, endptr: **char, base: i32) c_long;
+pub extern fn strtoul(str: [*]const char, endptr: **char, base: i32) c_ulong;
 
 // search & sort
-pub extern fn qsort(base: *void, count: usize, size: usize, cmp: fn(*void, *void) i32) void;
-pub extern fn bsearch(key: *void, base: *void, count: usize, size: usize, cmp: fn(*void, *void) i32) *void;
+pub extern fn qsort(base: *void, count: c_size_t, size: c_size_t, cmp: fn(*void, *void) i32) void;
+pub extern fn bsearch(key: *void, base: *void, count: c_size_t, size: c_size_t, cmp: fn(*void, *void) i32) *void;
 
 // random
 pub extern fn rand() i32;
-pub extern fn srand(seed: u32) void;
+pub extern fn srand(seed: c_uint) void;
 
 // div
 pub extern fn div(numer: i32, denom: i32) c_div_t;
-pub extern fn ldiv(numer: isize, denom: isize) c_ldiv_t;
-pub extern fn lldiv(numer: i64, denom: i64) c_lldiv_t;
+pub extern fn ldiv(numer: c_long, denom: c_long) c_ldiv_t;
+pub extern fn lldiv(numer: c_longlong, denom: c_longlong) c_lldiv_t;
 
 // environment
 pub extern fn getenv(name: [*]const char) *char;
@@ -56,5 +58,5 @@ pub extern fn unsetenv(name: [*]const char) i32;
 
 // misc
 pub extern fn abs(n: i32) i32;
-pub extern fn labs(n: isize) isize;
-pub extern fn llabs(n: i64) i64;
+pub extern fn labs(n: c_long) c_long;
+pub extern fn llabs(n: c_longlong) c_longlong;
