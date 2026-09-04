@@ -14,6 +14,7 @@ use smol_str::SmolStr;
 
 use crate::error::ResolveError;
 use zeen_ast::declarations::{Declaration, DeclarationKind};
+use zeen_driver::{CompilationMode, Target};
 
 #[derive(Debug, Clone)]
 struct RawModule<'arena> {
@@ -27,6 +28,9 @@ pub struct IncludeResolver<'ctx> {
     arena: &'ctx Bump,
     interner: Rc<RefCell<Rodeo>>,
     context: &'ctx mut zeen_driver::CompilationContext,
+
+    target: Target,
+    mode: CompilationMode,
 
     modules: HashMap<PathBuf, RawModule<'ctx>>,
 
@@ -43,11 +47,16 @@ impl<'ctx> IncludeResolver<'ctx> {
         arena: &'ctx Bump,
         interner: Rc<RefCell<Rodeo>>,
         context: &'ctx mut zeen_driver::CompilationContext,
+        target: Target,
+        mode: CompilationMode,
     ) -> Self {
         Self {
             arena,
             interner,
             context,
+
+            target,
+            mode,
 
             src,
             filename,
@@ -101,7 +110,14 @@ impl<'ctx> IncludeResolver<'ctx> {
             let source = Arc::new(content.to_string());
             let filename = Rc::new(name.to_string());
 
-            let parsed_module = self.parse_module(Arc::clone(&source), filename)?;
+            let parsed_module = Self::parse_module(
+                self.arena,
+                &self.interner,
+                &self.target,
+                self.mode,
+                Arc::clone(&source),
+                filename,
+            )?;
             parsed_module.iter().for_each(|decl| out.push(decl));
 
             self.modules.insert(
@@ -119,7 +135,14 @@ impl<'ctx> IncludeResolver<'ctx> {
             let source = Arc::new(content.to_string());
             let filename = Rc::new(name.to_string());
 
-            let parsed_module = self.parse_module(Arc::clone(&source), filename)?;
+            let parsed_module = Self::parse_module(
+                self.arena,
+                &self.interner,
+                &self.target,
+                self.mode,
+                Arc::clone(&source),
+                filename,
+            )?;
             parsed_module.iter().for_each(|decl| out.push(decl));
 
             self.modules.insert(
@@ -294,7 +317,14 @@ impl<'ctx> IncludeResolver<'ctx> {
 
             let named_src = NamedSource::new(&target_name, Arc::clone(&source));
 
-            let target_decls = match self.parse_module(source, Rc::new(target_name)) {
+            let target_decls = match Self::parse_module(
+                self.arena,
+                &self.interner,
+                &self.target,
+                self.mode,
+                source,
+                Rc::new(target_name),
+            ) {
                 Ok(program) => program,
                 Err(mut err) => {
                     self.errors.append(&mut err);
@@ -320,7 +350,10 @@ impl<'ctx> IncludeResolver<'ctx> {
     }
 
     fn parse_module(
-        &self,
+        arena: &'ctx Bump,
+        interner: &Rc<RefCell<Rodeo>>,
+        target: &Target,
+        mode: CompilationMode,
         source: Arc<String>,
         filename: Rc<String>,
     ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
@@ -329,8 +362,8 @@ impl<'ctx> IncludeResolver<'ctx> {
             filename,
             Arc::clone(&source),
             &mut tokens,
-            self.arena,
-            Rc::clone(&self.interner),
+            arena,
+            Rc::clone(interner),
         );
 
         let program = parser.parse_program().map_err(|errors| {
@@ -340,7 +373,9 @@ impl<'ctx> IncludeResolver<'ctx> {
                 .collect::<Vec<ResolveError>>()
         })?;
 
-        Ok(program)
+        Ok(zeen_preprocessor::resolve(
+            program, arena, interner, target, mode,
+        ))
     }
 
     fn merge_module(

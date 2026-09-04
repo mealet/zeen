@@ -35,12 +35,21 @@ pub fn resolve<'ctx>(
     let core_files = context.core_files.clone();
     let std_files = context.std_files.clone();
 
+    let target = context
+        .target
+        .as_deref()
+        .map(zeen_driver::Target::parse)
+        .unwrap_or_else(zeen_driver::Target::host);
+    let mode = context.mode;
+
     let mut include_resolver = include_resolver::IncludeResolver::new(
         Rc::clone(&filename),
         Arc::clone(&src),
         arena,
         Rc::clone(&interner),
         context,
+        target,
+        mode,
     );
 
     let resolved_core_injections = include_resolver.resolve_core_injects(
@@ -140,6 +149,13 @@ mod tests {
                 .map(|e| ResolveError::ModuleParseError(e.clone()))
                 .collect::<Vec<_>>()
         })?;
+
+        let target = context
+            .target
+            .as_deref()
+            .map(zeen_driver::Target::parse)
+            .unwrap_or_else(zeen_driver::Target::host);
+        let program = zeen_preprocessor::resolve(program, &bump, &rodeo, &target, context.mode);
 
         let lookup_rodeo = Rc::clone(&rodeo);
 

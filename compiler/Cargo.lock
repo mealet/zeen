@@ -923,6 +923,7 @@ dependencies = [
  "zeen-driver",
  "zeen-lexer",
  "zeen-parser",
+ "zeen-preprocessor",
 ]
 
 [[package]]

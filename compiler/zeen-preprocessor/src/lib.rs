@@ -17,21 +17,21 @@ use zeen_driver::{CompilationMode, Target};
 /// blocks and replaces `@var[...]` expressions with concrete literals. Runs
 /// right after parsing, before resolve/HIR, so platform-specific code that
 /// does not exist on the current target is dropped from the AST.
-pub struct Preprocessor<'a> {
+pub struct Preprocessor<'a, 'b> {
     arena: &'a Bump,
-    interner: &'a Rc<RefCell<Rodeo>>,
-    target: &'a Target,
+    interner: &'b Rc<RefCell<Rodeo>>,
+    target: &'b Target,
     mode: CompilationMode,
 }
 
-impl<'a> Preprocessor<'a> {
+impl<'a, 'b> Preprocessor<'a, 'b> {
     fn alloc_slice<T: Copy>(&mut self, items: &[T]) -> &'a [T] {
         self.arena.alloc_slice_copy(items)
     }
     pub fn new(
         arena: &'a Bump,
-        interner: &'a Rc<RefCell<Rodeo>>,
-        target: &'a Target,
+        interner: &'b Rc<RefCell<Rodeo>>,
+        target: &'b Target,
         mode: CompilationMode,
     ) -> Self {
         Self {
@@ -662,8 +662,8 @@ impl<'a> Preprocessor<'a> {
 pub fn resolve<'a>(
     program: &[&'a Declaration<'a>],
     arena: &'a Bump,
-    interner: &'a Rc<RefCell<Rodeo>>,
-    target: &'a Target,
+    interner: &Rc<RefCell<Rodeo>>,
+    target: &Target,
     mode: CompilationMode,
 ) -> &'a [&'a Declaration<'a>] {
     Preprocessor::new(arena, interner, target, mode).resolve_program(program)
