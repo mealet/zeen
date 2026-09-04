@@ -1,6 +1,6 @@
 use lib;
 
 fn main() {
-    @println("{}", platform());
+    @println("{}", get_value());
     return;
 }
