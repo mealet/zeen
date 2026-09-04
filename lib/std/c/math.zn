@@ -102,17 +102,17 @@ pub extern fn llrint(x: f64) c_longlong;
 pub extern fn llrintf(x: f32) c_longlong;
 
 // floating-point manipulation
-pub extern fn ldexp(x: f64, exp: i32) f64;
-pub extern fn ldexpf(x: f32, exp: i32) f32;
+pub extern fn ldexp(x: f64, exp: c_int) f64;
+pub extern fn ldexpf(x: f32, exp: c_int) f32;
 
-pub extern fn frexp(x: f64, exp: *i32) f64;
-pub extern fn frexpf(x: f32, exp: *i32) f32;
+pub extern fn frexp(x: f64, exp: *c_int) f64;
+pub extern fn frexpf(x: f32, exp: *c_int) f32;
 
 pub extern fn modf(x: f64, iptr: *f64) f64;
 pub extern fn modff(x: f32, iptr: *f32) f32;
 
-pub extern fn scalbn(x: f64, n: i32) f64;
-pub extern fn scalbnf(x: f32, n: i32) f32;
+pub extern fn scalbn(x: f64, n: c_int) f64;
+pub extern fn scalbnf(x: f32, n: c_int) f32;
 pub extern fn scalbln(x: f64, n: c_long) f64;
 pub extern fn scalblnf(x: f32, n: c_long) f32;
 

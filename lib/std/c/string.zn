@@ -3,9 +3,9 @@ use std.c.types;
 // memory
 pub extern fn memcpy(dest: *void, src: [*]const void, n: c_size_t) *void;
 pub extern fn memmove(dest: *void, src: [*]const void, n: c_size_t) *void;
-pub extern fn memset(dest: *void, value: i32, n: c_size_t) *void;
-pub extern fn memcmp(a: [*]const void, b: [*]const void, n: c_size_t) i32;
-pub extern fn memchr(ptr: [*]const void, value: i32, n: c_size_t) *void;
+pub extern fn memset(dest: *void, value: c_int, n: c_size_t) *void;
+pub extern fn memcmp(a: [*]const void, b: [*]const void, n: c_size_t) c_int;
+pub extern fn memchr(ptr: [*]const void, value: c_int, n: c_size_t) *void;
 
 // string copy / concat
 pub extern fn strcpy(dest: [*]char, src: [*]const char) *char;
@@ -14,9 +14,9 @@ pub extern fn strcat(dest: [*]char, src: [*]const char) *char;
 pub extern fn strncat(dest: [*]char, src: [*]const char, n: c_size_t) *char;
 
 // comparison
-pub extern fn strcmp(a: [*]const char, b: [*]const char) i32;
-pub extern fn strncmp(a: [*]const char, b: [*]const char, n: c_size_t) i32;
-pub extern fn strcoll(a: [*]const char, b: [*]const char) i32;
+pub extern fn strcmp(a: [*]const char, b: [*]const char) c_int;
+pub extern fn strncmp(a: [*]const char, b: [*]const char, n: c_size_t) c_int;
+pub extern fn strcoll(a: [*]const char, b: [*]const char) c_int;
 
 // search
 pub extern fn strchr(str: [*]const char, ch: char) *char;
@@ -33,4 +33,4 @@ pub extern fn strdup(str: [*]const char) *char;
 pub extern fn strndup(str: [*]const char, n: c_size_t) *char;
 
 // misc
-pub extern fn strerror(errnum: i32) *char;
+pub extern fn strerror(errnum: c_int) *char;
