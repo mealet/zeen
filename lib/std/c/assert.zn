@@ -1,0 +1,7 @@
+// Returns without effect when `cond` is true; otherwise terminates with a
+// panic. C's `assert` macro analogue.
+pub fn assert(cond: bool) void {
+  if (!cond) {
+    @panic("assertion failed");
+  }
+}

@@ -1,0 +1,2 @@
+// bool maps to Zeen's primitive `bool`; the literals are `true` / `false`.
+pub alias c_bool = bool;
