@@ -1,3 +1,5 @@
+use std.c.types;
+
 pub struct c_FILE {}
 
 // standard streams
@@ -17,7 +19,7 @@ pub extern fn rename(old_name: [*]const char, new_name: [*]const char) i32;
 pub extern fn printf(fmt: [*]const char, ...) i32;
 pub extern fn fprintf(stream: *c_FILE, fmt: [*]const char, ...) i32;
 pub extern fn sprintf(buf: [*]char, fmt: [*]const char, ...) i32;
-pub extern fn snprintf(buf: [*]char, n: usize, fmt: [*]const char, ...) i32;
+pub extern fn snprintf(buf: [*]char, n: c_size_t, fmt: [*]const char, ...) i32;
 pub extern fn scanf(fmt: [*]const char, ...) i32;
 pub extern fn fscanf(stream: *c_FILE, fmt: [*]const char, ...) i32;
 pub extern fn sscanf(str: [*]const char, fmt: [*]const char, ...) i32;
@@ -32,15 +34,15 @@ pub extern fn putchar(ch: char) i32;
 pub extern fn ungetc(ch: char, stream: *c_FILE) i32;
 
 // line / block I/O
-pub extern fn fgets(buf: [*]char, n: i32, stream: *c_FILE) *char;
+pub extern fn fgets(buf: [*]char, n: c_int, stream: *c_FILE) *char;
 pub extern fn fputs(str: [*]const char, stream: *c_FILE) i32;
 pub extern fn puts(str: [*]const char) i32;
-pub extern fn fread(ptr: *void, size: usize, count: usize, stream: *c_FILE) usize;
-pub extern fn fwrite(ptr: [*]const void, size: usize, count: usize, stream: *c_FILE) usize;
+pub extern fn fread(ptr: *void, size: c_size_t, count: c_size_t, stream: *c_FILE) c_size_t;
+pub extern fn fwrite(ptr: [*]const void, size: c_size_t, count: c_size_t, stream: *c_FILE) c_size_t;
 
 // positioning
-pub extern fn fseek(stream: *c_FILE, offset: isize, origin: i32) i32;
-pub extern fn ftell(stream: *c_FILE) isize;
+pub extern fn fseek(stream: *c_FILE, offset: c_long, origin: i32) i32;
+pub extern fn ftell(stream: *c_FILE) c_long;
 pub extern fn rewind(stream: *c_FILE) void;
 
 // error handling
