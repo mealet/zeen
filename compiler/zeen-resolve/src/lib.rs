@@ -33,7 +33,6 @@ pub fn resolve<'ctx>(
     context: &'ctx mut CompilationContext,
 ) -> Result<ResolvedProgram<'ctx>, Vec<ResolveError>> {
     let core_files = context.core_files.clone();
-    let std_files = context.std_files.clone();
 
     let target = context
         .target
@@ -57,7 +56,6 @@ pub fn resolve<'ctx>(
         entry_program,
         miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
         &core_files,
-        &std_files,
     )?;
 
     let resolved_program = include_resolver.resolve(
@@ -130,7 +128,6 @@ mod tests {
                 linked: HashSet::new(),
             },
             core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
-            std_files: vec![],
             mode: CompilationMode::Debug,
             output: CompilationOutput::EmitMIR,
             target: None,

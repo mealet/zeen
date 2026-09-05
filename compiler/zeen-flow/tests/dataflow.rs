@@ -57,7 +57,6 @@ fn compile(src: &str) -> Result<Compiled, Vec<String>> {
             linked: HashSet::new(),
         },
         core_files: core_files(),
-        std_files: vec![],
         mode: CompilationMode::Debug,
         output: CompilationOutput::EmitMIR,
         target: None,

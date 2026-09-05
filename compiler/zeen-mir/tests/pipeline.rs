@@ -48,7 +48,6 @@ fn compile_mode(src: &str, mode: CompilationMode) -> Result<String, Vec<String>>
             linked: HashSet::new(),
         },
         core_files: core_files(),
-        std_files: vec![],
         mode,
         output: CompilationOutput::EmitMIR,
         target: None,
