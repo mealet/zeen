@@ -1,0 +1,24 @@
+use std.c.posix.sys.stat;
+use std.c.posix.fcntl;
+use std.c.posix.unistd;
+
+fn main() i32 {
+  let path: [*]const char = "/tmp/zeen_stat_case";
+  let fd: c_int = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0o644);
+  let buf: [*]const char = "hello";
+  let _: c_ssize_t = write(fd, @as([*]const void, buf), 5);
+  let _: c_int = close(fd);
+
+  let st: Stat = @uninit();
+  let ok: c_int = stat(path, &st);
+  @println("stat={} size={} mode={} type={}", ok, st.st_size, st.st_mode, st.st_mode & S_IFMT);
+
+  let fd2: c_int = open(path, O_RDONLY, 0);
+  let st2: Stat = @uninit();
+  let ok2: c_int = fstat(fd2, &st2);
+  @println("fstat={} size={}", ok2, st2.st_size);
+  let _: c_int = close(fd2);
+
+  let _: c_int = unlink(path);
+  return 0;
+}
