@@ -1,0 +1,34 @@
+use std.c.types;
+
+// `unistd.h` — POSIX-only. The whole file is guarded on the set of POSIX
+// targets we support; android reports `os = "android"` (its `family` is empty,
+// so `@family[unix]` alone would NOT cover it). On any other target the module
+// resolves empty, so symbols from `use std.c.posix.unistd;` simply don't exist.
+
+@os[linux | darwin | freebsd | android] {
+  pub const STDIN_FILENO: c_int = 0;
+  pub const STDOUT_FILENO: c_int = 1;
+  pub const STDERR_FILENO: c_int = 2;
+
+  pub extern fn read(fd: c_int, buf: *void, count: c_size_t) c_ssize_t;
+  pub extern fn write(fd: c_int, buf: [*]const void, count: c_size_t) c_ssize_t;
+  pub extern fn close(fd: c_int) c_int;
+
+  pub extern fn getpid() c_pid_t;
+  pub extern fn getppid() c_pid_t;
+  pub extern fn getuid() c_uid_t;
+  pub extern fn getgid() c_gid_t;
+
+  pub extern fn sleep(seconds: c_uint) c_uint;
+  pub extern fn usleep(useconds: c_useconds_t) c_int;
+  pub extern fn alarm(seconds: c_uint) c_uint;
+
+  pub extern fn access(path: [*]const char, amode: c_int) c_int;
+  pub extern fn chdir(path: [*]const char) c_int;
+  pub extern fn getcwd(buf: [*]char, size: c_size_t) [*]char;
+  pub extern fn unlink(path: [*]const char) c_int;
+  pub extern fn rmdir(path: [*]const char) c_int;
+
+  pub extern fn fsync(fd: c_int) c_int;
+  pub extern fn _exit(status: c_int) void;
+}
