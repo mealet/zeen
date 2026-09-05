@@ -22,14 +22,20 @@ pub const INT_MIN: c_int = ~INT_MAX;
 pub const UINT_MAX: c_uint = 4294967295;
 
 // long / long long
-@arch[i686 | wasm32] {
+@os[windows] {
   pub const LONG_MAX: c_long = 2147483647;
   pub const LONG_MIN: c_long = ~LONG_MAX;
   pub const ULONG_MAX: c_ulong = ~0;
 } else {
-  pub const LONG_MAX: c_long = 9223372036854775807;
-  pub const LONG_MIN: c_long = ~LONG_MAX;
-  pub const ULONG_MAX: c_ulong = ~0;
+  @arch[i686 | wasm32] {
+    pub const LONG_MAX: c_long = 2147483647;
+    pub const LONG_MIN: c_long = ~LONG_MAX;
+    pub const ULONG_MAX: c_ulong = ~0;
+  } else {
+    pub const LONG_MAX: c_long = 9223372036854775807;
+    pub const LONG_MIN: c_long = ~LONG_MAX;
+    pub const ULONG_MAX: c_ulong = ~0;
+  }
 }
 
 pub const LLONG_MAX: c_longlong = 9223372036854775807;

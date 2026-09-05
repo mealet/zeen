@@ -1,14 +1,27 @@
 use std.c.types;
 
-// `time_t` is a platform-dependent integer: on POSIX it is `long`, on
-// Windows (MSVC) it is always a 64-bit `__int64`.  `clock_t` is `long` on
-// both (so it matches `c_long` per target).
+// `time_t`: `long` on POSIX (64-bit on LP64, 32-bit on i686 Linux/glibc),
+// `__int64` on Windows (MSVC/mingw, even 32-bit), `long long` on wasi.  For
+// each supported target this resolves to exactly one width.
 @os[windows] {
+  pub alias c_time_t = i64;
+} else @family[wasm] {
   pub alias c_time_t = i64;
 } else {
   pub alias c_time_t = c_long;
 }
-pub alias c_clock_t = c_long;
+
+// `clock_t`: `long` on Windows (LLP64 -> 32-bit) and the other POSIX targets,
+// `unsigned long` on macOS, `long long` on wasi.
+@os[windows] {
+  pub alias c_clock_t = c_long;
+} else @os[darwin] {
+  pub alias c_clock_t = c_ulong;
+} else @family[wasm] {
+  pub alias c_clock_t = i64;
+} else {
+  pub alias c_clock_t = c_long;
+}
 
 pub struct c_tm {
   pub tm_sec: c_int,
@@ -24,6 +37,8 @@ pub struct c_tm {
 
 @os[windows] {
   pub const CLOCKS_PER_SEC: c_clock_t = 1000;
+} else @os[darwin] {
+  pub const CLOCKS_PER_SEC: c_clock_t = 100;
 } else {
   pub const CLOCKS_PER_SEC: c_clock_t = 1000000;
 }
