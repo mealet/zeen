@@ -142,7 +142,7 @@ impl SymbolTable {
     }
 
     /// Collects the `DefId`s a closure is allowed to capture: everything in the
-    /// enclosing function's live frame (params, locals, generics) — all scopes
+    /// enclosing function's live frame (params, locals, generics) - all scopes
     /// outside the closure's own scope down to and including the first
     /// function-like scope. Globals are excluded (always reachable, never
     /// captured), and frames above the enclosing function are dead.

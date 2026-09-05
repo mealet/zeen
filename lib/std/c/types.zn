@@ -100,23 +100,20 @@ pub alias c_uintptr_t = usize;
 }
 
 // ==> posix unistd/fcntl support types
-// pid_t/uid_t/gid_t/useconds_t are plain int / unsigned-int on every POSIX
-// target we support.
 
 pub alias c_pid_t = c_int;
 pub alias c_uid_t = c_uint;
 pub alias c_gid_t = c_uint;
 pub alias c_useconds_t = c_uint;
 
-// mode_t: 32-bit on Linux/Android/bionic, 16-bit on BSD/macOS.
+// mode_t: 32-bit on Linux/Android, 16-bit on BSD/macOS.
 @os[linux | android] {
   pub alias c_mode_t = c_uint;
 } else {
   pub alias c_mode_t = c_ushort;
 }
 
-// off_t: `long` on Linux/Android (so 32-bit on i686), always 64-bit on
-// BSD/macOS. `lseek`/`ftruncate` ABI follows from this.
+// off_t: `long` on Linux/Android (32-bit on i686), 64-bit on BSD/macOS.
 @os[linux | android] {
   pub alias c_off_t = c_long;
 } else @os[darwin | freebsd] {

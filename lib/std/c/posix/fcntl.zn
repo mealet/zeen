@@ -1,14 +1,11 @@
 use std.c.types;
 
-// `fcntl.h` — POSIX-only, whole-file guard as in `posix/unistd.zn`.
-//
-// NOTE: the `O_*` bit values differ between Linux/Android (glibc/bionic,
-// octal `0000100`-style) and BSD/macOS (a different numbering), so they are
-// split into two branches. `F_*`/`FD_*` constants happen to agree across both
-// families and are written once.
+// `fcntl.h` - POSIX-only, whole-file guard as in `posix/unistd.zn`.
+// `O_*` bit values differ between Linux/Android (glibc/bionic) and BSD/macOS,
+// so they are split; `F_*`/`FD_*` agree on both families.
 
 @os[linux | darwin | freebsd | android] {
-  // read/write/open mode bits (ABI-dependent, see header above).
+  // read/write/open mode bits (ABI-dependent).
   @os[linux | android] {
     pub const O_RDONLY: c_int = 0;
     pub const O_WRONLY: c_int = 1;
@@ -41,8 +38,7 @@ use std.c.types;
   pub const F_SETFL: c_int = 4;
   pub const FD_CLOEXEC: c_int = 1;
 
-  // `open` and `fcntl` are varargs: pass the optional `mode` argument only
-  // when `O_CREAT` is set.
+  // `open` and `fcntl` are varargs: pass the optional `mode` only with `O_CREAT`.
   pub extern fn open(path: [*]const char, oflag: c_int, ...) c_int;
   pub extern fn fcntl(fd: c_int, cmd: c_int, ...) c_int;
   pub extern fn creat(path: [*]const char, mode: c_mode_t) c_int;

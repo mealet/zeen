@@ -728,7 +728,7 @@ impl<'ctx> MirLowering<'ctx> {
 
     /// Registers the drop function of every `FnOnce` fat type showing up
     /// among the lowered locals. The value owns its captured environment
-    /// inline, so its death tears the captured (non-Copy) values down —
+    /// inline, so its death tears the captured (non-Copy) values down -
     /// nothing is ever freed. `Fn` values hold only Copy captures and need
     /// no drop.
     fn register_fat_drop_functions(&mut self) {
@@ -774,7 +774,7 @@ impl<'ctx> MirLowering<'ctx> {
 
     /// Builds the drop function of a `FnOnce` fat type: the value is passed
     /// by value and `Drop` statements tear each teardown-needing capture
-    /// down (codegen expands them recursively). Nothing is freed — the
+    /// down (codegen expands them recursively). Nothing is freed - the
     /// captures live inside the value itself.
     fn synthesize_fat_drop_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
         let Type::FatFn {
@@ -1204,7 +1204,7 @@ impl<'ctx> MirLowering<'ctx> {
 
     /// Registers slice layouts for every `Slice[T]` reachable from a struct
     /// field. Codegen needs a `{ ptr, len }` body for any slice type that
-    /// shows up as a struct field — `register_slice_layout` alone only sees
+    /// shows up as a struct field - `register_slice_layout` alone only sees
     /// slice-typed locals, so a struct holding a slice (even one pointing at
     /// static string data) used to crash codegen.
     fn register_reachable_slice_layouts(&mut self) {
@@ -5116,8 +5116,8 @@ impl<'ctx> MirLowering<'ctx> {
     /// from the value's type: a `Closure` body dispatches directly to its
     /// target with a pointer to the value (which *is* the environment) as the
     /// leading env-first argument; a `Pointer` body calls the fn pointer it
-    /// holds with the plain ABI. An `FnOnce` value is consumed by the call —
-    /// the whole value moves into a slot so dataflow rejects a second call —
+    /// holds with the plain ABI. An `FnOnce` value is consumed by the call -
+    /// the whole value moves into a slot so dataflow rejects a second call -
     /// and its captured values are torn down right after the call returns.
     fn lower_fat_call(
         &mut self,

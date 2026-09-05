@@ -223,8 +223,8 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
         }
 
         // The same widening, through a pointer: `*<concrete closure>` into
-        // `*Fn(T) R`. The pointer value is identical — only the annotation
-        // is erased — so the storage stays the concrete pointer type.
+        // `*Fn(T) R`. The pointer value is identical - only the annotation
+        // is erased - so the storage stays the concrete pointer type.
         (
             Type::Pointer {
                 inner: from_inner,

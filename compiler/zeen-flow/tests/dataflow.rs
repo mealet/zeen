@@ -1382,7 +1382,7 @@ fn nested_block_scope_drops_its_locals_at_block_end() {
 
     // A drop-typed local inside a nested block is dropped at the end of that
     // block (its own `StorageDead`) and not only at function exit. The green
-    // local is dropped twice: once for its block scope, once... no — a local
+    // local is dropped twice: once for its block scope, once... no - a local
     // must be dropped exactly once. This function has no explicit drops, so the
     // scope-end drop is the only drop of the block-scoped value.
     let drops = drops_in(

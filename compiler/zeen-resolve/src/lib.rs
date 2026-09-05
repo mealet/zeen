@@ -445,7 +445,7 @@ mod tests {
             .def_id_by_name("closure0")
             .expect("closure0 def must be defined");
 
-        // `x` lives in main's dead frame — only `y` (nested's frame) is captured
+        // `x` lives in main's dead frame - only `y` (nested's frame) is captured
         assert_eq!(fx.captured_names(closure), vec!["y".to_string()]);
     }
 
