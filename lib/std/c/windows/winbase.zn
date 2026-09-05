@@ -1,8 +1,6 @@
 use std.c.types;
 use std.c.windows.windef;
 
-// `winbase.h` essentials - Windows-only guard. Real KERNEL32 exports.
-
 @os[windows] {
   pub extern fn GetLastError() WinDWORD;
   pub extern fn SetLastError(err: WinDWORD) void;

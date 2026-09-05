@@ -1,9 +1,5 @@
 use std.c.types;
 
-// `windef.h` basics - Windows-only guard, mirror of `posix/*.zn`. `DWORD` is
-// `unsigned long` (32-bit on LLP64), `HANDLE` is a transparent pointer. Names
-// use the `Win` prefix to avoid clashing with the `c_*` convention.
-
 @os[windows] {
   pub alias WinDWORD = c_ulong;
   pub alias WinBOOL = c_int;

@@ -1,9 +1,5 @@
 use std.c.types;
 
-// `fcntl.h` - POSIX-only, whole-file guard as in `posix/unistd.zn`.
-// `O_*` bit values differ between Linux/Android (glibc/bionic) and BSD/macOS,
-// so they are split; `F_*`/`FD_*` agree on both families.
-
 @os[linux | darwin | freebsd | android] {
   // read/write/open mode bits (ABI-dependent).
   @os[linux | android] {
