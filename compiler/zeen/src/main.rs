@@ -9,7 +9,6 @@ mod cli;
 mod targets;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
-include!(concat!(env!("OUT_DIR"), "/std_files.rs"));
 
 fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
     if path
@@ -203,7 +202,6 @@ fn main() {
             linked: HashSet::new(),
         },
         core_files: CORE_FILES.iter().map(|file| file.to_basic()).collect(),
-        std_files: STD_FILES.iter().map(|file| file.to_basic()).collect(),
         mode: args.mode,
         output: args.emit,
         target: Some(target_triple.clone()),
