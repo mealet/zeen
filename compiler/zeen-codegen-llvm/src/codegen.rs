@@ -703,7 +703,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     /// Builds an `alloca` at the top of the current function's entry block.
     /// An alloca created at the current position would execute on every visit
-    /// of its block, growing the stack each time — a loop creating aggregate
+    /// of its block, growing the stack each time - a loop creating aggregate
     /// temporaries would exhaust it after enough iterations.
     fn entry_alloca(&self, ty: BasicTypeEnum<'ctx>, name: &str) -> PointerValue<'ctx> {
         let entry = self
@@ -967,7 +967,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             let elem_ty = match kind {
                 AggregateKind::Struct(_) | AggregateKind::Slice => {
                     // Slices store through their registered layout: the `len`
-                    // field is `usize` — storing it narrower leaves the rest
+                    // field is `usize` - storing it narrower leaves the rest
                     // of the slot uninitialized garbage, which the loop
                     // condition then reads as a huge length.
                     self.program.struct_layouts[&expected_ty].fields[i].ty
@@ -2570,7 +2570,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         // stack overflowing with deep recursion never writes out of bounds;
         // the runtime then prints the most recent frames. When recursion runs
         // deeper than the buffer and then unwinds, reused slots may hold stale
-        // frames from the deeper calls — this only affects Debug diagnostics,
+        // frames from the deeper calls - this only affects Debug diagnostics,
         // never memory safety.
         let slot = self
             .builder

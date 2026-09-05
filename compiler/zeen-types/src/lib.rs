@@ -18,7 +18,7 @@ pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
 pub const ARRAY_LEN_FIELD: DefId = DefId(u32::MAX - 4);
 
 /// Synthetic `DefId`s for the fat closure-value struct `{ function, env }`
-/// (type `Type::FatFn`). The struct def and its two fields are canonical — they
+/// (type `Type::FatFn`). The struct def and its two fields are canonical - they
 /// are shared by every fat value, since the layout of a fat pointer is always
 /// two pointer-sized slots regardless of the captured environment's shape.
 pub const CLOSURE_FAT_DEF: DefId = DefId(u32::MAX - 5);
@@ -54,7 +54,7 @@ pub struct TypeId(pub u32);
 ///
 /// Storage is always concrete: the captures live in an inline struct (the
 /// value *is* the environment) and the called function is known statically.
-/// `Bound` is the erased annotation form `Fn(T) R` — a coercion target used
+/// `Bound` is the erased annotation form `Fn(T) R` - a coercion target used
 /// for checks, never a storage type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FatFnBody {
@@ -114,7 +114,7 @@ pub enum Type {
         ret: TypeId,
     },
 
-    /// Fat closure value. `once` marks `FnOnce` — callable at most once
+    /// Fat closure value. `once` marks `FnOnce` - callable at most once
     /// because it owns a non-Copy capture; `Fn` values (all-Copy captures or
     /// none) are `Copy`. The `body` says what the value is made of: storage
     /// is always concrete (inline env struct + static target, or an inline

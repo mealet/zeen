@@ -1272,7 +1272,7 @@ impl<'ctx> NameResolver {
                 // Nested functions may not capture the enclosing function's
                 // params/locals/generics (no closures): hide them for the body.
                 // Function definitions are not closure captures, so they stay
-                // visible — a nested fn can recurse and call sibling fns.
+                // visible - a nested fn can recurse and call sibling fns.
                 let capture_blocked: HashSet<DefId> = self
                     .table
                     .enclosing_defs()
@@ -1470,7 +1470,7 @@ impl<'ctx> NameResolver {
         }
 
         // Capturable: the enclosing live frame plus everything outer closures
-        // may capture themselves. Inheritance stops at nested-fn boundaries —
+        // may capture themselves. Inheritance stops at nested-fn boundaries -
         // frames behind a `Blocked` layer are dead. Own scope is pushed first
         // so the walk can skip it.
         self.table.push(ScopeKind::Function);

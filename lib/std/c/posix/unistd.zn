@@ -1,9 +1,8 @@
 use std.c.types;
 
-// `unistd.h` — POSIX-only. The whole file is guarded on the set of POSIX
-// targets we support; android reports `os = "android"` (its `family` is empty,
-// so `@family[unix]` alone would NOT cover it). On any other target the module
-// resolves empty, so symbols from `use std.c.posix.unistd;` simply don't exist.
+// `unistd.h` - POSIX-only, whole file guarded by os. Android has a bare
+// `family`, so `@os[linux | darwin | freebsd | android]` is explicit rather
+// than `@family[unix]`. On other targets the module resolves empty.
 
 @os[linux | darwin | freebsd | android] {
   pub const STDIN_FILENO: c_int = 0;

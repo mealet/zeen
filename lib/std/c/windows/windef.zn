@@ -1,11 +1,8 @@
 use std.c.types;
 
-// `windef.h` basics — Windows-only. Mirror of the POSIX guard in
-// `posix/*.zn`: on non-Windows targets this module resolves empty.
-//
-// `DWORD` is `unsigned long`, which on Windows LLP64 is 32-bit; `HANDLE` is a
-// transparent pointer. Names are prefixed `Win` to avoid clashing with the
-// `c_*` convention used elsewhere.
+// `windef.h` basics - Windows-only guard, mirror of `posix/*.zn`. `DWORD` is
+// `unsigned long` (32-bit on LLP64), `HANDLE` is a transparent pointer. Names
+// use the `Win` prefix to avoid clashing with the `c_*` convention.
 
 @os[windows] {
   pub alias WinDWORD = c_ulong;

@@ -1471,7 +1471,7 @@ impl<'res> TypeChecker<'res> {
     }
 
     /// Whether the type contains an erased `Fn`/`FnOnce` bound anywhere
-    /// (directly, or inside pointers/arrays/struct args) — such types cannot
+    /// (directly, or inside pointers/arrays/struct args) - such types cannot
     /// name a storage layout.
     fn type_contains_fat_bound(&self, ty: TypeId) -> bool {
         match self.result.interner.get(ty).clone() {
@@ -3223,7 +3223,7 @@ impl<'res> TypeChecker<'res> {
                 // concrete fat types pass through unchanged (the bound is
                 // only a check), while a basic fn value gets its concrete
                 // fat form (inline env + static target, or an inline fn
-                // pointer) — never the erased bound.
+                // pointer) - never the erased bound.
                 let storage = self.fat_coercion_storage(actual, expected, expr);
                 self.result.record_expr_type(id, storage);
                 storage
@@ -3243,7 +3243,7 @@ impl<'res> TypeChecker<'res> {
                 // array→slice coercion: codegen lowers a `ConstValue::Str`
                 // straight into a slice. Any other array (literal or variable)
                 // must be explicitly referenced with `&` to build a
-                // `{ ptr, len }` slice — the implicit path has no MIR/codegen
+                // `{ ptr, len }` slice - the implicit path has no MIR/codegen
                 // support and crashes verification.
                 if matches!(&expr.kind, HirExprKind::Literal(Literal::String(_))) {
                     self.result.record_expr_type(id, expected);
@@ -3313,7 +3313,7 @@ impl<'res> TypeChecker<'res> {
 
     /// Computes the storage type a fat coercion produces. A concrete fat
     /// value flowing into a `Fn`/`FnOnce` bound keeps its own concrete type;
-    /// a basic fn value gets a fresh concrete fat form — a closure value
+    /// a basic fn value gets a fresh concrete fat form - a closure value
     /// with an inline env and a statically known target when the coerced
     /// expression is a closure literal or a static `fn`, an inline fn
     /// pointer otherwise (the pointer is a runtime value, so its target

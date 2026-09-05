@@ -652,7 +652,7 @@ fn string_literal_coerces_to_slice_return_value() {
         },
     );
 
-    // `fn hello() []const char { return "hello!"; }` — a string literal
+    // `fn hello() []const char { return "hello!"; }` - a string literal
     // returned from a function must lower to a `{ ptr, len }` slice.
     let hello_str = const_str(&mut fx, "hello!");
     let hello_def = fx.def("hello", DefKind::Function);
@@ -704,7 +704,7 @@ fn string_literal_in_struct_array_field_is_stored_inline() {
         },
     );
 
-    // `let s: Str = Str { .inner = "hello" };` — the string literal fills the
+    // `let s: Str = Str { .inner = "hello" };` - the string literal fills the
     // `[6]char` field, so its bytes must be copied into the array field, not
     // stored as a raw pointer to the literal global.
     let hello = const_str(&mut fx, "hello");

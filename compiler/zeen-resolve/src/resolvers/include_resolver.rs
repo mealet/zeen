@@ -93,11 +93,9 @@ impl<'ctx> IncludeResolver<'ctx> {
         self.interner.borrow_mut().get_or_intern(value)
     }
 
-    /// Whether any declaration in `decls` contains a `@format(...)` macro call.
-    /// `@format` is the only place that needs `std.string`, which lives on the
-    /// filesystem (never embedded). Checking the whole AST keeps the implicit
-    /// `use std.string` correct even when the macro is nested in expressions,
-    /// statements or method bodies.
+    /// Whether any declaration contains a `@format(...)` macro call, which is
+    /// the only place that needs `std.string` from the filesystem. Walks the
+    /// whole AST so nested macros are caught.
     fn has_format_macro(&self, decls: &[&'ctx Declaration<'ctx>]) -> bool {
         decls.iter().any(|decl| self.decl_has_format(decl))
     }
@@ -260,11 +258,8 @@ impl<'ctx> IncludeResolver<'ctx> {
             );
         }
 
-        // `std.string` is NOT a builtin: the std library only lives on the
-        // filesystem. Except for one implicit case: `@format` builds a heap
-        // `String`, so when the root program uses `@format` we synthesize a
-        // `use std.string;` declaration that the include resolver then loads
-        // from `std_root`. Other std modules are never auto-injected.
+        // `std.string` is never embedded; `@format` is the one implicit case
+        // that needs it, so synthesize a `use std.string;` for the resolver.
         if self.has_format_macro(root_decls) {
             let module = self.get_or_intern("std.string");
             let span = SourceSpan::new(0.into(), 0);

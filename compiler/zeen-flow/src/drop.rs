@@ -46,7 +46,7 @@ fn type_needs_drop_impl(
 
         // `FnOnce` closure values own a non-Copy capture, so their death
         // tears the captured values down (a synthesized per-type drop
-        // function does it). `Fn` values hold only Copy captures — nothing
+        // function does it). `Fn` values hold only Copy captures - nothing
         // to drop, and copies keep the value alive anyway.
         Type::FatFn { once, .. } => once,
 
@@ -85,7 +85,7 @@ fn type_needs_drop_impl(
 /// Expands the drop places of a wholly-live value of type `ty` rooted at
 /// `place`, flattening structs that do not implement `Drop` into their fields.
 ///
-/// A struct with an explicit `Drop` implementation is dropped as a whole — the
+/// A struct with an explicit `Drop` implementation is dropped as a whole - the
 /// codegen emits the implementation's `drop` call. Any other struct is expanded
 /// recursively: each field that (transitively) needs a drop ends up as its own
 /// `Drop` place. Arrays/slices stay a single drop of the whole aggregate, since
@@ -145,7 +145,7 @@ fn expand_live_drops(
 /// Expands the drop places of a partially moved struct: only the fields that
 /// are still live are dropped, each expanded to its own (possibly nested)
 /// explicit drops. Partially moved structs without an explicit `Drop` impl are
-/// the only ones that get here — field moves are rejected for `Drop` structs.
+/// the only ones that get here - field moves are rejected for `Drop` structs.
 fn expand_partial_drops(
     interner: &TypeInterner,
     typecheck: &TypeCheckResult,
