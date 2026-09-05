@@ -1,0 +1,49 @@
+use std.c.types;
+
+// `fcntl.h` — POSIX-only, whole-file guard as in `posix/unistd.zn`.
+//
+// NOTE: the `O_*` bit values differ between Linux/Android (glibc/bionic,
+// octal `0000100`-style) and BSD/macOS (a different numbering), so they are
+// split into two branches. `F_*`/`FD_*` constants happen to agree across both
+// families and are written once.
+
+@os[linux | darwin | freebsd | android] {
+  // read/write/open mode bits (ABI-dependent, see header above).
+  @os[linux | android] {
+    pub const O_RDONLY: c_int = 0;
+    pub const O_WRONLY: c_int = 1;
+    pub const O_RDWR: c_int = 2;
+    pub const O_CREAT: c_int = 64;
+    pub const O_EXCL: c_int = 128;
+    pub const O_NOCTTY: c_int = 256;
+    pub const O_TRUNC: c_int = 512;
+    pub const O_APPEND: c_int = 1024;
+    pub const O_NONBLOCK: c_int = 2048;
+    pub const O_CLOEXEC: c_int = 524288;
+  } else {
+    pub const O_RDONLY: c_int = 0;
+    pub const O_WRONLY: c_int = 1;
+    pub const O_RDWR: c_int = 2;
+    pub const O_APPEND: c_int = 8;
+    pub const O_CREAT: c_int = 512;
+    pub const O_TRUNC: c_int = 1024;
+    pub const O_EXCL: c_int = 2048;
+    pub const O_NONBLOCK: c_int = 4;
+    pub const O_NOCTTY: c_int = 131072;
+    pub const O_CLOEXEC: c_int = 1048576;
+  }
+
+  // fcntl commands and close-on-exec flag (identical on Linux, BSD, macOS).
+  pub const F_DUPFD: c_int = 0;
+  pub const F_GETFD: c_int = 1;
+  pub const F_SETFD: c_int = 2;
+  pub const F_GETFL: c_int = 3;
+  pub const F_SETFL: c_int = 4;
+  pub const FD_CLOEXEC: c_int = 1;
+
+  // `open` and `fcntl` are varargs: pass the optional `mode` argument only
+  // when `O_CREAT` is set.
+  pub extern fn open(path: [*]const char, oflag: c_int, ...) c_int;
+  pub extern fn fcntl(fd: c_int, cmd: c_int, ...) c_int;
+  pub extern fn creat(path: [*]const char, mode: c_mode_t) c_int;
+}

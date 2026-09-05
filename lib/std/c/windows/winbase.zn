@@ -1,0 +1,12 @@
+use std.c.types;
+use std.c.windows.windef;
+
+// `winbase.h` essentials — Windows-only, guarded as above. These are real
+// CRT/KERNEL32 exports, linkable through the mingw/mswvc toolchain.
+
+@os[windows] {
+  pub extern fn GetLastError() WinDWORD;
+  pub extern fn SetLastError(err: WinDWORD) void;
+  pub extern fn Sleep(ms: WinDWORD) void;
+  pub extern fn ExitProcess(code: c_uint) void;
+}
