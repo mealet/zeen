@@ -96,9 +96,11 @@ pub fn lower_program<'ctx>(
                 lowering.monomorphize_fn(*def_id, Vec::new(), *owner, &[]);
             }
         });
-
-        lowering.register_user_struct_layouts(resolution);
     }
+
+    // Register layouts for every user-defined struct regardless of usage, so
+    // `@sizeof(Struct)` on an otherwise-unused type has a registered layout.
+    lowering.register_user_struct_layouts(resolution);
 
     lowering.build_init_globals();
     lowering.register_drop_functions();

@@ -1263,3 +1263,35 @@ fn generic_bound_method_call_dispatches_to_concrete_impl() {
         "bare interface method `write_str` must not be emitted, got {names:?}"
     );
 }
+
+#[test]
+fn sizeof_of_unused_struct_registers_layout() {
+    // `@sizeof(Foo)` is the only reference to the struct; the layout must
+    // still be registered so codegen can size the type.
+    let mir = compile_mir_ok(
+        "struct Foo { a: i32, b: i64 } \
+         fn main() { let s: usize = @sizeof(Foo); @println(\"{}\", s); }",
+    );
+
+    let layouts: Vec<(usize, u32)> = mir
+        .program
+        .struct_layouts
+        .values()
+        .map(|l| {
+            (
+                l.fields.len(),
+                l.fields.first().map(|f| f.def_id.0).unwrap_or(0),
+            )
+        })
+        .collect();
+
+    assert!(
+        layouts.iter().any(|(len, first)| *len == 2 && *first != 0),
+        "expected `Foo` layout (2 fields) to be registered for `@sizeof(Foo)`, got {layouts:?}"
+    );
+}
+
+fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
+    let _ = ty;
+    true
+}
