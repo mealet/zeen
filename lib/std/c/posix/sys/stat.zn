@@ -1,12 +1,5 @@
 use std.c.types;
 
-// `sys/stat.h` - POSIX-only. Whole-file guard as in `posix/unistd.zn`.
-// The `stat` struct layout is per-target: linux x86_64/i686/musl use one ABI,
-// linux aarch64 and android aarch64 share a second, darwin and freebsd each
-// have their own. Fields are listed in the exact C order; zeen lays structs
-// out with natural alignment (like LLVM unpadded structs), which matches the
-// system header on each target.
-
 // File type / mode masks (identical across POSIX targets).
 pub const S_IFMT: c_mode_t = 0o170000;
 pub const S_IFREG: c_mode_t = 0o100000;

@@ -1,9 +1,5 @@
 use std.c.types;
 
-// `unistd.h` - POSIX-only, whole file guarded by os. Android has a bare
-// `family`, so `@os[linux | darwin | freebsd | android]` is explicit rather
-// than `@family[unix]`. On other targets the module resolves empty.
-
 @os[linux | darwin | freebsd | android] {
   pub const STDIN_FILENO: c_int = 0;
   pub const STDOUT_FILENO: c_int = 1;
