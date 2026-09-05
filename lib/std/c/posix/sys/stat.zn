@@ -1,0 +1,188 @@
+use std.c.types;
+
+// `sys/stat.h` - POSIX-only. Whole-file guard as in `posix/unistd.zn`.
+// The `stat` struct layout is per-target: linux x86_64/i686/musl use one ABI,
+// linux aarch64 and android aarch64 share a second, darwin and freebsd each
+// have their own. Fields are listed in the exact C order; zeen lays structs
+// out with natural alignment (like LLVM unpadded structs), which matches the
+// system header on each target.
+
+// File type / mode masks (identical across POSIX targets).
+pub const S_IFMT: c_mode_t = 0o170000;
+pub const S_IFREG: c_mode_t = 0o100000;
+pub const S_IFDIR: c_mode_t = 0o040000;
+pub const S_IFLNK: c_mode_t = 0o120000;
+pub const S_IRWXU: c_mode_t = 0o0700;
+pub const S_IRWXG: c_mode_t = 0o0070;
+pub const S_IRWXO: c_mode_t = 0o0007;
+
+@os[linux | android] {
+  @arch[x86_64] {
+    pub struct Stat {
+      pub st_dev: u64,
+      pub st_ino: u64,
+      pub st_nlink: u64,
+      pub st_mode: c_uint,
+      pub st_uid: c_uint,
+      pub st_gid: c_uint,
+      pub _pad0: c_int,
+      pub st_rdev: u64,
+      pub st_size: i64,
+      pub st_blksize: i64,
+      pub st_blocks: i64,
+      pub st_atime: i64,
+      pub st_atime_nsec: i64,
+      pub st_mtime: i64,
+      pub st_mtime_nsec: i64,
+      pub st_ctime: i64,
+      pub st_ctime_nsec: i64,
+      pub _unused: [3]i64
+    }
+  } else @arch[aarch64] {
+    pub struct Stat {
+      pub st_dev: u64,
+      pub st_ino: u64,
+      pub st_mode: c_uint,
+      pub st_nlink: c_uint,
+      pub st_uid: c_uint,
+      pub st_gid: c_uint,
+      pub st_rdev: u64,
+      pub _pad1: i64,
+      pub st_size: i64,
+      pub st_blksize: c_int,
+      pub _pad2: c_int,
+      pub st_blocks: i64,
+      pub st_atime: i64,
+      pub st_atime_nsec: i64,
+      pub st_mtime: i64,
+      pub st_mtime_nsec: i64,
+      pub st_ctime: i64,
+      pub st_ctime_nsec: i64,
+      pub _unused: [2]c_int
+    }
+  } else @arch[i686] {
+    pub struct Stat {
+      pub st_dev: u64,
+      pub st_ino: u64,
+      pub st_mode: c_uint,
+      pub st_nlink: c_uint,
+      pub st_uid: c_uint,
+      pub st_gid: c_uint,
+      pub st_rdev: u64,
+      pub _pad1: i64,
+      pub st_size: i64,
+      pub st_blksize: c_int,
+      pub _pad2: c_int,
+      pub st_blocks: i64,
+      pub st_atime: i64,
+      pub st_atime_nsec: i64,
+      pub st_mtime: i64,
+      pub st_mtime_nsec: i64,
+      pub st_ctime: i64,
+      pub st_ctime_nsec: i64,
+      pub _unused: [2]c_int
+    }
+  } else {
+    pub struct Stat {
+      pub st_dev: u64,
+      pub st_ino: u64,
+      pub st_mode: c_uint,
+      pub st_nlink: c_uint,
+      pub st_uid: c_uint,
+      pub st_gid: c_uint,
+      pub st_rdev: u64,
+      pub _pad1: i64,
+      pub st_size: i64,
+      pub st_blksize: c_int,
+      pub _pad2: c_int,
+      pub st_blocks: i64,
+      pub st_atime: i64,
+      pub st_atime_nsec: i64,
+      pub st_mtime: i64,
+      pub st_mtime_nsec: i64,
+      pub st_ctime: i64,
+      pub st_ctime_nsec: i64,
+      pub _unused: [2]c_int
+    }
+  }
+
+  pub extern fn stat(path: [*]const char, buf: *Stat) c_int;
+  pub extern fn fstat(fd: c_int, buf: *Stat) c_int;
+  pub extern fn lstat(path: [*]const char, buf: *Stat) c_int;
+  pub extern fn chmod(path: [*]const char, mode: c_mode_t) c_int;
+  pub extern fn fchmod(fd: c_int, mode: c_mode_t) c_int;
+  pub extern fn mkdir(path: [*]const char, mode: c_mode_t) c_int;
+  pub extern fn chown(path: [*]const char, owner: c_uid_t, group: c_gid_t) c_int;
+  pub extern fn fchown(fd: c_int, owner: c_uid_t, group: c_gid_t) c_int;
+}
+
+@os[darwin] {
+  pub struct Stat {
+    pub st_dev: c_int,
+    pub st_mode: c_ushort,
+    pub st_nlink: c_ushort,
+    pub st_ino: u64,
+    pub st_uid: c_uint,
+    pub st_gid: c_uint,
+    pub st_rdev: c_int,
+    pub st_atime: c_long,
+    pub st_atime_nsec: c_long,
+    pub st_mtime: c_long,
+    pub st_mtime_nsec: c_long,
+    pub st_ctime: c_long,
+    pub st_ctime_nsec: c_long,
+    pub st_birthtime: c_long,
+    pub st_birthtime_nsec: c_long,
+    pub st_size: c_long,
+    pub st_blocks: c_long,
+    pub st_blksize: c_int,
+    pub st_flags: c_uint,
+    pub st_gen: c_uint,
+    pub st_lspare: c_int,
+    pub st_qspare: [2]i64
+  }
+
+  pub extern fn stat(path: [*]const char, buf: *Stat) c_int;
+  pub extern fn fstat(fd: c_int, buf: *Stat) c_int;
+  pub extern fn lstat(path: [*]const char, buf: *Stat) c_int;
+  pub extern fn chmod(path: [*]const char, mode: c_mode_t) c_int;
+  pub extern fn fchmod(fd: c_int, mode: c_mode_t) c_int;
+  pub extern fn mkdir(path: [*]const char, mode: c_mode_t) c_int;
+  pub extern fn chown(path: [*]const char, owner: c_uid_t, group: c_gid_t) c_int;
+  pub extern fn fchown(fd: c_int, owner: c_uid_t, group: c_gid_t) c_int;
+}
+
+@os[freebsd] {
+  pub struct Stat {
+    pub st_dev: u64,
+    pub st_ino: u64,
+    pub st_nlink: u64,
+    pub st_mode: c_ushort,
+    pub st_uid: c_uint,
+    pub st_gid: c_uint,
+    pub st_rdev: u64,
+    pub st_atime: c_long,
+    pub st_atime_nsec: c_long,
+    pub st_mtime: c_long,
+    pub st_mtime_nsec: c_long,
+    pub st_ctime: c_long,
+    pub st_ctime_nsec: c_long,
+    pub st_birthtime: c_long,
+    pub st_birthtime_nsec: c_long,
+    pub st_size: c_long,
+    pub st_blocks: c_long,
+    pub st_blksize: c_int,
+    pub st_flags: c_uint,
+    pub st_gen: u64,
+    pub st_filerev: u64,
+    pub st_spare: [9]u64
+  }
+
+  pub extern fn stat(path: [*]const char, buf: *Stat) c_int;
+  pub extern fn fstat(fd: c_int, buf: *Stat) c_int;
+  pub extern fn lstat(path: [*]const char, buf: *Stat) c_int;
+  pub extern fn chmod(path: [*]const char, mode: c_mode_t) c_int;
+  pub extern fn fchmod(fd: c_int, mode: c_mode_t) c_int;
+  pub extern fn mkdir(path: [*]const char, mode: c_mode_t) c_int;
+  pub extern fn chown(path: [*]const char, owner: c_uid_t, group: c_gid_t) c_int;
+}
