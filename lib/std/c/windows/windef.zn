@@ -7,6 +7,6 @@ use std.c.types;
   pub alias WinBYTE = c_uchar;
   pub alias WinWORD = c_ushort;
 
-  pub const TRUE: WinBOOL = 1;
-  pub const FALSE: WinBOOL = 0;
+  pub const WinTRUE: WinBOOL = 1;
+  pub const WinFALSE: WinBOOL = 0;
 }
