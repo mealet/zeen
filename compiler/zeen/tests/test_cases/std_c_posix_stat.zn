@@ -9,12 +9,12 @@ fn main() i32 {
   let _: c_ssize_t = write(fd, @as([*]const void, buf), 5);
   let _: c_int = close(fd);
 
-  let st: Stat = @uninit();
+  let st: c_Stat = @uninit();
   let ok: c_int = stat(path, &st);
   @println("stat={} size={} mode={} type={}", ok, st.st_size, st.st_mode, st.st_mode & S_IFMT);
 
   let fd2: c_int = open(path, O_RDONLY, 0);
-  let st2: Stat = @uninit();
+  let st2: c_Stat = @uninit();
   let ok2: c_int = fstat(fd2, &st2);
   @println("fstat={} size={}", ok2, st2.st_size);
   let _: c_int = close(fd2);

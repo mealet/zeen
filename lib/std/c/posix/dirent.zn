@@ -17,7 +17,7 @@ pub const DT_SOCK: c_uchar = 12;
 @os[linux | android] {
   // glibc/musl/bionic: d_ino@0, d_off@8, d_reclen@16, d_type@18, d_name@19.
   // Fields are identical across 64-bit and 32-bit (ino64/time64) ABIs.
-  pub struct Dirent {
+  pub struct c_Dirent {
     pub d_ino: c_ulonglong,
     pub d_off: c_longlong,
     pub d_reclen: c_ushort,
@@ -29,7 +29,7 @@ pub const DT_SOCK: c_uchar = 12;
 @os[darwin] {
   // Apple: d_ino@0, d_seekoff@8, d_reclen@16, d_namlen@18, d_type@20,
   // d_name@21[1024]. The legacy `d_off` field was replaced by `d_seekoff`.
-  pub struct Dirent {
+  pub struct c_Dirent {
     pub d_ino: c_ulonglong,
     pub d_seekoff: c_ulonglong,
     pub d_reclen: c_ushort,
@@ -42,7 +42,7 @@ pub const DT_SOCK: c_uchar = 12;
 @os[freebsd] {
   // FreeBSD: d_fileno@0, d_off@8, d_reclen@16, d_type@18, d_pad0@19,
   // d_namlen@20, d_pad1@22, d_name@24[256].
-  pub struct Dirent {
+  pub struct c_Dirent {
     pub d_fileno: c_ulonglong,
     pub d_off: c_longlong,
     pub d_reclen: c_ushort,
@@ -65,10 +65,10 @@ pub const DT_SOCK: c_uchar = 12;
 
 @os[linux | android] {
   pub extern fn opendir(name: [*]const char) *c_DIR;
-  pub extern fn readdir(dirp: *c_DIR) *Dirent;
+  pub extern fn readdir(dirp: *c_DIR) *c_Dirent;
   pub extern fn closedir(dirp: *c_DIR) c_int;
   pub extern fn rewinddir(dirp: *c_DIR) void;
   pub extern fn dirfd(dirp: *c_DIR) c_int;
   pub extern fn fdopendir(fd: c_int) *c_DIR;
-  pub extern fn readdir_r(dirp: *c_DIR, entry: *Dirent, result: **Dirent) c_int;
+  pub extern fn readdir_r(dirp: *c_DIR, entry: *c_Dirent, result: **c_Dirent) c_int;
 }

@@ -31,11 +31,11 @@ pub const MSG_DONTROUTE: c_int = 4;
 pub alias c_socklen_t = c_uint;
 
 // Internet addresses (identical across POSIX targets).
-pub struct InAddr {
+pub struct c_InAddr {
   pub s_addr: u32,
 }
 
-pub struct In6Addr {
+pub struct c_In6Addr {
   pub s6_addr: [16]u8,
 }
 
@@ -71,40 +71,40 @@ pub struct In6Addr {
   pub const MSG_NOSIGNAL: c_int = 0x4000;
 
   // Linux: family@0 (u16), data@2[14].
-  pub struct SockAddr {
+  pub struct c_SockAddr {
     pub sa_family: c_ushort,
     pub sa_data: [14]c_char,
   }
 
-  pub struct SockAddrIn {
+  pub struct c_SockAddrIn {
     pub sin_family: c_ushort,
     pub sin_port: c_ushort,
-    pub sin_addr: InAddr,
+    pub sin_addr: c_InAddr,
     pub sin_zero: [8]u8,
   }
 
-  pub struct SockAddrIn6 {
+  pub struct c_SockAddrIn6 {
     pub sin6_family: c_ushort,
     pub sin6_port: c_ushort,
     pub sin6_flowinfo: u32,
-    pub sin6_addr: In6Addr,
+    pub sin6_addr: c_In6Addr,
     pub sin6_scope_id: u32,
   }
 
-  pub struct SockAddrUn {
+  pub struct c_SockAddrUn {
     pub sun_family: c_ushort,
     pub sun_path: [108]c_char,
   }
 
   // sockaddr_storage: 128 bytes; family@0 (u16), then pad + align.
   @arch[i686] {
-    pub struct SockAddrStorage {
+    pub struct c_SockAddrStorage {
       pub ss_family: c_ushort,
       pub ss_pad2: [122]u8,
       pub ss_align: u32,
     }
   } else {
-    pub struct SockAddrStorage {
+    pub struct c_SockAddrStorage {
       pub ss_family: c_ushort,
       pub ss_pad2: [118]u8,
       pub ss_align: u64,
@@ -149,30 +149,30 @@ pub struct In6Addr {
   pub const MSG_WAITALL: c_int = 0x40;
 
   // BSD: len@0 (u8), family@1 (u8), data@2[14].
-  pub struct SockAddr {
+  pub struct c_SockAddr {
     pub sa_len: u8,
     pub sa_family: u8,
     pub sa_data: [14]c_char,
   }
 
-  pub struct SockAddrIn {
+  pub struct c_SockAddrIn {
     pub sin_len: u8,
     pub sin_family: u8,
     pub sin_port: c_ushort,
-    pub sin_addr: InAddr,
+    pub sin_addr: c_InAddr,
     pub sin_zero: [8]u8,
   }
 
-  pub struct SockAddrIn6 {
+  pub struct c_SockAddrIn6 {
     pub sin6_len: u8,
     pub sin6_family: u8,
     pub sin6_port: c_ushort,
     pub sin6_flowinfo: u32,
-    pub sin6_addr: In6Addr,
+    pub sin6_addr: c_In6Addr,
     pub sin6_scope_id: u32,
   }
 
-  pub struct SockAddrUn {
+  pub struct c_SockAddrUn {
     pub sun_len: u8,
     pub sun_family: u8,
     pub sun_path: [104]c_char,
@@ -180,7 +180,7 @@ pub struct In6Addr {
 
   // sockaddr_storage: 128 bytes; len@0, family@1, pad1@2[6],
   // align@8 (i64), pad2@16[112].
-  pub struct SockAddrStorage {
+  pub struct c_SockAddrStorage {
     pub ss_len: u8,
     pub ss_family: u8,
     pub ss_pad1: [6]u8,
@@ -191,49 +191,49 @@ pub struct In6Addr {
 
 // getaddrinfo result node; differs in field order between linux and bsd/android.
 @os[linux] {
-  pub struct AddrInfo {
+  pub struct c_AddrInfo {
     pub ai_flags: c_int,
     pub ai_family: c_int,
     pub ai_socktype: c_int,
     pub ai_protocol: c_int,
     pub ai_addrlen: c_socklen_t,
-    pub ai_addr: *SockAddr,
+    pub ai_addr: *c_SockAddr,
     pub ai_canonname: [*]c_char,
-    pub ai_next: *AddrInfo,
+    pub ai_next: *c_AddrInfo,
   }
 }
 
 @os[android | darwin | freebsd] {
-  pub struct AddrInfo {
+  pub struct c_AddrInfo {
     pub ai_flags: c_int,
     pub ai_family: c_int,
     pub ai_socktype: c_int,
     pub ai_protocol: c_int,
     pub ai_addrlen: c_socklen_t,
     pub ai_canonname: [*]c_char,
-    pub ai_addr: *SockAddr,
-    pub ai_next: *AddrInfo,
+    pub ai_addr: *c_SockAddr,
+    pub ai_next: *c_AddrInfo,
   }
 }
 
 // Common socket functions exist on every POSIX target; signatures are shared.
 @os[linux | android | darwin | freebsd] {
   pub extern fn socket(domain: c_int, ty: c_int, protocol: c_int) c_int;
-  pub extern fn bind(sockfd: c_int, addr: *const SockAddr, addrlen: c_socklen_t) c_int;
-  pub extern fn connect(sockfd: c_int, addr: *const SockAddr, addrlen: c_socklen_t) c_int;
+  pub extern fn bind(sockfd: c_int, addr: *const c_SockAddr, addrlen: c_socklen_t) c_int;
+  pub extern fn connect(sockfd: c_int, addr: *const c_SockAddr, addrlen: c_socklen_t) c_int;
   pub extern fn listen(sockfd: c_int, backlog: c_int) c_int;
-  pub extern fn accept(sockfd: c_int, addr: *SockAddr, addrlen: *c_socklen_t) c_int;
-  pub extern fn getpeername(sockfd: c_int, addr: *SockAddr, addrlen: *c_socklen_t) c_int;
-  pub extern fn getsockname(sockfd: c_int, addr: *SockAddr, addrlen: *c_socklen_t) c_int;
+  pub extern fn accept(sockfd: c_int, addr: *c_SockAddr, addrlen: *c_socklen_t) c_int;
+  pub extern fn getpeername(sockfd: c_int, addr: *c_SockAddr, addrlen: *c_socklen_t) c_int;
+  pub extern fn getsockname(sockfd: c_int, addr: *c_SockAddr, addrlen: *c_socklen_t) c_int;
   pub extern fn send(sockfd: c_int, buf: [*]const void, len: c_size_t, flags: c_int) c_ssize_t;
   pub extern fn recv(sockfd: c_int, buf: *void, len: c_size_t, flags: c_int) c_ssize_t;
-  pub extern fn sendto(sockfd: c_int, buf: [*]const void, len: c_size_t, flags: c_int, addr: *const SockAddr, addrlen: c_socklen_t) c_ssize_t;
-  pub extern fn recvfrom(sockfd: c_int, buf: *void, len: c_size_t, flags: c_int, addr: *SockAddr, addrlen: *c_socklen_t) c_ssize_t;
+  pub extern fn sendto(sockfd: c_int, buf: [*]const void, len: c_size_t, flags: c_int, addr: *const c_SockAddr, addrlen: c_socklen_t) c_ssize_t;
+  pub extern fn recvfrom(sockfd: c_int, buf: *void, len: c_size_t, flags: c_int, addr: *c_SockAddr, addrlen: *c_socklen_t) c_ssize_t;
   pub extern fn shutdown(sockfd: c_int, how: c_int) c_int;
   pub extern fn getsockopt(sockfd: c_int, level: c_int, optname: c_int, optval: *void, optlen: *c_socklen_t) c_int;
   pub extern fn setsockopt(sockfd: c_int, level: c_int, optname: c_int, optval: *const void, optlen: c_socklen_t) c_int;
   pub extern fn socketpair(domain: c_int, ty: c_int, protocol: c_int, sv: *[2]c_int) c_int;
-  pub extern fn getaddrinfo(node: [*]const char, service: [*]const char, hints: *const AddrInfo, res: **AddrInfo) c_int;
-  pub extern fn freeaddrinfo(res: *AddrInfo) void;
+  pub extern fn getaddrinfo(node: [*]const char, service: [*]const char, hints: *const c_AddrInfo, res: **c_AddrInfo) c_int;
+  pub extern fn freeaddrinfo(res: *c_AddrInfo) void;
   pub extern fn gai_strerror(errcode: c_int) [*]const char;
 }

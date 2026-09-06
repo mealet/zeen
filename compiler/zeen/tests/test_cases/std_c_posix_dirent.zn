@@ -15,7 +15,7 @@ fn main() i32 {
   if (dir_stream == nullptr) { @println("opendir failed"); return 1; };
   let files_found: c_int = 0;
   let dirs_found: c_int = 0;
-  let e: *Dirent = nullptr;
+  let e: *c_Dirent = nullptr;
   while (true) {
     e = readdir(dir_stream);
     if (e == nullptr) { break; };
