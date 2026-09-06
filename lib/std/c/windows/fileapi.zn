@@ -1,0 +1,90 @@
+use std.c.types;
+use std.c.windows.windef;
+
+@os[windows] {
+  // HANDLE-returning functions, sync I/O. `Overlapped` is opaque; pass
+  // nullptr for synchronous reads/writes.
+
+  // Desired access (winnt.h).
+  pub const GENERIC_READ: WinDWORD = 0x80000000;
+  pub const GENERIC_WRITE: WinDWORD = 0x40000000;
+
+  // Share mode (winnt.h).
+  pub const FILE_SHARE_READ: WinDWORD = 0x00000001;
+  pub const FILE_SHARE_WRITE: WinDWORD = 0x00000002;
+  pub const FILE_SHARE_DELETE: WinDWORD = 0x00000004;
+
+  // Creation disposition (fileapi.h).
+  pub const CREATE_NEW: WinDWORD = 1;
+  pub const CREATE_ALWAYS: WinDWORD = 2;
+  pub const OPEN_EXISTING: WinDWORD = 3;
+  pub const OPEN_ALWAYS: WinDWORD = 4;
+  pub const TRUNCATE_EXISTING: WinDWORD = 5;
+
+  // Flags and attributes, common bits only (winnt.h/winbase.h).
+  pub const FILE_ATTRIBUTE_NORMAL: WinDWORD = 0x00000080;
+  pub const FILE_FLAG_DELETE_ON_CLOSE: WinDWORD = 0x04000000;
+
+  // Move method (fileapi.h).
+  pub const FILE_BEGIN: WinDWORD = 0;
+  pub const FILE_CURRENT: WinDWORD = 1;
+  pub const FILE_END: WinDWORD = 2;
+
+  const INVALID_HANDLE_VALUE_RAW: isize = -1;
+  pub const INVALID_HANDLE_VALUE: WinHANDLE = @as(WinHANDLE, INVALID_HANDLE_VALUE_RAW);
+
+  pub struct Overlapped {}
+
+  pub extern fn CreateFileW(
+    name: [*]const c_wchar_t,
+    desired_access: WinDWORD,
+    share_mode: WinDWORD,
+    security_attributes: *void,
+    creation_disposition: WinDWORD,
+    flags_attributes: WinDWORD,
+    template_file: WinHANDLE,
+  ) WinHANDLE;
+
+  pub extern fn CreateFileA(
+    name: [*]const c_char,
+    desired_access: WinDWORD,
+    share_mode: WinDWORD,
+    security_attributes: *void,
+    creation_disposition: WinDWORD,
+    flags_attributes: WinDWORD,
+    template_file: WinHANDLE,
+  ) WinHANDLE;
+
+  pub extern fn ReadFile(
+    handle: WinHANDLE,
+    buffer: *void,
+    bytes_to_read: WinDWORD,
+    bytes_read: *WinDWORD,
+    overlapped: *Overlapped,
+  ) WinBOOL;
+
+  pub extern fn WriteFile(
+    handle: WinHANDLE,
+    buffer: *const void,
+    bytes_to_write: WinDWORD,
+    bytes_written: *WinDWORD,
+    overlapped: *Overlapped,
+  ) WinBOOL;
+
+  pub extern fn CloseHandle(handle: WinHANDLE) WinBOOL;
+  pub extern fn FlushFileBuffers(handle: WinHANDLE) WinBOOL;
+
+  pub extern fn GetFileSize(handle: WinHANDLE, size_high: *WinDWORD) WinDWORD;
+
+  pub extern fn SetFilePointer(
+    handle: WinHANDLE,
+    distance: c_long,
+    distance_high: *c_long,
+    move_method: WinDWORD,
+  ) WinDWORD;
+
+  pub extern fn DeleteFileW(name: [*]const c_wchar_t) WinBOOL;
+  pub extern fn DeleteFileA(name: [*]const c_char) WinBOOL;
+  pub extern fn MoveFileW(existing: [*]const c_wchar_t, new_file: [*]const c_wchar_t) WinBOOL;
+  pub extern fn MoveFileA(existing: [*]const c_char, new_file: [*]const c_char) WinBOOL;
+}
