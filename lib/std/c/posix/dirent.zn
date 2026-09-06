@@ -1,9 +1,5 @@
 use std.c.types;
 
-// `dirent.h` - POSIX-only. Whole-file guard as in `posix/sys/stat.zn`.
-// DT_* values are identical on every POSIX target; the `dirent` struct layout
-// differs per OS family.
-
 // Opaque directory stream handle (`DIR *`).
 pub struct DirentStream {}
 
