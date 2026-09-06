@@ -35,6 +35,12 @@ pub struct c_tm {
   pub tm_isdst: c_int
 }
 
+// struct timespec: tv_sec is time_t, tv_nsec is long on every supported target.
+pub struct c_Timespec {
+  pub tv_sec: c_time_t,
+  pub tv_nsec: c_long,
+}
+
 @os[windows] {
   pub const CLOCKS_PER_SEC: c_clock_t = 1000;
 } else @os[darwin] {
@@ -48,6 +54,11 @@ pub extern fn time(timer: *c_time_t) c_time_t;
 pub extern fn clock() c_clock_t;
 pub extern fn difftime(end: c_time_t, start: c_time_t) f64;
 pub extern fn mktime(tm: *c_tm) c_time_t;
+
+// POSIX-only sleep; not present on Windows.
+@os[linux | android | darwin | freebsd] {
+  pub extern fn nanosleep(rqtp: *const c_Timespec, rmtp: *c_Timespec) c_int;
+}
 
 // conversion
 pub extern fn gmtime(timer: *const c_time_t) *c_tm;
