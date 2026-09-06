@@ -2,9 +2,10 @@ use std.c.types;
 use std.c.time;
 
 // suseconds_t is `long` except on Darwin where it is `int`.
-pub alias c_suseconds_t = c_long;
 @os[darwin] {
-  pub alias c_suseconds_t = i32;
+  pub alias c_suseconds_t = c_int;
+} else {
+  pub alias c_suseconds_t = c_long;
 }
 
 // struct timeval (sys/time.h, identical layout on all POSIX targets).
