@@ -1,0 +1,77 @@
+use std.c.types;
+
+// `dirent.h` - POSIX-only. Whole-file guard as in `posix/sys/stat.zn`.
+// DT_* values are identical on every POSIX target; the `dirent` struct layout
+// differs per OS family.
+
+// Opaque directory stream handle (`DIR *`).
+pub struct DirentStream {}
+
+// File type bits returned in `dirent.d_type` (identical across POSIX).
+pub const DT_UNKNOWN: c_uchar = 0;
+pub const DT_FIFO: c_uchar = 1;
+pub const DT_CHR: c_uchar = 2;
+pub const DT_DIR: c_uchar = 4;
+pub const DT_BLK: c_uchar = 6;
+pub const DT_REG: c_uchar = 8;
+pub const DT_LNK: c_uchar = 10;
+pub const DT_SOCK: c_uchar = 12;
+
+@os[linux | android] {
+  // glibc/musl/bionic: d_ino@0, d_off@8, d_reclen@16, d_type@18, d_name@19.
+  // Fields are identical across 64-bit and 32-bit (ino64/time64) ABIs.
+  pub struct Dirent {
+    pub d_ino: c_ulonglong,
+    pub d_off: c_longlong,
+    pub d_reclen: c_ushort,
+    pub d_type: c_uchar,
+    pub d_name: [256]c_char,
+  }
+}
+
+@os[darwin] {
+  // Apple: d_ino@0, d_seekoff@8, d_reclen@16, d_namlen@18, d_type@20,
+  // d_name@21[1024]. The legacy `d_off` field was replaced by `d_seekoff`.
+  pub struct Dirent {
+    pub d_ino: c_ulonglong,
+    pub d_seekoff: c_ulonglong,
+    pub d_reclen: c_ushort,
+    pub d_namlen: c_ushort,
+    pub d_type: c_uchar,
+    pub d_name: [1024]c_char,
+  }
+}
+
+@os[freebsd] {
+  // FreeBSD: d_fileno@0, d_off@8, d_reclen@16, d_type@18, d_pad0@19,
+  // d_namlen@20, d_pad1@22, d_name@24[256].
+  pub struct Dirent {
+    pub d_fileno: c_ulonglong,
+    pub d_off: c_longlong,
+    pub d_reclen: c_ushort,
+    pub d_type: c_uchar,
+    pub d_pad0: c_uchar,
+    pub d_namlen: c_ushort,
+    pub d_pad1: c_ushort,
+    pub d_name: [256]c_char,
+  }
+}
+
+// opendir/readdir/closedir/rewinddir/fdopendir/readdir_r/dirfd exist on every
+// POSIX target; seekdir/telldir are missing on FreeBSD (libc does not export
+// them there).
+
+@os[linux | android | darwin] {
+  pub extern fn seekdir(dirp: *DirentStream, loc: c_long) void;
+  pub extern fn telldir(dirp: *DirentStream) c_long;
+}
+
+@os[linux | android] {
+  pub extern fn opendir(name: [*]const char) *DirentStream;
+  pub extern fn readdir(dirp: *DirentStream) *Dirent;
+  pub extern fn closedir(dirp: *DirentStream) c_int;
+  pub extern fn rewinddir(dirp: *DirentStream) void;
+  pub extern fn dirfd(dirp: *DirentStream) c_int;
+  pub extern fn fdopendir(fd: c_int) *DirentStream;
+  pub extern fn readdir_r(dirp: *DirentStream, entry: *Dirent, result: **Dirent) c_int;
+}

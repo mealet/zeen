@@ -1,0 +1,31 @@
+use std.c.posix.dirent;
+use std.c.posix.sys.stat;
+use std.c.posix.fcntl;
+use std.c.posix.unistd;
+
+fn main() i32 {
+  let _: c_int = rmdir("/tmp/zeen_dirent_case");
+  let _: c_int = mkdir("/tmp/zeen_dirent_case", 0o755);
+  let fd: c_int = open("/tmp/zeen_dirent_case/file.txt", O_CREAT | O_WRONLY | O_TRUNC, 0o644);
+  let buf: [*]const char = "hello";
+  let _: c_ssize_t = write(fd, @as([*]const void, buf), 5);
+  let _: c_int = close(fd);
+
+  let dir_stream = opendir("/tmp/zeen_dirent_case");
+  if (dir_stream == nullptr) { @println("opendir failed"); return 1; };
+  let files_found: c_int = 0;
+  let dirs_found: c_int = 0;
+  let e: *Dirent = nullptr;
+  while (true) {
+    e = readdir(dir_stream);
+    if (e == nullptr) { break; };
+    if ((*e).d_type == DT_REG) { files_found += 1; };
+    if ((*e).d_type == DT_DIR) { dirs_found += 1; };
+  }
+  closedir(dir_stream);
+  @println("files={} dirs={}", files_found, dirs_found);
+
+  let _: c_int = unlink("/tmp/zeen_dirent_case/file.txt");
+  let _: c_int = rmdir("/tmp/zeen_dirent_case");
+  return 0;
+}
