@@ -14,6 +14,8 @@ use std.c.types;
   pub extern fn getuid() c_uid_t;
   pub extern fn getgid() c_gid_t;
 
+  pub extern fn fork() c_pid_t;
+
   pub extern fn sleep(seconds: c_uint) c_uint;
   pub extern fn usleep(useconds: c_useconds_t) c_int;
   pub extern fn alarm(seconds: c_uint) c_uint;

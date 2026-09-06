@@ -1,0 +1,21 @@
+use std.c.posix.wait;
+use std.c.posix.unistd;
+use std.c.posix.sys.time;
+
+fn main() i32 {
+  let pid = fork();
+  if (pid == 0) {
+    return 42;
+  };
+
+  let status: c_int = 0;
+  let statusp: *c_int = @as(*c_int, &status);
+  let w = waitpid(pid, statusp, 0);
+  @println("waited={} exited={} exitcode={}", w == pid, WIFEXITED(status), WEXITSTATUS(status));
+
+  let tv: c_Timeval = @uninit();
+  let tvp: *void = @as(*void, &tv);
+  let gt = gettimeofday(tvp, nullptr);
+  @println("gettimeofday_ok={} in_epoch={} usecs_gt0={}", gt == 0, tv.tv_sec > 0, tv.tv_usec > 0);
+  return 0;
+}
