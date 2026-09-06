@@ -1,0 +1,26 @@
+use std.c.posix.sys.socket;
+use std.c.posix.unistd;
+
+fn main() i32 {
+  let fds: [2]c_int = @uninit();
+  let fds_ptr: *[2]c_int = @as(*[2]c_int, &fds[0]);
+  let sp = socketpair(AF_UNIX, SOCK_STREAM, 0, fds_ptr);
+  if (sp != 0) {
+    @println("socketpair failed");
+    return 1;
+  };
+
+  let msg: [*]const char = "hello";
+  let w: c_ssize_t = send(fds[0], @as([*]const void, msg), 5, 0);
+  @println("sent={}", w);
+
+  let buf: [16]u8 = @uninit();
+  let r: c_ssize_t = recv(fds[1], @as(*void, &buf[0]), 16, 0);
+  @println("recv={} first={}", r, @as(c_uchar, buf[0]));
+
+  let _: c_int = shutdown(fds[0], SHUT_RDWR);
+  let _: c_int = shutdown(fds[1], SHUT_RDWR);
+  let _: c_int = close(fds[0]);
+  let _: c_int = close(fds[1]);
+  return 0;
+}

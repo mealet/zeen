@@ -1,0 +1,239 @@
+use std.c.types;
+
+// Socket address families (identical across POSIX targets).
+pub const AF_UNSPEC: c_int = 0;
+pub const AF_UNIX: c_int = 1;
+pub const AF_LOCAL: c_int = 1;
+pub const AF_INET: c_int = 2;
+
+// Socket types (identical across POSIX targets).
+pub const SOCK_STREAM: c_int = 1;
+pub const SOCK_DGRAM: c_int = 2;
+pub const SOCK_RAW: c_int = 3;
+
+// shutdown() directions (identical across POSIX targets).
+pub const SHUT_RD: c_int = 0;
+pub const SHUT_WR: c_int = 1;
+pub const SHUT_RDWR: c_int = 2;
+
+// Protocol numbers (identical across POSIX targets).
+pub const IPPROTO_IP: c_int = 0;
+pub const IPPROTO_TCP: c_int = 6;
+pub const IPPROTO_UDP: c_int = 17;
+pub const IPPROTO_IPV6: c_int = 41;
+
+// Message flags (identical across POSIX targets).
+pub const MSG_OOB: c_int = 1;
+pub const MSG_PEEK: c_int = 2;
+pub const MSG_DONTROUTE: c_int = 4;
+
+// socklen_t is u32 on every POSIX target.
+pub alias c_socklen_t = c_uint;
+
+// Internet addresses (identical across POSIX targets).
+pub struct InAddr {
+  pub s_addr: u32,
+}
+
+pub struct In6Addr {
+  pub s6_addr: [16]u8,
+}
+
+@os[linux | android] {
+  pub const AF_INET6: c_int = 10;
+
+  pub const SOL_SOCKET: c_int = 1;
+
+  pub const SO_DEBUG: c_int = 1;
+  pub const SO_REUSEADDR: c_int = 2;
+  pub const SO_TYPE: c_int = 3;
+  pub const SO_ERROR: c_int = 4;
+  pub const SO_DONTROUTE: c_int = 5;
+  pub const SO_BROADCAST: c_int = 6;
+  pub const SO_SNDBUF: c_int = 7;
+  pub const SO_RCVBUF: c_int = 8;
+  pub const SO_KEEPALIVE: c_int = 9;
+  pub const SO_OOBINLINE: c_int = 10;
+  pub const SO_PRIORITY: c_int = 12;
+  pub const SO_LINGER: c_int = 13;
+  pub const SO_BSDCOMPAT: c_int = 14;
+  pub const SO_REUSEPORT: c_int = 15;
+  pub const SO_RCVLOWAT: c_int = 18;
+  pub const SO_SNDLOWAT: c_int = 19;
+  pub const SO_RCVTIMEO: c_int = 20;
+  pub const SO_SNDTIMEO: c_int = 21;
+
+  pub const MSG_CTRUNC: c_int = 8;
+  pub const MSG_TRUNC: c_int = 0x20;
+  pub const MSG_DONTWAIT: c_int = 0x40;
+  pub const MSG_EOR: c_int = 0x80;
+  pub const MSG_WAITALL: c_int = 0x100;
+  pub const MSG_NOSIGNAL: c_int = 0x4000;
+
+  // Linux: family@0 (u16), data@2[14].
+  pub struct SockAddr {
+    pub sa_family: c_ushort,
+    pub sa_data: [14]c_char,
+  }
+
+  pub struct SockAddrIn {
+    pub sin_family: c_ushort,
+    pub sin_port: c_ushort,
+    pub sin_addr: InAddr,
+    pub sin_zero: [8]u8,
+  }
+
+  pub struct SockAddrIn6 {
+    pub sin6_family: c_ushort,
+    pub sin6_port: c_ushort,
+    pub sin6_flowinfo: u32,
+    pub sin6_addr: In6Addr,
+    pub sin6_scope_id: u32,
+  }
+
+  pub struct SockAddrUn {
+    pub sun_family: c_ushort,
+    pub sun_path: [108]c_char,
+  }
+
+  // sockaddr_storage: 128 bytes; family@0 (u16), then pad + align.
+  @arch[i686] {
+    pub struct SockAddrStorage {
+      pub ss_family: c_ushort,
+      pub ss_pad2: [122]u8,
+      pub ss_align: u32,
+    }
+  } else {
+    pub struct SockAddrStorage {
+      pub ss_family: c_ushort,
+      pub ss_pad2: [118]u8,
+      pub ss_align: u64,
+    }
+  }
+}
+
+@os[freebsd] {
+  pub const AF_INET6: c_int = 28;
+}
+
+@os[darwin] {
+  pub const AF_INET6: c_int = 30;
+}
+
+@os[darwin | freebsd] {
+  pub const SOL_SOCKET: c_int = 0xffff;
+
+  pub const SO_DEBUG: c_int = 0x01;
+  pub const SO_ACCEPTCONN: c_int = 0x0002;
+  pub const SO_REUSEADDR: c_int = 0x0004;
+  pub const SO_KEEPALIVE: c_int = 0x0008;
+  pub const SO_DONTROUTE: c_int = 0x0010;
+  pub const SO_BROADCAST: c_int = 0x0020;
+  pub const SO_USELOOPBACK: c_int = 0x0040;
+  pub const SO_LINGER: c_int = 0x0080;
+  pub const SO_OOBINLINE: c_int = 0x0100;
+  pub const SO_REUSEPORT: c_int = 0x0200;
+  pub const SO_SNDBUF: c_int = 0x1001;
+  pub const SO_RCVBUF: c_int = 0x1002;
+  pub const SO_SNDLOWAT: c_int = 0x1003;
+  pub const SO_RCVLOWAT: c_int = 0x1004;
+  pub const SO_SNDTIMEO: c_int = 0x1005;
+  pub const SO_RCVTIMEO: c_int = 0x1006;
+  pub const SO_ERROR: c_int = 0x1007;
+  pub const SO_TYPE: c_int = 0x1008;
+
+  pub const MSG_CTRUNC: c_int = 0x20;
+  pub const MSG_TRUNC: c_int = 0x10;
+  pub const MSG_DONTWAIT: c_int = 0x80;
+  pub const MSG_EOR: c_int = 0x8;
+  pub const MSG_WAITALL: c_int = 0x40;
+
+  // BSD: len@0 (u8), family@1 (u8), data@2[14].
+  pub struct SockAddr {
+    pub sa_len: u8,
+    pub sa_family: u8,
+    pub sa_data: [14]c_char,
+  }
+
+  pub struct SockAddrIn {
+    pub sin_len: u8,
+    pub sin_family: u8,
+    pub sin_port: c_ushort,
+    pub sin_addr: InAddr,
+    pub sin_zero: [8]u8,
+  }
+
+  pub struct SockAddrIn6 {
+    pub sin6_len: u8,
+    pub sin6_family: u8,
+    pub sin6_port: c_ushort,
+    pub sin6_flowinfo: u32,
+    pub sin6_addr: In6Addr,
+    pub sin6_scope_id: u32,
+  }
+
+  pub struct SockAddrUn {
+    pub sun_len: u8,
+    pub sun_family: u8,
+    pub sun_path: [104]c_char,
+  }
+
+  // sockaddr_storage: 128 bytes; len@0, family@1, pad1@2[6],
+  // align@8 (i64), pad2@16[112].
+  pub struct SockAddrStorage {
+    pub ss_len: u8,
+    pub ss_family: u8,
+    pub ss_pad1: [6]u8,
+    pub ss_align: i64,
+    pub ss_pad2: [112]u8,
+  }
+}
+
+// getaddrinfo result node; differs in field order between linux and bsd/android.
+@os[linux] {
+  pub struct AddrInfo {
+    pub ai_flags: c_int,
+    pub ai_family: c_int,
+    pub ai_socktype: c_int,
+    pub ai_protocol: c_int,
+    pub ai_addrlen: c_socklen_t,
+    pub ai_addr: *SockAddr,
+    pub ai_canonname: [*]c_char,
+    pub ai_next: *AddrInfo,
+  }
+}
+
+@os[android | darwin | freebsd] {
+  pub struct AddrInfo {
+    pub ai_flags: c_int,
+    pub ai_family: c_int,
+    pub ai_socktype: c_int,
+    pub ai_protocol: c_int,
+    pub ai_addrlen: c_socklen_t,
+    pub ai_canonname: [*]c_char,
+    pub ai_addr: *SockAddr,
+    pub ai_next: *AddrInfo,
+  }
+}
+
+// Common socket functions exist on every POSIX target; signatures are shared.
+@os[linux | android | darwin | freebsd] {
+  pub extern fn socket(domain: c_int, ty: c_int, protocol: c_int) c_int;
+  pub extern fn bind(sockfd: c_int, addr: *const SockAddr, addrlen: c_socklen_t) c_int;
+  pub extern fn connect(sockfd: c_int, addr: *const SockAddr, addrlen: c_socklen_t) c_int;
+  pub extern fn listen(sockfd: c_int, backlog: c_int) c_int;
+  pub extern fn accept(sockfd: c_int, addr: *SockAddr, addrlen: *c_socklen_t) c_int;
+  pub extern fn getpeername(sockfd: c_int, addr: *SockAddr, addrlen: *c_socklen_t) c_int;
+  pub extern fn getsockname(sockfd: c_int, addr: *SockAddr, addrlen: *c_socklen_t) c_int;
+  pub extern fn send(sockfd: c_int, buf: [*]const void, len: c_size_t, flags: c_int) c_ssize_t;
+  pub extern fn recv(sockfd: c_int, buf: *void, len: c_size_t, flags: c_int) c_ssize_t;
+  pub extern fn sendto(sockfd: c_int, buf: [*]const void, len: c_size_t, flags: c_int, addr: *const SockAddr, addrlen: c_socklen_t) c_ssize_t;
+  pub extern fn recvfrom(sockfd: c_int, buf: *void, len: c_size_t, flags: c_int, addr: *SockAddr, addrlen: *c_socklen_t) c_ssize_t;
+  pub extern fn shutdown(sockfd: c_int, how: c_int) c_int;
+  pub extern fn getsockopt(sockfd: c_int, level: c_int, optname: c_int, optval: *void, optlen: *c_socklen_t) c_int;
+  pub extern fn setsockopt(sockfd: c_int, level: c_int, optname: c_int, optval: *const void, optlen: c_socklen_t) c_int;
+  pub extern fn socketpair(domain: c_int, ty: c_int, protocol: c_int, sv: *[2]c_int) c_int;
+  pub extern fn getaddrinfo(node: [*]const char, service: [*]const char, hints: *const AddrInfo, res: **AddrInfo) c_int;
+  pub extern fn freeaddrinfo(res: *AddrInfo) void;
+  pub extern fn gai_strerror(errcode: c_int) [*]const char;
+}
