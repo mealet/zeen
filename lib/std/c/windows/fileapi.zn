@@ -2,7 +2,7 @@ use std.c.types;
 use std.c.windows.windef;
 
 @os[windows] {
-  // HANDLE-returning functions, sync I/O. `Overlapped` is opaque; pass
+  // HANDLE-returning functions, sync I/O. `c_Overlapped` is opaque; pass
   // nullptr for synchronous reads/writes.
 
   // Desired access (winnt.h).
@@ -33,7 +33,7 @@ use std.c.windows.windef;
   const INVALID_HANDLE_VALUE_RAW: isize = -1;
   pub const INVALID_HANDLE_VALUE: WinHANDLE = @as(WinHANDLE, INVALID_HANDLE_VALUE_RAW);
 
-  pub struct Overlapped {}
+  pub struct c_Overlapped {}
 
   pub extern fn CreateFileW(
     name: [*]const c_wchar_t,
@@ -60,7 +60,7 @@ use std.c.windows.windef;
     buffer: *void,
     bytes_to_read: WinDWORD,
     bytes_read: *WinDWORD,
-    overlapped: *Overlapped,
+    overlapped: *c_Overlapped,
   ) WinBOOL;
 
   pub extern fn WriteFile(
@@ -68,7 +68,7 @@ use std.c.windows.windef;
     buffer: *const void,
     bytes_to_write: WinDWORD,
     bytes_written: *WinDWORD,
-    overlapped: *Overlapped,
+    overlapped: *c_Overlapped,
   ) WinBOOL;
 
   pub extern fn CloseHandle(handle: WinHANDLE) WinBOOL;
