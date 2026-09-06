@@ -18,9 +18,15 @@ pub const SHUT_RDWR: c_int = 2;
 
 // Protocol numbers (identical across POSIX targets).
 pub const IPPROTO_IP: c_int = 0;
+pub const IPPROTO_ICMP: c_int = 1;
+pub const IPPROTO_IGMP: c_int = 2;
 pub const IPPROTO_TCP: c_int = 6;
 pub const IPPROTO_UDP: c_int = 17;
 pub const IPPROTO_IPV6: c_int = 41;
+pub const IPPROTO_ESP: c_int = 50;
+pub const IPPROTO_AH: c_int = 51;
+pub const IPPROTO_ICMPV6: c_int = 58;
+pub const IPPROTO_SCTP: c_int = 132;
 
 // Message flags (identical across POSIX targets).
 pub const MSG_OOB: c_int = 1;
@@ -30,13 +36,46 @@ pub const MSG_DONTROUTE: c_int = 4;
 // socklen_t is u32 on every POSIX target.
 pub alias c_socklen_t = c_uint;
 
+// in_addr_t/in_port_t (netinet/in.h): u32/u16 on every POSIX target.
+pub alias c_in_addr_t = c_uint;
+pub alias c_in_port_t = c_ushort;
+
+// Special IPv4 addresses (netinet/in.h, identical across POSIX targets).
+pub const INADDR_ANY: c_in_addr_t = 0;
+pub const INADDR_LOOPBACK: c_in_addr_t = 0x7f000001;
+pub const INADDR_BROADCAST: c_in_addr_t = 0xffffffff;
+pub const INADDR_NONE: c_in_addr_t = 0xffffffff;
+
+// Textual address buffer lengths (netinet/in.h).
+pub const INET_ADDRSTRLEN: c_int = 16;
+pub const INET6_ADDRSTRLEN: c_int = 46;
+
 // Internet addresses (identical across POSIX targets).
 pub struct c_InAddr {
   pub s_addr: u32,
 }
 
+// In6Addr struct end
 pub struct c_In6Addr {
   pub s6_addr: [16]u8,
+}
+
+// Network byte order helpers (macro/inline in C headers; identical on all
+// little-endian POSIX targets we support).
+pub fn htons(v: u16) u16 {
+  return ((v >> 8) | (v << 8));
+}
+
+pub fn htonl(v: u32) u32 {
+  return ((v >> 24) | ((v >> 8) & 0x0000ff00) | ((v & 0x0000ff00) << 8) | (v << 24));
+}
+
+pub fn ntohs(v: u16) u16 {
+  return htons(v);
+}
+
+pub fn ntohl(v: u32) u32 {
+  return htonl(v);
 }
 
 @os[linux | android] {
@@ -236,4 +275,8 @@ pub struct c_In6Addr {
   pub extern fn getaddrinfo(node: [*]const char, service: [*]const char, hints: *const c_AddrInfo, res: **c_AddrInfo) c_int;
   pub extern fn freeaddrinfo(res: *c_AddrInfo) void;
   pub extern fn gai_strerror(errcode: c_int) [*]const char;
+
+  // Presence of inet_pton/inet_ntop varies; both exist on all POSIX targets.
+  pub extern fn inet_pton(af: c_int, src: [*]const char, dst: *void) c_int;
+  pub extern fn inet_ntop(af: c_int, src: *const void, dst: [*]c_char, size: c_socklen_t) [*]const char;
 }
