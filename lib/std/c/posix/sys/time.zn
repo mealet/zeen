@@ -1,0 +1,19 @@
+use std.c.types;
+use std.c.time;
+
+// suseconds_t is `long` except on Darwin where it is `int`.
+pub alias c_suseconds_t = c_long;
+@os[darwin] {
+  pub alias c_suseconds_t = i32;
+}
+
+// struct timeval (sys/time.h, identical layout on all POSIX targets).
+pub struct c_Timeval {
+  pub tv_sec: c_time_t,
+  pub tv_usec: c_suseconds_t,
+}
+
+// tz is deprecated and always passed as nullptr.
+@os[linux | android | darwin | freebsd] {
+  pub extern fn gettimeofday(tp: *void, tz: *void) c_int;
+}
