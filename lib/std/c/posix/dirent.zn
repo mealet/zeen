@@ -1,7 +1,8 @@
 use std.c.types;
 
 // Opaque directory stream handle (`DIR *`).
-pub struct DirentStream {}
+pub struct c_DirentStream {}
+pub alias c_DIR = c_DirentStream;
 
 // File type bits returned in `dirent.d_type` (identical across POSIX).
 pub const DT_UNKNOWN: c_uchar = 0;
@@ -58,16 +59,16 @@ pub const DT_SOCK: c_uchar = 12;
 // them there).
 
 @os[linux | android | darwin] {
-  pub extern fn seekdir(dirp: *DirentStream, loc: c_long) void;
-  pub extern fn telldir(dirp: *DirentStream) c_long;
+  pub extern fn seekdir(dirp: *c_DIR, loc: c_long) void;
+  pub extern fn telldir(dirp: *c_DIR) c_long;
 }
 
 @os[linux | android] {
-  pub extern fn opendir(name: [*]const char) *DirentStream;
-  pub extern fn readdir(dirp: *DirentStream) *Dirent;
-  pub extern fn closedir(dirp: *DirentStream) c_int;
-  pub extern fn rewinddir(dirp: *DirentStream) void;
-  pub extern fn dirfd(dirp: *DirentStream) c_int;
-  pub extern fn fdopendir(fd: c_int) *DirentStream;
-  pub extern fn readdir_r(dirp: *DirentStream, entry: *Dirent, result: **Dirent) c_int;
+  pub extern fn opendir(name: [*]const char) *c_DIR;
+  pub extern fn readdir(dirp: *c_DIR) *Dirent;
+  pub extern fn closedir(dirp: *c_DIR) c_int;
+  pub extern fn rewinddir(dirp: *c_DIR) void;
+  pub extern fn dirfd(dirp: *c_DIR) c_int;
+  pub extern fn fdopendir(fd: c_int) *c_DIR;
+  pub extern fn readdir_r(dirp: *c_DIR, entry: *Dirent, result: **Dirent) c_int;
 }
