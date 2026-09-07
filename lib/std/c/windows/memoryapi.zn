@@ -1,0 +1,87 @@
+use std.c.types;
+use std.c.windows.windef;
+
+@os[windows] {
+  // Allocation type (MemoryApi.h)
+  pub const MEM_COMMIT: WinDWORD = 0x1000;
+  pub const MEM_RESERVE: WinDWORD = 0x2000;
+  pub const MEM_RESET: WinDWORD = 0x80000;
+  pub const MEM_RESET_UNDO: WinDWORD = 0x1000000;
+  pub const MEM_TOP_DOWN: WinDWORD = 0x100000;
+  pub const MEM_RESERVE_PLACEHOLDER: WinDWORD = 0x40000;
+
+  // Free type
+  pub const MEM_RELEASE: WinDWORD = 0x8000;
+  pub const MEM_DECOMMIT: WinDWORD = 0x4000;
+
+  // Memory state (VirtualQuery output)
+  pub const MEM_FREE: WinDWORD = 0x10000;
+
+  // Page protection constants
+  pub const PAGE_NOACCESS: WinDWORD = 0x01;
+  pub const PAGE_READONLY: WinDWORD = 0x02;
+  pub const PAGE_READWRITE: WinDWORD = 0x04;
+  pub const PAGE_WRITECOPY: WinDWORD = 0x08;
+  pub const PAGE_EXECUTE: WinDWORD = 0x10;
+  pub const PAGE_EXECUTE_READ: WinDWORD = 0x20;
+  pub const PAGE_EXECUTE_READWRITE: WinDWORD = 0x40;
+  pub const PAGE_EXECUTE_WRITECOPY: WinDWORD = 0x80;
+  pub const PAGE_GUARD: WinDWORD = 0x100;
+  pub const PAGE_NOCACHE: WinDWORD = 0x200;
+  pub const PAGE_WRITECOMBINE: WinDWORD = 0x400;
+
+  // File mapping constants
+  pub const FILE_MAP_WRITE: WinDWORD = 2;
+  pub const FILE_MAP_READ: WinDWORD = 4;
+  pub const FILE_MAP_COPY: WinDWORD = 1;
+  pub const FILE_MAP_EXECUTE: WinDWORD = 0x20;
+  pub const FILE_MAP_ALL_ACCESS: WinDWORD = 0xF001F;
+
+  // MEMORY_BASIC_INFORMATION: per-architecture layout.
+  // 64-bit has PartitionId:u16 inserted between AllocationProtect and RegionSize.
+  @arch[x86_64 | aarch64] {
+    pub struct c_MEMORY_BASIC_INFORMATION {
+      pub base_address: *void,
+      pub allocation_base: *void,
+      pub allocation_protect: WinDWORD,
+      pub partition_id: u16,
+      pub region_size: c_size_t,
+      pub state: WinDWORD,
+      pub protect: WinDWORD,
+      pub mem_type: WinDWORD,
+    }
+  } else {
+    pub struct c_MEMORY_BASIC_INFORMATION {
+      pub base_address: *void,
+      pub allocation_base: *void,
+      pub allocation_protect: WinDWORD,
+      pub region_size: c_size_t,
+      pub state: WinDWORD,
+      pub protect: WinDWORD,
+      pub mem_type: WinDWORD,
+    }
+  }
+
+  pub extern fn VirtualAlloc(
+    address: *void,
+    size: c_size_t,
+    allocation_type: WinDWORD,
+    protect: WinDWORD,
+  ) *void;
+  pub extern fn VirtualFree(
+    address: *void,
+    size: c_size_t,
+    free_type: WinDWORD,
+  ) WinBOOL;
+  pub extern fn VirtualProtect(
+    address: *void,
+    size: c_size_t,
+    new_protect: WinDWORD,
+    old_protect: *WinDWORD,
+  ) WinBOOL;
+  pub extern fn VirtualQuery(
+    address: *const void,
+    buffer: *c_MEMORY_BASIC_INFORMATION,
+    length: c_size_t,
+  ) c_size_t;
+}

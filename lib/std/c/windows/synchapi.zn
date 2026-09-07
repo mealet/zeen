@@ -1,0 +1,73 @@
+use std.c.types;
+use std.c.windows.windef;
+
+@os[windows] {
+  // Wait constants
+  pub const WAIT_OBJECT_0: WinDWORD = 0;
+  pub const WAIT_ABANDONED: WinDWORD = 0x80;
+  pub const WAIT_TIMEOUT: WinDWORD = 0x102;
+  pub const WAIT_FAILED: WinDWORD = 0xFFFFFFFF;
+  pub const WAIT_IO_COMPLETION: WinDWORD = 0xC0;
+  pub const INFINITE: WinDWORD = 0xFFFFFFFF;
+
+  pub extern fn WaitForSingleObject(
+    handle: WinHANDLE,
+    ms: WinDWORD,
+  ) WinDWORD;
+  pub extern fn WaitForMultipleObjects(
+    n_count: WinDWORD,
+    handles: [*]const WinHANDLE,
+    wait_all: WinBOOL,
+    ms: WinDWORD,
+  ) WinDWORD;
+
+  // Events
+  pub extern fn CreateEventA(
+    attr: *void,
+    manual_reset: WinBOOL,
+    initial_state: WinBOOL,
+    name: [*]const c_char,
+  ) WinHANDLE;
+  pub extern fn CreateEventW(
+    attr: *void,
+    manual_reset: WinBOOL,
+    initial_state: WinBOOL,
+    name: [*]const c_wchar_t,
+  ) WinHANDLE;
+  pub extern fn SetEvent(event: WinHANDLE) WinBOOL;
+  pub extern fn ResetEvent(event: WinHANDLE) WinBOOL;
+
+  // Mutexes
+  pub extern fn CreateMutexA(
+    attr: *void,
+    initial_owner: WinBOOL,
+    name: [*]const c_char,
+  ) WinHANDLE;
+  pub extern fn CreateMutexW(
+    attr: *void,
+    initial_owner: WinBOOL,
+    name: [*]const c_wchar_t,
+  ) WinHANDLE;
+  pub extern fn ReleaseMutex(mutex: WinHANDLE) WinBOOL;
+
+  // Semaphores
+  pub extern fn CreateSemaphoreA(
+    attr: *void,
+    initial_count: c_long,
+    max_count: c_long,
+    name: [*]const c_char,
+  ) WinHANDLE;
+  pub extern fn CreateSemaphoreW(
+    attr: *void,
+    initial_count: c_long,
+    max_count: c_long,
+    name: [*]const c_wchar_t,
+  ) WinHANDLE;
+  pub extern fn ReleaseSemaphore(
+    semaphore: WinHANDLE,
+    release_count: c_long,
+    prev_count: *c_long,
+  ) WinBOOL;
+
+  pub extern fn SleepEx(ms: WinDWORD, alertable: WinBOOL) WinDWORD;
+}
