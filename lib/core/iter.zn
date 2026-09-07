@@ -1,0 +1,14 @@
+/// Main Iterator interface
+interface Iterator {
+  pub fn next[T](*self) Option[T];
+}
+
+/// Returns struct that implements `Iterator` with pointer access
+interface PtrIterator {
+  pub fn iter[I: Iterator](*self) I;
+}
+
+/// Converter from ownership `self` to struct with `Iterator` implementation
+interface OwnedIterator {
+  pub fn into_iter[I: Iterator](self) I;
+}
