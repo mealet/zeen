@@ -18,3 +18,4 @@ zeen-ast = {path = "../zeen-ast"}
 zeen-driver = {path = "../zeen-driver"}
 zeen-lexer = {path = "../zeen-lexer"}
 zeen-parser = {path = "../zeen-parser"}
+zeen-preprocessor = {path = "../zeen-preprocessor"}

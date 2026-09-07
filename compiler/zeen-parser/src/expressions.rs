@@ -3,7 +3,10 @@ use crate::{Parser, error::ParserError};
 use smallvec::SmallVec;
 use strum::FromRepr;
 
-use zeen_ast::expressions::{self, Expression, ExpressionKind};
+use zeen_ast::{
+    PreprocessorDirective,
+    expressions::{self, ExprConditionalBlock, Expression, ExpressionKind},
+};
 use zeen_lexer::{Token, TokenKind};
 
 pub struct ExprParser<'tok, 'ctx, 'pr> {
@@ -316,6 +319,10 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             // <-- keywords
             TokenKind::Ident => self.parse_ident_or_struct_init(),
             TokenKind::MacroIdent => self.parse_macro_call(),
+            TokenKind::PreprocessorVar => self.parse_target_var(),
+            TokenKind::PreprocessorIdent
+            | TokenKind::PreprocessorDebug
+            | TokenKind::PreprocessorRelease => self.parse_conditional_expr(),
 
             TokenKind::OpenParen => self.parse_grouped(),
             TokenKind::OpenBracket => self.parse_array_init(),
@@ -873,6 +880,40 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         Some(expr)
     }
 
+    fn parse_target_var(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let var_token = self.p.expect(TokenKind::PreprocessorVar, "@var")?;
+        let _ = self.p.expect(TokenKind::OpenBracket, "[")?;
+
+        let name_token = self.p.expect(TokenKind::Ident, "variable name")?;
+        let name_span = name_token.span;
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+        let kind = match zeen_ast::expressions::TargetVarKind::from_name(&name_slice) {
+            Some(kind) => kind,
+            None => {
+                self.p.report(ParserError::SyntaxError {
+                    label: format!("unknown target variable `{name_slice}`").into(),
+                    help: Some(
+                        "expected one of os, arch, env, target, family, debug, release".into(),
+                    ),
+                    src: self.p.named_src(),
+                    span: name_span,
+                });
+                return None;
+            }
+        };
+
+        let close_bracket = self.p.expect(TokenKind::CloseBracket, "]")?;
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::TargetVar(kind),
+            span: var_token.merge_span(close_bracket.span),
+        });
+
+        Some(expr)
+    }
+
     fn parse_field_access(&mut self, object: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
         let _ = self.p.advance_not_eof()?; // skip `.`
 
@@ -999,6 +1040,87 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         });
 
         Some(expr)
+    }
+
+    /// Parses an expression-level preprocessor guard: `@os[linux] { expr }`
+    /// followed by an optional `else @os[...] { expr }` / `else { expr }`
+    /// chain. During preprocessing the whole expression is replaced by the
+    /// body of the single matching branch.
+    fn parse_conditional_expr(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let start_token = self.p.current_clone();
+        let start_span = start_token.span;
+
+        let name_slice =
+            self.p.src[start_span.offset() + 1..start_span.offset() + start_span.len()].to_owned();
+
+        let directive = match self.p.parse_preprocessor_directive() {
+            Some(d) => d,
+            None => {
+                self.p.report(ParserError::SyntaxError {
+                    label: format!("unknown preprocessor directive `@{name_slice}`").into(),
+                    help: Some(
+                        "expected one of os, arch, env, target, family, debug, release".into(),
+                    ),
+                    src: self.p.named_src(),
+                    span: start_span,
+                });
+                return None;
+            }
+        };
+
+        let _ = self.p.advance_not_eof()?;
+
+        let values = self.p.parse_directive_values(directive)?;
+        let body = self.parse_directive_expr_body()?;
+        let else_block = self.parse_directive_expr_else()?;
+
+        let block = self.p.arena.alloc(ExprConditionalBlock {
+            directive,
+            values,
+            body,
+            bare_else: false,
+            else_block,
+        });
+
+        let span = start_token.merge_span(self.p.current().span);
+
+        Some(self.p.arena.alloc(Expression {
+            kind: ExpressionKind::ConditionalBlock(block),
+            span,
+        }))
+    }
+
+    fn parse_directive_expr_body(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        self.parse_block()
+    }
+
+    fn parse_directive_expr_else(&mut self) -> Option<Option<&'ctx Expression<'ctx>>> {
+        if !self
+            .p
+            .at(TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::Else))
+        {
+            return Some(None);
+        }
+
+        let _ = self.p.advance_not_eof()?;
+
+        if self.p.at(TokenKind::OpenBrace) {
+            let body = self.parse_directive_expr_body()?;
+            let block = self.p.arena.alloc(ExprConditionalBlock {
+                directive: PreprocessorDirective::Debug,
+                values: self.p.arena.alloc_slice_copy(&[]),
+                body,
+                bare_else: true,
+                else_block: None,
+            });
+            let expr = self.p.arena.alloc(Expression {
+                kind: ExpressionKind::ConditionalBlock(block),
+                span: self.p.current().span,
+            });
+            return Some(Some(expr));
+        }
+
+        self.parse_conditional_expr().map(Some)
     }
 
     fn parse_array_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -2173,5 +2295,18 @@ mod tests {
         };
 
         assert!(trailing.is_some());
+    }
+
+    #[test]
+    fn target_var_expr() {
+        const SRC: &str = "@var[target]";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        assert!(matches!(
+            parsed.kind,
+            ExpressionKind::TargetVar(zeen_ast::expressions::TargetVarKind::Target)
+        ));
     }
 }

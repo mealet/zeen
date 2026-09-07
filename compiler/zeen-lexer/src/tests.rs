@@ -74,6 +74,92 @@ fn macro_ident() {
 }
 
 #[test]
+fn preprocessor_ident() {
+    const SOURCE: &str = "@os[linux]";
+
+    let mut tokens = tokenize(SOURCE);
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::PreprocessorIdent,
+            SourceSpan::new(0.into(), 3)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::OpenBracket,
+            SourceSpan::new(3.into(), 1)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(4.into(), 5)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::CloseBracket,
+            SourceSpan::new(9.into(), 1)
+        ))
+    );
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn preprocessor_var() {
+    const SOURCE: &str = "@var[arch]";
+
+    let mut tokens = tokenize(SOURCE);
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::PreprocessorVar,
+            SourceSpan::new(0.into(), 4)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::OpenBracket,
+            SourceSpan::new(4.into(), 1)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(5.into(), 4)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::CloseBracket,
+            SourceSpan::new(9.into(), 1)
+        ))
+    );
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn preprocessor_debug_and_release() {
+    let mut tokens = tokenize("@debug @release");
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::PreprocessorDebug,
+            SourceSpan::new(0.into(), 6)
+        ))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::PreprocessorRelease,
+            SourceSpan::new(7.into(), 8)
+        ))
+    );
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
 fn reference() {
     const SOURCE: &str = "&val";
 

@@ -1,0 +1,6 @@
+emptyset=0 addset=0 member=true
+SIG_BLOCK=0 SIG_UNBLOCK=1 SIG_SETMASK=2
+SA_SIGINFO=4 SA_RESTART=268435456
+sigaction=0 actnonnull=true
+signal nonnull=false
+strsignal nonnull=true

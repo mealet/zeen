@@ -1,6 +1,8 @@
 use lasso::Spur;
 use miette::SourceSpan;
 
+use crate::declarations::{DirectiveValue, PreprocessorDirective};
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Expression<'arena> {
     pub kind: ExpressionKind<'arena>,
@@ -95,6 +97,53 @@ pub enum ExpressionKind<'arena> {
     },
 
     Type(&'arena crate::types::TypeExpr<'arena>),
+
+    /// Compile-time target constant (`@var[os]`), resolved by the preprocessor.
+    TargetVar(TargetVarKind),
+
+    /// An expression guarded by a target condition (`@os[linux] { expr } else { expr }`).
+    /// Resolved by the preprocessor: the whole expression is replaced by the
+    /// body of the single matching branch.
+    ConditionalBlock(&'arena ExprConditionalBlock<'arena>),
+}
+
+/// A `@name[values] { expr }` guard at expression level with an optional `else`.
+/// `else_block` is either another expression conditional (else-if) or a bare-else
+/// expression holding the fallback body.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct ExprConditionalBlock<'arena> {
+    pub directive: PreprocessorDirective,
+    pub values: &'arena [DirectiveValue<'arena>],
+    pub body: &'arena Expression<'arena>,
+    pub bare_else: bool,
+    pub else_block: Option<&'arena Expression<'arena>>,
+}
+
+/// Target information provided at compile time via `@var[name]`.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum TargetVarKind {
+    Os,
+    Arch,
+    Env,
+    Target,
+    Family,
+    Debug,
+    Release,
+}
+
+impl TargetVarKind {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "os" => Some(Self::Os),
+            "arch" => Some(Self::Arch),
+            "env" => Some(Self::Env),
+            "target" => Some(Self::Target),
+            "family" => Some(Self::Family),
+            "debug" => Some(Self::Debug),
+            "release" => Some(Self::Release),
+            _ => None,
+        }
+    }
 }
 
 // Literal

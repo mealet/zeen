@@ -1,0 +1,172 @@
+use std.c.types;
+use std.c.windows.windef;
+
+@os[windows] {
+  // Process access rights
+  pub const PROCESS_TERMINATE: WinDWORD = 0x0001;
+  pub const PROCESS_CREATE_THREAD: WinDWORD = 0x0002;
+  pub const PROCESS_SET_SESSIONID: WinDWORD = 0x0004;
+  pub const PROCESS_VM_OPERATION: WinDWORD = 0x0008;
+  pub const PROCESS_VM_READ: WinDWORD = 0x0010;
+  pub const PROCESS_VM_WRITE: WinDWORD = 0x0020;
+  pub const PROCESS_DUP_HANDLE: WinDWORD = 0x0040;
+  pub const PROCESS_CREATE_PROCESS: WinDWORD = 0x0080;
+  pub const PROCESS_SET_QUOTA: WinDWORD = 0x0100;
+  pub const PROCESS_SET_INFORMATION: WinDWORD = 0x0200;
+  pub const PROCESS_QUERY_INFORMATION: WinDWORD = 0x0400;
+  pub const PROCESS_SUSPEND_RESUME: WinDWORD = 0x0800;
+  pub const PROCESS_QUERY_LIMITED_INFORMATION: WinDWORD = 0x1000;
+  pub const PROCESS_SET_LIMITED_INFORMATION: WinDWORD = 0x2000;
+  pub const PROCESS_DELETE: WinDWORD = 0x00010000;
+  pub const PROCESS_READ_CONTROL: WinDWORD = 0x00020000;
+  pub const PROCESS_WRITE_DAC: WinDWORD = 0x00040000;
+  pub const PROCESS_WRITE_OWNER: WinDWORD = 0x00080000;
+  pub const PROCESS_SYNCHRONIZE: WinDWORD = 0x00100000;
+  pub const PROCESS_ALL_ACCESS: WinDWORD = 0x001FFFFF;
+
+  // Thread access rights
+  pub const THREAD_TERMINATE: WinDWORD = 0x0001;
+  pub const THREAD_SUSPEND_RESUME: WinDWORD = 0x0002;
+  pub const THREAD_GET_CONTEXT: WinDWORD = 0x0008;
+  pub const THREAD_SET_CONTEXT: WinDWORD = 0x0010;
+  pub const THREAD_SET_INFORMATION: WinDWORD = 0x0020;
+  pub const THREAD_QUERY_INFORMATION: WinDWORD = 0x0040;
+  pub const THREAD_SET_THREAD_TOKEN: WinDWORD = 0x0080;
+  pub const THREAD_IMPERSONATE: WinDWORD = 0x0100;
+  pub const THREAD_DIRECT_IMPERSONATION: WinDWORD = 0x0200;
+  pub const THREAD_SET_LIMITED_INFORMATION: WinDWORD = 0x0400;
+  pub const THREAD_QUERY_LIMITED_INFORMATION: WinDWORD = 0x0800;
+  pub const THREAD_RESUME: WinDWORD = 0x1000;
+  pub const THREAD_DELETE: WinDWORD = 0x00010000;
+  pub const THREAD_READ_CONTROL: WinDWORD = 0x00020000;
+  pub const THREAD_WRITE_DAC: WinDWORD = 0x00040000;
+  pub const THREAD_WRITE_OWNER: WinDWORD = 0x00080000;
+  pub const THREAD_SYNCHRONIZE: WinDWORD = 0x00100000;
+  pub const THREAD_ALL_ACCESS: WinDWORD = 0x001FFFFF;
+
+  // Process creation flags
+  pub const CREATE_NEW_CONSOLE: WinDWORD = 0x10;
+  pub const DETACHED_PROCESS: WinDWORD = 0x0008;
+  pub const CREATE_NEW_PROCESS_GROUP: WinDWORD = 0x200;
+  pub const CREATE_NO_WINDOW: WinDWORD = 0x8000000;
+  pub const CREATE_UNICODE_ENVIRONMENT: WinDWORD = 0x400;
+  pub const CREATE_DEFAULT_ERROR_MODE: WinDWORD = 0x4000000;
+  pub const CREATE_BREAKAWAY_FROM_JOB: WinDWORD = 0x1000000;
+  pub const CREATE_SUSPENDED: WinDWORD = 0x0004;
+  pub const STARTF_USESTDHANDLES: WinDWORD = 0x100;
+
+  // Thread priority constants
+  pub const THREAD_PRIORITY_IDLE: c_int = -15;
+  pub const THREAD_PRIORITY_LOWEST: c_int = -2;
+  pub const THREAD_PRIORITY_BELOW_NORMAL: c_int = -1;
+  pub const THREAD_PRIORITY_NORMAL: c_int = 0;
+  pub const THREAD_PRIORITY_ABOVE_NORMAL: c_int = 1;
+  pub const THREAD_PRIORITY_HIGHEST: c_int = 2;
+  pub const THREAD_PRIORITY_TIME_CRITICAL: c_int = 15;
+
+  // Structs
+  pub struct c_SECURITY_ATTRIBUTES {
+    pub n_length: WinDWORD,
+    pub lp_security_descriptor: *void,
+    pub b_inherit_handle: WinBOOL,
+  }
+
+  pub struct c_PROCESS_INFORMATION {
+    pub h_process: WinHANDLE,
+    pub h_thread: WinHANDLE,
+    pub dw_process_id: WinDWORD,
+    pub dw_thread_id: WinDWORD,
+  }
+
+  pub struct c_STARTUPINFOA {
+    pub cb: WinDWORD,
+    pub lp_reserved: *char,
+    pub lp_desktop: *char,
+    pub lp_title: *char,
+    pub dw_x: WinDWORD,
+    pub dw_y: WinDWORD,
+    pub dw_x_size: WinDWORD,
+    pub dw_y_size: WinDWORD,
+    pub dw_x_count_chars: WinDWORD,
+    pub dw_y_count_chars: WinDWORD,
+    pub dw_fill_attribute: WinDWORD,
+    pub dw_flags: WinDWORD,
+    pub w_show_window: u16,
+    pub cb_reserved2: u16,
+    pub lp_reserved2: *u8,
+    pub h_std_input: WinHANDLE,
+    pub h_std_output: WinHANDLE,
+    pub h_std_error: WinHANDLE,
+  }
+
+  pub struct c_STARTUPINFOW {
+    pub cb: WinDWORD,
+    pub lp_reserved: *u16,
+    pub lp_desktop: *u16,
+    pub lp_title: *u16,
+    pub dw_x: WinDWORD,
+    pub dw_y: WinDWORD,
+    pub dw_x_size: WinDWORD,
+    pub dw_y_size: WinDWORD,
+    pub dw_x_count_chars: WinDWORD,
+    pub dw_y_count_chars: WinDWORD,
+    pub dw_fill_attribute: WinDWORD,
+    pub dw_flags: WinDWORD,
+    pub w_show_window: u16,
+    pub cb_reserved2: u16,
+    pub lp_reserved2: *u8,
+    pub h_std_input: WinHANDLE,
+    pub h_std_output: WinHANDLE,
+    pub h_std_error: WinHANDLE,
+  }
+
+  // Process functions
+  pub extern fn CreateProcessA(
+    app: [*]const c_char,
+    cmdline: [*]c_char,
+    proc_attr: *void,
+    thread_attr: *void,
+    inherit_handles: WinBOOL,
+    creation_flags: WinDWORD,
+    env: *void,
+    cwd: [*]const c_char,
+    startup_info: *c_STARTUPINFOA,
+    proc_info: *c_PROCESS_INFORMATION,
+  ) WinBOOL;
+  pub extern fn CreateProcessW(
+    app: [*]const c_wchar_t,
+    cmdline: [*]c_wchar_t,
+    proc_attr: *void,
+    thread_attr: *void,
+    inherit_handles: WinBOOL,
+    creation_flags: WinDWORD,
+    env: *void,
+    cwd: [*]const c_wchar_t,
+    startup_info: *c_STARTUPINFOW,
+    proc_info: *c_PROCESS_INFORMATION,
+  ) WinBOOL;
+  pub extern fn GetCurrentProcess() WinHANDLE;
+  pub extern fn GetCurrentProcessId() WinDWORD;
+  pub extern fn TerminateProcess(process: WinHANDLE, exit_code: c_uint) WinBOOL;
+  pub extern fn OpenProcess(desired_access: WinDWORD, inherit_handle: WinBOOL, process_id: WinDWORD) WinHANDLE;
+  pub extern fn GetExitCodeProcess(process: WinHANDLE, exit_code: *WinDWORD) WinBOOL;
+
+  // Thread functions
+  pub extern fn GetCurrentThread() WinHANDLE;
+  pub extern fn GetCurrentThreadId() WinDWORD;
+  pub extern fn CreateThread(
+    thread_attr: *void,
+    stack_size: c_size_t,
+    start_address: fn(*void) u32,
+    parameter: *void,
+    creation_flags: WinDWORD,
+    thread_id: *WinDWORD,
+  ) WinHANDLE;
+  pub extern fn ExitThread(exit_code: WinDWORD) void;
+  pub extern fn TerminateThread(thread: WinHANDLE, exit_code: WinDWORD) WinBOOL;
+  pub extern fn GetExitCodeThread(thread: WinHANDLE, exit_code: *WinDWORD) WinBOOL;
+  pub extern fn SuspendThread(thread: WinHANDLE) WinDWORD;
+  pub extern fn ResumeThread(thread: WinHANDLE) WinDWORD;
+  pub extern fn SetThreadPriority(thread: WinHANDLE, priority: c_int) WinBOOL;
+  pub extern fn GetThreadPriority(thread: WinHANDLE) c_int;
+}

@@ -1,0 +1,9 @@
+use std.c.types;
+use std.c.windows.windef;
+
+@os[windows] {
+  pub extern fn GetLastError() WinDWORD;
+  pub extern fn SetLastError(err: WinDWORD) void;
+  pub extern fn Sleep(ms: WinDWORD) void;
+  pub extern fn ExitProcess(code: c_uint) void;
+}

@@ -1,14 +1,16 @@
-pub extern fn isalpha(ch: i32) i32;
-pub extern fn isdigit(ch: i32) i32;
-pub extern fn isalnum(ch: i32) i32;
-pub extern fn isspace(ch: i32) i32;
-pub extern fn ispunct(ch: i32) i32;
-pub extern fn isupper(ch: i32) i32;
-pub extern fn islower(ch: i32) i32;
-pub extern fn iscntrl(ch: i32) i32;
-pub extern fn isprint(ch: i32) i32;
-pub extern fn isgraph(ch: i32) i32;
-pub extern fn isxdigit(ch: i32) i32;
+use std.c.types;
 
-pub extern fn toupper(ch: i32) i32;
-pub extern fn tolower(ch: i32) i32;
+pub extern fn isalpha(ch: c_int) c_int;
+pub extern fn isdigit(ch: c_int) c_int;
+pub extern fn isalnum(ch: c_int) c_int;
+pub extern fn isspace(ch: c_int) c_int;
+pub extern fn ispunct(ch: c_int) c_int;
+pub extern fn isupper(ch: c_int) c_int;
+pub extern fn islower(ch: c_int) c_int;
+pub extern fn iscntrl(ch: c_int) c_int;
+pub extern fn isprint(ch: c_int) c_int;
+pub extern fn isgraph(ch: c_int) c_int;
+pub extern fn isxdigit(ch: c_int) c_int;
+
+pub extern fn toupper(ch: c_int) c_int;
+pub extern fn tolower(ch: c_int) c_int;

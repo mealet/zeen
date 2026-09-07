@@ -1,0 +1,34 @@
+use std.c.types;
+
+// utsname struct. Linux adds a domainname field and uses 65-byte arrays;
+// BSD uses 256-byte arrays and no domainname.
+@os[linux | android] {
+  pub struct c_utsname {
+    pub sysname: [65]c_char,
+    pub nodename: [65]c_char,
+    pub release: [65]c_char,
+    pub version: [65]c_char,
+    pub machine: [65]c_char,
+    pub domainname: [65]c_char,
+  }
+} else @os[darwin | freebsd] {
+  pub struct c_utsname {
+    pub sysname: [256]c_char,
+    pub nodename: [256]c_char,
+    pub release: [256]c_char,
+    pub version: [256]c_char,
+    pub machine: [256]c_char,
+  }
+} else {
+  pub struct c_utsname {
+    pub sysname: [65]c_char,
+    pub nodename: [65]c_char,
+    pub release: [65]c_char,
+    pub version: [65]c_char,
+    pub machine: [65]c_char,
+  }
+}
+
+@os[linux | android | darwin | freebsd] {
+  pub extern fn uname(buf: *c_utsname) c_int;
+}

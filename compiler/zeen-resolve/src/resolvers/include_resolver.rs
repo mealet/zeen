@@ -14,6 +14,12 @@ use smol_str::SmolStr;
 
 use crate::error::ResolveError;
 use zeen_ast::declarations::{Declaration, DeclarationKind};
+use zeen_ast::{
+    Source,
+    expressions::{Expression, ExpressionKind},
+    statements::{Statement, StatementKind},
+};
+use zeen_driver::{CompilationMode, Target};
 
 #[derive(Debug, Clone)]
 struct RawModule<'arena> {
@@ -27,6 +33,9 @@ pub struct IncludeResolver<'ctx> {
     arena: &'ctx Bump,
     interner: Rc<RefCell<Rodeo>>,
     context: &'ctx mut zeen_driver::CompilationContext,
+
+    target: Target,
+    mode: CompilationMode,
 
     modules: HashMap<PathBuf, RawModule<'ctx>>,
 
@@ -43,11 +52,16 @@ impl<'ctx> IncludeResolver<'ctx> {
         arena: &'ctx Bump,
         interner: Rc<RefCell<Rodeo>>,
         context: &'ctx mut zeen_driver::CompilationContext,
+        target: Target,
+        mode: CompilationMode,
     ) -> Self {
         Self {
             arena,
             interner,
             context,
+
+            target,
+            mode,
 
             src,
             filename,
@@ -75,13 +89,135 @@ impl<'ctx> IncludeResolver<'ctx> {
         self.modules.contains_key(Path::new(raw))
     }
 
+    fn get_or_intern(&self, value: &str) -> Spur {
+        self.interner.borrow_mut().get_or_intern(value)
+    }
+
+    /// Whether any declaration contains a `@format(...)` macro call, which is
+    /// the only place that needs `std.string` from the filesystem. Walks the
+    /// whole AST so nested macros are caught.
+    fn has_format_macro(&self, decls: &[&'ctx Declaration<'ctx>]) -> bool {
+        decls.iter().any(|decl| self.decl_has_format(decl))
+    }
+
+    fn decl_has_format(&self, decl: &Declaration<'ctx>) -> bool {
+        match &decl.kind {
+            DeclarationKind::FnDecl {
+                body: Some(body), ..
+            } => self.stmt_has_format(body),
+            DeclarationKind::StructDecl { methods, .. }
+            | DeclarationKind::InterfaceDecl { methods, .. }
+            | DeclarationKind::ImplementDecl { methods, .. } => self.has_format_macro(methods),
+            DeclarationKind::GlobalVar { value, .. } => self.expr_has_format(value),
+            DeclarationKind::ConditionalBlock(block) => {
+                self.has_format_macro(block.body)
+                    || block
+                        .else_block
+                        .is_some_and(|decl| self.decl_has_format(decl))
+            }
+            _ => false,
+        }
+    }
+
+    fn stmt_has_format(&self, stmt: &Statement<'ctx>) -> bool {
+        match &stmt.kind {
+            StatementKind::Let {
+                value: Some(value), ..
+            } => self.expr_has_format(value),
+            StatementKind::Let { value: None, .. } => false,
+            StatementKind::Assign { object, value }
+            | StatementKind::CompoundAssign {
+                object,
+                value,
+                op: _,
+            } => self.expr_has_format(object) || self.expr_has_format(value),
+            StatementKind::Return { value: Some(value) } => self.expr_has_format(value),
+            StatementKind::Return { .. } | StatementKind::Break | StatementKind::Continue => false,
+            StatementKind::While { condition, block } => {
+                self.expr_has_format(condition) || self.stmt_has_format(block)
+            }
+            StatementKind::For {
+                varname: _,
+                iterator,
+                block,
+            } => self.expr_has_format(iterator) || self.stmt_has_format(block),
+            StatementKind::Expr(expr) | StatementKind::TrailingExpr(expr) => {
+                self.expr_has_format(expr)
+            }
+            StatementKind::FnDecl(decl) => self.decl_has_format(decl),
+            StatementKind::ConditionalBlock(block) => {
+                block.stmts.iter().any(|stmt| self.stmt_has_format(stmt))
+            }
+        }
+    }
+
+    fn expr_has_format(&self, expr: &Expression<'ctx>) -> bool {
+        match &expr.kind {
+            ExpressionKind::Literal(_)
+            | ExpressionKind::Ident { .. }
+            | ExpressionKind::Type(_)
+            | ExpressionKind::TargetVar(_) => false,
+            ExpressionKind::Binary { lhs, rhs, .. } => {
+                self.expr_has_format(lhs) || self.expr_has_format(rhs)
+            }
+            ExpressionKind::Unary { expr, .. } => self.expr_has_format(expr),
+            ExpressionKind::Call { callee, args } => {
+                self.expr_has_format(callee) || args.iter().any(|arg| self.expr_has_format(arg))
+            }
+            ExpressionKind::MacroCall { name, args } => {
+                self.interner_resolve(&name.0) == "format"
+                    || args.iter().any(|arg| self.expr_has_format(arg))
+            }
+            ExpressionKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.expr_has_format(condition)
+                    || self.stmt_has_format(then_block)
+                    || else_block.is_some_and(|block| self.stmt_has_format(block))
+            }
+            ExpressionKind::Switch { object, arms } => {
+                self.expr_has_format(object)
+                    || arms.iter().any(|arm| {
+                        self.expr_has_format(arm.body)
+                            || arm.guard.is_some_and(|guard| self.expr_has_format(guard))
+                    })
+            }
+            ExpressionKind::FieldAccess { object, field } => {
+                self.expr_has_format(object) || self.expr_has_format(field)
+            }
+            ExpressionKind::SliceAccess { object, index } => {
+                self.expr_has_format(object) || self.expr_has_format(index)
+            }
+            ExpressionKind::StructInit { fields, .. } => fields
+                .is_some_and(|fields| fields.iter().any(|field| self.expr_has_format(field.value))),
+            ExpressionKind::ArrayInit { elements } => {
+                elements.iter().any(|element| self.expr_has_format(element))
+            }
+            ExpressionKind::ArrayRepeatInit { element, len } => {
+                self.expr_has_format(element) || self.expr_has_format(len)
+            }
+            ExpressionKind::Block { stmts, trailing } => {
+                stmts.iter().any(|stmt| self.stmt_has_format(stmt))
+                    || trailing.is_some_and(|expr| self.expr_has_format(expr))
+            }
+            ExpressionKind::Closure { body, .. } => self.stmt_has_format(body),
+            ExpressionKind::ConditionalBlock(block) => {
+                self.expr_has_format(block.body)
+                    || block
+                        .else_block
+                        .is_some_and(|expr| self.expr_has_format(expr))
+            }
+        }
+    }
+
     pub fn resolve_core_injects(
         &mut self,
         root_path: PathBuf,
         root_decls: &'ctx [&'ctx Declaration<'ctx>],
         root_named_src: NamedSource<Arc<String>>,
         core_files: &[(&'static str, &'static str)],
-        std_files: &[(&'static str, &'static str)],
     ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
         let root_canonical = canonicalize_best_effort(&root_path);
 
@@ -101,7 +237,14 @@ impl<'ctx> IncludeResolver<'ctx> {
             let source = Arc::new(content.to_string());
             let filename = Rc::new(name.to_string());
 
-            let parsed_module = self.parse_module(Arc::clone(&source), filename)?;
+            let parsed_module = Self::parse_module(
+                self.arena,
+                &self.interner,
+                &self.target,
+                self.mode,
+                Arc::clone(&source),
+                filename,
+            )?;
             parsed_module.iter().for_each(|decl| out.push(decl));
 
             self.modules.insert(
@@ -115,22 +258,24 @@ impl<'ctx> IncludeResolver<'ctx> {
             );
         }
 
-        for (name, content) in std_files {
-            let source = Arc::new(content.to_string());
-            let filename = Rc::new(name.to_string());
+        // `std.string` is never embedded; `@format` is the one implicit case
+        // that needs it, so synthesize a `use std.string;` for the resolver.
+        if self.has_format_macro(root_decls) {
+            let module = self.get_or_intern("std.string");
+            let span = SourceSpan::new(0.into(), 0);
+            let source = root_decls
+                .first()
+                .map(|decl| decl.source.clone())
+                .unwrap_or_else(|| Source::from((span, self.named_src())));
 
-            let parsed_module = self.parse_module(Arc::clone(&source), filename)?;
-            parsed_module.iter().for_each(|decl| out.push(decl));
-
-            self.modules.insert(
-                Path::new(name).to_path_buf(),
-                RawModule {
-                    decls: parsed_module,
-                    canonical_path: Path::new(name).to_path_buf(),
-                    named_src: NamedSource::new(name, source),
-                    is_core: true,
+            let use_std_string = self.arena.alloc(Declaration {
+                kind: DeclarationKind::Use {
+                    module: (module, span),
                 },
-            );
+                source,
+            });
+
+            out.push(use_std_string);
         }
 
         root_decls.iter().for_each(|decl| out.push(decl));
@@ -294,7 +439,14 @@ impl<'ctx> IncludeResolver<'ctx> {
 
             let named_src = NamedSource::new(&target_name, Arc::clone(&source));
 
-            let target_decls = match self.parse_module(source, Rc::new(target_name)) {
+            let target_decls = match Self::parse_module(
+                self.arena,
+                &self.interner,
+                &self.target,
+                self.mode,
+                source,
+                Rc::new(target_name),
+            ) {
                 Ok(program) => program,
                 Err(mut err) => {
                     self.errors.append(&mut err);
@@ -320,7 +472,10 @@ impl<'ctx> IncludeResolver<'ctx> {
     }
 
     fn parse_module(
-        &self,
+        arena: &'ctx Bump,
+        interner: &Rc<RefCell<Rodeo>>,
+        target: &Target,
+        mode: CompilationMode,
         source: Arc<String>,
         filename: Rc<String>,
     ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
@@ -329,8 +484,8 @@ impl<'ctx> IncludeResolver<'ctx> {
             filename,
             Arc::clone(&source),
             &mut tokens,
-            self.arena,
-            Rc::clone(&self.interner),
+            arena,
+            Rc::clone(interner),
         );
 
         let program = parser.parse_program().map_err(|errors| {
@@ -340,7 +495,9 @@ impl<'ctx> IncludeResolver<'ctx> {
                 .collect::<Vec<ResolveError>>()
         })?;
 
-        Ok(program)
+        Ok(zeen_preprocessor::resolve(
+            program, arena, interner, target, mode,
+        ))
     }
 
     fn merge_module(

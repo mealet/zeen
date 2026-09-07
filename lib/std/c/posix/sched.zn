@@ -1,0 +1,45 @@
+use std.c.types;
+use std.c.time;
+use std.c.posix.pthread;
+
+// POSIX scheduling: process-level queries and policy constants. The kernel
+// schedulers are exposed on Linux (glibc, musl and bionic) and FreeBSD only;
+// macOS keeps sched.h mostly internal and libc does not bind it.
+//
+// c_sched_param and c_cpu_set_t are shared with the pthread module.
+
+// Policy constants. glibc, musl and bionic agree on the numbering.
+@os[linux | android] {
+  pub const SCHED_NORMAL: c_int = 0;
+  pub const SCHED_OTHER: c_int = 0;
+  pub const SCHED_FIFO: c_int = 1;
+  pub const SCHED_RR: c_int = 2;
+  pub const SCHED_BATCH: c_int = 3;
+  pub const SCHED_IDLE: c_int = 5;
+  pub const SCHED_DEADLINE: c_int = 6;
+}
+
+// Process scheduling queries and control.
+@os[linux | android | freebsd] {
+  pub extern fn sched_get_priority_max(policy: c_int) c_int;
+  pub extern fn sched_get_priority_min(policy: c_int) c_int;
+  pub extern fn sched_getparam(pid: c_pid_t, param: *c_sched_param) c_int;
+  pub extern fn sched_setparam(pid: c_pid_t, param: *const c_sched_param) c_int;
+  pub extern fn sched_getscheduler(pid: c_pid_t) c_int;
+  pub extern fn sched_setscheduler(pid: c_pid_t, policy: c_int, param: *const c_sched_param) c_int;
+  pub extern fn sched_rr_get_interval(pid: c_pid_t, interval: *c_Timespec) c_int;
+}
+
+// Current CPU and affinity masks. cpu_set_t is only bound on glibc (see the
+// pthread module); FreeBSD uses its own opaque cpuset ABI internally.
+@os[linux] {
+  @env[gnu] {
+    pub extern fn sched_getaffinity(pid: c_pid_t, cpusetsize: c_size_t, cpuset: *c_cpu_set_t) c_int;
+    pub extern fn sched_setaffinity(pid: c_pid_t, cpusetsize: c_size_t, cpuset: *const c_cpu_set_t) c_int;
+    pub extern fn sched_getcpu() c_int;
+  }
+}
+
+@os[android] {
+  pub extern fn sched_getcpu() c_int;
+}

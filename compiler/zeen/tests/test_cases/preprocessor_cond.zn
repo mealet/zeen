@@ -1,0 +1,20 @@
+@os[linux] {
+    fn platform() i32 {
+        return 1;
+    }
+}
+else @os[windows] {
+    fn platform() i32 {
+        return 2;
+    }
+}
+else {
+    fn platform() i32 {
+        return 3;
+    }
+}
+
+fn main() {
+    @println("{}", platform());
+    return;
+}

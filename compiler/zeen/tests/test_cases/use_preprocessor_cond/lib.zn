@@ -1,0 +1,15 @@
+@os[linux] {
+    pub fn platform() i32 {
+        return 1;
+    }
+}
+else @os[windows] {
+    pub fn platform() i32 {
+        return 2;
+    }
+}
+else {
+    pub fn platform() i32 {
+        return 3;
+    }
+}

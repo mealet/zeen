@@ -1,0 +1,30 @@
+use std.c.signal;
+use std.c.string;
+
+fn main() i32 {
+  let set: c_sigset_t = @uninit();
+  let sp: *c_sigset_t = @as(*c_sigset_t, &set);
+  let e: c_int = sigemptyset(sp);
+  let a: c_int = sigaddset(sp, SIGTERM);
+  let m: bool = sigismember(sp, SIGTERM) == 1;
+  @println("emptyset={} addset={} member={}", e, a, m);
+
+  @println("SIG_BLOCK={} SIG_UNBLOCK={} SIG_SETMASK={}", SIG_BLOCK, SIG_UNBLOCK, SIG_SETMASK);
+  @println("SA_SIGINFO={} SA_RESTART={}", SA_SIGINFO, SA_RESTART);
+
+  let act: c_sigaction = @uninit();
+  let actp: *c_sigaction = @as(*c_sigaction, &act);
+  let s: c_int = sigaction(SIGINT, nullptr, actp);
+  let nonnull: bool = @as(*void, actp) != nullptr;
+  @println("sigaction={} actnonnull={}", s, nonnull);
+
+  let sv: c_sighandler_t = signal(SIGINT, SIG_DFL);
+  let svn: bool = @as(*void, sv) != nullptr;
+  @println("signal nonnull={}", svn);
+
+  let msg: *char = strsignal(SIGPIPE);
+  let mn: bool = @as(*void, msg) != nullptr;
+  @println("strsignal nonnull={}", mn);
+
+  return 0;
+}
