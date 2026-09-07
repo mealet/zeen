@@ -1,0 +1,56 @@
+use std.c.types;
+use std.c.time;
+
+// sem_t: 32-byte opaque buffer on Linux (glibc and musl), 16 bytes on bionic
+// and FreeBSD, a plain int on macOS. An 8-byte element keeps stack alignment
+// at least as strong as libc expects.
+@os[linux] {
+  pub struct c_sem_t {
+    pub __private: [4]u64,
+  }
+} else @os[android] {
+  pub struct c_sem_t {
+    pub __private: [2]u64,
+  }
+} else @os[darwin] {
+  pub alias c_sem_t = c_int;
+} else @os[freebsd] {
+  pub struct c_sem_t {
+    pub __private: [2]u64,
+  }
+} else {
+  pub struct c_sem_t {
+    pub __private: [4]u64,
+  }
+}
+
+// Named-semaphore failure sentinel. glibc, musl, bionic and FreeBSD use NULL,
+// macOS the pointer value -1.
+@os[darwin] {
+  const SEM_FAILED_INT: isize = -1;
+  pub const SEM_FAILED: *c_sem_t = @as(*c_sem_t, SEM_FAILED_INT);
+} else {
+  const SEM_FAILED_INT: isize = 0;
+  pub const SEM_FAILED: *c_sem_t = @as(*c_sem_t, SEM_FAILED_INT);
+}
+
+// Core semaphore operations, shared by all POSIX targets.
+pub extern fn sem_wait(sem: *c_sem_t) c_int;
+pub extern fn sem_trywait(sem: *c_sem_t) c_int;
+pub extern fn sem_post(sem: *c_sem_t) c_int;
+
+pub extern fn sem_open(name: [*]const char, oflag: c_int, ...) *c_sem_t;
+pub extern fn sem_close(sem: *c_sem_t) c_int;
+pub extern fn sem_unlink(name: [*]const char) c_int;
+
+// Counting semaphore setup on every POSIX target.
+@os[linux | android | darwin | freebsd] {
+  pub extern fn sem_init(sem: *c_sem_t, pshared: c_int, value: c_uint) c_int;
+  pub extern fn sem_destroy(sem: *c_sem_t) c_int;
+}
+
+// Timed wait and value queries: absent from the macOS libc binding.
+@os[linux | android | freebsd] {
+  pub extern fn sem_timedwait(sem: *c_sem_t, abstime: *const c_Timespec) c_int;
+  pub extern fn sem_getvalue(sem: *c_sem_t, sval: *c_int) c_int;
+}

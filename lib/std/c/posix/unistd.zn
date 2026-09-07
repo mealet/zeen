@@ -1,6 +1,6 @@
 use std.c.types;
 
-@os[linux | darwin | freebsd | android] {
+@os[linux | android | darwin | freebsd] {
   pub const STDIN_FILENO: c_int = 0;
   pub const STDOUT_FILENO: c_int = 1;
   pub const STDERR_FILENO: c_int = 2;
@@ -9,13 +9,17 @@ use std.c.types;
   pub extern fn write(fd: c_int, buf: [*]const void, count: c_size_t) c_ssize_t;
   pub extern fn close(fd: c_int) c_int;
 
+  pub extern fn dup(fd: c_int) c_int;
+  pub extern fn dup2(src: c_int, dst: c_int) c_int;
+
   pub extern fn getpid() c_pid_t;
   pub extern fn getppid() c_pid_t;
   pub extern fn getuid() c_uid_t;
+  pub extern fn geteuid() c_uid_t;
   pub extern fn getgid() c_gid_t;
+  pub extern fn getegid() c_gid_t;
 
   pub extern fn fork() c_pid_t;
-
   pub extern fn sleep(seconds: c_uint) c_uint;
   pub extern fn usleep(useconds: c_useconds_t) c_int;
   pub extern fn alarm(seconds: c_uint) c_uint;
@@ -28,4 +32,30 @@ use std.c.types;
 
   pub extern fn fsync(fd: c_int) c_int;
   pub extern fn _exit(status: c_int) void;
+
+  // Variadic exec family (all POSIX).
+  pub extern fn execl(path: [*]const char, arg0: [*]const char, ...) c_int;
+  pub extern fn execle(path: [*]const char, arg0: [*]const char, ...) c_int;
+  pub extern fn execlp(file: [*]const char, arg0: [*]const char, ...) c_int;
+
+  // Vector exec family (all POSIX).
+  pub extern fn execv(prog: [*]const char, argv: *[*]const char) c_int;
+  pub extern fn execve(prog: [*]const char, argv: *[*]const char, envp: *[*]const char) c_int;
+  pub extern fn execvp(c: [*]const char, argv: *[*]const char) c_int;
+}
+
+// Linux and bionic have execvpe, fexecve.
+@os[linux | android] {
+  pub extern fn execvpe(prog: [*]const char, argv: *[*]const char, envp: *[*]const char) c_int;
+  pub extern fn fexecve(fd: c_int, argv: *[*]const char, envp: *[*]const char) c_int;
+}
+
+// FreeBSD has exect and execvP; macOS has execvP.
+@os[darwin | freebsd] {
+  pub extern fn execvP(file: [*]const char, argv: *[*]const char) c_int;
+}
+
+@os[freebsd] {
+  pub extern fn exect(path: [*]const char, argv: *[*]const char, envp: *[*]const char) c_int;
+  pub extern fn fexecve(fd: c_int, argv: *[*]const char, envp: *[*]const char) c_int;
 }

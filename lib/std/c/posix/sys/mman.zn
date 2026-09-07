@@ -75,6 +75,9 @@ pub const POSIX_MADV_DONTNEED: c_int = 4;
   pub extern fn mlockall(flags: c_int) c_int;
   pub extern fn munlockall() c_int;
   pub extern fn mlock2(addr: *void, length: usize, flags: c_int) c_int;
+
+  pub extern fn shm_open(name: [*]const char, oflag: c_int, mode: c_mode_t) c_int;
+  pub extern fn shm_unlink(name: [*]const char) c_int;
 }
 
 @os[darwin] {
@@ -116,6 +119,10 @@ pub const POSIX_MADV_DONTNEED: c_int = 4;
   pub extern fn munlock(addr: *void, length: usize) c_int;
   pub extern fn mlockall(flags: c_int) c_int;
   pub extern fn munlockall() c_int;
+
+  // macOS omitted the mode argument from shm_open's ABI.
+  pub extern fn shm_open(name: [*]const char, oflag: c_int, ...) c_int;
+  pub extern fn shm_unlink(name: [*]const char) c_int;
 }
 
 @os[freebsd] {
@@ -157,4 +164,7 @@ pub const POSIX_MADV_DONTNEED: c_int = 4;
   pub extern fn munlock(addr: *void, length: usize) c_int;
   pub extern fn mlockall(flags: c_int) c_int;
   pub extern fn munlockall() c_int;
+
+  pub extern fn shm_open(name: [*]const char, oflag: c_int, mode: c_mode_t) c_int;
+  pub extern fn shm_unlink(name: [*]const char) c_int;
 }
