@@ -60,3 +60,23 @@ pub extern fn unsetenv(name: [*]const char) c_int;
 pub extern fn abs(n: c_int) c_int;
 pub extern fn labs(n: c_long) c_long;
 pub extern fn llabs(n: c_longlong) c_longlong;
+
+// POSIX stdlib extensions.
+@os[linux | android | darwin | freebsd] {
+  pub extern fn mkstemp(template: [*]char) c_int;
+  pub extern fn mkdtemp(template: [*]char) *char;
+  pub extern fn realpath(pathname: [*]const char, resolved: [*]char) *char;
+  pub extern fn posix_memalign(memptr: **void, align: c_size_t, size: c_size_t) c_int;
+}
+
+// mkstemps (with suffix): linux, freebsd, darwin.
+@os[linux | darwin | freebsd] {
+  pub extern fn mkstemps(template: [*]char, suffixlen: c_int) c_int;
+}
+
+// arc4random family: bsd + darwin.
+@os[darwin | freebsd] {
+  pub extern fn arc4random() c_uint;
+  pub extern fn arc4random_buf(buf: *void, size: c_size_t) void;
+  pub extern fn arc4random_uniform(upper_bound: c_uint) c_uint;
+}
