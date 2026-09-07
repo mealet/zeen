@@ -1,0 +1,36 @@
+use std.c.posix.sys.socket;
+use std.c.string;
+
+fn main() i32 {
+  let hints: c_AddrInfo = @uninit();
+  let hp: *c_AddrInfo = @as(*c_AddrInfo, &hints);
+  let paren: *void = @as(*void, hp);
+  let i: usize = 0;
+  while (i < @sizeof(c_AddrInfo)) {
+    @as([*]u8, paren)[i] = 0;
+    i = i + 1;
+  };
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+
+  let res: *c_AddrInfo = @uninit();
+  let resp: **c_AddrInfo = @as(**c_AddrInfo, &res);
+  let ga: c_int = getaddrinfo("localhost", "80", hp, resp);
+  @println("getaddrinfo={} nonnull={}", ga, @as(*void, res) != nullptr);
+  if (ga == 0) { freeaddrinfo(res); };
+
+  let namebuf: [256]u8 = @uninit();
+  let nb: [*]u8 = @as([*]u8, &namebuf[0]);
+  let gn: c_int = gethostname(@as([*]char, nb), 256);
+  @println("gethostname={} nonnull={}", gn, namebuf[0] != 0);
+
+  @println("AI_PASSIVE={} AI_CANONNAME={} AI_NUMERICHOST={}", AI_PASSIVE, AI_CANONNAME, AI_NUMERICHOST);
+  @println("NI_NUMERICHOST={} NI_NUMERICSERV={}", NI_NUMERICHOST, NI_NUMERICSERV);
+  @println("EAI_NONAME={} EAI_AGAIN={}", EAI_NONAME, EAI_AGAIN);
+
+  let addr: c_in_addr_t = inet_addr("203.0.113.5");
+  @println("inet_addr nonnull={}", addr != INADDR_NONE);
+
+  return 0;
+}

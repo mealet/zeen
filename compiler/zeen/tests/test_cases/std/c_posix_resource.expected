@@ -1,0 +1,8 @@
+getrlimit=0 cur>0=true curmax>0=true
+getrusage=0 ru_utime.sec=0
+uname=0 nonnull=true
+fileno=1
+gettimeofday=0
+mkstemp fd>=0=true
+memmem nonnull=true
+stpcpy ok=true
