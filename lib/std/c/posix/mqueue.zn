@@ -1,0 +1,54 @@
+use std.c.types;
+use std.c.time;
+
+// POSIX message queues (mqueue.h). Present on Linux (glibc, musl, bionic
+// excluding HarmonyOS) and FreeBSD. macOS and Android libc do not expose
+// message-queue functions.
+//
+// mqd_t: plain int on Linux, an opaque pointer on FreeBSD.
+@os[linux] {
+  pub alias c_mqd_t = c_int;
+} else @os[freebsd] {
+  pub alias c_mqd_t = *void;
+} else {
+  pub alias c_mqd_t = c_int;
+}
+
+// mq_attr: long fields on Linux and FreeBSD with an internal reserved tail.
+@os[linux | freebsd] {
+  pub struct c_mq_attr {
+    pub mq_flags: c_long,
+    pub mq_maxmsg: c_long,
+    pub mq_msgsize: c_long,
+    pub mq_curmsgs: c_long,
+    pub __reserved: [c_long; 4],
+  }
+}
+
+// Core queue lifecycle.
+@os[linux | freebsd] {
+  pub extern fn mq_open(name: [*]const char, oflag: c_int, ...) c_mqd_t;
+  pub extern fn mq_close(mqd: c_mqd_t) c_int;
+  pub extern fn mq_unlink(name: [*]const char) c_int;
+
+  pub extern fn mq_send(mqd: c_mqd_t, msg_ptr: [*]const char, msg_len: c_size_t, msg_prio: c_uint) c_int;
+  pub extern fn mq_receive(mqd: c_mqd_t, msg_ptr: [*]char, msg_len: c_size_t, msg_prio: *c_uint) c_ssize_t;
+
+  pub extern fn mq_timedsend(
+    mqd: c_mqd_t,
+    msg_ptr: [*]const char,
+    msg_len: c_size_t,
+    msg_prio: c_uint,
+    abstime: *const c_Timespec
+  ) c_int;
+  pub extern fn mq_timedreceive(
+    mqd: c_mqd_t,
+    msg_ptr: [*]char,
+    msg_len: c_size_t,
+    msg_prio: *c_uint,
+    abstime: *const c_Timespec
+  ) c_ssize_t;
+
+  pub extern fn mq_getattr(mqd: c_mqd_t, attr: *c_mq_attr) c_int;
+  pub extern fn mq_setattr(mqd: c_mqd_t, newattr: *const c_mq_attr, oldattr: *c_mq_attr) c_int;
+}
