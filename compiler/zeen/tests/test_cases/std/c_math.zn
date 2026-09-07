@@ -1,0 +1,23 @@
+use std.c.types;
+use std.c.math;
+use std.c.time;
+
+fn main() c_int {
+  @println("fabs={}", fabs(-2.5));
+  @println("pow={}", pow(3.0, 3.0));
+  @println("sqrt={}", sqrt(25.0));
+  @println("sin={}", sin(0.0));
+  @println("cos={}", cos(0.0));
+  @println("ceil={}", ceil(2.3));
+  @println("floor={}", floor(2.7));
+  @println("hypot={}", hypot(3.0, 4.0));
+
+  let t0: c_time_t = time(@as(*c_time_t, 0));
+  @println("time_ok={}", t0 > 0);
+
+  let t1: c_time_t = time(@as(*c_time_t, 0));
+  let diff: f64 = difftime(t1, t0);
+  @println("diff_ok={}", diff >= 0.0);
+
+  return 0;
+}
