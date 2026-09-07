@@ -1,0 +1,51 @@
+use std.c.types;
+use std.c.windows.windef;
+
+@os[windows] {
+  pub const STD_INPUT_HANDLE: WinDWORD = 0xFFFFFFF6;
+  pub const STD_OUTPUT_HANDLE: WinDWORD = 0xFFFFFFF5;
+  pub const STD_ERROR_HANDLE: WinDWORD = 0xFFFFFFF4;
+  pub const CONSOLE_TEXTMODE_BUFFER: WinDWORD = 1;
+
+  pub struct c_COORD {
+    pub x: i16,
+    pub y: i16,
+  }
+
+  pub struct c_SMALL_RECT {
+    pub left: i16,
+    pub top: i16,
+    pub right: i16,
+    pub bottom: i16,
+  }
+
+  pub struct c_CONSOLE_SCREEN_BUFFER_INFO {
+    pub dw_size: c_COORD,
+    pub dw_cursor_position: c_COORD,
+    pub w_attributes: c_ushort,
+    pub sr_window: c_SMALL_RECT,
+    pub dw_maximum_window_size: c_COORD,
+  }
+
+  pub extern fn GetStdHandle(n_std_handle: WinDWORD) WinHANDLE;
+  pub extern fn WriteConsoleA(
+    output: WinHANDLE,
+    buffer: [*]const void,
+    chars_to_write: WinDWORD,
+    chars_written: *WinDWORD,
+    reserved: *void,
+  ) WinBOOL;
+  pub extern fn ReadConsoleA(
+    input: WinHANDLE,
+    buffer: *void,
+    chars_to_read: WinDWORD,
+    chars_read: *WinDWORD,
+    input_control: *void,
+  ) WinBOOL;
+  pub extern fn SetConsoleTitleA(title: [*]const c_char) WinBOOL;
+  pub extern fn GetConsoleTitleA(title: [*]c_char, size: WinDWORD) WinDWORD;
+  pub extern fn GetConsoleScreenBufferInfo(
+    output: WinHANDLE,
+    info: *c_CONSOLE_SCREEN_BUFFER_INFO,
+  ) WinBOOL;
+}
