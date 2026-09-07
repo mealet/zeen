@@ -34,3 +34,15 @@ pub extern fn strndup(str: [*]const char, n: c_size_t) *char;
 
 // misc
 pub extern fn strerror(errnum: c_int) *char;
+pub extern fn strsignal(sig: c_int) *char;
+
+// POSIX string extensions.
+@os[linux | android | darwin | freebsd] {
+  pub extern fn stpcpy(dst: [*]char, src: [*]const char) *char;
+  pub extern fn memmem(haystack: [*]const void, haystacklen: c_size_t, needle: [*]const void, needlelen: c_size_t) *void;
+}
+
+// stpncpy is missing on android.
+@os[linux | darwin | freebsd] {
+  pub extern fn stpncpy(dst: [*]char, src: [*]const char, n: c_size_t) *char;
+}
