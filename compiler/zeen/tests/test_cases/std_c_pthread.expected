@@ -1,0 +1,3 @@
+mutex_ok=true cond_ok=true key_ok=true self_ok=true key_val_ok=true
+attr_ok=true create_ok=true join_ok=true sig_ok=true rw_ok=true
+bar_ok=true spin_ok=true spin_lock_ok=true once_ok=true timed_ok=true detach_ok=true
