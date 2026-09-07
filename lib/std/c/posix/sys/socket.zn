@@ -228,6 +228,111 @@ pub fn ntohl(v: u32) u32 {
   }
 }
 
+// AI_* flags for getaddrinfo (netdb.h).
+@os[linux] {
+  pub const AI_PASSIVE: c_int = 0x0001;
+  pub const AI_CANONNAME: c_int = 0x0002;
+  pub const AI_NUMERICHOST: c_int = 0x0004;
+  pub const AI_V4MAPPED: c_int = 0x0008;
+  pub const AI_ALL: c_int = 0x0010;
+  pub const AI_ADDRCONFIG: c_int = 0x0020;
+  pub const AI_NUMERICSERV: c_int = 0x0400;
+} else @os[android] {
+  pub const AI_PASSIVE: c_int = 0x0001;
+  pub const AI_CANONNAME: c_int = 0x0002;
+  pub const AI_NUMERICHOST: c_int = 0x0004;
+  pub const AI_NUMERICSERV: c_int = 0x0008;
+  pub const AI_ALL: c_int = 0x0100;
+  pub const AI_V4MAPPED_CFG: c_int = 0x0200;
+  pub const AI_ADDRCONFIG: c_int = 0x0400;
+  pub const AI_V4MAPPED: c_int = 0x0800;
+} else @os[darwin] {
+  pub const AI_PASSIVE: c_int = 0x0001;
+  pub const AI_CANONNAME: c_int = 0x0002;
+  pub const AI_NUMERICHOST: c_int = 0x0004;
+  pub const AI_V4MAPPED_CFG: c_int = 0x0200;
+  pub const AI_ALL: c_int = 0x0100;
+  pub const AI_ADDRCONFIG: c_int = 0x0400;
+  pub const AI_V4MAPPED: c_int = 0x0800;
+  pub const AI_NUMERICSERV: c_int = 0x1000;
+  pub const AI_DEFAULT: c_int = 0x0600;
+  pub const AI_MASK: c_int = 0x1F07;
+} else @os[freebsd] {
+  pub const AI_PASSIVE: c_int = 0x0001;
+  pub const AI_CANONNAME: c_int = 0x0002;
+  pub const AI_NUMERICHOST: c_int = 0x0004;
+  pub const AI_NUMERICSERV: c_int = 0x0008;
+  pub const AI_ALL: c_int = 0x0100;
+  pub const AI_ADDRCONFIG: c_int = 0x0400;
+  pub const AI_V4MAPPED: c_int = 0x0800;
+}
+
+// NI_* flags for getnameinfo.
+@os[linux] {
+  pub const NI_NUMERICHOST: c_int = 1;
+  pub const NI_NUMERICSERV: c_int = 2;
+  pub const NI_NOFQDN: c_int = 4;
+  pub const NI_NAMEREQD: c_int = 8;
+  pub const NI_DGRAM: c_int = 16;
+  pub const NI_IDN: c_int = 32;
+  pub const NI_MAXHOST: c_int = 1025;
+  pub const NI_MAXSERV: c_int = 32;
+} else @os[android | darwin] {
+  pub const NI_NOFQDN: c_int = 0x0001;
+  pub const NI_NUMERICHOST: c_int = 0x0002;
+  pub const NI_NAMEREQD: c_int = 0x0004;
+  pub const NI_NUMERICSERV: c_int = 0x0008;
+  pub const NI_DGRAM: c_int = 0x0010;
+  pub const NI_MAXHOST: c_int = 1025;
+  pub const NI_MAXSERV: c_int = 32;
+} else @os[freebsd] {
+  pub const NI_NUMERICHOST: c_int = 0x0001;
+  pub const NI_NUMERICSERV: c_int = 0x0002;
+  pub const NI_NAMEREQD: c_int = 0x0004;
+  pub const NI_NOFQDN: c_int = 0x0008;
+  pub const NI_DGRAM: c_int = 0x0010;
+  pub const NI_MAXHOST: c_int = 1025;
+  pub const NI_MAXSERV: c_int = 32;
+}
+
+// EAI_* error codes for getaddrinfo/getnameinfo.
+@os[linux] {
+  pub const EAI_BADFLAGS: c_int = -1;
+  pub const EAI_NONAME: c_int = -2;
+  pub const EAI_AGAIN: c_int = -3;
+  pub const EAI_FAIL: c_int = -4;
+  pub const EAI_NODATA: c_int = -5;
+  pub const EAI_FAMILY: c_int = -6;
+  pub const EAI_SOCKTYPE: c_int = -7;
+  pub const EAI_SERVICE: c_int = -8;
+  pub const EAI_MEMORY: c_int = -10;
+  pub const EAI_SYSTEM: c_int = -11;
+  pub const EAI_OVERFLOW: c_int = -12;
+} else @os[android | darwin] {
+  pub const EAI_AGAIN: c_int = 2;
+  pub const EAI_BADFLAGS: c_int = 3;
+  pub const EAI_FAIL: c_int = 4;
+  pub const EAI_FAMILY: c_int = 5;
+  pub const EAI_MEMORY: c_int = 6;
+  pub const EAI_NODATA: c_int = 7;
+  pub const EAI_NONAME: c_int = 8;
+  pub const EAI_SERVICE: c_int = 9;
+  pub const EAI_SOCKTYPE: c_int = 10;
+  pub const EAI_SYSTEM: c_int = 11;
+  pub const EAI_OVERFLOW: c_int = 14;
+} else @os[freebsd] {
+  pub const EAI_AGAIN: c_int = 2;
+  pub const EAI_BADFLAGS: c_int = 3;
+  pub const EAI_FAIL: c_int = 4;
+  pub const EAI_FAMILY: c_int = 5;
+  pub const EAI_MEMORY: c_int = 6;
+  pub const EAI_NONAME: c_int = 8;
+  pub const EAI_SERVICE: c_int = 9;
+  pub const EAI_SOCKTYPE: c_int = 10;
+  pub const EAI_SYSTEM: c_int = 11;
+  pub const EAI_OVERFLOW: c_int = 14;
+}
+
 // getaddrinfo result node; differs in field order between linux and bsd/android.
 @os[linux] {
   pub struct c_AddrInfo {
@@ -275,8 +380,19 @@ pub fn ntohl(v: u32) u32 {
   pub extern fn getaddrinfo(node: [*]const char, service: [*]const char, hints: *const c_AddrInfo, res: **c_AddrInfo) c_int;
   pub extern fn freeaddrinfo(res: *c_AddrInfo) void;
   pub extern fn gai_strerror(errcode: c_int) [*]const char;
+  pub extern fn gethostname(name: [*]char, len: c_size_t) c_int;
+  pub extern fn getnameinfo(
+    sa: *const c_SockAddr,
+    salen: c_socklen_t,
+    host: [*]char,
+    hostlen: c_socklen_t,
+    serv: [*]char,
+    servlen: c_socklen_t,
+    flags: c_int
+  ) c_int;
 
-  // Presence of inet_pton/inet_ntop varies; both exist on all POSIX targets.
   pub extern fn inet_pton(af: c_int, src: [*]const char, dst: *void) c_int;
   pub extern fn inet_ntop(af: c_int, src: *const void, dst: [*]c_char, size: c_socklen_t) [*]const char;
+  pub extern fn inet_addr(cp: [*]const char) c_in_addr_t;
+  pub extern fn inet_ntoa(addr: c_InAddr) [*]char;
 }
