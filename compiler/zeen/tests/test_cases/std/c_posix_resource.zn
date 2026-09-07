@@ -1,0 +1,55 @@
+use std.c.posix.sys.resource;
+use std.c.posix.sys.utsname;
+use std.c.posix.sys.time;
+use std.c.stdio;
+use std.c.stdlib;
+use std.c.string;
+use std.c.posix.unistd;
+
+fn main() i32 {
+  let rl: c_rlimit = @uninit();
+  let rp: *c_rlimit = @as(*c_rlimit, &rl);
+  let gr: c_int = getrlimit(RLIMIT_NOFILE, rp);
+  @println("getrlimit={} cur>0={} curmax>0={}", gr, rl.rlim_cur > 0, rl.rlim_max > 0);
+
+  let ru: c_rusage = @uninit();
+  let rup: *c_rusage = @as(*c_rusage, &ru);
+  let gu: c_int = getrusage(RUSAGE_SELF, rup);
+  @println("getrusage={} ru_utime.sec={}", gu, ru.ru_utime.tv_sec);
+
+  let us: c_utsname = @uninit();
+  let usp: *c_utsname = @as(*c_utsname, &us);
+  let un: c_int = uname(usp);
+  @println("uname={} nonnull={}", un, us.sysname[0] != 0);
+
+  let fo: c_int = fileno(stdout);
+  @println("fileno={}", fo);
+
+  let tv: c_Timeval = @uninit();
+  let tvp: *void = @as(*void, &tv);
+  let gtod: c_int = gettimeofday(tvp, nullptr);
+  @println("gettimeofday={}", gtod);
+
+  let tmpl: [16]char = @uninit();
+  let src: [*]const char = "zeen_XXXXXX";
+  let i: usize = 0;
+  while (i < 12) {
+    tmpl[i] = src[i];
+    i = i + 1;
+  };
+  tmpl[12] = @as(char, @as(c_int, 0));
+  tmpl[13] = @as(char, @as(c_int, 0));
+  tmpl[14] = @as(char, @as(c_int, 0));
+  tmpl[15] = @as(char, @as(c_int, 0));
+  let fd: c_int = mkstemp(@as([*]char, &tmpl[0]));
+  @println("mkstemp fd>=0={}", fd >= 0);
+  if (fd >= 0) { let _: c_int = close(fd); };
+
+  let mm: *void = memmem(@as([*]const void, "haystack with needle"), 20, @as([*]const void, "needle"), 6);
+  @println("memmem nonnull={}", @as(*void, mm) != nullptr);
+
+  let _sp: *char = stpcpy(@as([*]char, &tmpl[0]), "abc");
+  @println("stpcpy ok={}", tmpl[0] == 'a');
+
+  return 0;
+}
