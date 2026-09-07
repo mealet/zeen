@@ -1,0 +1,79 @@
+use std.c.types;
+use std.c.time;
+use std.c.posix.pthread;
+
+let counter: c_int = 0;
+
+fn worker(arg: *void) *void {
+  counter += 1;
+  return @as(*void, 0);
+}
+
+let once_flag: c_int = 0;
+let once_runs: c_int = 0;
+
+fn once_fun() void {
+  once_runs += 1;
+}
+
+fn main() c_int {
+  let t: c_pthread_t = @uninit();
+  let mutex: c_pthread_mutex_t = @uninit();
+  let cond: c_pthread_cond_t = @uninit();
+  let rwl: c_pthread_rwlock_t = @uninit();
+  let bar: c_pthread_barrier_t = @uninit();
+  let spin: c_pthread_spinlock_t = @uninit();
+  let key: c_pthread_key_t = @uninit();
+
+  let mutex_ok = pthread_mutex_init(@as(*c_pthread_mutex_t, &mutex), nullptr) == 0;
+  let cond_ok = pthread_cond_init(@as(*c_pthread_cond_t, &cond), nullptr) == 0;
+  pthread_rwlock_init(@as(*c_pthread_rwlock_t, &rwl), nullptr);
+  pthread_barrier_init(@as(*c_pthread_barrier_t, &bar), nullptr, 1);
+  let spin_ok = pthread_spin_init(@as(*c_pthread_spinlock_t, &spin), 0) == 0;
+  let key_ok = pthread_key_create(@as(*c_pthread_key_t, &key), nullptr) == 0;
+  pthread_setspecific(key, @as(*void, 1));
+  let self_ok = pthread_equal(pthread_self(), pthread_self()) == 1;
+  let key_val_ok = pthread_getspecific(key) == @as(*void, 1);
+
+  let attrs: c_pthread_attr_t = @uninit();
+  pthread_attr_init(@as(*c_pthread_attr_t, &attrs));
+  let attr_ok = pthread_attr_setstacksize(@as(*c_pthread_attr_t, &attrs), @as(c_size_t, 65536)) == 0;
+  let create_ok = pthread_create(@as(*c_pthread_t, &t), @as(*const c_pthread_attr_t, &attrs), worker, @as(*void, 0)) == 0;
+  let join_ok = pthread_join(t, nullptr) == 0 && counter == 1;
+  pthread_attr_destroy(@as(*c_pthread_attr_t, &attrs));
+
+  pthread_mutex_lock(@as(*c_pthread_mutex_t, &mutex));
+  let sig_ok = pthread_cond_signal(@as(*c_pthread_cond_t, &cond)) == 0;
+  pthread_mutex_unlock(@as(*c_pthread_mutex_t, &mutex));
+
+  let rw_ok = pthread_rwlock_rdlock(@as(*c_pthread_rwlock_t, &rwl)) == 0;
+  pthread_rwlock_unlock(@as(*c_pthread_rwlock_t, &rwl));
+
+  let bar_ok = pthread_barrier_wait(@as(*c_pthread_barrier_t, &bar)) == PTHREAD_BARRIER_SERIAL_THREAD;
+  let spin_lock_ok = pthread_spin_lock(@as(*c_pthread_spinlock_t, &spin)) == 0;
+  pthread_spin_unlock(@as(*c_pthread_spinlock_t, &spin));
+
+  let once_ok = pthread_once(@as(*c_pthread_once_t, &once_flag), once_fun) == 0
+    && pthread_once(@as(*c_pthread_once_t, &once_flag), once_fun) == 0
+    && once_runs == 1;
+
+  let ts: c_Timespec = @uninit();
+  ts.tv_sec = 0;
+  ts.tv_nsec = 1;
+  let timed_ok = pthread_mutex_timedlock(@as(*c_pthread_mutex_t, &mutex), @as(*const c_Timespec, &ts)) == 0;
+  pthread_mutex_unlock(@as(*c_pthread_mutex_t, &mutex));
+
+  let detach_ok = pthread_detach(pthread_self()) == 0;
+
+  pthread_key_delete(key);
+  pthread_spin_destroy(@as(*c_pthread_spinlock_t, &spin));
+  pthread_barrier_destroy(@as(*c_pthread_barrier_t, &bar));
+  pthread_rwlock_destroy(@as(*c_pthread_rwlock_t, &rwl));
+  pthread_cond_destroy(@as(*c_pthread_cond_t, &cond));
+  pthread_mutex_destroy(@as(*c_pthread_mutex_t, &mutex));
+
+  @println("mutex_ok={} cond_ok={} key_ok={} self_ok={} key_val_ok={}", mutex_ok, cond_ok, key_ok, self_ok, key_val_ok);
+  @println("attr_ok={} create_ok={} join_ok={} sig_ok={} rw_ok={}", attr_ok, create_ok, join_ok, sig_ok, rw_ok);
+  @println("bar_ok={} spin_ok={} spin_lock_ok={} once_ok={} timed_ok={} detach_ok={}", bar_ok, spin_ok, spin_lock_ok, once_ok, timed_ok, detach_ok);
+  return 0;
+}

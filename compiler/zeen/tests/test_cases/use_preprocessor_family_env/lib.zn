@@ -1,0 +1,26 @@
+@family[unix] {
+    pub fn family_id() i32 {
+        return 1;
+    }
+}
+else @family[windows] {
+    pub fn family_id() i32 {
+        return 2;
+    }
+}
+else {
+    pub fn family_id() i32 {
+        return 0;
+    }
+}
+
+@env[gnu] {
+    pub fn env_id() i32 {
+        return 10;
+    }
+}
+else {
+    pub fn env_id() i32 {
+        return 0;
+    }
+}

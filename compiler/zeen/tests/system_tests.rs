@@ -1,5 +1,5 @@
 use assert_cmd::Command;
-use std::{fs, process::Output};
+use std::{fs, path::PathBuf, process::Output};
 
 struct FailedTest {
     pub test_case: String,
@@ -137,6 +137,15 @@ fn run_binary(binary_path: &str) -> Output {
         .expect("failed to run test binary")
 }
 
+/// The repository's std library root, passed as `--std` so golden tests can
+/// reach `use std.*` modules from the filesystem (std is never embedded).
+fn std_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib/std")
+        .canonicalize()
+        .expect("repo `lib/std` must exist next to the compiler workspace")
+}
+
 /// Compiles and runs a single test case in the given mode, returning a list
 /// of errors (empty if the test passed for this mode).
 fn run_test_case_in_mode(
@@ -157,7 +166,9 @@ fn run_test_case_in_mode(
         .arg(input_file)
         .arg(binary_path_str)
         .arg("-m")
-        .arg(mode.as_str());
+        .arg(mode.as_str())
+        .arg("--std")
+        .arg(std_dir());
 
     let compilation_result = compile_cmd.assert().try_success();
     if let Err(compilation_error) = compilation_result {

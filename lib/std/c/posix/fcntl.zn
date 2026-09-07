@@ -1,0 +1,41 @@
+use std.c.types;
+
+@os[linux | darwin | freebsd | android] {
+  // read/write/open mode bits (ABI-dependent).
+  @os[linux | android] {
+    pub const O_RDONLY: c_int = 0;
+    pub const O_WRONLY: c_int = 1;
+    pub const O_RDWR: c_int = 2;
+    pub const O_CREAT: c_int = 64;
+    pub const O_EXCL: c_int = 128;
+    pub const O_NOCTTY: c_int = 256;
+    pub const O_TRUNC: c_int = 512;
+    pub const O_APPEND: c_int = 1024;
+    pub const O_NONBLOCK: c_int = 2048;
+    pub const O_CLOEXEC: c_int = 524288;
+  } else {
+    pub const O_RDONLY: c_int = 0;
+    pub const O_WRONLY: c_int = 1;
+    pub const O_RDWR: c_int = 2;
+    pub const O_APPEND: c_int = 8;
+    pub const O_CREAT: c_int = 512;
+    pub const O_TRUNC: c_int = 1024;
+    pub const O_EXCL: c_int = 2048;
+    pub const O_NONBLOCK: c_int = 4;
+    pub const O_NOCTTY: c_int = 131072;
+    pub const O_CLOEXEC: c_int = 1048576;
+  }
+
+  // fcntl commands and close-on-exec flag (identical on Linux, BSD, macOS).
+  pub const F_DUPFD: c_int = 0;
+  pub const F_GETFD: c_int = 1;
+  pub const F_SETFD: c_int = 2;
+  pub const F_GETFL: c_int = 3;
+  pub const F_SETFL: c_int = 4;
+  pub const FD_CLOEXEC: c_int = 1;
+
+  // `open` and `fcntl` are varargs: pass the optional `mode` only with `O_CREAT`.
+  pub extern fn open(path: [*]const char, oflag: c_int, ...) c_int;
+  pub extern fn fcntl(fd: c_int, cmd: c_int, ...) c_int;
+  pub extern fn creat(path: [*]const char, mode: c_mode_t) c_int;
+}

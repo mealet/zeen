@@ -1,0 +1,19 @@
+use std.c.posix.sys.socket;
+
+fn main() i32 {
+  let p: u16 = htons(0x1234);
+  @println("htons={}", @as(u32, p));
+  let n: u32 = htonl(0x12340000);
+  @println("htonl={}", n);
+
+  let ip: c_InAddr = @uninit();
+  let ipf: *c_InAddr = @as(*c_InAddr, &ip);
+  let r: c_int = inet_pton(AF_INET, "203.0.113.9", @as(*void, ipf));
+  @println("inet_pton={}", r);
+
+  let buf: [16]c_char = @uninit();
+  let strp: [*]const char = inet_ntop(AF_INET, @as(*const void, ipf), @as([*]c_char, &buf[0]), @as(c_socklen_t, 16));
+  let nonnull: bool = @as(*void, strp) != nullptr;
+  @println("ntop nonnull={}", nonnull);
+  return 0;
+}

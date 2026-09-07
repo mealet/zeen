@@ -1,0 +1,6 @@
+use lib;
+
+fn main() {
+    @println("{} {}", family_id(), env_id());
+    return;
+}

@@ -1,0 +1,36 @@
+use std.c.types;
+use std.c.posix.semaphore;
+use std.c.posix.sched;
+use std.c.posix.sys.mman;
+use std.c.posix.fcntl;
+use std.c.posix.unistd;
+
+fn main() c_int {
+  @println("euid_ok={}", geteuid() >= 0);
+  @println("egid_ok={}", getegid() >= 0);
+
+  let fd = dup(STDOUT_FILENO);
+  @println("dup_ok={}", fd >= 0);
+  @println("dup2_ok={}", dup2(fd, STDERR_FILENO) >= 0);
+  close(fd);
+
+  @println("cpu_ok={}", sched_getcpu() >= 0);
+
+  let s: c_sem_t = @uninit();
+  let sem_ok = sem_init(@as(*c_sem_t, &s), 0, 0) == 0;
+  sem_post(@as(*c_sem_t, &s));
+  let v: c_int = @uninit();
+  sem_getvalue(@as(*c_sem_t, &s), @as(*c_int, &v));
+  @println("sem_ok={} sem_val={}", sem_ok, v);
+  sem_destroy(@as(*c_sem_t, &s));
+
+  let shm_fd = shm_open(@as([*]const char, "/zn_test_golden"), O_CREAT | O_RDWR, @as(c_mode_t, 0o600));
+  @println("shm_ok={}", shm_fd >= 0);
+  if (shm_fd >= 0) { close(shm_fd); shm_unlink(@as([*]const char, "/zn_test_golden")); };
+
+  let sem = sem_open(@as([*]const char, "/zn_sem_golden"), O_CREAT | O_RDWR, @as(c_mode_t, 0o600), @as(c_uint, 1));
+  @println("named_ok={}", sem != SEM_FAILED);
+  if (sem != SEM_FAILED) { sem_close(sem); sem_unlink(@as([*]const char, "/zn_sem_golden")); };
+
+  return 0;
+}

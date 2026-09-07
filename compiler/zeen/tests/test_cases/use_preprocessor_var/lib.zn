@@ -1,0 +1,4 @@
+pub fn get_os_len() i32 {
+    let os = @var[os];
+    return 5;
+}

@@ -1,0 +1,120 @@
+use std.c.types;
+use std.c.posix.sys.time;
+
+// rlimit: resource limits. rlim_t differs per OS.
+@os[linux | android] {
+  pub alias c_rlim_t = c_ulong;
+} else @os[darwin] {
+  pub alias c_rlim_t = c_ulonglong;
+} else @os[freebsd] {
+  pub alias c_rlim_t = c_longlong;
+} else {
+  pub alias c_rlim_t = c_ulong;
+}
+
+pub struct c_rlimit {
+  pub rlim_cur: c_rlim_t,
+  pub rlim_max: c_rlim_t,
+}
+
+// rusage resource usage.
+pub struct c_rusage {
+  pub ru_utime: c_Timeval,
+  pub ru_stime: c_Timeval,
+  pub ru_maxrss: c_long,
+  pub ru_ixrss: c_long,
+  pub ru_idrss: c_long,
+  pub ru_isrss: c_long,
+  pub ru_minflt: c_long,
+  pub ru_majflt: c_long,
+  pub ru_nswap: c_long,
+  pub ru_inblock: c_long,
+  pub ru_oublock: c_long,
+  pub ru_msginfo: c_long,
+  pub ru_msgout: c_long,
+  pub ru_nsignals: c_long,
+  pub ru_nvcsw: c_long,
+  pub ru_nivcsw: c_long,
+}
+
+@os[linux] {
+  pub const RLIMIT_CPU: c_int = 0;
+  pub const RLIMIT_FSIZE: c_int = 1;
+  pub const RLIMIT_DATA: c_int = 2;
+  pub const RLIMIT_STACK: c_int = 3;
+  pub const RLIMIT_CORE: c_int = 4;
+  pub const RLIMIT_RSS: c_int = 5;
+  pub const RLIMIT_NPROC: c_int = 6;
+  pub const RLIMIT_NOFILE: c_int = 7;
+  pub const RLIMIT_MEMLOCK: c_int = 8;
+  pub const RLIMIT_AS: c_int = 9;
+  pub const RLIMIT_LOCKS: c_int = 10;
+  pub const RLIMIT_SIGPENDING: c_int = 11;
+  pub const RLIMIT_MSGQUEUE: c_int = 12;
+  pub const RLIMIT_NICE: c_int = 13;
+  pub const RLIMIT_RTPRIO: c_int = 14;
+  pub const RLIMIT_RTTIME: c_int = 15;
+
+  pub const RUSAGE_SELF: c_int = 0;
+  pub const RUSAGE_CHILDREN: c_int = -1;
+} else @os[android] {
+  pub const RLIMIT_CPU: c_int = 0;
+  pub const RLIMIT_FSIZE: c_int = 1;
+  pub const RLIMIT_DATA: c_int = 2;
+  pub const RLIMIT_STACK: c_int = 3;
+  pub const RLIMIT_CORE: c_int = 4;
+  pub const RLIMIT_RSS: c_int = 5;
+  pub const RLIMIT_NPROC: c_int = 6;
+  pub const RLIMIT_NOFILE: c_int = 7;
+  pub const RLIMIT_MEMLOCK: c_int = 8;
+  pub const RLIMIT_AS: c_int = 9;
+  pub const RLIMIT_LOCKS: c_int = 10;
+  pub const RLIMIT_SIGPENDING: c_int = 11;
+  pub const RLIMIT_MSGQUEUE: c_int = 12;
+  pub const RLIMIT_NICE: c_int = 13;
+  pub const RLIMIT_RTPRIO: c_int = 14;
+
+  pub const RUSAGE_SELF: c_int = 0;
+  pub const RUSAGE_CHILDREN: c_int = -1;
+} else @os[darwin] {
+  pub const RLIMIT_CPU: c_int = 0;
+  pub const RLIMIT_FSIZE: c_int = 1;
+  pub const RLIMIT_DATA: c_int = 2;
+  pub const RLIMIT_STACK: c_int = 3;
+  pub const RLIMIT_CORE: c_int = 4;
+  pub const RLIMIT_AS: c_int = 5;
+  pub const RLIMIT_RSS: c_int = 5;
+  pub const RLIMIT_MEMLOCK: c_int = 6;
+  pub const RLIMIT_NPROC: c_int = 7;
+  pub const RLIMIT_NOFILE: c_int = 8;
+  pub const RLIM_NLIMITS: c_int = 9;
+
+  pub const RUSAGE_SELF: c_int = 0;
+  pub const RUSAGE_CHILDREN: c_int = -1;
+} else @os[freebsd] {
+  pub const RLIMIT_CPU: c_int = 0;
+  pub const RLIMIT_FSIZE: c_int = 1;
+  pub const RLIMIT_DATA: c_int = 2;
+  pub const RLIMIT_STACK: c_int = 3;
+  pub const RLIMIT_CORE: c_int = 4;
+  pub const RLIMIT_RSS: c_int = 5;
+  pub const RLIMIT_MEMLOCK: c_int = 6;
+  pub const RLIMIT_NPROC: c_int = 7;
+  pub const RLIMIT_NOFILE: c_int = 8;
+  pub const RLIMIT_SBSIZE: c_int = 9;
+  pub const RLIMIT_VMEM: c_int = 10;
+  pub const RLIMIT_AS: c_int = 10;
+
+  pub const RUSAGE_SELF: c_int = 0;
+  pub const RUSAGE_CHILDREN: c_int = -1;
+} else {
+  pub const RLIMIT_CPU: c_int = 0;
+  pub const RUSAGE_SELF: c_int = 0;
+  pub const RUSAGE_CHILDREN: c_int = -1;
+}
+
+@os[linux | android | darwin | freebsd] {
+  pub extern fn getrlimit(resource: c_int, rlim: *c_rlimit) c_int;
+  pub extern fn setrlimit(resource: c_int, rlim: *const c_rlimit) c_int;
+  pub extern fn getrusage(resource: c_int, usage: *c_rusage) c_int;
+}

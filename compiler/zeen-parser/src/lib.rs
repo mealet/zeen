@@ -117,6 +117,76 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
         val
     }
 
+    /// Reads the directive name of the current `@name[...]` preprocessor token
+    /// (the caller must be positioned on a `PreprocessorIdent` / `PreprocessorDebug`
+    /// / `PreprocessorRelease` token). Does not consume the token.
+    pub fn parse_preprocessor_directive(
+        &self,
+    ) -> Option<zeen_ast::declarations::PreprocessorDirective> {
+        use zeen_ast::declarations::PreprocessorDirective;
+
+        let name_span = self.current.span;
+        let name_slice = &self.src[name_span.offset() + 1..name_span.offset() + name_span.len()];
+        PreprocessorDirective::from_name(name_slice)
+    }
+
+    /// Parses the `[a | b]` value list of a directive into an arena slice.
+    /// Bool directives (`@debug`/`@release`) carry no brackets and yield `[]`.
+    pub fn parse_directive_values(
+        &mut self,
+        directive: zeen_ast::declarations::PreprocessorDirective,
+    ) -> Option<&'ctx [zeen_ast::declarations::DirectiveValue<'ctx>]> {
+        use zeen_ast::declarations::{DirectiveValue, PreprocessorDirective};
+
+        let is_bool = matches!(
+            directive,
+            PreprocessorDirective::Debug | PreprocessorDirective::Release
+        );
+        if is_bool {
+            return Some(self.arena.alloc_slice_copy(&[]));
+        }
+
+        let open = self.expect(TokenKind::OpenBracket, "[")?;
+        let open_end = open.span.offset() + open.span.len();
+
+        while !self.at(TokenKind::CloseBracket) && !self.at(TokenKind::Eof) {
+            let _ = self.advance_not_eof()?;
+        }
+
+        let close = self.expect(TokenKind::CloseBracket, "]")?;
+        let close_start = close.span.offset();
+
+        let raw = &self.src[open_end..close_start];
+
+        let mut buffer: SmallVec<[DirectiveValue; 4]> = SmallVec::new();
+        let mut rest = raw;
+        let mut base = 0;
+        loop {
+            let end = rest.find('|').map_or(rest.len(), |i| i);
+            let part = &rest[..end];
+            let ts = part.find(|c: char| !c.is_whitespace());
+            if let Some(ts) = ts {
+                let trimmed = &part[ts..];
+                let te = trimmed
+                    .rfind(|c: char| !c.is_whitespace())
+                    .map(|idx| idx + 1)
+                    .unwrap_or(trimmed.len());
+                let value = &trimmed[..te];
+                buffer.push(DirectiveValue {
+                    value: self.arena.alloc_str(value),
+                    span: miette::SourceSpan::new((open_end + base + ts).into(), value.len()),
+                });
+            }
+            if end == rest.len() {
+                break;
+            }
+            base += end + 1;
+            rest = &rest[end + 1..];
+        }
+
+        Some(self.arena.alloc_slice_copy(&buffer))
+    }
+
     pub fn report(&mut self, err: ParserError) {
         self.errors.push(err);
         self.panic_mode = true;

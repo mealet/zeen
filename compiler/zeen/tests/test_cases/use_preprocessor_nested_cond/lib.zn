@@ -1,0 +1,27 @@
+@os[linux] {
+    pub alias platform_type = i64;
+}
+else @os[windows] {
+    pub alias platform_type = i32;
+}
+else {
+    pub alias platform_type = i32;
+}
+
+@os[linux] {
+    @arch[x86_64] {
+        pub fn arch_id() i32 {
+            return 10;
+        }
+    }
+    else {
+        pub fn arch_id() i32 {
+            return 11;
+        }
+    }
+}
+else {
+    pub fn arch_id() i32 {
+        return 0;
+    }
+}

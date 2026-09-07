@@ -1,0 +1,12 @@
+use std.c.types;
+
+@os[windows] {
+  pub alias WinDWORD = c_ulong;
+  pub alias WinBOOL = c_int;
+  pub alias WinHANDLE = *void;
+  pub alias WinBYTE = c_uchar;
+  pub alias WinWORD = c_ushort;
+
+  pub const WinTRUE: WinBOOL = 1;
+  pub const WinFALSE: WinBOOL = 0;
+}

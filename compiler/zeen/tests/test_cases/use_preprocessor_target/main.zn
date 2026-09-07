@@ -1,0 +1,6 @@
+use lib;
+
+fn main() {
+    @println("{}", target_match());
+    return;
+}

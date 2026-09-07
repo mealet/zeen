@@ -1,0 +1,10 @@
+@debug {
+    pub fn get_value() i32 {
+        return 1;
+    }
+}
+else @release {
+    pub fn get_value() i32 {
+        return 1;
+    }
+}

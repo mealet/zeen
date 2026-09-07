@@ -448,6 +448,7 @@ impl<'ctx> NameResolver {
             DeclarationKind::ExternLink { .. } => {}
             DeclarationKind::ImplementDecl { .. } => {}
             DeclarationKind::Use { .. } => {}
+            DeclarationKind::ConditionalBlock(_) => {}
         }
     }
 
@@ -656,6 +657,7 @@ impl<'ctx> NameResolver {
 
             DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => {}
             DeclarationKind::Use { .. } => {}
+            DeclarationKind::ConditionalBlock(_) => {}
         }
     }
 
@@ -756,6 +758,10 @@ impl<'ctx> NameResolver {
 
             ExpressionKind::Closure { body, .. } => self.collect_global_stmt_deps(body, out),
 
+            ExpressionKind::TargetVar(_) => {}
+
+            ExpressionKind::ConditionalBlock(_) => {}
+
             ExpressionKind::Literal(_) => {}
         }
     }
@@ -802,6 +808,8 @@ impl<'ctx> NameResolver {
 
             StatementKind::Break | StatementKind::Continue => {}
             StatementKind::TrailingExpr(_) => panic!("that was not supposed to happen"),
+
+            StatementKind::ConditionalBlock(_) => {}
         }
     }
 
@@ -1264,7 +1272,7 @@ impl<'ctx> NameResolver {
                 // Nested functions may not capture the enclosing function's
                 // params/locals/generics (no closures): hide them for the body.
                 // Function definitions are not closure captures, so they stay
-                // visible — a nested fn can recurse and call sibling fns.
+                // visible - a nested fn can recurse and call sibling fns.
                 let capture_blocked: HashSet<DefId> = self
                     .table
                     .enclosing_defs()
@@ -1289,6 +1297,8 @@ impl<'ctx> NameResolver {
             }
 
             StatementKind::TrailingExpr(_) => panic!("that was not supposed to happen"),
+
+            StatementKind::ConditionalBlock(_) => {}
         }
     }
 
@@ -1420,6 +1430,10 @@ impl<'ctx> NameResolver {
             } => {
                 self.resolve_closure(expr, params, return_type, body);
             }
+
+            ExpressionKind::TargetVar(_) => {}
+
+            ExpressionKind::ConditionalBlock(_) => {}
         }
     }
 
@@ -1456,7 +1470,7 @@ impl<'ctx> NameResolver {
         }
 
         // Capturable: the enclosing live frame plus everything outer closures
-        // may capture themselves. Inheritance stops at nested-fn boundaries —
+        // may capture themselves. Inheritance stops at nested-fn boundaries -
         // frames behind a `Blocked` layer are dead. Own scope is pushed first
         // so the walk can skip it.
         self.table.push(ScopeKind::Function);

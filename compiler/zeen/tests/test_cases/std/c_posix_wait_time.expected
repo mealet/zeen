@@ -1,0 +1,2 @@
+waited=true exited=true exitcode=42
+gettimeofday_ok=true in_epoch=true usecs_gt0=true

@@ -1,0 +1,10 @@
+use std.c.types;
+use std.c.windows.windef;
+
+@os[windows] {
+  pub extern fn LoadLibraryA(filename: [*]const c_char) WinHANDLE;
+  pub extern fn GetProcAddress(module: WinHANDLE, proc_name: [*]const c_char) *void;
+  pub extern fn FreeLibrary(module: WinHANDLE) WinBOOL;
+  pub extern fn GetModuleHandleA(module_name: [*]const c_char) WinHANDLE;
+  pub extern fn GetModuleFileNameA(module: WinHANDLE, filename: [*]c_char, size: WinDWORD) WinDWORD;
+}

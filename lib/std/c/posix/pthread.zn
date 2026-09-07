@@ -1,0 +1,560 @@
+use std.c.types;
+use std.c.time;
+
+// pthread_t: glibc and musl keep a pointer-sized opaque handle, bionic an
+// integral one, the BSDs an unsigned long.
+@os[linux] {
+  @env[gnu] {
+    pub alias c_pthread_t = c_ulong;
+  } else {
+    pub alias c_pthread_t = usize;
+  }
+} else @os[android] {
+  pub alias c_pthread_t = c_long;
+} else @os[darwin] {
+  pub alias c_pthread_t = c_ulong;
+} else @os[freebsd] {
+  pub alias c_pthread_t = c_ulong;
+} else {
+  pub alias c_pthread_t = usize;
+}
+
+@os[linux] {
+  pub alias c_pthread_key_t = c_uint;
+} else @os[android] {
+  pub alias c_pthread_key_t = c_int;
+} else @os[darwin] {
+  pub alias c_pthread_key_t = c_ulong;
+} else @os[freebsd] {
+  pub alias c_pthread_key_t = c_int;
+} else {
+  pub alias c_pthread_key_t = c_int;
+}
+
+// pthread_once_t: plain int on Linux/bionic, an opaque 16-byte struct on macOS.
+// FreeBSD has pthread_once in the C library but libc does not expose the type;
+// it is left unbound there.
+@os[linux] {
+  pub alias c_pthread_once_t = c_int;
+} else @os[android] {
+  pub alias c_pthread_once_t = c_int;
+} else @os[darwin] {
+  pub struct c_pthread_once_t {
+    pub __private: [2]u64,
+  }
+} else {
+  pub alias c_pthread_once_t = c_int;
+}
+
+// clockid_t used by pthread_condattr_setclock and pthread_getcpuclockid.
+@os[linux | android | freebsd] {
+  pub alias c_clockid_t = c_int;
+} else {
+  pub alias c_clockid_t = c_int;
+}
+
+@os[linux | android | freebsd] {
+  pub const CLOCK_REALTIME: c_clockid_t = 0;
+  pub const CLOCK_MONOTONIC: c_clockid_t = 1;
+}
+
+// sched_param: only sched_priority is used by pthread scheduling funcs. Linux,
+// musl, bionic and macOS keep just that int; FreeBSD pads with the sporadic
+// scheduler fields it may write back on pthread_attr_setschedparam queries.
+@os[linux | android | darwin] {
+  pub struct c_sched_param {
+    pub sched_priority: c_int,
+  }
+} else @os[freebsd] {
+  pub struct c_sched_param {
+    pub sched_priority: c_int,
+    pub sched_ss_low_priority: c_int,
+    pub sched_ss_repl_period: c_Timespec,
+    pub sched_ss_init_budget: c_Timespec,
+    pub sched_ss_max_repl: c_int,
+    pub __pad: c_int,
+  }
+} else {
+  pub struct c_sched_param {
+    pub sched_priority: c_int,
+  }
+}
+
+// Opaque pthread types are expressed as byte buffers sized to the biggest
+// variant of the OS (64-bit Linux ABI, 32-bit i686 glibc is a subset). An
+// 8-byte element keeps stack alignment at least as strong as libc expects.
+@os[linux] {
+  pub struct c_pthread_attr_t {
+    pub __private: [8]u64,
+  }
+  pub struct c_pthread_mutex_t {
+    pub __private: [6]u64,
+  }
+  pub struct c_pthread_cond_t {
+    pub __private: [6]u64,
+  }
+  pub struct c_pthread_rwlock_t {
+    pub __private: [7]u64,
+  }
+  pub struct c_pthread_barrier_t {
+    pub __private: [4]u64,
+  }
+  pub struct c_pthread_mutexattr_t {
+    pub __private: c_int,
+  }
+  pub struct c_pthread_condattr_t {
+    pub __private: c_int,
+  }
+  pub struct c_pthread_rwlockattr_t {
+    pub __private: [1]u64,
+  }
+  pub struct c_pthread_barrierattr_t {
+    pub __private: c_int,
+  }
+  pub alias c_pthread_spinlock_t = c_int;
+} else @os[android] {
+  pub struct c_pthread_attr_t {
+    pub __private: [7]u64,
+  }
+  pub struct c_pthread_mutex_t {
+    pub __private: [5]u64,
+  }
+  pub struct c_pthread_cond_t {
+    pub __private: [6]u64,
+  }
+  pub struct c_pthread_rwlock_t {
+    pub __private: [7]u64,
+  }
+  pub struct c_pthread_barrier_t {
+    pub __private: [4]u64,
+  }
+  pub alias c_pthread_mutexattr_t = c_long;
+  pub alias c_pthread_condattr_t = c_long;
+  pub alias c_pthread_rwlockattr_t = c_long;
+  pub alias c_pthread_barrierattr_t = c_int;
+  pub struct c_pthread_spinlock_t {
+    pub __private: [1]u64,
+  }
+} else @os[darwin] {
+  pub struct c_pthread_attr_t {
+    pub __private: [8]u64,
+  }
+  pub struct c_pthread_mutex_t {
+    pub __private: [8]u64,
+  }
+  pub struct c_pthread_cond_t {
+    pub __private: [6]u64,
+  }
+  pub struct c_pthread_rwlock_t {
+    pub __private: [25]u64,
+  }
+  pub struct c_pthread_mutexattr_t {
+    pub __private: [2]u64,
+  }
+  pub struct c_pthread_condattr_t {
+    pub __private: [2]u64,
+  }
+  pub struct c_pthread_rwlockattr_t {
+    pub __private: [3]u64,
+  }
+} else @os[freebsd] {
+  pub alias c_pthread_attr_t = *void;
+  pub alias c_pthread_mutex_t = *void;
+  pub alias c_pthread_cond_t = *void;
+  pub alias c_pthread_rwlock_t = *void;
+  pub alias c_pthread_barrier_t = *void;
+  pub alias c_pthread_mutexattr_t = *void;
+  pub alias c_pthread_condattr_t = *void;
+  pub alias c_pthread_rwlockattr_t = *void;
+  pub alias c_pthread_barrierattr_t = *void;
+  pub alias c_pthread_spinlock_t = *void;
+}
+
+// cpu_set_t (CPU_SETSIZE bits, glibc only).
+@os[linux] {
+  @env[gnu] {
+    pub struct c_cpu_set_t {
+      pub __bits: [16]u64,
+    }
+  }
+}
+
+// Joinability. macOS numbers differ from the POSIX 0/1.
+@os[darwin] {
+  pub const PTHREAD_CREATE_JOINABLE: c_int = 1;
+  pub const PTHREAD_CREATE_DETACHED: c_int = 2;
+} else {
+  pub const PTHREAD_CREATE_JOINABLE: c_int = 0;
+  pub const PTHREAD_CREATE_DETACHED: c_int = 1;
+}
+
+// Process-scope markers. macOS maps private to 2 (legacy enum).
+@os[darwin] {
+  pub const PTHREAD_PROCESS_PRIVATE: c_int = 2;
+  pub const PTHREAD_PROCESS_SHARED: c_int = 1;
+} else {
+  pub const PTHREAD_PROCESS_PRIVATE: c_int = 0;
+  pub const PTHREAD_PROCESS_SHARED: c_int = 1;
+}
+
+// Scheduling inheritance. musl/bionic reverse glibc's 0/1; macOS uses 1/2.
+@os[linux] {
+  @env[gnu] {
+    pub const PTHREAD_INHERIT_SCHED: c_int = 0;
+    pub const PTHREAD_EXPLICIT_SCHED: c_int = 1;
+  } else {
+    pub const PTHREAD_INHERIT_SCHED: c_int = 1;
+    pub const PTHREAD_EXPLICIT_SCHED: c_int = 0;
+  }
+} else @os[android] {
+  pub const PTHREAD_INHERIT_SCHED: c_int = 1;
+  pub const PTHREAD_EXPLICIT_SCHED: c_int = 0;
+} else @os[darwin] {
+  pub const PTHREAD_INHERIT_SCHED: c_int = 1;
+  pub const PTHREAD_EXPLICIT_SCHED: c_int = 2;
+}
+
+// Mutex kind constants. FreeBSD swaps RECURSIVE and NORMAL numbering.
+@os[linux | android] {
+  pub const PTHREAD_MUTEX_NORMAL: c_int = 0;
+  pub const PTHREAD_MUTEX_RECURSIVE: c_int = 1;
+  pub const PTHREAD_MUTEX_ERRORCHECK: c_int = 2;
+  pub const PTHREAD_MUTEX_DEFAULT: c_int = 0;
+} else @os[darwin] {
+  pub const PTHREAD_MUTEX_NORMAL: c_int = 0;
+  pub const PTHREAD_MUTEX_ERRORCHECK: c_int = 1;
+  pub const PTHREAD_MUTEX_RECURSIVE: c_int = 2;
+  pub const PTHREAD_MUTEX_DEFAULT: c_int = 0;
+} else @os[freebsd] {
+  pub const PTHREAD_MUTEX_ERRORCHECK: c_int = 1;
+  pub const PTHREAD_MUTEX_RECURSIVE: c_int = 2;
+  pub const PTHREAD_MUTEX_NORMAL: c_int = 3;
+  pub const PTHREAD_MUTEX_DEFAULT: c_int = 1;
+}
+
+// Robust mutexes: glibc and FreeBSD.
+@os[linux | freebsd] {
+  pub const PTHREAD_MUTEX_STALLED: c_int = 0;
+  pub const PTHREAD_MUTEX_ROBUST: c_int = 1;
+}
+
+@os[linux | android | freebsd] {
+  pub const PTHREAD_BARRIER_SERIAL_THREAD: c_int = -1;
+}
+
+// Priority inheritance attributes for mutexattr_setprotocol.
+@os[linux | darwin] {
+  pub const PTHREAD_PRIO_NONE: c_int = 0;
+  pub const PTHREAD_PRIO_INHERIT: c_int = 1;
+  pub const PTHREAD_PRIO_PROTECT: c_int = 2;
+}
+
+// Darwin-only scheduling scope for pthread_attr_setscope.
+@os[darwin] {
+  pub const PTHREAD_SCOPE_SYSTEM: c_int = 1;
+  pub const PTHREAD_SCOPE_PROCESS: c_int = 2;
+}
+
+// Cancellation state. glibc/musl use 0/1, macOS bitmasks.
+@os[linux] {
+  pub const PTHREAD_CANCEL_ENABLE: c_int = 0;
+  pub const PTHREAD_CANCEL_DISABLE: c_int = 1;
+  pub const PTHREAD_CANCEL_DEFERRED: c_int = 0;
+  pub const PTHREAD_CANCEL_ASYNCHRONOUS: c_int = 1;
+} else @os[darwin] {
+  pub const PTHREAD_CANCEL_ENABLE: c_int = 0x01;
+  pub const PTHREAD_CANCEL_DISABLE: c_int = 0x00;
+  pub const PTHREAD_CANCEL_DEFERRED: c_int = 0x02;
+  pub const PTHREAD_CANCEL_ASYNCHRONOUS: c_int = 0x00;
+}
+
+// rwlock kind for glibc pthread_rwlockattr_setkind_np.
+@os[linux] {
+  @env[gnu] {
+    pub const PTHREAD_RWLOCK_PREFER_READER_NP: c_int = 0;
+    pub const PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP: c_int = 1;
+    pub const PTHREAD_RWLOCK_PREFER_WRITER_NP: c_int = 2;
+  }
+}
+
+// Static initializers where the libc layout is all zeros. Kept out of macOS
+// and FreeBSD where the initializer embeds a spike value we do not bind.
+@os[linux | android] {
+  pub const PTHREAD_ONCE_INIT: c_pthread_once_t = 0;
+}
+
+@os[linux] {
+  pub const PTHREAD_MUTEX_INITIALIZER: c_pthread_mutex_t = c_pthread_mutex_t { .__private = [0; 6] };
+  pub const PTHREAD_COND_INITIALIZER: c_pthread_cond_t = c_pthread_cond_t { .__private = [0; 6] };
+  pub const PTHREAD_RWLOCK_INITIALIZER: c_pthread_rwlock_t = c_pthread_rwlock_t { .__private = [0; 7] };
+} else @os[android] {
+  pub const PTHREAD_MUTEX_INITIALIZER: c_pthread_mutex_t = c_pthread_mutex_t { .__private = [0; 5] };
+  pub const PTHREAD_COND_INITIALIZER: c_pthread_cond_t = c_pthread_cond_t { .__private = [0; 6] };
+  pub const PTHREAD_RWLOCK_INITIALIZER: c_pthread_rwlock_t = c_pthread_rwlock_t { .__private = [0; 7] };
+}
+
+// ---------------------------------------------------------------------------
+// Core lifecycle and thread identity (all POSIX targets).
+// ---------------------------------------------------------------------------
+@os[linux | android | darwin | freebsd] {
+  pub extern fn pthread_create(
+    native: *c_pthread_t,
+    attr: *const c_pthread_attr_t,
+    start: fn(*void) *void,
+    arg: *void
+  ) c_int;
+  pub extern fn pthread_join(native: c_pthread_t, value: **void) c_int;
+  pub extern fn pthread_exit(value: *void) void;
+  pub extern fn pthread_self() c_pthread_t;
+  pub extern fn pthread_equal(a: c_pthread_t, b: c_pthread_t) c_int;
+  pub extern fn pthread_detach(native: c_pthread_t) c_int;
+
+  pub extern fn pthread_attr_init(attr: *c_pthread_attr_t) c_int;
+  pub extern fn pthread_attr_destroy(attr: *c_pthread_attr_t) c_int;
+  pub extern fn pthread_attr_getstacksize(attr: *const c_pthread_attr_t, size: *c_size_t) c_int;
+  pub extern fn pthread_attr_setstacksize(attr: *c_pthread_attr_t, size: c_size_t) c_int;
+  pub extern fn pthread_attr_getdetachstate(attr: *const c_pthread_attr_t, state: *c_int) c_int;
+  pub extern fn pthread_attr_setdetachstate(attr: *c_pthread_attr_t, state: c_int) c_int;
+
+  pub extern fn pthread_key_create(key: *c_pthread_key_t, destructor: *void) c_int;
+  pub extern fn pthread_key_delete(key: c_pthread_key_t) c_int;
+  pub extern fn pthread_getspecific(key: c_pthread_key_t) *void;
+  pub extern fn pthread_setspecific(key: c_pthread_key_t, value: *void) c_int;
+
+  pub extern fn pthread_mutex_init(lock: *c_pthread_mutex_t, attr: *const c_pthread_mutexattr_t) c_int;
+  pub extern fn pthread_mutex_destroy(lock: *c_pthread_mutex_t) c_int;
+  pub extern fn pthread_mutex_lock(lock: *c_pthread_mutex_t) c_int;
+  pub extern fn pthread_mutex_trylock(lock: *c_pthread_mutex_t) c_int;
+  pub extern fn pthread_mutex_unlock(lock: *c_pthread_mutex_t) c_int;
+
+  pub extern fn pthread_mutexattr_init(attr: *c_pthread_mutexattr_t) c_int;
+  pub extern fn pthread_mutexattr_destroy(attr: *c_pthread_mutexattr_t) c_int;
+  pub extern fn pthread_mutexattr_settype(attr: *c_pthread_mutexattr_t, kind: c_int) c_int;
+
+  pub extern fn pthread_cond_init(cond: *c_pthread_cond_t, attr: *const c_pthread_condattr_t) c_int;
+  pub extern fn pthread_cond_destroy(cond: *c_pthread_cond_t) c_int;
+  pub extern fn pthread_cond_wait(cond: *c_pthread_cond_t, lock: *c_pthread_mutex_t) c_int;
+  pub extern fn pthread_cond_timedwait(
+    cond: *c_pthread_cond_t,
+    lock: *c_pthread_mutex_t,
+    abstime: *const c_Timespec
+  ) c_int;
+  pub extern fn pthread_cond_signal(cond: *c_pthread_cond_t) c_int;
+  pub extern fn pthread_cond_broadcast(cond: *c_pthread_cond_t) c_int;
+
+  pub extern fn pthread_condattr_init(attr: *c_pthread_condattr_t) c_int;
+  pub extern fn pthread_condattr_destroy(attr: *c_pthread_condattr_t) c_int;
+
+  pub extern fn pthread_rwlock_init(lock: *c_pthread_rwlock_t, attr: *const c_pthread_rwlockattr_t) c_int;
+  pub extern fn pthread_rwlock_destroy(lock: *c_pthread_rwlock_t) c_int;
+  pub extern fn pthread_rwlock_rdlock(lock: *c_pthread_rwlock_t) c_int;
+  pub extern fn pthread_rwlock_tryrdlock(lock: *c_pthread_rwlock_t) c_int;
+  pub extern fn pthread_rwlock_wrlock(lock: *c_pthread_rwlock_t) c_int;
+  pub extern fn pthread_rwlock_trywrlock(lock: *c_pthread_rwlock_t) c_int;
+  pub extern fn pthread_rwlock_unlock(lock: *c_pthread_rwlock_t) c_int;
+
+  pub extern fn pthread_rwlockattr_init(attr: *c_pthread_rwlockattr_t) c_int;
+  pub extern fn pthread_rwlockattr_destroy(attr: *c_pthread_rwlockattr_t) c_int;
+
+  pub extern fn sched_yield() c_int;
+}
+
+// pthread_once. FreeBSD lacks a reliable libc binding, so it is excluded.
+@os[linux | android | darwin] {
+  pub extern fn pthread_once(control: *c_pthread_once_t, routine: fn() void) c_int;
+}
+
+// Thread scheduling queries shared by Linux and the BSDs.
+@os[linux | freebsd] {
+  pub extern fn pthread_getschedparam(
+    native: c_pthread_t,
+    policy: *c_int,
+    param: *c_sched_param
+  ) c_int;
+  pub extern fn pthread_setschedparam(
+    native: c_pthread_t,
+    policy: c_int,
+    param: *const c_sched_param
+  ) c_int;
+}
+
+// glibc also reports the live thread, priority and per-process clock id.
+@os[linux] {
+  pub extern fn pthread_setschedprio(native: c_pthread_t, priority: c_int) c_int;
+}
+
+@os[linux | android] {
+  pub extern fn pthread_getcpuclockid(native: c_pthread_t, clk_id: *c_clockid_t) c_int;
+}
+
+// Attribute plumbing shared by Linux/bionic/FreeBSD.
+@os[linux | android | freebsd] {
+  pub extern fn pthread_attr_getstack(
+    attr: *const c_pthread_attr_t,
+    stackaddr: **void,
+    stacksize: *c_size_t
+  ) c_int;
+  pub extern fn pthread_attr_setstack(attr: *c_pthread_attr_t, stackaddr: *void, stacksize: c_size_t) c_int;
+  pub extern fn pthread_attr_getguardsize(attr: *const c_pthread_attr_t, size: *c_size_t) c_int;
+  pub extern fn pthread_attr_setguardsize(attr: *c_pthread_attr_t, size: c_size_t) c_int;
+  pub extern fn pthread_condattr_setclock(attr: *c_pthread_condattr_t, clock_id: c_clockid_t) c_int;
+  pub extern fn pthread_condattr_getclock(attr: *const c_pthread_condattr_t, clock_id: *c_clockid_t) c_int;
+  pub extern fn pthread_rwlockattr_getpshared(attr: *const c_pthread_rwlockattr_t, val: *c_int) c_int;
+  pub extern fn pthread_rwlockattr_setpshared(attr: *c_pthread_rwlockattr_t, val: c_int) c_int;
+}
+
+// inherited/priority scheduling on Linux (glibc and musl) and bionic.
+@os[linux | android] {
+  pub extern fn pthread_attr_getinheritsched(attr: *const c_pthread_attr_t, flag: *c_int) c_int;
+  pub extern fn pthread_attr_setinheritsched(attr: *c_pthread_attr_t, flag: c_int) c_int;
+}
+
+// glibc-only attribute scheduling control.
+@os[linux | darwin | freebsd] {
+  pub extern fn pthread_attr_getschedpolicy(attr: *const c_pthread_attr_t, policy: *c_int) c_int;
+  pub extern fn pthread_attr_setschedpolicy(attr: *c_pthread_attr_t, policy: c_int) c_int;
+  pub extern fn pthread_attr_getschedparam(attr: *const c_pthread_attr_t, param: *c_sched_param) c_int;
+  pub extern fn pthread_attr_setschedparam(attr: *c_pthread_attr_t, param: *const c_sched_param) c_int;
+}
+
+// macOS attr getters that return two values, plus stack-addr and scope extras.
+@os[darwin] {
+  pub extern fn pthread_attr_getinheritsched(
+    attr: *const c_pthread_attr_t,
+    inheritsched: *c_int,
+    contentionscope: *c_int
+  ) c_int;
+  pub extern fn pthread_attr_setinheritsched(attr: *c_pthread_attr_t, flag: c_int) c_int;
+  pub extern fn pthread_attr_getstackaddr(attr: *const c_pthread_attr_t, stackaddr: **void) c_int;
+  pub extern fn pthread_attr_setstackaddr(attr: *c_pthread_attr_t, stackaddr: *void) c_int;
+  pub extern fn pthread_attr_setscope(attr: *c_pthread_attr_t, contentionscope: c_int) c_int;
+  pub extern fn pthread_get_stackaddr_np(native: c_pthread_t) *void;
+  pub extern fn pthread_get_stacksize_np(native: c_pthread_t) c_size_t;
+  pub extern fn pthread_main_np() c_int;
+}
+
+// Current thread attributes (glibc/bionic name and FreeBSD name).
+@os[linux | android] {
+  pub extern fn pthread_getattr_np(native: c_pthread_t, attr: *c_pthread_attr_t) c_int;
+} else @os[freebsd] {
+  pub extern fn pthread_attr_get_np(native: c_pthread_t, attr: *c_pthread_attr_t) c_int;
+}
+
+// Barriers and spinlocks: present on Linux, bionic and FreeBSD, absent on macOS.
+@os[linux | android | freebsd] {
+  pub extern fn pthread_barrier_init(
+    barrier: *c_pthread_barrier_t,
+    attr: *const c_pthread_barrierattr_t,
+    count: c_uint
+  ) c_int;
+  pub extern fn pthread_barrier_destroy(barrier: *c_pthread_barrier_t) c_int;
+  pub extern fn pthread_barrier_wait(barrier: *c_pthread_barrier_t) c_int;
+  pub extern fn pthread_barrierattr_init(attr: *c_pthread_barrierattr_t) c_int;
+  pub extern fn pthread_barrierattr_destroy(attr: *c_pthread_barrierattr_t) c_int;
+  pub extern fn pthread_barrierattr_getpshared(attr: *const c_pthread_barrierattr_t, shared: *c_int) c_int;
+  pub extern fn pthread_barrierattr_setpshared(attr: *c_pthread_barrierattr_t, shared: c_int) c_int;
+  pub extern fn pthread_spin_init(lock: *c_pthread_spinlock_t, pshared: c_int) c_int;
+  pub extern fn pthread_spin_destroy(lock: *c_pthread_spinlock_t) c_int;
+  pub extern fn pthread_spin_lock(lock: *c_pthread_spinlock_t) c_int;
+  pub extern fn pthread_spin_trylock(lock: *c_pthread_spinlock_t) c_int;
+  pub extern fn pthread_spin_unlock(lock: *c_pthread_spinlock_t) c_int;
+}
+
+// Timed locking exists on Linux, bionic and FreeBSD but not macOS.
+@os[linux | android | freebsd] {
+  pub extern fn pthread_mutex_timedlock(lock: *c_pthread_mutex_t, abstime: *const c_Timespec) c_int;
+}
+
+// Shared/robust mutex plumbing on glibc and FreeBSD.
+@os[linux | freebsd] {
+  pub extern fn pthread_mutex_consistent(lock: *c_pthread_mutex_t) c_int;
+  pub extern fn pthread_mutexattr_getrobust(attr: *const c_pthread_mutexattr_t, robust: *c_int) c_int;
+  pub extern fn pthread_mutexattr_setrobust(attr: *c_pthread_mutexattr_t, robust: c_int) c_int;
+}
+
+// pshared mutex and cond attributes on Linux/bionic (macOS later only cond).
+@os[linux | android] {
+  pub extern fn pthread_mutexattr_getpshared(attr: *const c_pthread_mutexattr_t, shared: *c_int) c_int;
+  pub extern fn pthread_mutexattr_setpshared(attr: *c_pthread_mutexattr_t, shared: c_int) c_int;
+  pub extern fn pthread_condattr_getpshared(attr: *const c_pthread_condattr_t, shared: *c_int) c_int;
+  pub extern fn pthread_condattr_setpshared(attr: *c_pthread_condattr_t, shared: c_int) c_int;
+} else @os[darwin] {
+  pub extern fn pthread_mutexattr_getpshared(attr: *const c_pthread_mutexattr_t, shared: *c_int) c_int;
+  pub extern fn pthread_mutexattr_setpshared(attr: *c_pthread_mutexattr_t, shared: c_int) c_int;
+  pub extern fn pthread_condattr_getpshared(attr: *const c_pthread_condattr_t, shared: *c_int) c_int;
+  pub extern fn pthread_condattr_setpshared(attr: *c_pthread_condattr_t, shared: c_int) c_int;
+}
+
+// rwlock kind selection (glibc extension).
+@os[linux] {
+  @env[gnu] {
+    pub extern fn pthread_rwlockattr_getkind_np(attr: *const c_pthread_rwlockattr_t, val: *c_int) c_int;
+    pub extern fn pthread_rwlockattr_setkind_np(attr: *c_pthread_rwlockattr_t, val: c_int) c_int;
+  }
+}
+
+// Mutex protocol attribute (glibc/musl extension).
+@os[linux] {
+  pub extern fn pthread_mutexattr_getprotocol(attr: *const c_pthread_mutexattr_t, protocol: *c_int) c_int;
+  pub extern fn pthread_mutexattr_setprotocol(attr: *c_pthread_mutexattr_t, protocol: c_int) c_int;
+}
+
+// Thread naming. macOS names the calling thread and has no return value in the
+// legacy form; the others take an explicit thread id.
+@os[linux | android] {
+  pub extern fn pthread_setname_np(native: c_pthread_t, name: [*]const char) c_int;
+} else @os[darwin] {
+  pub extern fn pthread_setname_np(name: [*]const char) c_int;
+} else @os[freebsd] {
+  pub extern fn pthread_setname_np(native: c_pthread_t, name: [*]const char) c_int;
+}
+
+@os[linux | freebsd] {
+  pub extern fn pthread_getname_np(native: c_pthread_t, name: [*]c_char, len: c_size_t) c_int;
+} else @os[darwin] {
+  pub extern fn pthread_getname_np(native: c_pthread_t, name: [*]c_char, len: c_size_t) c_int;
+}
+
+// Cancellation: glibc and macOS.
+@os[linux | darwin] {
+  pub extern fn pthread_cancel(native: c_pthread_t) c_int;
+}
+
+// Thread signal handling on Linux/bionic.
+@os[linux | android] {
+  pub extern fn pthread_kill(native: c_pthread_t, sig: c_int) c_int;
+  pub extern fn pthread_sigmask(how: c_int, mask: *const void, old: *void) c_int;
+}
+
+// atfork hooks. Callbacks are kept as raw void pointers: NULL is legal and a
+// real function can be passed via @as(*void, f).
+@os[linux | android | darwin] {
+  pub extern fn pthread_atfork(prepare: *void, parent: *void, child: *void) c_int;
+}
+
+// glibc CPU affinity. cpusetsize is taken from the C library binary interface
+// (any value works as long as it covers the kernel's current CPU count).
+@os[linux] {
+  @env[gnu] {
+    pub extern fn pthread_setaffinity_np(
+      native: c_pthread_t,
+      cpusetsize: c_size_t,
+      cpuset: *const c_cpu_set_t
+    ) c_int;
+    pub extern fn pthread_getaffinity_np(
+      native: c_pthread_t,
+      cpusetsize: c_size_t,
+      cpuset: *c_cpu_set_t
+    ) c_int;
+    pub extern fn pthread_attr_setaffinity_np(
+      attr: *c_pthread_attr_t,
+      cpusetsize: c_size_t,
+      cpuset: *const c_cpu_set_t
+    ) c_int;
+    pub extern fn pthread_attr_getaffinity_np(
+      attr: *const c_pthread_attr_t,
+      cpusetsize: c_size_t,
+      cpuset: *c_cpu_set_t
+    ) c_int;
+  }
+}
