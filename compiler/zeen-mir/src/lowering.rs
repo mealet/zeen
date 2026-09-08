@@ -882,6 +882,17 @@ impl<'ctx> MirLowering<'ctx> {
         None
     }
 
+    fn find_struct_def(&self, struct_name: &str) -> Option<DefId> {
+        for (def, info) in &self.resolution.defs {
+            if matches!(info.kind, DefKind::Struct)
+                && self.rodeo.borrow().resolve(&info.name) == struct_name
+            {
+                return Some(*def);
+            }
+        }
+        None
+    }
+
     fn expr_type(&mut self, fb: &FnBuilder, expr: &HirExpr) -> TypeId {
         // A fat-annotated parameter is erased in the signature but stores a
         // concrete closure type in this monomorphized copy: rewrite reads of
@@ -4256,6 +4267,10 @@ impl<'ctx> MirLowering<'ctx> {
                         self.lower_for_iterable(fb, def_id, iterator, iter_ty, body, block)
                     }
 
+                    Type::Struct { .. } => {
+                        self.lower_for_iterator(fb, def_id, iterator, iter_ty, body, block, stmt.id)
+                    }
+
                     _ => panic!("non-iterable type passed Typechecker: {:?}", iter_ty),
                 }
             }
@@ -4265,6 +4280,34 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(v) => {
                         let (b, op) = self.lower_expr_to_operand(fb, v, block);
                         let block = b;
+                        // A `return` inside a block scope reads its value after
+                        // the scope teardown emits `StorageDead` for the scope's
+                        // locals. Re-home a place owned by the innermost scope
+                        // into a fresh temp so the teardown can't poison it.
+                        let op = match &op {
+                            Operand::Copy(place, _) | Operand::Move(place, _) => {
+                                if fb
+                                    .scope_stack
+                                    .last()
+                                    .is_some_and(|locals| locals.contains(&place.local))
+                                {
+                                    let ty = fb.func.local(place.local).ty;
+                                    let temp = fb.new_temp(ty);
+                                    fb.push_stmt(
+                                        block,
+                                        MirStatement::Assign {
+                                            place: Place::from_local(temp),
+                                            rvalue: Rvalue::Use(op),
+                                            source: Some(v.source.clone()),
+                                        },
+                                    );
+                                    Operand::Move(Place::from_local(temp), Some(v.source.clone()))
+                                } else {
+                                    op
+                                }
+                            }
+                            _ => op,
+                        };
                         fb.set_terminator(
                             block,
                             Terminator::Return(self.normalize_return_operand(fb, op)),
@@ -4631,6 +4674,176 @@ impl<'ctx> MirLowering<'ctx> {
 
         fb.set_terminator(continue_bb, Terminator::Goto(header));
         fb.join_if_open(body_end, continue_bb);
+
+        exit_bb
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_for_iterator(
+        &mut self,
+        fb: &mut FnBuilder,
+        def_id: &DefId,
+        iterator: &HirExpr,
+        iter_ty: TypeId,
+        body: &HirStmt,
+        block: BlockId,
+        stmt_id: HirId,
+    ) -> BlockId {
+        let Type::Struct {
+            def_id: struct_def,
+            generic_args,
+        } = self.typecheck.interner.get(iter_ty).clone()
+        else {
+            panic!("iterator for-loop must iterate a struct");
+        };
+
+        let elem_ty = self
+            .typecheck
+            .def_types
+            .get(def_id)
+            .copied()
+            .expect("loop variable must have a recorded element type");
+
+        let next_def = self
+            .typecheck
+            .for_iterator_next_methods
+            .get(&stmt_id)
+            .copied()
+            .expect("for-loop over an Iterator must record its next method");
+
+        // The iterator is evaluated once into a mutable slot the loop advances
+        // through `next(*self)`; the user's expression is never touched again.
+        let iter_local = fb.new_local(
+            iter_ty,
+            LocalKind::Temporary,
+            Mutability::Mut,
+            None,
+            Some(iterator.source.clone()),
+        );
+        let (block, iter_operand) = self.lower_expr_to_operand(fb, iterator, block);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(iter_local),
+                rvalue: Rvalue::Use(iter_operand),
+                source: Some(iterator.source.clone()),
+            },
+        );
+
+        let option_def = self
+            .find_struct_def("Option")
+            .expect("core.option `Option` must be present");
+        let option_ty = self.typecheck.interner.intern(Type::Struct {
+            def_id: option_def,
+            generic_args: vec![elem_ty],
+        });
+        self.register_struct_layout(option_ty, option_def);
+
+        let option_fields = &self.typecheck.struct_info[&option_def].fields;
+        let rodeo = self.rodeo.borrow();
+        let is_some_field = option_fields
+            .iter()
+            .find(|f| rodeo.resolve(&f.name) == "_is_some")
+            .expect("Option must have an `_is_some` field")
+            .field_def;
+        let value_field = option_fields
+            .iter()
+            .find(|f| rodeo.resolve(&f.name) == "value")
+            .expect("Option must have a `value` field")
+            .field_def;
+        drop(rodeo);
+
+        let result_local = fb.new_temp(option_ty);
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let header = fb.new_block();
+        fb.set_terminator(block, Terminator::Goto(header));
+
+        // `next(&iter_local)` advances the iterator and yields a fresh
+        // `Option[T]` every iteration.
+        let (call_block, self_operand) = self.lower_place_receiver_operand(
+            fb,
+            Place::from_local(iter_local),
+            iter_ty,
+            next_def,
+            Some(iterator.source.clone()),
+            header,
+        );
+
+        let mono_args = self.substitute_generic_args(fb, &generic_args);
+        let owner_struct = self.typecheck.method_owner.get(&next_def).copied();
+        let mir_fn_id = self.monomorphize_fn(next_def, mono_args, owner_struct, &[]);
+
+        let check_block = fb.new_block();
+        fb.set_terminator(
+            call_block,
+            Terminator::Call {
+                func: CallTarget::Direct(mir_fn_id),
+                args: vec![self_operand],
+                destination: Place::from_local(result_local),
+                target: Some(check_block),
+                source: None,
+            },
+        );
+
+        let is_some_local = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            check_block,
+            MirStatement::Assign {
+                place: Place::from_local(is_some_local),
+                rvalue: Rvalue::Use(Operand::Copy(
+                    Place::from_local(result_local).field(is_some_field),
+                    None,
+                )),
+                source: None,
+            },
+        );
+
+        let body_bb = fb.new_block();
+        let exit_bb = fb.new_block();
+        fb.set_terminator(
+            check_block,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(is_some_local), None),
+                targets: vec![(1, body_bb)],
+                otherwise: exit_bb,
+            },
+        );
+
+        let loop_var = fb.new_local(
+            elem_ty,
+            LocalKind::UserVariable,
+            Mutability::Const,
+            None,
+            None,
+        );
+        fb.locals_by_def.insert(*def_id, loop_var);
+
+        let value_operand = self.place_to_operand(
+            Place::from_local(result_local).field(value_field),
+            elem_ty,
+            Some(iterator.source.clone()),
+        );
+        fb.push_stmt(
+            body_bb,
+            MirStatement::Assign {
+                place: Place::from_local(loop_var),
+                rvalue: Rvalue::Use(value_operand),
+                source: None,
+            },
+        );
+
+        fb.loop_stack.push(LoopTargets {
+            break_target: exit_bb,
+            continue_target: header,
+        });
+        let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
+        fb.loop_stack.pop();
+
+        fb.join_if_open(body_end, header);
 
         exit_bb
     }

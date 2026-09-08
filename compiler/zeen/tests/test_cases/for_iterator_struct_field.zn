@@ -1,0 +1,25 @@
+struct Counter {
+  n: i32,
+}
+
+implement Iterator : Counter {
+  fn next(*self) Option[i32] {
+    if (self.n < 3) {
+      self.n = self.n + 1;
+      return Option.Some(self.n);
+    };
+
+    Option.None()
+  }
+}
+
+struct Wrapper {
+  pub counter: Counter,
+}
+
+fn main() {
+  let wrapper = Wrapper { .counter = Counter { .n = 0 } };
+  for (i : wrapper.counter) {
+    @println("{}", i);
+  }
+}
