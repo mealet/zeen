@@ -4280,6 +4280,34 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(v) => {
                         let (b, op) = self.lower_expr_to_operand(fb, v, block);
                         let block = b;
+                        // A `return` inside a block scope reads its value after
+                        // the scope teardown emits `StorageDead` for the scope's
+                        // locals. Re-home a place owned by the innermost scope
+                        // into a fresh temp so the teardown can't poison it.
+                        let op = match &op {
+                            Operand::Copy(place, _) | Operand::Move(place, _) => {
+                                if fb
+                                    .scope_stack
+                                    .last()
+                                    .is_some_and(|locals| locals.contains(&place.local))
+                                {
+                                    let ty = fb.func.local(place.local).ty;
+                                    let temp = fb.new_temp(ty);
+                                    fb.push_stmt(
+                                        block,
+                                        MirStatement::Assign {
+                                            place: Place::from_local(temp),
+                                            rvalue: Rvalue::Use(op),
+                                            source: Some(v.source.clone()),
+                                        },
+                                    );
+                                    Operand::Move(Place::from_local(temp), Some(v.source.clone()))
+                                } else {
+                                    op
+                                }
+                            }
+                            _ => op,
+                        };
                         fb.set_terminator(
                             block,
                             Terminator::Return(self.normalize_return_operand(fb, op)),

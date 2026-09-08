@@ -218,6 +218,67 @@ fn main() {
     assert!(!errors.is_empty());
 }
 
+#[test]
+fn return_of_block_scoped_copy_binding_passes() {
+    flow_ok(
+        r#"
+fn f() i32 {
+  if (true) {
+    let result = 42;
+    return result;
+  };
+  0
+}
+fn main() {
+  let x = f();
+  @println("{}", x);
+}
+"#,
+    );
+}
+
+#[test]
+fn return_of_block_scoped_move_binding_passes() {
+    flow_ok(
+        r#"
+struct Pair { pub n: i32 }
+fn f() Pair {
+  {
+    let result = Pair { .n = 42 };
+    return result;
+  }
+}
+fn main() {
+  let x = f();
+  @println("{}", x.n);
+}
+"#,
+    );
+}
+
+#[test]
+fn return_of_block_scoped_binding_drops_sibling_locals() {
+    flow_ok(
+        r#"
+struct Ring { pub n: i32 }
+implement Drop : Ring {
+  fn drop(self) void {}
+}
+fn f() Ring {
+  {
+    let a = Ring { .n = 1 };
+    let b = Ring { .n = 2 };
+    return a;
+  }
+}
+fn main() {
+  let x = f();
+  @println("{}", x.n);
+}
+"#,
+    );
+}
+
 // --> Closure consumption (S6: env-kind in the fat type)
 
 #[test]
