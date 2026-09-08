@@ -1,0 +1,34 @@
+struct Repeat[T] {
+  value: T,
+  remaining: i32,
+
+  pub fn new(value: T, remaining: i32) Self {
+    Self {
+      .value = value,
+      .remaining = remaining
+    }
+  }
+}
+
+implement[T] Iterator : Repeat[T] {
+  fn next(*self) Option[T] {
+    if (self.remaining > 0) {
+      self.remaining = self.remaining - 1;
+      return Option.Some(self.value);
+    };
+
+    Option.None()
+  }
+}
+
+fn main() {
+  let nine = Repeat.new(9, 3);
+  for (i : nine) {
+    @println("nine {}", i);
+  }
+
+  let five = Repeat.new(5, 2);
+  for (i : five) {
+    @println("five {}", i);
+  }
+}

@@ -9,6 +9,8 @@ use crate::lowering::{MirLoweringResult, lower_program};
 
 const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
 const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
+const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
+const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
 
 fn compile_mir_mode(
     src: &str,
@@ -25,7 +27,12 @@ fn compile_mir_mode(
             std_root: None,
             linked: HashSet::new(),
         },
-        core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
+        core_files: vec![
+            ("core.ops", CORE_OPS),
+            ("core.out", CORE_OUT),
+            ("core.iter", CORE_ITER),
+            ("core.option", CORE_OPTION),
+        ],
         mode,
         output: CompilationOutput::EmitMIR,
         target: None,
@@ -251,6 +258,47 @@ fn for_loop_over_rvalue_slice_materializes_iterator() {
     compile_mir_ok(
         "fn get_slice() []i32 { let arr = [1, 2, 3]; return &arr; } \
          fn main() { for (element : get_slice()) { @println(\"{}\", element); } }",
+    );
+}
+
+#[test]
+fn for_loop_over_iterator_struct_monomorphizes_next() {
+    let mir = compile_mir_ok(
+        "struct Counter { n: i32 } \
+         implement Iterator : Counter { fn next(*self) Option[i32] { \
+            if (self.n < 5) { self.n = self.n + 1; return Option.Some(self.n); }; \
+            Option.None() \
+         } } \
+         fn main() { let counter = Counter { .n = 0 }; \
+            for (i : counter) { @println(\"{}\", i); } }",
+    );
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+
+    assert!(
+        names.iter().any(|n| n == "Counter.next"),
+        "expected a monomorphized `Counter.next` in MIR function names, got {names:?}"
+    );
+}
+
+#[test]
+fn for_loop_over_generic_iterator_struct_monomorphizes_next() {
+    let mir = compile_mir_ok(
+        "struct Repeat[T] { value: T, remaining: i32 } \
+         implement[T] Iterator : Repeat[T] { fn next(*self) Option[T] { \
+            if (self.remaining > 0) { self.remaining = self.remaining - 1; \
+                return Option.Some(self.value); }; \
+            Option.None() \
+         } } \
+         fn main() { let rep = Repeat { .value = 7, .remaining = 3 }; \
+            for (i : rep) { @println(\"{}\", i); } }",
+    );
+
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+
+    assert!(
+        names.iter().any(|n| n == "Repeat[i32].next"),
+        "expected a monomorphized `Repeat[i32].next` in MIR function names, got {names:?}"
     );
 }
 
