@@ -62,6 +62,11 @@ pub struct TypeCheckResult {
     /// dispatch a call made on a bounded generic parameter to the concrete
     /// implementation once the receiver is monomorphized.
     pub interface_method_owners: HashMap<DefId, DefId>,
+
+    /// The concrete `Iterator::next` method resolved for a for-loop over a
+    /// struct, keyed by the loop statement. Mirrors `format_arg_resolutions`
+    /// so MIR dispatches to the same implementation the checker picked.
+    pub for_iterator_next_methods: HashMap<HirId, DefId>,
 }
 
 /// A single `implement` block registered for a `(struct, interface)` pair.

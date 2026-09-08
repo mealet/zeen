@@ -262,7 +262,7 @@ pub enum TypeError {
     },
 
     #[error("type `{child_type}` is not iterable")]
-    #[diagnostic(severity(Error), code(zeen::typechecker::not_indexable))]
+    #[diagnostic(severity(Error), code(zeen::typechecker::not_iterable))]
     NotIterable {
         child_type: SmolStr,
 
