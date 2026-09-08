@@ -1,6 +1,6 @@
 /// Main Iterator interface
-interface Iterator {
-  pub fn next[T](*self) Option[T];
+interface[T] Iterator {
+  pub fn next(*self) Option[T];
 }
 
 /// Returns struct that implements `Iterator` with pointer access
