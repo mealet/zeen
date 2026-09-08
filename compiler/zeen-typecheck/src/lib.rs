@@ -1716,6 +1716,25 @@ impl<'res> TypeChecker<'res> {
                     Type::Builtin(b) if coerce::builtin_is_integer(b) => iter_ty,
                     Type::Array { element, .. } => element,
                     Type::Slice { element, .. } => element,
+                    Type::Struct {
+                        def_id: struct_def,
+                        generic_args,
+                    } => match self.for_iterator_elem(struct_def, &generic_args) {
+                        Some((elem_ty, next_def)) => {
+                            self.result
+                                .for_iterator_next_methods
+                                .insert(stmt.id, next_def);
+                            elem_ty
+                        }
+                        None => {
+                            self.report(TypeError::NotIterable {
+                                child_type: self.display_type(iter_ty).into(),
+                                src: iterator.source.src(),
+                                span: iterator.source.span,
+                            });
+                            self.result.interner.error()
+                        }
+                    },
                     Type::Error => self.result.interner.error(),
                     _ => {
                         self.report(TypeError::NotIterable {
@@ -4825,6 +4844,56 @@ impl<'res> TypeChecker<'res> {
             .iter()
             .find(|e| !e.is_specialized && e.generic_bounds.is_empty())
             .cloned()
+    }
+
+    /// Resolves the element type and the concrete `next` method for a for-loop
+    /// over a struct implementing `Iterator`. The element type is the single
+    /// generic argument of `Option[T]` the `next` method returns, resolved
+    /// through the implementation's generic bindings.
+    fn for_iterator_elem(
+        &mut self,
+        struct_def: DefId,
+        generic_args: &[TypeId],
+    ) -> Option<(TypeId, DefId)> {
+        let iter_iface = self.interface_registry.get("Iterator")?;
+
+        let entry = self.applicable_impl(struct_def, iter_iface, generic_args)?;
+
+        let next_def = entry
+            .methods
+            .iter()
+            .copied()
+            .find(|&def| self.def_name(def).as_deref() == Some("next"))?;
+
+        let sig_ret = self.fn_sigs[&next_def].ret;
+
+        let struct_generics = self
+            .struct_generics
+            .get(&struct_def)
+            .cloned()
+            .unwrap_or_default();
+        let mut bindings: HashMap<DefId, TypeId> = struct_generics
+            .iter()
+            .copied()
+            .zip(generic_args.iter().copied())
+            .collect();
+
+        // The implementation's generic parameters resolve through the struct's
+        // generic slots (`implement[T] Iterator : Box[T]` -> `T` is `Box`'s `T`).
+        for (imp_g, struct_g) in &entry.generic_bindings {
+            if let Some(&concrete) = bindings.get(struct_g) {
+                bindings.insert(*imp_g, concrete);
+            }
+        }
+
+        let ret = self.substitute_generics(sig_ret, &bindings);
+
+        match self.result.interner.get(ret).clone() {
+            Type::Struct { generic_args, .. } if generic_args.len() == 1 => {
+                Some((generic_args[0], next_def))
+            }
+            _ => None,
+        }
     }
 
     fn call_interface_method(
