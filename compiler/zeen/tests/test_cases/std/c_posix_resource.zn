@@ -44,6 +44,7 @@ fn main() i32 {
   let fd: c_int = mkstemp(@as([*]char, &tmpl[0]));
   @println("mkstemp fd>=0={}", fd >= 0);
   if (fd >= 0) { let _: c_int = close(fd); };
+  let _: c_int = unlink(@as([*]const char, &tmpl[0]));
 
   let mm: *void = memmem(@as([*]const void, "haystack with needle"), 20, @as([*]const void, "needle"), 6);
   @println("memmem nonnull={}", @as(*void, mm) != nullptr);
