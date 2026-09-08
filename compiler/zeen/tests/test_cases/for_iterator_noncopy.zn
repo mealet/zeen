@@ -1,0 +1,27 @@
+use std.string;
+
+struct Words {
+  index: i32,
+}
+
+implement Iterator : Words {
+  fn next(*self) Option[String] {
+    if (self.index == 0) {
+      self.index = 1;
+      return Option.Some(String.from("one"));
+    };
+    if (self.index == 1) {
+      self.index = 2;
+      return Option.Some(String.from("two"));
+    };
+
+    Option.None()
+  }
+}
+
+fn main() {
+  let words = Words { .index = 0 };
+  for (w : words) {
+    @println("word {}", w);
+  }
+}
