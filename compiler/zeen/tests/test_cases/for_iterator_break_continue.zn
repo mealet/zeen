@@ -1,0 +1,30 @@
+struct Counter {
+  n: i32,
+}
+
+implement Iterator : Counter {
+  fn next(*self) Option[i32] {
+    if (self.n < 6) {
+      self.n = self.n + 1;
+      return Option.Some(self.n);
+    };
+
+    Option.None()
+  }
+}
+
+fn main() {
+  let counter = Counter { .n = 0 };
+  for (i : counter) {
+    if (i == 1) {
+      @println("skipping {}", i);
+      continue;
+    };
+    if (i == 4) {
+      @println("breaking at {}", i);
+      break;
+    };
+    @println("value {}", i);
+  }
+  @println("after loop");
+}

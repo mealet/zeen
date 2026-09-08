@@ -1,0 +1,23 @@
+struct Counter {
+  n: i32,
+}
+
+implement Iterator : Counter {
+  fn next(*self) Option[i32] {
+    if (self.n < 4) {
+      self.n = self.n + 1;
+      return Option.Some(self.n);
+    };
+
+    Option.None()
+  }
+}
+
+fn main() {
+  for (round : 2) {
+    let counter = Counter { .n = 0 };
+    for (i : counter) {
+      @println("{}:{}", round, i);
+    }
+  }
+}
