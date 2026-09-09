@@ -703,7 +703,7 @@ fn global_depends_on_another_init_order() {
 use crate::{
     AggregateKind, CallTarget, ConstValue, LocalId, MirFunctionId, Operand, Rvalue, Terminator,
 };
-use zeen_types::{CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD, is_closure_struct_def};
+use zeen_types::{CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD};
 
 fn fn_id_by_name(mir: &MirLoweringResult, name: &str) -> Option<MirFunctionId> {
     mir.program
@@ -721,10 +721,12 @@ fn calls_of(mir: &MirLoweringResult, id: MirFunctionId) -> Vec<&Terminator> {
         .collect()
 }
 
-// Capturing closures lower to a fat value that *is* the captured environment
-// (an inline struct of captures); the closure body gets a leading `*const`
-// parameter pointing at it (env-first ABI), and call sites dispatch directly
-// to the body with `&value` as that first argument.
+// Capturing closures lower to a fat value: a static `{ $fn, $env }`
+// envelope whose `$env` points at a heap-allocated struct of captures. The
+// closure body gets a leading `*const` parameter pointing at that env
+// struct (env-first ABI); call sites dispatch indirectly through `$fn` with
+// `$env` as the leading argument, so provenance never matters at the call
+// site.
 
 fn closure_id_named(mir: &MirLoweringResult, name: &str) -> MirFunctionId {
     fn_id_by_name(mir, name).expect("expected closure function by name")
@@ -804,43 +806,38 @@ fn fat_call_passes_env_before_user_args() {
     let apply_id = fn_id_starting_with(&mir, "apply");
     let apply = &mir.program.functions[&apply_id];
 
-    // The fat call dispatches directly to the closure body, passing `&f`
-    // (a const ref to the fat parameter) as the leading env-first argument.
-    let fat_call = apply.blocks.iter().any(|b| {
-        matches!(
-            &b.terminator,
-            Terminator::Call {
-                func: CallTarget::Direct(_),
-                args,
-                ..
-            } if matches!(
-                args.first(),
-                Some(Operand::Copy(place, _)) if place.projection.is_empty()
-            )
-        )
+    // The fat call dispatches indirectly through `$fn` (uniform env-first
+    // ABI), passing the `$env` field copy as the leading argument before the
+    // user args.
+    let fat_call = apply.blocks.iter().find_map(|b| match &b.terminator {
+        Terminator::Call {
+            func: CallTarget::Indirect(_),
+            args,
+            ..
+        } => Some(args),
+        _ => None,
     });
+    let fat_call = fat_call.expect("fat call must dispatch indirectly through `$fn`");
     assert!(
-        fat_call,
-        "fat call must dispatch directly with `&value` as the first argument"
+        matches!(
+            fat_call.first(),
+            Some(Operand::Copy(place, _))
+                if matches!(
+                    place.projection.as_slice(),
+                    [crate::PlaceElem::Field(CLOSURE_FAT_ENV_FIELD)]
+                )
+        ),
+        "first arg of a fat call must be the `$env` field of the callee"
     );
-
-    // The env pointer is built with a `&const` ref of the fat value itself.
-    let takes_env_addr = apply.blocks.iter().any(|b| {
-        b.statements.iter().any(|s| {
-            matches!(
-                s,
-                crate::MirStatement::Assign {
-                    rvalue: Rvalue::Ref { is_const: true, .. },
-                    ..
-                }
-            )
-        })
-    });
-    assert!(takes_env_addr, "expected a `&const value` env pointer");
+    assert_eq!(
+        fat_call.len(),
+        2,
+        "the fat call takes the env field plus the user arg"
+    );
 }
 
 #[test]
-fn closure_values_never_touch_the_heap() {
+fn capturing_closure_env_is_heap_allocated() {
     let mir = compile_mir_ok(
         "fn apply(f: Fn(i32) i32, x: i32) i32 { f(x) } \
          fn main() { \
@@ -850,12 +847,24 @@ fn closure_values_never_touch_the_heap() {
          }",
     );
 
+    // Captures live in a heap env block: building the closure mallocs it,
+    // and every fat value's death frees it back.
     assert!(
-        mir.program.extern_fns.is_empty(),
-        "closure values are inline structs: no malloc/free must be declared"
+        mir.program
+            .extern_fns
+            .iter()
+            .any(|f| f.symbol_name == "malloc"),
+        "building a capturing closure must declare `malloc` for its env"
+    );
+    assert!(
+        mir.program
+            .extern_fns
+            .iter()
+            .any(|f| f.symbol_name == "free"),
+        "drops must declare `free` for the env block"
     );
 
-    // The captures are grouped into the fat value with a plain aggregate.
+    // The captures are grouped into a plain env aggregate first.
     let builds_aggregate = mir.program.functions.values().any(|func| {
         func.blocks.iter().any(|b| {
             b.statements.iter().any(|s| {
@@ -873,7 +882,7 @@ fn closure_values_never_touch_the_heap() {
 }
 
 #[test]
-fn stack_only_closure_env_does_not_call_malloc() {
+fn closure_env_block_is_stored_through_a_boxed_pointer() {
     let mir = compile_mir_ok(
         "fn main() { \
              let n = 5; \
@@ -883,32 +892,45 @@ fn stack_only_closure_env_does_not_call_malloc() {
          }",
     );
 
-    assert!(
-        mir.program.extern_fns.is_empty(),
-        "a closure that stays on its own frame must not malloc its env"
-    );
-
+    // The env block is malloc'd (sized with a `SizeOf`), and the aggregate is
+    // stored through a cast `*void -> *env` pointer, i.e. into a boxed
+    // deref.
     let main_id = closure_id_named(&mir, "main");
     let main = &mir.program.functions[&main_id];
-    let takes_env_addr = main.blocks.iter().any(|b| {
+    let sizes_env = main.blocks.iter().any(|b| {
         b.statements.iter().any(|s| {
             matches!(
                 s,
                 crate::MirStatement::Assign {
-                    rvalue: Rvalue::Ref { is_const: true, .. },
+                    rvalue: Rvalue::SizeOf(_),
                     ..
                 }
             )
         })
     });
+    assert!(sizes_env, "expected a SizeOf to size the env malloc");
+
+    let main = &mir.program.functions[&main_id];
+    let stores_env = main.blocks.iter().any(|b| {
+        b.statements.iter().any(|s| {
+            matches!(
+                s,
+                crate::MirStatement::Assign {
+                    place,
+                    rvalue: Rvalue::Use(_),
+                    ..
+                } if place.projection.as_slice() == [crate::PlaceElem::Deref]
+            )
+        })
+    });
     assert!(
-        takes_env_addr,
-        "expected a `&const env` ref for the stack env"
+        stores_env,
+        "the env aggregate must be moved into the boxed block"
     );
 }
 
 #[test]
-fn zero_capture_closure_coerced_to_fat_dispatches_directly() {
+fn zero_capture_closure_coerced_to_fat_uses_env_first_adapter() {
     let mir = compile_mir_ok(
         "fn apply_once(f: FnOnce(i32) i32, x: i32) i32 { f(x) } \
          fn main() { \
@@ -916,78 +938,96 @@ fn zero_capture_closure_coerced_to_fat_dispatches_directly() {
          }",
     );
 
+    // The zero-capture closure is a plain body; its fat slot needs an
+    // env-first adapter, synthesized once.
     let names: Vec<String> = mir.program.function_names.values().cloned().collect();
     assert!(
-        !names.iter().any(|n| n.contains("fatadapter")),
-        "adapters are gone: fat values dispatch directly, got {names:?}"
+        names.iter().any(|n| n.starts_with("$fatadapt")),
+        "a zero-capture closure in a fat slot must get an env-first adapter, got {names:?}"
     );
 
-    // The mono copy of `apply_once` for the zero-capture closure calls the
-    // closure body directly.
+    // The mono copy of `apply_once` for the zero-capture closure calls
+    // indirectly through the `$fn` field (the adapter).
     let apply_once_id = fn_id_starting_with(&mir, "apply_once");
     let apply_once = &mir.program.functions[&apply_once_id];
-    let direct = apply_once.blocks.iter().any(|b| {
+    let indirect = apply_once.blocks.iter().any(|b| {
         matches!(
             b.terminator,
             Terminator::Call {
-                func: CallTarget::Direct(_),
+                func: CallTarget::Indirect(_),
                 ..
             }
         )
     });
-    assert!(direct, "the fat call must dispatch to the closure body");
+    assert!(indirect, "the fat call must go through the adapter pointer");
 }
 
 #[test]
-fn static_fn_coerced_to_fat_dispatches_directly() {
+fn static_fn_coerced_to_fat_dispatches_through_adapter() {
     let mir = compile_mir_ok(
         "fn double(x: i32) i32 { x * 2 } \
          fn apply(f: Fn(i32) i32, x: i32) i32 { f(x) } \
          fn main() { @println(\"{}\", apply(double, 21)); }",
     );
 
+    // The static fn has an empty env, so the fat value holds a `null` env and
+    // an env-first adapter forwarding into `double`.
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
+    assert!(
+        names.iter().any(|n| n.starts_with("$fatadapt")),
+        "a static fn in a fat slot must get an env-first adapter, got {names:?}"
+    );
+
+    // Inside `apply` the call is indirect through `$fn`.
     let apply_id = fn_id_starting_with(&mir, "apply");
     let apply = &mir.program.functions[&apply_id];
-
-    // The direct call inside `apply` must target the `double` body itself.
-    let double_id = fn_id_by_name(&mir, "double").expect("double body must be lowered");
-    let calls_double = apply.blocks.iter().any(|b| {
+    let calls_indirect = apply.blocks.iter().any(|b| {
         matches!(
             b.terminator,
             Terminator::Call {
-                func: CallTarget::Direct(id),
+                func: CallTarget::Indirect(_),
                 ..
-            } if id == double_id
+            }
         )
     });
     assert!(
-        calls_double,
-        "a static fn in a fat slot must be called through its own body"
+        calls_indirect,
+        "a static fn in a fat slot must be called indirectly through `$fn`"
     );
 
-    // The env envelope is built at the call site: an aggregate with no
-    // captures (the static fn has an empty env).
+    // The envelope is built at the call site: two fields, fn pointer and a
+    // `null` env mark for the adapter-callable empty envelope.
     let main_id = fn_id_by_name(&mir, "main").expect("main missing");
     let main_fn = &mir.program.functions[&main_id];
-    let empty_aggregate = main_fn.blocks.iter().any(|b| {
+    let envelope = main_fn.blocks.iter().any(|b| {
         b.statements.iter().any(|s| {
             matches!(
                 s,
                 crate::MirStatement::Assign {
-                    rvalue: Rvalue::Aggregate { operands, .. },
+                    rvalue: Rvalue::Aggregate {
+                        kind: AggregateKind::Struct(def),
+                        operands,
+                        ..
+                    },
                     ..
-                } if operands.is_empty()
+                } if matches!(
+                    operands.as_slice(),
+                    [
+                        Operand::Copy(_, _),
+                        Operand::Constant(ConstValue::NullPtr, None)
+                    ]
+                ) && *def == zeen_types::CLOSURE_FAT_DEF
             )
         })
     });
     assert!(
-        empty_aggregate,
-        "expected an empty env aggregate at the call site"
+        envelope,
+        "expected a `{{ fn, null }}` envelope aggregate at the call site"
     );
 }
 
 #[test]
-fn fat_layout_matches_captures() {
+fn fat_layout_is_static_two_field_envelope() {
     let mir = compile_mir_ok(
         "fn apply(f: Fn(i32) i32, x: i32) i32 { f(x) } \
          fn main() { \
@@ -997,7 +1037,8 @@ fn fat_layout_matches_captures() {
          }",
     );
 
-    // A fat value is its environment: the layout has one field per capture.
+    // A fat value is a static `{ $fn, $env }` envelope shared by every fat
+    // type; the captures live in the heap block `$env` points at.
     let fat_layouts: Vec<_> = mir
         .program
         .struct_layouts
@@ -1007,13 +1048,34 @@ fn fat_layout_matches_captures() {
     assert!(!fat_layouts.is_empty(), "fat layout must be registered");
     assert_eq!(
         fat_layouts[0].fields.len(),
+        2,
+        "the fat envelope always holds `$fn` and `$env`"
+    );
+    assert_eq!(
+        fat_layouts[0].fields[0].def_id,
+        zeen_types::CLOSURE_FAT_FN_FIELD,
+    );
+    assert_eq!(
+        fat_layouts[0].fields[1].def_id,
+        zeen_types::CLOSURE_FAT_ENV_FIELD,
+    );
+
+    // The env captures get their own inline struct layout.
+    let env_layouts: Vec<_> = mir
+        .program
+        .struct_layouts
+        .iter()
+        .filter(|(_, l)| l.def_id != zeen_types::CLOSURE_FAT_DEF)
+        .collect();
+    assert_eq!(
+        env_layouts.len(),
         1,
-        "the fat value is the env struct: one field per capture"
+        "one env struct layout (one capture) must be registered"
     );
 }
 
 #[test]
-fn runtime_bare_fn_coercion_wraps_into_pointer_fat() {
+fn runtime_bare_fn_coercion_boxes_pointer_and_uses_adapter() {
     let mir = compile_mir_ok(
         "fn apply(f: Fn(i32) i32, x: i32) i32 { f(x) } \
          fn main() { \
@@ -1022,25 +1084,23 @@ fn runtime_bare_fn_coercion_wraps_into_pointer_fat() {
          }",
     );
 
-    // A basic fn value read from a variable is wrapped into a one-field fat
-    // value and called indirectly.
-    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
-    let main = &mir.program.functions[&main_id];
-    let wraps_fn_ptr = main.blocks.iter().any(|b| {
-        b.statements.iter().any(|s| {
-            matches!(
-                s,
-                crate::MirStatement::Assign {
-                    rvalue: Rvalue::Aggregate { operands, .. },
-                    ..
-                } if operands.len() == 1
-            )
-        })
-    });
+    // A basic fn value read from a variable is boxed into a heap fat
+    // envelope (env = null, `$fn` = the pointer), and calls go through a
+    // shared env-first pointer adapter.
+    let names: Vec<String> = mir.program.function_names.values().cloned().collect();
     assert!(
-        wraps_fn_ptr,
-        "a basic fn value must be wrapped into a one-field fat value"
+        names.iter().any(|n| n.starts_with("$fatptr")),
+        "a runtime fn pointer in a fat slot must get a pointer adapter, got {names:?}"
     );
+    assert!(
+        mir.program
+            .extern_fns
+            .iter()
+            .any(|f| f.symbol_name == "malloc"),
+        "boxing the fn pointer must declare `malloc`"
+    );
+
+    // Inside `apply` the call is indirect through `$fn` (the adapter).
     let apply_id = fn_id_starting_with(&mir, "apply");
     let apply = &mir.program.functions[&apply_id];
     let indirect = apply.blocks.iter().any(|b| {
@@ -1054,7 +1114,7 @@ fn runtime_bare_fn_coercion_wraps_into_pointer_fat() {
     });
     assert!(
         indirect,
-        "a pointer-fat value must be called indirectly through its field"
+        "a boxed fn pointer must be called indirectly through `$fn`"
     );
 }
 
@@ -1106,9 +1166,9 @@ fn generic_typed_capture_is_rejected() {
     );
 }
 
-// A heap-env `FnOnce` closure owns its captured block: an escaping,
-// non-Copy-capturing closure must get a synthesized `$fatdrop#N` free
-// function, while frame-bound or copyable closures must not.
+// A heap-env closure owns its captured block: any fat value (Fn or FnOnce)
+// must get a synthesized `$fatdrop#N` drop function that `free`s the block,
+// and the `free` extern must be declared.
 
 #[test]
 fn escaping_fnonce_closure_gets_fat_drop_function() {
@@ -1123,11 +1183,11 @@ fn escaping_fnonce_closure_gets_fat_drop_function() {
     );
 
     assert!(
-        !mir.program
+        mir.program
             .extern_fns
             .iter()
             .any(|f| f.symbol_name == "free"),
-        "closure envs are inline: `free` must not be declared"
+        "the env block is heap-allocated: `free` must be declared"
     );
     assert!(
         mir.program
@@ -1139,7 +1199,7 @@ fn escaping_fnonce_closure_gets_fat_drop_function() {
 }
 
 #[test]
-fn fn_closure_needs_no_drop_function() {
+fn heap_fn_closure_gets_drop_function() {
     let mir = compile_mir_ok(
         "fn main() { \
              let n = 5; \
@@ -1149,21 +1209,21 @@ fn fn_closure_needs_no_drop_function() {
          }",
     );
 
+    // Every fat value owns a heap env block, `Fn` included: the value's
+    // scope-end drop must `free` it back.
     assert!(
-        !mir.program
+        mir.program
             .extern_fns
             .iter()
             .any(|f| f.symbol_name == "free"),
-        "a frame-bound closure must not declare `free`: its env is on the stack"
+        "a heap-env closure must declare `free` for its env block"
     );
-    // `Fn` values hold only Copy captures: nothing to tear down, no drop
-    // function.
     assert!(
-        !mir.program
+        mir.program
             .function_names
             .values()
             .any(|n| n.starts_with("$fatdrop#")),
-        "an `Fn` closure's captures are all Copy: no drop function"
+        "an `Fn` value's heap env must also get a drop function"
     );
 }
 
@@ -1236,11 +1296,11 @@ fn fnonce_param_mono_copy_registers_drop_function() {
     );
 
     assert!(
-        !mir.program
+        mir.program
             .extern_fns
             .iter()
             .any(|f| f.symbol_name == "free"),
-        "closure envs are inline: `free` must not be declared"
+        "the concrete FnOnce fat type owns a heap env: `free` must be declared"
     );
     assert!(
         mir.program
@@ -1268,7 +1328,8 @@ fn consuming_call_of_concrete_env_calls_drop_function() {
     let main = &mir.program.functions[&main_id];
 
     // A direct call to the synthesized drop function must follow the
-    // indirect fat call.
+    // indirect fat call, moving the consumed slot into it (so dataflow
+    // stops tracking it).
     let drops_after_call = main.blocks.iter().any(|b| {
         matches!(
             &b.terminator,
@@ -1276,7 +1337,10 @@ fn consuming_call_of_concrete_env_calls_drop_function() {
                 func: CallTarget::Direct(_),
                 args,
                 ..
-            } if matches!(args.first(), Some(Operand::Copy(place, _)) if place.projection.is_empty())
+            } if matches!(
+                args.first(),
+                Some(Operand::Move(place, _)) if place.projection.is_empty()
+            )
         )
     });
     assert!(
