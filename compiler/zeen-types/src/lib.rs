@@ -76,10 +76,13 @@ pub enum Type {
     /// Fat closure value backed by the canonical `{ ptr, env }` struct.
     /// `once` marks `FnOnce` - callable at most once because it owns a
     /// non-Copy capture. Both `Fn` and `FnOnce` are move-only.
+    /// `erased` marks a user-written annotation (`Fn(T) R` / `FnOnce(T) R`)
+    /// that needs finalization to resolve to a concrete closure type.
     FatFn {
         params: Vec<TypeId>,
         ret: TypeId,
         once: bool,
+        erased: bool,
     },
 
     GenericParam(DefId),
@@ -175,7 +178,9 @@ impl Type {
                 format!("fn({}) {}", string_params.join(", "), string_ret)
             }
 
-            Type::FatFn { params, ret, once } => {
+            Type::FatFn {
+                params, ret, once, ..
+            } => {
                 let string_params = params
                     .iter()
                     .map(|param| {
@@ -484,7 +489,12 @@ pub fn substitute_generics(
             }
         }
 
-        Type::FatFn { params, ret, once } => {
+        Type::FatFn {
+            params,
+            ret,
+            once,
+            erased,
+        } => {
             let new_params: Vec<TypeId> = params
                 .iter()
                 .map(|p| substitute_generics(interner, *p, bindings))
@@ -497,6 +507,7 @@ pub fn substitute_generics(
                     params: new_params,
                     ret: new_ret,
                     once,
+                    erased,
                 })
             }
         }
@@ -883,11 +894,13 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
+            erased: false,
         });
         let fat_once = interner.intern(Type::FatFn {
             params: vec![foo],
             ret: void,
             once: true,
+            erased: false,
         });
 
         assert_eq!(

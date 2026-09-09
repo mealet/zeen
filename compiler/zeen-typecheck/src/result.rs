@@ -109,10 +109,9 @@ impl TypeCheckResult {
                 self.applicable_copy_impl(def_id, copy_iface, &generic_args)
             }
             Type::Array { element, .. } => self.is_copy(element),
-            // `Fn` closure values (all-Copy captures or none) are Copy: the
-            // inline environment is duplicated with the value; `FnOnce` owns a
-            // non-Copy capture so it is move-only.
-            Type::FatFn { once, .. } => !once,
+            // Both `Fn` and `FnOnce` closure values are move-only: the
+            // inline environment is part of the value and cannot be copied.
+            Type::FatFn { .. } => false,
             Type::Slice { .. } => true,
             // Builtins, pointers, fn pointers, enums, void, never, error.
             _ => true,

@@ -1,5 +1,5 @@
 use zeen_ast::types::BuiltinType;
-use zeen_types::{FatFnBody, Type, TypeId, TypeInterner};
+use zeen_types::{Type, TypeId, TypeInterner};
 
 pub fn builtin_is_integer(b: BuiltinType) -> bool {
     matches!(
@@ -201,10 +201,10 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
             },
         ) if fp == tp && fr == tr => CoerceResult::FatFnCoercion,
 
-        // A concrete fat value widens into the erased `Fn`/`FnOnce` bound of
-        // the same signature. `FnOnce` never narrows back to `Fn`, while an
-        // `Fn` value may flow into an `FnOnce` slot (the concrete storage
-        // keeps its `Fn` abilities).
+        // A fat value widens into the erased `Fn`/`FnOnce` bound of the same
+        // signature. `FnOnce` never narrows back to `Fn`, while an `Fn` value
+        // may flow into an `FnOnce` slot (the concrete storage keeps its
+        // `Fn` abilities).
         (
             Type::FatFn {
                 params: fp,
@@ -216,7 +216,7 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
                 params: tp,
                 ret: tr,
                 once: to_once,
-                body: FatFnBody::Bound,
+                erased: true,
             },
         ) if fp == tp && fr == tr && (!from_once || from_once == to_once) => {
             CoerceResult::FatFnCoercion
@@ -235,20 +235,8 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
                 is_const: to_const,
             },
         ) if from_const == to_const
-            && matches!(
-                interner.get(from_inner),
-                Type::FatFn {
-                    body: FatFnBody::Closure { .. },
-                    ..
-                }
-            )
-            && matches!(
-                interner.get(to_inner),
-                Type::FatFn {
-                    body: FatFnBody::Bound,
-                    ..
-                }
-            )
+            && matches!(interner.get(from_inner), Type::FatFn { erased: false, .. })
+            && matches!(interner.get(to_inner), Type::FatFn { erased: true, .. })
             && match (interner.get(from_inner), interner.get(to_inner)) {
                 (
                     Type::FatFn {
@@ -863,7 +851,7 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
-            body: FatFnBody::Bound,
+            erased: true,
         });
 
         assert_eq!(try_coerce(&mut it, bare, fat), CoerceResult::FatFnCoercion);
@@ -882,7 +870,7 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: true,
-            body: FatFnBody::Bound,
+            erased: true,
         });
 
         assert_eq!(
@@ -900,13 +888,13 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
-            body: FatFnBody::Bound,
+            erased: true,
         });
         let fat_once = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            body: FatFnBody::Bound,
+            erased: true,
         });
 
         assert_eq!(
@@ -924,13 +912,13 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
-            body: FatFnBody::Bound,
+            erased: true,
         });
         let fat_once = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            body: FatFnBody::Bound,
+            erased: true,
         });
 
         assert_eq!(try_coerce(&mut it, fat_once, fat), CoerceResult::Fail);
@@ -940,25 +928,18 @@ mod tests {
     fn concrete_closure_widens_to_bound() {
         let mut it = TypeInterner::default();
         let i32 = it.intern(Type::Builtin(BuiltinType::i32));
-        let env_struct = it.intern(Type::Struct {
-            def_id: zeen_resolve::DefId(9_000),
-            generic_args: vec![],
-        });
 
         let concrete = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            body: FatFnBody::Closure {
-                env: env_struct,
-                target: zeen_resolve::DefId(9_500),
-            },
+            erased: false,
         });
         let opaque = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            body: FatFnBody::Bound,
+            erased: true,
         });
 
         assert_eq!(
@@ -971,65 +952,48 @@ mod tests {
     fn bound_does_not_narrow_to_concrete() {
         let mut it = TypeInterner::default();
         let i32 = it.intern(Type::Builtin(BuiltinType::i32));
-        let env_struct = it.intern(Type::Struct {
-            def_id: zeen_resolve::DefId(9_000),
-            generic_args: vec![],
-        });
 
         let opaque = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            body: FatFnBody::Bound,
+            erased: true,
         });
         let concrete = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: true,
-            body: FatFnBody::Closure {
-                env: env_struct,
-                target: zeen_resolve::DefId(9_500),
-            },
+            erased: false,
         });
 
         assert_eq!(try_coerce(&mut it, opaque, concrete), CoerceResult::Fail);
     }
 
     #[test]
-    fn different_concrete_targets_do_not_coerce() {
+    fn same_signature_concrete_fats_are_identical() {
         let mut it = TypeInterner::default();
         let i32 = it.intern(Type::Builtin(BuiltinType::i32));
-        let env_a = it.intern(Type::Struct {
-            def_id: zeen_resolve::DefId(9_000),
-            generic_args: vec![],
-        });
-        let env_b = it.intern(Type::Struct {
-            def_id: zeen_resolve::DefId(9_001),
-            generic_args: vec![],
-        });
 
+        // Concrete closures share no type-level identity with a target:
+        // dispatch is decided by MIR from the value. Two concrete fats with
+        // the same signature are structurally identical (hash-consed).
         let closure_a = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: false,
-            body: FatFnBody::Closure {
-                env: env_a,
-                target: zeen_resolve::DefId(9_500),
-            },
+            erased: false,
         });
         let closure_b = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,
             once: false,
-            body: FatFnBody::Closure {
-                env: env_b,
-                target: zeen_resolve::DefId(9_501),
-            },
+            erased: false,
         });
 
+        assert_eq!(closure_a, closure_b, "hash-consing must unify equal fats");
         assert_eq!(
             try_coerce(&mut it, closure_a, closure_b),
-            CoerceResult::Fail
+            CoerceResult::Identity
         );
     }
 
@@ -1047,7 +1011,7 @@ mod tests {
             params: vec![void],
             ret: i32,
             once: false,
-            body: FatFnBody::Bound,
+            erased: true,
         });
 
         assert_eq!(try_coerce(&mut it, bare, mismatched), CoerceResult::Fail);
