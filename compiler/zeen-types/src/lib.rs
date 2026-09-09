@@ -17,57 +17,16 @@ pub const SLICE_PTR_FIELD: DefId = DefId(u32::MAX - 2);
 pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
 pub const ARRAY_LEN_FIELD: DefId = DefId(u32::MAX - 4);
 
-/// Synthetic `DefId`s for the fat closure-value struct `{ function, env }`
-/// (type `Type::FatFn`). The struct def and its two fields are canonical - they
-/// are shared by every fat value, since the layout of a fat pointer is always
-/// two pointer-sized slots regardless of the captured environment's shape.
+/// Synthetic `DefId`s for the canonical fat closure-value struct `{ ptr, env }`
+/// (type `Type::FatFn`). The struct def and its two fields are shared by every
+/// fat value: `ptr` is the function pointer, `env` is the heap-allocated
+/// environment (null when the closure has no captures).
 pub const CLOSURE_FAT_DEF: DefId = DefId(u32::MAX - 5);
 pub const CLOSURE_FAT_FN_FIELD: DefId = DefId(u32::MAX - 6);
 pub const CLOSURE_FAT_ENV_FIELD: DefId = DefId(u32::MAX - 7);
 
-/// Synthetic `DefId`s for closure value structs. Each closure function gets a
-/// private block of ids (struct def first, then one per field), far away from
-/// real defs (small), slice/array sentinels (top of the range) and each other.
-const CLOSURE_SYNTH_BASE: u32 = 1 << 30;
-const CLOSURE_SYNTH_STRIDE: u32 = 1024;
-
-/// The value-struct `DefId` of the closure defined by `closure_fn`.
-pub fn closure_struct_def(closure_fn: DefId) -> DefId {
-    DefId(CLOSURE_SYNTH_BASE + closure_fn.0 * CLOSURE_SYNTH_STRIDE)
-}
-
-/// The `i`-th field (0 = `$fn_ptr`, then captures) of the closure value struct.
-pub fn closure_field_def(closure_fn: DefId, index: usize) -> DefId {
-    DefId(CLOSURE_SYNTH_BASE + closure_fn.0 * CLOSURE_SYNTH_STRIDE + 1 + index as u32)
-}
-
-/// Whether `def_id` belongs to a synthetic closure value struct.
-pub fn is_closure_struct_def(def_id: DefId) -> bool {
-    def_id.0 >= CLOSURE_SYNTH_BASE
-        && def_id.0 < CLOSURE_SYNTH_BASE + (u32::MAX - CLOSURE_SYNTH_BASE) / 2
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub u32);
-
-/// What a fat fn value is made of.
-///
-/// Storage is always concrete: the captures live in an inline struct (the
-/// value *is* the environment) and the called function is known statically.
-/// `Bound` is the erased annotation form `Fn(T) R` - a coercion target used
-/// for checks, never a storage type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FatFnBody {
-    /// The annotation form `Fn(T) R` / `FnOnce(T) R`.
-    Bound,
-    /// A closure (or static `fn`) value: captures in an inline env struct,
-    /// called by dispatching directly to `target` with `&env` as the first
-    /// argument (env-first ABI).
-    Closure { env: TypeId, target: DefId },
-    /// A basic fn pointer value stored inline in a one-field struct; called
-    /// indirectly through it with the plain (no-env) ABI.
-    Pointer { pointee: TypeId },
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -114,17 +73,13 @@ pub enum Type {
         ret: TypeId,
     },
 
-    /// Fat closure value. `once` marks `FnOnce` - callable at most once
-    /// because it owns a non-Copy capture; `Fn` values (all-Copy captures or
-    /// none) are `Copy`. The `body` says what the value is made of: storage
-    /// is always concrete (inline env struct + static target, or an inline
-    /// fn pointer), while `Bound` is the erased annotation form used only as
-    /// a coercion target.
+    /// Fat closure value backed by the canonical `{ ptr, env }` struct.
+    /// `once` marks `FnOnce` - callable at most once because it owns a
+    /// non-Copy capture. Both `Fn` and `FnOnce` are move-only.
     FatFn {
         params: Vec<TypeId>,
         ret: TypeId,
         once: bool,
-        body: FatFnBody,
     },
 
     GenericParam(DefId),
@@ -146,37 +101,6 @@ impl Type {
             Type::Builtin(b) => b.to_string(),
             Type::IntLiteral => DEFAULT_INT_LITERAL.to_string(),
             Type::FloatLiteral => DEFAULT_FLOAT_LITERAL.to_string(),
-
-            Type::Struct {
-                def_id,
-                generic_args,
-            } if is_closure_struct_def(*def_id) && !generic_args.is_empty() => {
-                // Closure value structs carry their callable signature in
-                // `generic_args[0]` and captured types after it, so they can
-                // be displayed as a readable signature.
-                let signature = type_interner.get(generic_args[0]).to_display(
-                    Rc::clone(&interner),
-                    type_interner,
-                    resolution_result,
-                );
-
-                if generic_args.len() == 1 {
-                    signature
-                } else {
-                    let env: Vec<String> = generic_args[1..]
-                        .iter()
-                        .map(|&ty| {
-                            type_interner.get(ty).to_display(
-                                Rc::clone(&interner),
-                                type_interner,
-                                resolution_result,
-                            )
-                        })
-                        .collect();
-
-                    format!("{} [env: {}]", signature, env.join(", "))
-                }
-            }
 
             Type::Struct {
                 def_id,
@@ -251,9 +175,7 @@ impl Type {
                 format!("fn({}) {}", string_params.join(", "), string_ret)
             }
 
-            Type::FatFn {
-                params, ret, once, ..
-            } => {
+            Type::FatFn { params, ret, once } => {
                 let string_params = params
                     .iter()
                     .map(|param| {
@@ -558,6 +480,23 @@ pub fn substitute_generics(
                 interner.intern(Type::Fn {
                     params: new_params,
                     ret: new_ret,
+                })
+            }
+        }
+
+        Type::FatFn { params, ret, once } => {
+            let new_params: Vec<TypeId> = params
+                .iter()
+                .map(|p| substitute_generics(interner, *p, bindings))
+                .collect();
+            let new_ret = substitute_generics(interner, ret, bindings);
+            if new_params == params && new_ret == ret {
+                ty
+            } else {
+                interner.intern(Type::FatFn {
+                    params: new_params,
+                    ret: new_ret,
+                    once,
                 })
             }
         }
@@ -923,32 +862,6 @@ mod tests {
     }
 
     #[test]
-    fn closure_struct_displays_as_signature_with_env() {
-        use zeen_resolve::DefId;
-
-        let mut interner = TypeInterner::new();
-        let resolution = ResolutionResult::default();
-        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
-
-        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
-        let fn_ty = interner.intern(Type::Fn {
-            params: vec![i32],
-            ret: i32,
-        });
-
-        let closure_def = closure_struct_def(DefId(7));
-        let closure_ty = interner.intern(Type::Struct {
-            def_id: closure_def,
-            generic_args: vec![fn_ty, i32],
-        });
-
-        assert_eq!(
-            interner.display_type(closure_ty, Rc::clone(&rodeo), &resolution),
-            "fn(i32) i32 [env: i32]"
-        );
-    }
-
-    #[test]
     fn fat_fn_displays_as_signature() {
         use zeen_resolve::DefId;
 
@@ -970,13 +883,11 @@ mod tests {
             params: vec![i32],
             ret: i32,
             once: false,
-            body: FatFnBody::Bound,
         });
         let fat_once = interner.intern(Type::FatFn {
             params: vec![foo],
             ret: void,
             once: true,
-            body: FatFnBody::Bound,
         });
 
         assert_eq!(
