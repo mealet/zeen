@@ -18,6 +18,7 @@ use zeen_ast::{
     Source,
     expressions::{Expression, ExpressionKind},
     statements::{Statement, StatementKind},
+    types::{TypeExpr, TypeKind},
 };
 use zeen_driver::{CompilationMode, Target};
 
@@ -27,6 +28,14 @@ struct RawModule<'arena> {
     decls: &'arena [&'arena Declaration<'arena>],
     named_src: NamedSource<Arc<String>>,
     is_core: bool,
+}
+
+/// Which std modules a program needs injected: `@format(...)` pulls in
+/// `std.string`, closure/fat usage pulls in `std.fn`.
+#[derive(Default)]
+struct UsageFlags {
+    has_format: bool,
+    has_fat: bool,
 }
 
 pub struct IncludeResolver<'ctx> {
@@ -93,122 +102,304 @@ impl<'ctx> IncludeResolver<'ctx> {
         self.interner.borrow_mut().get_or_intern(value)
     }
 
-    /// Whether any declaration contains a `@format(...)` macro call, which is
-    /// the only place that needs `std.string` from the filesystem. Walks the
-    /// whole AST so nested macros are caught.
-    fn has_format_macro(&self, decls: &[&'ctx Declaration<'ctx>]) -> bool {
-        decls.iter().any(|decl| self.decl_has_format(decl))
+    /// Walks the whole AST for `@format` and closure/fat usage, deciding
+    /// whether `std.string` / `std.fn` must be injected (both are only
+    /// reachable from the filesystem std root, never embedded).
+    fn usage_flags(&self, decls: &[&'ctx Declaration<'ctx>]) -> UsageFlags {
+        let mut flags = UsageFlags::default();
+        for decl in decls {
+            self.decl_usage(decl, &mut flags);
+        }
+        flags
     }
 
-    fn decl_has_format(&self, decl: &Declaration<'ctx>) -> bool {
+    fn decl_usage(&self, decl: &Declaration<'ctx>, flags: &mut UsageFlags) {
         match &decl.kind {
             DeclarationKind::FnDecl {
-                body: Some(body), ..
-            } => self.stmt_has_format(body),
-            DeclarationKind::StructDecl { methods, .. }
-            | DeclarationKind::InterfaceDecl { methods, .. }
-            | DeclarationKind::ImplementDecl { methods, .. } => self.has_format_macro(methods),
-            DeclarationKind::GlobalVar { value, .. } => self.expr_has_format(value),
-            DeclarationKind::ConditionalBlock(block) => {
-                self.has_format_macro(block.body)
-                    || block
-                        .else_block
-                        .is_some_and(|decl| self.decl_has_format(decl))
+                params,
+                return_type,
+                body,
+                ..
+            } => {
+                for param in params.iter() {
+                    self.type_usage(param.ty, flags);
+                }
+                if let Some(ret) = return_type {
+                    self.type_usage(ret, flags);
+                }
+                if let Some(body) = body {
+                    self.stmt_usage(body, flags);
+                }
             }
-            _ => false,
+
+            DeclarationKind::StructDecl {
+                fields, methods, ..
+            } => {
+                for field in fields.iter() {
+                    self.type_usage(field.ty, flags);
+                }
+                for method in methods.iter() {
+                    self.decl_usage(method, flags);
+                }
+            }
+
+            DeclarationKind::InterfaceDecl { methods, .. } => {
+                for method in methods.iter() {
+                    self.decl_usage(method, flags);
+                }
+            }
+
+            DeclarationKind::ImplementDecl {
+                object, methods, ..
+            } => {
+                for slot in object.2.iter() {
+                    self.type_usage(slot, flags);
+                }
+                for method in methods.iter() {
+                    self.decl_usage(method, flags);
+                }
+            }
+
+            DeclarationKind::ExternVar { ty, .. } => self.type_usage(ty, flags),
+
+            DeclarationKind::GlobalVar { ty, value, .. } => {
+                self.type_usage(ty, flags);
+                self.expr_usage(value, flags);
+            }
+
+            DeclarationKind::Alias(alias) => self.type_usage(alias.ty, flags),
+
+            DeclarationKind::ConditionalBlock(block) => {
+                for decl in block.body {
+                    self.decl_usage(decl, flags);
+                }
+                if let Some(else_decl) = block.else_block {
+                    self.decl_usage(else_decl, flags);
+                }
+            }
+
+            _ => {}
         }
     }
 
-    fn stmt_has_format(&self, stmt: &Statement<'ctx>) -> bool {
+    fn stmt_usage(&self, stmt: &Statement<'ctx>, flags: &mut UsageFlags) {
         match &stmt.kind {
             StatementKind::Let {
-                value: Some(value), ..
-            } => self.expr_has_format(value),
-            StatementKind::Let { value: None, .. } => false,
-            StatementKind::Assign { object, value }
-            | StatementKind::CompoundAssign {
-                object,
+                explicit_type,
                 value,
-                op: _,
-            } => self.expr_has_format(object) || self.expr_has_format(value),
-            StatementKind::Return { value: Some(value) } => self.expr_has_format(value),
-            StatementKind::Return { .. } | StatementKind::Break | StatementKind::Continue => false,
+                ..
+            } => {
+                if let Some(ty) = explicit_type {
+                    self.type_usage(ty, flags);
+                }
+                if let Some(value) = value {
+                    self.expr_usage(value, flags);
+                }
+            }
+
+            StatementKind::Assign { object, value }
+            | StatementKind::CompoundAssign { object, value, .. } => {
+                self.expr_usage(object, flags);
+                self.expr_usage(value, flags);
+            }
+
+            StatementKind::Return { value } => {
+                if let Some(value) = value {
+                    self.expr_usage(value, flags);
+                }
+            }
+
             StatementKind::While { condition, block } => {
-                self.expr_has_format(condition) || self.stmt_has_format(block)
+                self.expr_usage(condition, flags);
+                self.stmt_usage(block, flags);
             }
+
             StatementKind::For {
-                varname: _,
-                iterator,
-                block,
-            } => self.expr_has_format(iterator) || self.stmt_has_format(block),
+                iterator, block, ..
+            } => {
+                self.expr_usage(iterator, flags);
+                self.stmt_usage(block, flags);
+            }
+
+            StatementKind::FnDecl(decl) => self.decl_usage(decl, flags),
+
             StatementKind::Expr(expr) | StatementKind::TrailingExpr(expr) => {
-                self.expr_has_format(expr)
+                self.expr_usage(expr, flags)
             }
-            StatementKind::FnDecl(decl) => self.decl_has_format(decl),
+
             StatementKind::ConditionalBlock(block) => {
-                block.stmts.iter().any(|stmt| self.stmt_has_format(stmt))
+                for stmt in block.stmts {
+                    self.stmt_usage(stmt, flags);
+                }
+                if let Some(else_stmt) = block.else_block {
+                    self.stmt_usage(else_stmt, flags);
+                }
             }
+
+            StatementKind::Break | StatementKind::Continue => {}
         }
     }
 
-    fn expr_has_format(&self, expr: &Expression<'ctx>) -> bool {
+    fn expr_usage(&self, expr: &Expression<'ctx>, flags: &mut UsageFlags) {
         match &expr.kind {
             ExpressionKind::Literal(_)
             | ExpressionKind::Ident { .. }
-            | ExpressionKind::Type(_)
-            | ExpressionKind::TargetVar(_) => false,
+            | ExpressionKind::TargetVar(_) => {}
+
             ExpressionKind::Binary { lhs, rhs, .. } => {
-                self.expr_has_format(lhs) || self.expr_has_format(rhs)
+                self.expr_usage(lhs, flags);
+                self.expr_usage(rhs, flags);
             }
-            ExpressionKind::Unary { expr, .. } => self.expr_has_format(expr),
+
+            ExpressionKind::Unary { expr, .. } => self.expr_usage(expr, flags),
+
             ExpressionKind::Call { callee, args } => {
-                self.expr_has_format(callee) || args.iter().any(|arg| self.expr_has_format(arg))
+                self.expr_usage(callee, flags);
+                for arg in args.iter() {
+                    self.expr_usage(arg, flags);
+                }
             }
+
             ExpressionKind::MacroCall { name, args } => {
-                self.interner_resolve(&name.0) == "format"
-                    || args.iter().any(|arg| self.expr_has_format(arg))
+                if self.interner_resolve(&name.0) == "format" {
+                    flags.has_format = true;
+                }
+                for arg in args.iter() {
+                    self.expr_usage(arg, flags);
+                }
             }
+
             ExpressionKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                self.expr_has_format(condition)
-                    || self.stmt_has_format(then_block)
-                    || else_block.is_some_and(|block| self.stmt_has_format(block))
+                self.expr_usage(condition, flags);
+                self.stmt_usage(then_block, flags);
+                if let Some(else_block) = else_block {
+                    self.stmt_usage(else_block, flags);
+                }
             }
+
             ExpressionKind::Switch { object, arms } => {
-                self.expr_has_format(object)
-                    || arms.iter().any(|arm| {
-                        self.expr_has_format(arm.body)
-                            || arm.guard.is_some_and(|guard| self.expr_has_format(guard))
-                    })
+                self.expr_usage(object, flags);
+                for arm in arms.iter() {
+                    self.expr_usage(arm.body, flags);
+                    if let Some(guard) = arm.guard {
+                        self.expr_usage(guard, flags);
+                    }
+                }
             }
+
             ExpressionKind::FieldAccess { object, field } => {
-                self.expr_has_format(object) || self.expr_has_format(field)
+                self.expr_usage(object, flags);
+                self.expr_usage(field, flags);
             }
+
             ExpressionKind::SliceAccess { object, index } => {
-                self.expr_has_format(object) || self.expr_has_format(index)
+                self.expr_usage(object, flags);
+                self.expr_usage(index, flags);
             }
-            ExpressionKind::StructInit { fields, .. } => fields
-                .is_some_and(|fields| fields.iter().any(|field| self.expr_has_format(field.value))),
+
+            ExpressionKind::StructInit { ty, fields } => {
+                self.expr_usage(ty, flags);
+                if let Some(fields) = fields {
+                    for field in fields.iter() {
+                        self.expr_usage(field.value, flags);
+                    }
+                }
+            }
+
             ExpressionKind::ArrayInit { elements } => {
-                elements.iter().any(|element| self.expr_has_format(element))
+                for element in elements.iter() {
+                    self.expr_usage(element, flags);
+                }
             }
+
             ExpressionKind::ArrayRepeatInit { element, len } => {
-                self.expr_has_format(element) || self.expr_has_format(len)
+                self.expr_usage(element, flags);
+                self.expr_usage(len, flags);
             }
+
             ExpressionKind::Block { stmts, trailing } => {
-                stmts.iter().any(|stmt| self.stmt_has_format(stmt))
-                    || trailing.is_some_and(|expr| self.expr_has_format(expr))
+                for stmt in stmts.iter() {
+                    self.stmt_usage(stmt, flags);
+                }
+                if let Some(expr) = trailing {
+                    self.expr_usage(expr, flags);
+                }
             }
-            ExpressionKind::Closure { body, .. } => self.stmt_has_format(body),
+
+            ExpressionKind::Type(ty) => self.type_usage(ty, flags),
+
+            ExpressionKind::Closure {
+                params,
+                return_type,
+                body,
+            } => {
+                flags.has_fat = true;
+                for param in params.iter() {
+                    self.type_usage(param.ty, flags);
+                }
+                if let Some(ret) = return_type {
+                    self.type_usage(ret, flags);
+                }
+                self.stmt_usage(body, flags);
+            }
+
             ExpressionKind::ConditionalBlock(block) => {
-                self.expr_has_format(block.body)
-                    || block
-                        .else_block
-                        .is_some_and(|expr| self.expr_has_format(expr))
+                self.expr_usage(block.body, flags);
+                if let Some(else_expr) = block.else_block {
+                    self.expr_usage(else_expr, flags);
+                }
             }
+        }
+    }
+
+    fn type_usage(&self, ty: &TypeExpr<'ctx>, flags: &mut UsageFlags) {
+        match &ty.kind {
+            TypeKind::FatFn { params, ret, .. } => {
+                flags.has_fat = true;
+                for param in params.iter() {
+                    self.type_usage(param, flags);
+                }
+                self.type_usage(ret, flags);
+            }
+
+            TypeKind::Named {
+                generic_args: Some(args),
+                ..
+            } => {
+                for arg in args.iter() {
+                    self.type_usage(arg, flags);
+                }
+            }
+
+            TypeKind::Named {
+                generic_args: None, ..
+            } => {}
+
+            TypeKind::Const(inner)
+            | TypeKind::SinglePointer(inner)
+            | TypeKind::ManyPointer(inner) => self.type_usage(inner, flags),
+
+            TypeKind::TypeOf(expr) => self.expr_usage(expr, flags),
+
+            TypeKind::Array { element, len } => {
+                self.type_usage(element, flags);
+                if let Some(len) = len {
+                    self.expr_usage(len, flags);
+                }
+            }
+
+            TypeKind::Fn { params, ret, .. } => {
+                for param in params.iter() {
+                    self.type_usage(param, flags);
+                }
+                self.type_usage(ret, flags);
+            }
+
+            _ => {}
         }
     }
 
@@ -258,24 +449,23 @@ impl<'ctx> IncludeResolver<'ctx> {
             );
         }
 
-        // `std.string` is never embedded; `@format` is the one implicit case
-        // that needs it, so synthesize a `use std.string;` for the resolver.
-        if self.has_format_macro(root_decls) {
-            let module = self.get_or_intern("std.string");
+        // std modules are never embedded; `@format` needs `std.string` and
+        // closure/fat usage needs `std.fn`, so synthesize their `use` decls
+        // for the resolver.
+        let usage = self.usage_flags(root_decls);
+        if usage.has_format || usage.has_fat {
             let span = SourceSpan::new(0.into(), 0);
             let source = root_decls
                 .first()
                 .map(|decl| decl.source.clone())
                 .unwrap_or_else(|| Source::from((span, self.named_src())));
 
-            let use_std_string = self.arena.alloc(Declaration {
-                kind: DeclarationKind::Use {
-                    module: (module, span),
-                },
-                source,
-            });
-
-            out.push(use_std_string);
+            if usage.has_format {
+                self.push_synthetic_use(&mut out, "std.string", span, source.clone());
+            }
+            if usage.has_fat {
+                self.push_synthetic_use(&mut out, "std.fn", span, source.clone());
+            }
         }
 
         root_decls.iter().for_each(|decl| out.push(decl));
@@ -285,6 +475,23 @@ impl<'ctx> IncludeResolver<'ctx> {
         self.check_collisions(out_arena);
 
         Ok(out_arena)
+    }
+
+    fn push_synthetic_use(
+        &self,
+        out: &mut Vec<&'ctx Declaration<'ctx>>,
+        module: &str,
+        span: SourceSpan,
+        source: Source,
+    ) {
+        let use_std = self.arena.alloc(Declaration {
+            kind: DeclarationKind::Use {
+                module: (self.get_or_intern(module), span),
+            },
+            source,
+        });
+
+        out.push(use_std);
     }
 
     pub fn resolve(

@@ -44,11 +44,9 @@ fn type_needs_drop_impl(
         | Type::Never
         | Type::Error => false,
 
-        // `FnOnce` closure values own a non-Copy capture, so their death
-        // tears the captured values down (a synthesized per-type drop
-        // function does it). `Fn` values hold only Copy captures - nothing
-        // to drop, and copies keep the value alive anyway.
-        Type::FatFn { once, .. } => once,
+        // `Fn`/`FnOnce` closure values own a heap env block, so their death
+        // must `free` it back (a synthesized per-type drop function does it).
+        Type::FatFn { .. } => true,
 
         Type::Struct {
             def_id,

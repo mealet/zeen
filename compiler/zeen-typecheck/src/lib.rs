@@ -6,6 +6,7 @@ use std::{
 
 use lasso::Spur;
 use miette::SourceSpan;
+use smol_str::SmolStr;
 use zeen_ast::Source;
 
 use crate::{
@@ -29,11 +30,11 @@ use zeen_hir::{
     stmt::{HirStmt, HirStmtKind},
     types::{HirTypeExpr, HirTypeKind},
 };
-use zeen_resolve::{DefId, DefInfo, DefKind, ResolutionResult};
+use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_types::{
-    ARRAY_LEN_FIELD, Capabilities, FatFnBody, ReceiverAccess, SLICE_LEN_FIELD, SLICE_PTR_FIELD,
-    SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface,
-    closure_field_def, closure_struct_def, self_mode_of, unary_op_interface,
+    ARRAY_LEN_FIELD, Capabilities, ReceiverAccess, SLICE_LEN_FIELD, SLICE_PTR_FIELD, SelfMode,
+    StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface, self_mode_of,
+    unary_op_interface,
 };
 
 pub mod closure_alloc;
@@ -87,6 +88,13 @@ pub struct TypeChecker<'res> {
     method_owning_interface: HashMap<DefId, DefId>,
 
     extracting_typename: bool,
+
+    /// `VarRef` expressions that reference a type-only def (`Struct`,
+    /// `Interface`, `Enum`, `TypeAlias`) where a value is expected. Legitimate
+    /// uses remove themselves: a static method call receiver and a `typeof`
+    /// operand. Anything left after checking is a misuse reported in
+    /// [`TypeChecker::finalize_type_name_usage`].
+    type_names_as_values: HashMap<HirId, (DefId, Source)>,
 }
 
 struct FnSignature {
@@ -158,6 +166,7 @@ impl<'res> TypeChecker<'res> {
             all_generic_bounds: HashMap::new(),
             method_owning_interface: HashMap::new(),
             extracting_typename: false,
+            type_names_as_values: HashMap::new(),
         }
     }
 
@@ -240,6 +249,7 @@ impl<'res> TypeChecker<'res> {
         }
 
         self.finalize_fat_types();
+        self.finalize_type_name_usage();
 
         let target = self.compilation_context.target.as_deref();
         let requires_main = zeen_driver::target_requires_main(target);
@@ -288,17 +298,6 @@ impl<'res> TypeChecker<'res> {
 
                 for field in &s.fields {
                     let (ty, is_const) = self.lower_hir_type_with_const(&field.ty);
-
-                    // A `Fn`/`FnOnce` annotation is not a storage type and a
-                    // struct field would erase the concrete closure; rejected
-                    // until generic fields over fat bounds exist.
-                    if self.type_contains_fat_bound(ty) {
-                        self.report(TypeError::FatStorageUnsupported {
-                            what: "struct field".into(),
-                            src: field.ty.source.src(),
-                            span: field.ty.source.span,
-                        });
-                    }
 
                     self.result.def_types.insert(field.def_id, ty);
                     self.result.const_bindings.insert(field.def_id, is_const);
@@ -406,16 +405,6 @@ impl<'res> TypeChecker<'res> {
             HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {}
             HirDeclKind::GlobalVar { ty, is_const, .. } => {
                 let ty_id = self.lower_hir_type(ty);
-
-                // Globals are initialized before `main` runs; no concrete
-                // closure site can back a `Fn`/`FnOnce` annotation here yet.
-                if self.type_contains_fat_bound(ty_id) {
-                    self.report(TypeError::FatStorageUnsupported {
-                        what: "global".into(),
-                        src: ty.source.src(),
-                        span: ty.source.span,
-                    });
-                }
 
                 self.result.def_types.insert(decl.def_id, ty_id);
                 self.result.const_bindings.insert(decl.def_id, *is_const);
@@ -937,6 +926,7 @@ impl<'res> TypeChecker<'res> {
 
             HirTypeKind::TypeOf(expr) => {
                 let type_id = self.synth_expr(expr);
+                self.type_names_as_values.remove(&expr.id);
 
                 if type_id == self.result.interner.never()
                     || type_id == self.result.interner.error() && !self.extracting_typename
@@ -1019,7 +1009,7 @@ impl<'res> TypeChecker<'res> {
                     params: params_tys,
                     ret: ret_ty,
                     once: *once,
-                    body: FatFnBody::Bound,
+                    erased: true,
                 })
             }
 
@@ -1345,10 +1335,7 @@ impl<'res> TypeChecker<'res> {
                     // `return` statement does.
                     if matches!(
                         self.result.interner.get(sig_ret),
-                        Type::FatFn {
-                            body: FatFnBody::Bound,
-                            ..
-                        }
+                        Type::FatFn { erased: true, .. }
                     ) && let Some(tail) = trailing
                     {
                         self.result
@@ -1383,10 +1370,7 @@ impl<'res> TypeChecker<'res> {
         // every return path must agree (resolved after all bodies check).
         if matches!(
             self.result.interner.get(expected),
-            Type::FatFn {
-                body: FatFnBody::Bound,
-                ..
-            }
+            Type::FatFn { erased: true, .. }
         ) {
             let fn_def = self.ctx.current().fn_def;
             self.result
@@ -1397,6 +1381,39 @@ impl<'res> TypeChecker<'res> {
         }
 
         ty
+    }
+
+    /// Reports every `VarRef` that still references a type-only def after body
+    /// checking: the legitimate uses (static method call receiver, `typeof`
+    /// operand) removed themselves as they were checked, so anything left is a
+    /// type name used where a value is expected.
+    fn finalize_type_name_usage(&mut self) {
+        let flagged: Vec<(DefId, Source)> = self
+            .type_names_as_values
+            .drain()
+            .map(|(_, payload)| payload)
+            .collect();
+
+        for (def_id, source) in flagged {
+            let name: SmolStr = self
+                .interner
+                .borrow()
+                .resolve(
+                    &self
+                        .resolution
+                        .defs
+                        .get(&def_id)
+                        .map(|info| info.name)
+                        .unwrap_or_default(),
+                )
+                .into();
+
+            self.report(TypeError::TypeNameAsValue {
+                name,
+                src: source.src(),
+                span: source.span,
+            });
+        }
     }
 
     /// Resolves the erased `Fn`/`FnOnce` annotations down to the concrete
@@ -1463,10 +1480,7 @@ impl<'res> TypeChecker<'res> {
     fn is_fat_bound(&self, ty: TypeId) -> bool {
         matches!(
             self.result.interner.get(ty),
-            Type::FatFn {
-                body: FatFnBody::Bound,
-                ..
-            }
+            Type::FatFn { erased: true, .. }
         )
     }
 
@@ -1475,7 +1489,7 @@ impl<'res> TypeChecker<'res> {
     /// name a storage layout.
     fn type_contains_fat_bound(&self, ty: TypeId) -> bool {
         match self.result.interner.get(ty).clone() {
-            Type::FatFn { body, .. } => matches!(body, FatFnBody::Bound),
+            Type::FatFn { erased, .. } => erased,
             Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
                 self.type_contains_fat_bound(inner)
             }
@@ -1872,88 +1886,14 @@ impl<'res> TypeChecker<'res> {
             !self.type_is_copy(cap_ty)
         });
 
-        self.synthesize_env_struct(def_id, &captures, once, source);
-
-        // The fat value *is* the environment: captures live in an inline
-        // struct and the body is dispatched to directly, so no heap, no
-        // erasure and no allocation analysis are involved.
-        let env_ty = self.result.interner.intern(Type::Struct {
-            def_id: closure_struct_def(def_id),
-            generic_args: Vec::new(),
-        });
-
+        // A capturing closure is a concrete fat value. The canonical
+        // `{ ptr, env }` layout is managed by MIR lowering.
         self.result.interner.intern(Type::FatFn {
             params,
             ret,
             once,
-            body: FatFnBody::Closure {
-                env: env_ty,
-                target: def_id,
-            },
+            erased: false,
         })
-    }
-
-    /// Registers the anonymous environment struct of a capturing closure. Its
-    /// fields are the captured values in capture order; the closure body reads
-    /// them back through an `env` pointer.
-    fn synthesize_env_struct(
-        &mut self,
-        def_id: DefId,
-        captures: &[DefId],
-        once: bool,
-        source: &Source,
-    ) {
-        let env_def = closure_struct_def(def_id);
-
-        if self.result.struct_info.contains_key(&env_def) {
-            return;
-        }
-
-        let env_name = self
-            .interner
-            .borrow_mut()
-            .get_or_intern(format!("$env{}", def_id.0));
-
-        self.resolution
-            .defs
-            .entry(env_def)
-            .or_insert_with(|| DefInfo {
-                name: env_name,
-                kind: DefKind::Struct,
-                span: (source.span, source.src()).into(),
-                decl: None,
-                is_pub: false,
-            });
-
-        let mut fields = Vec::with_capacity(captures.len());
-        for (index, captured) in captures.iter().enumerate() {
-            let name = self
-                .interner
-                .borrow_mut()
-                .get_or_intern(format!("$env{index}"));
-            let field_ty = self.lookup_def_type(*captured, source.clone());
-
-            fields.push(StructFieldInfo {
-                name,
-                field_def: closure_field_def(def_id, index),
-                field_ty,
-                struct_def: env_def,
-                is_pub: false,
-            });
-        }
-
-        self.result.struct_info.insert(
-            env_def,
-            StructTypeInfo {
-                def_id: env_def,
-                fields,
-                capabalities: if once {
-                    Capabilities::MOVE_ONLY
-                } else {
-                    Capabilities::COPY
-                },
-            },
-        );
     }
 
     fn check_stmt_as_block_value(&mut self, stmt: &HirStmt, expected: Option<TypeId>) -> TypeId {
@@ -2012,6 +1952,13 @@ impl<'res> TypeChecker<'res> {
             },
 
             HirExprKind::VarRef(def_id) => {
+                if matches!(
+                    self.def_kind(*def_id),
+                    Some(DefKind::Struct | DefKind::Interface | DefKind::Enum | DefKind::TypeAlias)
+                ) {
+                    self.type_names_as_values
+                        .insert(expr.id, (*def_id, expr.source.clone()));
+                }
                 let ty = self.lookup_def_type(*def_id, expr.source.clone());
                 if matches!(self.result.interner.get(ty), Type::FatFn { .. }) {
                     self.result.fat_value_defs.insert(expr.id, *def_id);
@@ -2393,17 +2340,6 @@ impl<'res> TypeChecker<'res> {
                     && let HirExprKind::Type(ty_expr) = &arg.kind
                 {
                     let ty = self.lower_hir_type(ty_expr);
-
-                    // An erased `Fn`/`FnOnce` bound has no concrete size: only
-                    // concrete closure types (e.g. via `typeof f`) can be
-                    // measured.
-                    if self.type_contains_fat_bound(ty) {
-                        self.report(TypeError::FatStorageUnsupported {
-                            what: "@sizeof/@alignof argument (erased closure type)".into(),
-                            src: source.src(),
-                            span: source.span,
-                        });
-                    }
 
                     self.result.record_expr_type(arg.id, ty);
                 } else {
@@ -2802,6 +2738,7 @@ impl<'res> TypeChecker<'res> {
         }
 
         let obj_ty = self.synth_expr(object);
+        self.type_names_as_values.remove(&object.id);
 
         // -----------| Hard coded piece of shit section |-----------
         // > What is this for?
@@ -3337,37 +3274,38 @@ impl<'res> TypeChecker<'res> {
     /// expression is a closure literal or a static `fn`, an inline fn
     /// pointer otherwise (the pointer is a runtime value, so its target
     /// cannot be known here).
-    fn fat_coercion_storage(&mut self, actual: TypeId, expected: TypeId, expr: &HirExpr) -> TypeId {
+    fn fat_coercion_storage(
+        &mut self,
+        actual: TypeId,
+        expected: TypeId,
+        _expr: &HirExpr,
+    ) -> TypeId {
         let Type::FatFn {
             params,
             ret,
             once,
-            body: FatFnBody::Bound,
+            erased: true,
         } = self.result.interner.get(expected).clone()
         else {
-            // Concretes only ever coerce into bounds.
+            // Concretes only ever coerce into erased bounds.
             return actual;
         };
 
         match self.result.interner.get(actual).clone() {
             // A concrete fat value keeps its own type; the bound is only a
             // check.
-            Type::FatFn {
-                body: FatFnBody::Bound,
-                ..
-            } => expected,
-            Type::FatFn { .. } => actual,
+            Type::FatFn { erased: false, .. } => actual,
+            // An erased fat type (e.g. from another annotation) becomes the
+            // expected erased form.
+            Type::FatFn { erased: true, .. } => expected,
 
             Type::Fn { .. } => {
-                // A basic fn value only wraps when the bound itself is the
-                // storage shape; nested bounds (e.g. behind a pointer) can
-                // never be materialized from a bare pointer.
-                let body = self.fat_body_for_basic(actual, expr);
+                // A basic fn pointer gets wrapped into a concrete fat value.
                 self.result.interner.intern(Type::FatFn {
                     params,
                     ret,
                     once,
-                    body,
+                    erased: false,
                 })
             }
 
@@ -3376,40 +3314,6 @@ impl<'res> TypeChecker<'res> {
             _ if !self.type_contains_fat_bound(actual) => actual,
 
             _ => expected,
-        }
-    }
-
-    /// Decides what the concrete fat form of a basic fn value is: a closure
-    /// literal or a static `fn` reference becomes a direct-dispatch closure
-    /// value with an empty inline env; anything else (a fn pointer read from
-    /// a variable, returned from a call, ...) keeps its runtime target.
-    fn fat_body_for_basic(&mut self, actual: TypeId, expr: &HirExpr) -> FatFnBody {
-        let empty_env_of = |this: &mut Self, def_id: DefId| -> FatFnBody {
-            this.synthesize_env_struct(def_id, &[], false, &expr.source);
-            let env_ty = this.result.interner.intern(Type::Struct {
-                def_id: closure_struct_def(def_id),
-                generic_args: Vec::new(),
-            });
-            FatFnBody::Closure {
-                env: env_ty,
-                target: def_id,
-            }
-        };
-
-        match &expr.kind {
-            HirExprKind::Closure { def_id, .. } => empty_env_of(self, *def_id),
-
-            HirExprKind::VarRef(def_id)
-                if self
-                    .resolution
-                    .defs
-                    .get(def_id)
-                    .is_some_and(|info| matches!(info.kind, DefKind::Function)) =>
-            {
-                empty_env_of(self, *def_id)
-            }
-
-            _ => FatFnBody::Pointer { pointee: actual },
         }
     }
 
@@ -3896,6 +3800,7 @@ impl<'res> TypeChecker<'res> {
 
         // Otherwise it is instance call
         let obj_ty = self.synth_expr(object);
+        self.type_names_as_values.remove(&object.id);
 
         // A call on a generic parameter dispatches to the interface bound that
         // declares the method (e.g. `out.write_str(...)` where `O: StrWriter`).
@@ -4327,6 +4232,38 @@ impl<'res> TypeChecker<'res> {
     ) -> TypeId {
         match self.result.interner.get(callee_ty).clone() {
             Type::Fn { params, ret } | Type::FatFn { params, ret, .. } => {
+                if args.len() != params.len() {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: params.len(),
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                }
+
+                for (param_ty, arg) in params.iter().zip(args.iter()) {
+                    self.check_expr(arg, *param_ty, false);
+                }
+
+                ret
+            }
+
+            // Calling through `*Fn(T) R` / `*FnOnce(T) R`: dereference the
+            // pointer to get to the closure struct, then call it like a
+            // direct fat value.
+            Type::Pointer {
+                inner: ptr_inner, ..
+            } => {
+                let Type::FatFn { params, ret, .. } = self.result.interner.get(ptr_inner).clone()
+                else {
+                    self.report(TypeError::NotCallable {
+                        ty: self.display_type(callee_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                };
+
                 if args.len() != params.len() {
                     self.report(TypeError::ArgCountMismatch {
                         expected: params.len(),
@@ -5866,26 +5803,67 @@ mod tests {
 
     use crate::{TypeCheckResult, TypeChecker, TypeError};
 
+    const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
+    const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
+    const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
+    const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+
     fn typecheck(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
         typecheck_with_target(source, None)
+    }
+
+    fn typecheck_full(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
+        typecheck_with_target_full(source, None)
     }
 
     fn typecheck_with_target(
         source: &str,
         target: Option<&str>,
     ) -> Result<TypeCheckResult, Vec<TypeError>> {
+        typecheck_fixture(source, target, false)
+    }
+
+    fn typecheck_with_target_full(
+        source: &str,
+        target: Option<&str>,
+    ) -> Result<TypeCheckResult, Vec<TypeError>> {
+        typecheck_fixture(source, target, true)
+    }
+
+    /// The bare fixture has no core/std modules: enough for isolated
+    /// typechecking. The full fixture mirrors the real compiler: core files
+    /// injected and a filesystem std root, required for closure/fat usage
+    /// (`use std.fn` is injected then).
+    fn typecheck_fixture(
+        source: &str,
+        target: Option<&str>,
+        full: bool,
+    ) -> Result<TypeCheckResult, Vec<TypeError>> {
         let rodeo = Rc::new(RefCell::new(Rodeo::default()));
         let bump = Bump::default();
         let content = Arc::new(source.to_string());
         let filename = Rc::new("test.zn".to_string());
 
+        let core_files = if full {
+            vec![
+                ("core.ops", CORE_OPS),
+                ("core.out", CORE_OUT),
+                ("core.iter", CORE_ITER),
+                ("core.option", CORE_OPTION),
+            ]
+        } else {
+            Vec::new()
+        };
+
         let mut context = CompilationContext {
             paths: PathsConfig {
                 project_root: std::env::temp_dir(),
-                std_root: None,
+                std_root: full.then(|| {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")
+                }),
                 linked: HashSet::new(),
             },
-            core_files: Vec::new(),
+            core_files,
             mode: CompilationMode::Debug,
             output: CompilationOutput::Binary,
             target: target.map(|triple| triple.to_string()),
@@ -6873,28 +6851,22 @@ mod tests {
 
     // --> Closures
 
-    use zeen_types::{FatFnBody, Type, is_closure_struct_def};
+    use zeen_types::Type;
 
+    /// Finds a concrete (non-erased) fat type: erased `FatFn` bounds are
+    /// checker-only annotation forms, not real closure values.
     fn find_fat_fn(result: &TypeCheckResult) -> Option<zeen_types::TypeId> {
         result
             .def_types
             .values()
             .copied()
             .chain(result.expr_types.values().copied())
-            .find(|&ty| matches!(result.interner.get(ty), Type::FatFn { .. }))
-    }
-
-    fn find_env_struct(result: &TypeCheckResult) -> Option<zeen_resolve::DefId> {
-        result
-            .struct_info
-            .keys()
-            .copied()
-            .find(|&def_id| is_closure_struct_def(def_id))
+            .find(|&ty| matches!(result.interner.get(ty), Type::FatFn { erased: false, .. }))
     }
 
     #[test]
     fn zero_capture_closure_types_as_fn() {
-        let result = typecheck("fn main() { let c = fn(x: i32) i32 { return x + 1; }; }")
+        let result = typecheck_full("fn main() { let c = fn(x: i32) i32 { return x + 1; }; }")
             .expect("zero-capture closure must typecheck");
 
         assert!(
@@ -6911,14 +6883,14 @@ mod tests {
         );
 
         assert!(
-            find_fat_fn(&result).is_none() && find_env_struct(&result).is_none(),
-            "zero-capture closure must not create a fat pointer or env struct"
+            find_fat_fn(&result).is_none(),
+            "zero-capture closure must not create a fat pointer"
         );
     }
 
     #[test]
     fn capturing_closure_types_as_fat_fn() {
-        let result = typecheck("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
+        let result = typecheck_full("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
             .expect("capturing closure must typecheck");
 
         let fat = find_fat_fn(&result).expect("capturing closure must be typed as `Fn`");
@@ -6927,22 +6899,12 @@ mod tests {
             "Copy captures must keep the closure `Fn`, got: {:?}",
             result.interner.get(fat)
         );
-
-        let env_def = find_env_struct(&result).expect("env struct must be registered");
-        let info = &result.struct_info[&env_def];
-
-        assert_eq!(info.fields.len(), 1);
-        assert!(matches!(
-            result.interner.get(info.fields[0].field_ty),
-            Type::Builtin(zeen_ast::types::BuiltinType::i32)
-        ));
-        assert!(info.capabalities.is_copy);
     }
 
     #[test]
     fn closure_call_checks_argument_types() {
         let result =
-            typecheck("fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(2); }")
+            typecheck_full("fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(2); }")
                 .expect("closure call with matching args must typecheck");
 
         assert!(
@@ -6953,9 +6915,10 @@ mod tests {
             "call result must be i32"
         );
 
-        let errors =
-            typecheck("fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(true); }")
-                .expect_err("closure call with mismatched arg must be reported");
+        let errors = typecheck_full(
+            "fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(true); }",
+        )
+        .expect_err("closure call with mismatched arg must be reported");
 
         assert!(
             errors
@@ -6967,12 +6930,13 @@ mod tests {
 
     #[test]
     fn capturing_closure_call_checks_args() {
-        typecheck("fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(); }")
+        typecheck_full("fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(); }")
             .expect("capturing closure call must typecheck");
 
-        let errors =
-            typecheck("fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(1); }")
-                .expect_err("capturing closure call with extra arg must be reported");
+        let errors = typecheck_full(
+            "fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(1); }",
+        )
+        .expect_err("capturing closure call with extra arg must be reported");
 
         assert!(
             errors
@@ -6984,7 +6948,7 @@ mod tests {
 
     #[test]
     fn zero_capture_closure_passes_as_fn_argument() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn apply(f: fn(i32) i32) i32 {
                 return f(21);
@@ -7005,7 +6969,7 @@ mod tests {
 
     #[test]
     fn closure_body_return_type_is_checked() {
-        let errors = typecheck("fn main() { let c = fn() i32 { return true; }; }")
+        let errors = typecheck_full("fn main() { let c = fn() i32 { return true; }; }")
             .expect_err("closure body return mismatch must be reported");
 
         assert!(
@@ -7018,7 +6982,7 @@ mod tests {
 
     #[test]
     fn closure_capture_type_mismatch_is_reported() {
-        let errors = typecheck(
+        let errors = typecheck_full(
             "fn main() { let x = 1; let c = fn(y: bool) bool { return y; }; let r = c(x); }",
         )
         .expect_err("captured value passed as wrong arg type must be reported");
@@ -7039,7 +7003,7 @@ mod tests {
 
     #[test]
     fn closure_return_types_as_fat_fn() {
-        let result = typecheck(&format!("{MULT_SOURCE} fn main() i32 {{ return 0; }}"))
+        let result = typecheck_full(&format!("{MULT_SOURCE} fn main() i32 {{ return 0; }}"))
             .expect("closure return must typecheck");
 
         let fat = find_fat_fn(&result).expect("mult's return must be a `Fn` fat pointer");
@@ -7053,7 +7017,7 @@ mod tests {
 
     #[test]
     fn capturing_closure_fat_type_carries_body() {
-        let result = typecheck(
+        let result = typecheck_full(
             "fn main() i32 { let x = 1; let add = fn(a: i32) i32 { return a + x; }; return add(2); }",
         )
         .expect("capturing closure must typecheck");
@@ -7063,15 +7027,15 @@ mod tests {
                 result.interner.get(ty),
                 Type::FatFn {
                     once: false,
-                    body: FatFnBody::Closure { .. },
+                    erased: false,
                     ..
                 }
             )),
-            "a capturing closure must have a concrete closure-body fat type"
+            "a capturing closure must have a concrete fat type"
         );
 
         // A closure capturing a non-Copy value is `FnOnce` (move-only).
-        let result = typecheck(
+        let result = typecheck_full(
             "struct Wrap { pub v: i32 } \
              fn main() i32 { \
                  let w = Wrap { .v = 3 }; \
@@ -7086,7 +7050,7 @@ mod tests {
                 result.interner.get(ty),
                 Type::FatFn {
                     once: true,
-                    body: FatFnBody::Closure { .. },
+                    erased: false,
                     ..
                 }
             )),
@@ -7096,18 +7060,18 @@ mod tests {
 
     #[test]
     fn closure_return_forward_reference_types_as_fat_fn() {
-        let result =
-            typecheck(MULT_WITH_MAIN).expect("forward-referenced closure return must typecheck");
+        let result = typecheck_full(MULT_WITH_MAIN)
+            .expect("forward-referenced closure return must typecheck");
 
         assert!(
-            find_fat_fn(&result).is_some() && find_env_struct(&result).is_some(),
-            "elaborated fat pointer and env struct must exist"
+            find_fat_fn(&result).is_some(),
+            "elaborated fat pointer must exist"
         );
     }
 
     #[test]
     fn typed_let_of_capturing_closure_is_rejected() {
-        let errors = typecheck(&format!(
+        let errors = typecheck_full(&format!(
             "{MULT_SOURCE} fn main() i32 {{ let f: fn(i32) i32 = mult(); }}"
         ))
         .expect_err("capturing closure cannot be stored in a bare fn-typed variable");
@@ -7122,7 +7086,7 @@ mod tests {
 
     #[test]
     fn capturing_closure_flow_through_fat_fn_param() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn apply(f: Fn(i32) i32) i32 {
                 return f(2);
@@ -7136,12 +7100,12 @@ mod tests {
         )
         .expect("Fn-typed parameter must accept a capturing closure");
 
-        assert!(find_env_struct(&result).is_some());
+        assert!(find_fat_fn(&result).is_some());
     }
 
     #[test]
     fn zero_capture_closure_coerces_to_fat_fn_param() {
-        typecheck(
+        typecheck_full(
             r#"
             fn apply(f: Fn(i32) i32) i32 {
                 return f(2);
@@ -7157,7 +7121,7 @@ mod tests {
 
     #[test]
     fn capturing_non_copy_value_types_as_fatonce() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             struct Foo {}
 
@@ -7175,14 +7139,11 @@ mod tests {
             "non-Copy capture must produce `FnOnce`, got: {:?}",
             result.interner.get(fat)
         );
-
-        let env_def = find_env_struct(&result).expect("env struct must be registered");
-        assert!(!result.struct_info[&env_def].capabalities.is_copy);
     }
 
     #[test]
     fn closure_ret_accepts_fn_and_fatonce() {
-        typecheck(
+        typecheck_full(
             r#"
             fn apply(f: Fn(i32) i32) i32 {
                 return f(2);
@@ -7218,7 +7179,7 @@ mod tests {
     #[test]
     fn closure_only_called_stays_on_stack() {
         let result =
-            typecheck("fn main() { let x = 1; let c = fn() i32 { return x; }; let r = c(); }")
+            typecheck_full("fn main() { let x = 1; let c = fn() i32 { return x; }; let r = c(); }")
                 .expect("closure only used as a call target must typecheck");
 
         assert_eq!(
@@ -7230,7 +7191,7 @@ mod tests {
 
     #[test]
     fn unused_closure_is_elided() {
-        let result = typecheck("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
+        let result = typecheck_full("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
             .expect("an unused closure must typecheck");
 
         assert_eq!(
@@ -7242,7 +7203,7 @@ mod tests {
 
     #[test]
     fn returned_closure_is_heap_allocated() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn make() Fn() i32 {
                 let x = 1;
@@ -7265,7 +7226,7 @@ mod tests {
 
     #[test]
     fn closure_passed_as_argument_is_heap_allocated() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn apply(f: Fn(i32) i32) i32 {
                 return f(1);
@@ -7287,7 +7248,7 @@ mod tests {
 
     #[test]
     fn closure_called_in_place_stays_on_stack() {
-        let result = typecheck("fn main() { let r = (fn(a: i32) i32 { return a + 1; })(2); }")
+        let result = typecheck_full("fn main() { let r = (fn(a: i32) i32 { return a + 1; })(2); }")
             .expect("immediately-called closure must typecheck");
 
         assert_eq!(
@@ -7299,7 +7260,7 @@ mod tests {
 
     #[test]
     fn closure_captured_by_sibling_is_heap_allocated() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn main() void {
                 let x = 1;
@@ -7320,7 +7281,7 @@ mod tests {
 
     #[test]
     fn closure_moved_into_another_local_is_heap_allocated() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn main() void {
                 let x = 1;
@@ -7336,5 +7297,49 @@ mod tests {
             allocs(&result).contains(&ClosureAllocKind::Heap),
             "moving a closure into another local must force the heap"
         );
+    }
+
+    #[test]
+    fn struct_name_used_as_value_is_rejected() {
+        let errors = typecheck(
+            r#"
+            struct A { pub value: i32 }
+            fn main() {
+                let r = A;
+            }
+            "#,
+        )
+        .expect_err("a bare struct name is not a value");
+
+        assert!(
+            errors.iter().any(|err| {
+                matches!(
+                    err,
+                    TypeError::TypeNameAsValue {
+                        name,
+                        ..
+                    } if name.as_str() == "A"
+                )
+            }),
+            "expected TypeNameAsValue(A), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn static_method_receiver_is_not_a_type_name_value() {
+        typecheck(
+            r#"
+            struct A {
+                value: i32,
+                pub fn make() i32 {
+                    return 0;
+                }
+            }
+            fn main() {
+                let _ = A.make();
+            }
+            "#,
+        )
+        .expect("a static method call receiver must not be flagged");
     }
 }
