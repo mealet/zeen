@@ -389,7 +389,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
     }
 
     pub fn parse_if(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        let mut expr_parser = ExprParser::new(self.p).if_in_statement();
+        let mut expr_parser = ExprParser::new(self.p);
         let expr = expr_parser.parse()?;
 
         self.finish_expr_stmt(expr)
@@ -1191,6 +1191,65 @@ mod tests {
             stmt_parser.parse().unwrap(),
             Statement {
                 kind: StatementKind::Let { .. },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn if_without_semicolon_at_toplevel() {
+        const SRC: &str = "if (a) { 1 } let b = 2;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::If { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let { .. },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn if_without_semicolon_followed_by_if() {
+        const SRC: &str = "if (a) { 1 } if (b) { 2 }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::If { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::If { .. },
+                    ..
+                }),
                 ..
             }
         );

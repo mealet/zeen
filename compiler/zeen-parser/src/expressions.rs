@@ -12,7 +12,6 @@ use zeen_lexer::{Token, TokenKind};
 pub struct ExprParser<'tok, 'ctx, 'pr> {
     p: &'pr mut Parser<'tok, 'ctx>,
     non_struct_braces: bool,
-    if_in_statement: bool,
 }
 
 #[repr(u8)]
@@ -166,17 +165,11 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         Self {
             p: parser,
             non_struct_braces: false,
-            if_in_statement: false,
         }
     }
 
     pub fn non_struct_braces(mut self) -> Self {
         self.non_struct_braces = true;
-        self
-    }
-
-    pub fn if_in_statement(mut self) -> Self {
-        self.if_in_statement = true;
         self
     }
 
@@ -1017,18 +1010,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         } else {
             if_kw.merge_span(then_block.span)
         };
-
-        if self.if_in_statement
-            && !self.p.at(TokenKind::Semicolon)
-            && !self.p.at(TokenKind::CloseBrace)
-        {
-            self.p.report(ParserError::SyntaxError {
-                label: "expected `;` after \"if\" construction".into(),
-                help: Some("add `;` after \"if\" construction block".into()),
-                src: self.p.named_src(),
-                span: self.p.current().span,
-            });
-        }
 
         let expr = self.p.arena.alloc(Expression {
             kind: ExpressionKind::If {
