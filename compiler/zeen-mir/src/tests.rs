@@ -997,8 +997,9 @@ fn static_fn_coerced_to_fat_dispatches_through_adapter() {
         "a static fn in a fat slot must be called indirectly through `$fn`"
     );
 
-    // The envelope is built at the call site: two fields, fn pointer and a
-    // `null` env mark for the adapter-callable empty envelope.
+    // The envelope is built at the call site: three fields, fn pointer, a
+    // `null` env mark and the shared no-op teardown for the adapter-callable
+    // empty envelope.
     let main_id = fn_id_by_name(&mir, "main").expect("main missing");
     let main_fn = &mir.program.functions[&main_id];
     let envelope = main_fn.blocks.iter().any(|b| {
@@ -1016,7 +1017,8 @@ fn static_fn_coerced_to_fat_dispatches_through_adapter() {
                     operands.as_slice(),
                     [
                         Operand::Copy(_, _),
-                        Operand::Constant(ConstValue::NullPtr, None)
+                        Operand::Constant(ConstValue::NullPtr, None),
+                        Operand::Constant(ConstValue::Fn(_), None)
                     ]
                 ) && *def == zeen_types::CLOSURE_FAT_DEF
             )
@@ -1024,7 +1026,7 @@ fn static_fn_coerced_to_fat_dispatches_through_adapter() {
     });
     assert!(
         envelope,
-        "expected a `{{ fn, null }}` envelope aggregate at the call site"
+        "expected a `{{ fn, null, noop }}` envelope aggregate at the call site"
     );
 }
 
@@ -1039,8 +1041,9 @@ fn fat_layout_is_static_two_field_envelope() {
          }",
     );
 
-    // A fat value is a static `{ $fn, $env }` envelope shared by every fat
-    // type; the captures live in the heap block `$env` points at.
+    // A fat value is a static `{ $fn, $env, $drop }` envelope shared by
+    // every fat type; the captures live in the heap block `$env` points at
+    // and `$drop` tears them down before the block is freed.
     let fat_layouts: Vec<_> = mir
         .program
         .struct_layouts
@@ -1050,8 +1053,8 @@ fn fat_layout_is_static_two_field_envelope() {
     assert!(!fat_layouts.is_empty(), "fat layout must be registered");
     assert_eq!(
         fat_layouts[0].fields.len(),
-        2,
-        "the fat envelope always holds `$fn` and `$env`"
+        3,
+        "the fat envelope always holds `$fn`, `$env` and `$drop`"
     );
     assert_eq!(
         fat_layouts[0].fields[0].def_id,
@@ -1060,6 +1063,10 @@ fn fat_layout_is_static_two_field_envelope() {
     assert_eq!(
         fat_layouts[0].fields[1].def_id,
         zeen_types::CLOSURE_FAT_ENV_FIELD,
+    );
+    assert_eq!(
+        fat_layouts[0].fields[2].def_id,
+        zeen_types::CLOSURE_FAT_DROP_FIELD,
     );
 
     // The env captures get their own inline struct layout (one field for the
