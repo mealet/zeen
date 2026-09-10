@@ -567,6 +567,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             f64 => self.context.f64_type().into(),
             bool => self.context.bool_type().into(),
             void => panic!("void is not a basic value type"),
+            never => panic!("never is not a basic value type"),
         }
     }
 
@@ -607,6 +608,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 f32 | f64 => context.f64_type().into(),
                 bool => context.bool_type().into(),
                 void => context.i32_type().into(),
+                never => context.i32_type().into(),
             },
             Type::IntLiteral => context.i32_type().into(),
             Type::FloatLiteral => context.f64_type().into(),
