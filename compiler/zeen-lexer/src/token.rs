@@ -129,6 +129,7 @@ pub enum CompilerType {
     bool,
     char,
     void,
+    never,
 }
 
 impl CompilerType {
@@ -152,6 +153,7 @@ impl CompilerType {
             "bool" => Some(CompilerType::bool),
             "char" => Some(CompilerType::char),
             "void" => Some(CompilerType::void),
+            "never" => Some(CompilerType::never),
 
             _ => None,
         }

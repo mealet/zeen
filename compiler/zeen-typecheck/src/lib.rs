@@ -928,15 +928,6 @@ impl<'res> TypeChecker<'res> {
                 let type_id = self.synth_expr(expr);
                 self.type_names_as_values.remove(&expr.id);
 
-                if type_id == self.result.interner.never()
-                    || type_id == self.result.interner.error() && !self.extracting_typename
-                {
-                    self.report(TypeError::NeverFromTypeof {
-                        src: ty.source.src(),
-                        span: ty.source.span,
-                    });
-                }
-
                 type_id
             }
 
@@ -4563,6 +4554,7 @@ impl<'res> TypeChecker<'res> {
             char => &["Display", "Debug", "Eq"],
 
             void => &[],
+            never => &[],
         }
     }
 

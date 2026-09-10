@@ -80,6 +80,7 @@ pub enum BuiltinType {
     bool,
     char,
     void,
+    never,
 }
 
 impl BuiltinType {
@@ -105,6 +106,7 @@ impl BuiltinType {
             CompilerType::bool => Self::bool,
             CompilerType::char => Self::char,
             CompilerType::void => Self::void,
+            CompilerType::never => Self::never,
         }
     }
 }
@@ -133,6 +135,7 @@ impl std::fmt::Display for BuiltinType {
                 Self::bool => "bool",
                 Self::char => "char",
                 Self::void => "void",
+                Self::never => "never",
             }
         )
     }
