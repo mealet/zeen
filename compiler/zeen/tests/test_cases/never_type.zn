@@ -1,0 +1,6 @@
+extern fn exit(i32) never;
+
+fn main() {
+  exit(123);
+  @println("Hello, World!");
+}
