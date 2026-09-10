@@ -124,7 +124,7 @@ mod tests {
         let mut context = CompilationContext {
             paths: PathsConfig {
                 project_root: PathBuf::from("/"),
-                std_root: None,
+                std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")),
                 linked: HashSet::new(),
             },
             core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
