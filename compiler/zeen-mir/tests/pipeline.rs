@@ -44,7 +44,7 @@ fn compile_mode(src: &str, mode: CompilationMode) -> Result<String, Vec<String>>
     let mut context = CompilationContext {
         paths: PathsConfig {
             project_root: PathBuf::from("/"),
-            std_root: None,
+            std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")),
             linked: HashSet::new(),
         },
         core_files: core_files(),

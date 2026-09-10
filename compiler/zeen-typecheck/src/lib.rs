@@ -5750,26 +5750,67 @@ mod tests {
 
     use crate::{TypeCheckResult, TypeChecker, TypeError};
 
+    const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
+    const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
+    const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
+    const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+
     fn typecheck(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
         typecheck_with_target(source, None)
+    }
+
+    fn typecheck_full(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
+        typecheck_with_target_full(source, None)
     }
 
     fn typecheck_with_target(
         source: &str,
         target: Option<&str>,
     ) -> Result<TypeCheckResult, Vec<TypeError>> {
+        typecheck_fixture(source, target, false)
+    }
+
+    fn typecheck_with_target_full(
+        source: &str,
+        target: Option<&str>,
+    ) -> Result<TypeCheckResult, Vec<TypeError>> {
+        typecheck_fixture(source, target, true)
+    }
+
+    /// The bare fixture has no core/std modules: enough for isolated
+    /// typechecking. The full fixture mirrors the real compiler: core files
+    /// injected and a filesystem std root, required for closure/fat usage
+    /// (`use std.fn` is injected then).
+    fn typecheck_fixture(
+        source: &str,
+        target: Option<&str>,
+        full: bool,
+    ) -> Result<TypeCheckResult, Vec<TypeError>> {
         let rodeo = Rc::new(RefCell::new(Rodeo::default()));
         let bump = Bump::default();
         let content = Arc::new(source.to_string());
         let filename = Rc::new("test.zn".to_string());
 
+        let core_files = if full {
+            vec![
+                ("core.ops", CORE_OPS),
+                ("core.out", CORE_OUT),
+                ("core.iter", CORE_ITER),
+                ("core.option", CORE_OPTION),
+            ]
+        } else {
+            Vec::new()
+        };
+
         let mut context = CompilationContext {
             paths: PathsConfig {
                 project_root: std::env::temp_dir(),
-                std_root: None,
+                std_root: full.then(|| {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")
+                }),
                 linked: HashSet::new(),
             },
-            core_files: Vec::new(),
+            core_files,
             mode: CompilationMode::Debug,
             output: CompilationOutput::Binary,
             target: target.map(|triple| triple.to_string()),
@@ -6759,18 +6800,20 @@ mod tests {
 
     use zeen_types::Type;
 
+    /// Finds a concrete (non-erased) fat type: erased `FatFn` bounds are
+    /// checker-only annotation forms, not real closure values.
     fn find_fat_fn(result: &TypeCheckResult) -> Option<zeen_types::TypeId> {
         result
             .def_types
             .values()
             .copied()
             .chain(result.expr_types.values().copied())
-            .find(|&ty| matches!(result.interner.get(ty), Type::FatFn { .. }))
+            .find(|&ty| matches!(result.interner.get(ty), Type::FatFn { erased: false, .. }))
     }
 
     #[test]
     fn zero_capture_closure_types_as_fn() {
-        let result = typecheck("fn main() { let c = fn(x: i32) i32 { return x + 1; }; }")
+        let result = typecheck_full("fn main() { let c = fn(x: i32) i32 { return x + 1; }; }")
             .expect("zero-capture closure must typecheck");
 
         assert!(
@@ -6794,7 +6837,7 @@ mod tests {
 
     #[test]
     fn capturing_closure_types_as_fat_fn() {
-        let result = typecheck("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
+        let result = typecheck_full("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
             .expect("capturing closure must typecheck");
 
         let fat = find_fat_fn(&result).expect("capturing closure must be typed as `Fn`");
@@ -6808,7 +6851,7 @@ mod tests {
     #[test]
     fn closure_call_checks_argument_types() {
         let result =
-            typecheck("fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(2); }")
+            typecheck_full("fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(2); }")
                 .expect("closure call with matching args must typecheck");
 
         assert!(
@@ -6819,9 +6862,10 @@ mod tests {
             "call result must be i32"
         );
 
-        let errors =
-            typecheck("fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(true); }")
-                .expect_err("closure call with mismatched arg must be reported");
+        let errors = typecheck_full(
+            "fn main() { let c = fn(a: i32) i32 { return a + 1; }; let r = c(true); }",
+        )
+        .expect_err("closure call with mismatched arg must be reported");
 
         assert!(
             errors
@@ -6833,12 +6877,13 @@ mod tests {
 
     #[test]
     fn capturing_closure_call_checks_args() {
-        typecheck("fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(); }")
+        typecheck_full("fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(); }")
             .expect("capturing closure call must typecheck");
 
-        let errors =
-            typecheck("fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(1); }")
-                .expect_err("capturing closure call with extra arg must be reported");
+        let errors = typecheck_full(
+            "fn main() { let x = 5; let c = fn() i32 { return x; }; let r = c(1); }",
+        )
+        .expect_err("capturing closure call with extra arg must be reported");
 
         assert!(
             errors
@@ -6850,7 +6895,7 @@ mod tests {
 
     #[test]
     fn zero_capture_closure_passes_as_fn_argument() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn apply(f: fn(i32) i32) i32 {
                 return f(21);
@@ -6871,7 +6916,7 @@ mod tests {
 
     #[test]
     fn closure_body_return_type_is_checked() {
-        let errors = typecheck("fn main() { let c = fn() i32 { return true; }; }")
+        let errors = typecheck_full("fn main() { let c = fn() i32 { return true; }; }")
             .expect_err("closure body return mismatch must be reported");
 
         assert!(
@@ -6884,7 +6929,7 @@ mod tests {
 
     #[test]
     fn closure_capture_type_mismatch_is_reported() {
-        let errors = typecheck(
+        let errors = typecheck_full(
             "fn main() { let x = 1; let c = fn(y: bool) bool { return y; }; let r = c(x); }",
         )
         .expect_err("captured value passed as wrong arg type must be reported");
@@ -6905,7 +6950,7 @@ mod tests {
 
     #[test]
     fn closure_return_types_as_fat_fn() {
-        let result = typecheck(&format!("{MULT_SOURCE} fn main() i32 {{ return 0; }}"))
+        let result = typecheck_full(&format!("{MULT_SOURCE} fn main() i32 {{ return 0; }}"))
             .expect("closure return must typecheck");
 
         let fat = find_fat_fn(&result).expect("mult's return must be a `Fn` fat pointer");
@@ -6919,7 +6964,7 @@ mod tests {
 
     #[test]
     fn capturing_closure_fat_type_carries_body() {
-        let result = typecheck(
+        let result = typecheck_full(
             "fn main() i32 { let x = 1; let add = fn(a: i32) i32 { return a + x; }; return add(2); }",
         )
         .expect("capturing closure must typecheck");
@@ -6937,7 +6982,7 @@ mod tests {
         );
 
         // A closure capturing a non-Copy value is `FnOnce` (move-only).
-        let result = typecheck(
+        let result = typecheck_full(
             "struct Wrap { pub v: i32 } \
              fn main() i32 { \
                  let w = Wrap { .v = 3 }; \
@@ -6962,8 +7007,8 @@ mod tests {
 
     #[test]
     fn closure_return_forward_reference_types_as_fat_fn() {
-        let result =
-            typecheck(MULT_WITH_MAIN).expect("forward-referenced closure return must typecheck");
+        let result = typecheck_full(MULT_WITH_MAIN)
+            .expect("forward-referenced closure return must typecheck");
 
         assert!(
             find_fat_fn(&result).is_some(),
@@ -6973,7 +7018,7 @@ mod tests {
 
     #[test]
     fn typed_let_of_capturing_closure_is_rejected() {
-        let errors = typecheck(&format!(
+        let errors = typecheck_full(&format!(
             "{MULT_SOURCE} fn main() i32 {{ let f: fn(i32) i32 = mult(); }}"
         ))
         .expect_err("capturing closure cannot be stored in a bare fn-typed variable");
@@ -6988,7 +7033,7 @@ mod tests {
 
     #[test]
     fn capturing_closure_flow_through_fat_fn_param() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn apply(f: Fn(i32) i32) i32 {
                 return f(2);
@@ -7007,7 +7052,7 @@ mod tests {
 
     #[test]
     fn zero_capture_closure_coerces_to_fat_fn_param() {
-        typecheck(
+        typecheck_full(
             r#"
             fn apply(f: Fn(i32) i32) i32 {
                 return f(2);
@@ -7023,7 +7068,7 @@ mod tests {
 
     #[test]
     fn capturing_non_copy_value_types_as_fatonce() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             struct Foo {}
 
@@ -7045,7 +7090,7 @@ mod tests {
 
     #[test]
     fn closure_ret_accepts_fn_and_fatonce() {
-        typecheck(
+        typecheck_full(
             r#"
             fn apply(f: Fn(i32) i32) i32 {
                 return f(2);
@@ -7081,7 +7126,7 @@ mod tests {
     #[test]
     fn closure_only_called_stays_on_stack() {
         let result =
-            typecheck("fn main() { let x = 1; let c = fn() i32 { return x; }; let r = c(); }")
+            typecheck_full("fn main() { let x = 1; let c = fn() i32 { return x; }; let r = c(); }")
                 .expect("closure only used as a call target must typecheck");
 
         assert_eq!(
@@ -7093,7 +7138,7 @@ mod tests {
 
     #[test]
     fn unused_closure_is_elided() {
-        let result = typecheck("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
+        let result = typecheck_full("fn main() { let x = 1; let c = fn() i32 { return x; }; }")
             .expect("an unused closure must typecheck");
 
         assert_eq!(
@@ -7105,7 +7150,7 @@ mod tests {
 
     #[test]
     fn returned_closure_is_heap_allocated() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn make() Fn() i32 {
                 let x = 1;
@@ -7128,7 +7173,7 @@ mod tests {
 
     #[test]
     fn closure_passed_as_argument_is_heap_allocated() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn apply(f: Fn(i32) i32) i32 {
                 return f(1);
@@ -7150,7 +7195,7 @@ mod tests {
 
     #[test]
     fn closure_called_in_place_stays_on_stack() {
-        let result = typecheck("fn main() { let r = (fn(a: i32) i32 { return a + 1; })(2); }")
+        let result = typecheck_full("fn main() { let r = (fn(a: i32) i32 { return a + 1; })(2); }")
             .expect("immediately-called closure must typecheck");
 
         assert_eq!(
@@ -7162,7 +7207,7 @@ mod tests {
 
     #[test]
     fn closure_captured_by_sibling_is_heap_allocated() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn main() void {
                 let x = 1;
@@ -7183,7 +7228,7 @@ mod tests {
 
     #[test]
     fn closure_moved_into_another_local_is_heap_allocated() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn main() void {
                 let x = 1;
