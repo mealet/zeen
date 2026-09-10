@@ -31,7 +31,7 @@ use std.c.types;
   pub extern fn rmdir(path: [*]const char) c_int;
 
   pub extern fn fsync(fd: c_int) c_int;
-  pub extern fn _exit(status: c_int) void;
+  pub extern fn _exit(status: c_int) never;
 
   // Variadic exec family (all POSIX).
   pub extern fn execl(path: [*]const char, arg0: [*]const char, ...) c_int;
