@@ -6,6 +6,7 @@ use std::{
 
 use lasso::Spur;
 use miette::SourceSpan;
+use smol_str::SmolStr;
 use zeen_ast::Source;
 
 use crate::{
@@ -87,6 +88,13 @@ pub struct TypeChecker<'res> {
     method_owning_interface: HashMap<DefId, DefId>,
 
     extracting_typename: bool,
+
+    /// `VarRef` expressions that reference a type-only def (`Struct`,
+    /// `Interface`, `Enum`, `TypeAlias`) where a value is expected. Legitimate
+    /// uses remove themselves: a static method call receiver and a `typeof`
+    /// operand. Anything left after checking is a misuse reported in
+    /// [`TypeChecker::finalize_type_name_usage`].
+    type_names_as_values: HashMap<HirId, (DefId, Source)>,
 }
 
 struct FnSignature {
@@ -158,6 +166,7 @@ impl<'res> TypeChecker<'res> {
             all_generic_bounds: HashMap::new(),
             method_owning_interface: HashMap::new(),
             extracting_typename: false,
+            type_names_as_values: HashMap::new(),
         }
     }
 
@@ -240,6 +249,7 @@ impl<'res> TypeChecker<'res> {
         }
 
         self.finalize_fat_types();
+        self.finalize_type_name_usage();
 
         let target = self.compilation_context.target.as_deref();
         let requires_main = zeen_driver::target_requires_main(target);
@@ -916,6 +926,7 @@ impl<'res> TypeChecker<'res> {
 
             HirTypeKind::TypeOf(expr) => {
                 let type_id = self.synth_expr(expr);
+                self.type_names_as_values.remove(&expr.id);
 
                 if type_id == self.result.interner.never()
                     || type_id == self.result.interner.error() && !self.extracting_typename
@@ -1370,6 +1381,39 @@ impl<'res> TypeChecker<'res> {
         }
 
         ty
+    }
+
+    /// Reports every `VarRef` that still references a type-only def after body
+    /// checking: the legitimate uses (static method call receiver, `typeof`
+    /// operand) removed themselves as they were checked, so anything left is a
+    /// type name used where a value is expected.
+    fn finalize_type_name_usage(&mut self) {
+        let flagged: Vec<(DefId, Source)> = self
+            .type_names_as_values
+            .drain()
+            .map(|(_, payload)| payload)
+            .collect();
+
+        for (def_id, source) in flagged {
+            let name: SmolStr = self
+                .interner
+                .borrow()
+                .resolve(
+                    &self
+                        .resolution
+                        .defs
+                        .get(&def_id)
+                        .map(|info| info.name)
+                        .unwrap_or_default(),
+                )
+                .into();
+
+            self.report(TypeError::TypeNameAsValue {
+                name,
+                src: source.src(),
+                span: source.span,
+            });
+        }
     }
 
     /// Resolves the erased `Fn`/`FnOnce` annotations down to the concrete
@@ -1908,6 +1952,13 @@ impl<'res> TypeChecker<'res> {
             },
 
             HirExprKind::VarRef(def_id) => {
+                if matches!(
+                    self.def_kind(*def_id),
+                    Some(DefKind::Struct | DefKind::Interface | DefKind::Enum | DefKind::TypeAlias)
+                ) {
+                    self.type_names_as_values
+                        .insert(expr.id, (*def_id, expr.source.clone()));
+                }
                 let ty = self.lookup_def_type(*def_id, expr.source.clone());
                 if matches!(self.result.interner.get(ty), Type::FatFn { .. }) {
                     self.result.fat_value_defs.insert(expr.id, *def_id);
@@ -2687,6 +2738,7 @@ impl<'res> TypeChecker<'res> {
         }
 
         let obj_ty = self.synth_expr(object);
+        self.type_names_as_values.remove(&object.id);
 
         // -----------| Hard coded piece of shit section |-----------
         // > What is this for?
@@ -3748,6 +3800,7 @@ impl<'res> TypeChecker<'res> {
 
         // Otherwise it is instance call
         let obj_ty = self.synth_expr(object);
+        self.type_names_as_values.remove(&object.id);
 
         // A call on a generic parameter dispatches to the interface bound that
         // declares the method (e.g. `out.write_str(...)` where `O: StrWriter`).
@@ -7244,5 +7297,49 @@ mod tests {
             allocs(&result).contains(&ClosureAllocKind::Heap),
             "moving a closure into another local must force the heap"
         );
+    }
+
+    #[test]
+    fn struct_name_used_as_value_is_rejected() {
+        let errors = typecheck(
+            r#"
+            struct A { pub value: i32 }
+            fn main() {
+                let r = A;
+            }
+            "#,
+        )
+        .expect_err("a bare struct name is not a value");
+
+        assert!(
+            errors.iter().any(|err| {
+                matches!(
+                    err,
+                    TypeError::TypeNameAsValue {
+                        name,
+                        ..
+                    } if name.as_str() == "A"
+                )
+            }),
+            "expected TypeNameAsValue(A), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn static_method_receiver_is_not_a_type_name_value() {
+        typecheck(
+            r#"
+            struct A {
+                value: i32,
+                pub fn make() i32 {
+                    return 0;
+                }
+            }
+            fn main() {
+                let _ = A.make();
+            }
+            "#,
+        )
+        .expect("a static method call receiver must not be flagged");
     }
 }

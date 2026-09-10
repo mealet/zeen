@@ -699,4 +699,20 @@ pub enum TypeError {
         span: SourceSpan,
     },
     // <-- Format Errors
+    #[error("type `{name}` is used as a value")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::type_name_as_value),
+        help(
+            "a type name has no value: construct an instance (`{name} {{ ... }}`) or call a static method on it"
+        )
+    )]
+    TypeNameAsValue {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
