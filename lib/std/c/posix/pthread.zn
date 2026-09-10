@@ -304,7 +304,7 @@ use std.c.time;
     arg: *void
   ) c_int;
   pub extern fn pthread_join(native: c_pthread_t, value: **void) c_int;
-  pub extern fn pthread_exit(value: *void) void;
+  pub extern fn pthread_exit(value: *void) never;
   pub extern fn pthread_self() c_pthread_t;
   pub extern fn pthread_equal(a: c_pthread_t, b: c_pthread_t) c_int;
   pub extern fn pthread_detach(native: c_pthread_t) c_int;

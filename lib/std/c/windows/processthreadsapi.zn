@@ -162,7 +162,7 @@ use std.c.windows.windef;
     creation_flags: WinDWORD,
     thread_id: *WinDWORD,
   ) WinHANDLE;
-  pub extern fn ExitThread(exit_code: WinDWORD) void;
+  pub extern fn ExitThread(exit_code: WinDWORD) never;
   pub extern fn TerminateThread(thread: WinHANDLE, exit_code: WinDWORD) WinBOOL;
   pub extern fn GetExitCodeThread(thread: WinHANDLE, exit_code: *WinDWORD) WinBOOL;
   pub extern fn SuspendThread(thread: WinHANDLE) WinDWORD;

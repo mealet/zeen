@@ -22,8 +22,8 @@ pub extern fn realloc(ptr: *void, size: c_size_t) *void;
 pub extern fn free(ptr: *void);
 
 // process control
-pub extern fn exit(code: c_int) void;
-pub extern fn abort() void;
+pub extern fn exit(code: c_int) never;
+pub extern fn abort() never;
 pub extern fn atexit(func: fn() void) c_int;
 pub extern fn system(command: [*]const char) c_int;
 
