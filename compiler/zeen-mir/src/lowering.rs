@@ -172,6 +172,12 @@ pub struct MirLowering<'ctx> {
 
     /// Lazily resolved `std.string` `String` struct (the `@format` writer).
     format_string: Option<(TypeId, DefId)>,
+
+    /// Lazily resolved `std.alloc` `Allocator` struct and its `alloc` /
+    /// `dealloc` methods, used to grow and free heap env blocks.
+    allocator_struct: Option<DefId>,
+    allocator_alloc: Option<DefId>,
+    allocator_dealloc: Option<DefId>,
 }
 
 struct GlobalDecl {
@@ -352,6 +358,9 @@ impl<'ctx> MirLowering<'ctx> {
             globals_by_def: HashMap::new(),
             outstream: None,
             format_string: None,
+            allocator_struct: None,
+            allocator_alloc: None,
+            allocator_dealloc: None,
         }
     }
 
@@ -794,10 +803,10 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     /// Builds the drop function of a fat type: the value is passed by value
-    /// and `$env` is handed to `free` (a no-op on the `null` used for wrapped
-    /// bare fns). Captures are not torn down individually - captured values in
-    /// env structs are never ownership-bearing, so freeing the block is all
-    /// their death needs.
+    /// and `$env` is handed to `Allocator.dealloc` (a no-op on the `null`
+    /// used for wrapped bare fns). Captures are not torn down individually -
+    /// captured values in env structs are never ownership-bearing, so freeing
+    /// the block is all their death needs.
     fn synthesize_fat_drop_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
         self.register_fat_layout(fat_ty);
 
@@ -805,7 +814,8 @@ impl<'ctx> MirLowering<'ctx> {
         self.set_function_name(id, format!("$fatdrop#{}", id.0));
 
         let void_ty = self.void_ty();
-        let free_idx = self.free_extern();
+        let (allocator_def, dealloc_def) = self.resolve_allocator_method("dealloc");
+        let dealloc_id = self.monomorphize_fn(dealloc_def, Vec::new(), Some(allocator_def), &[]);
 
         let mut func = MirFunction {
             source_def: CLOSURE_FAT_DEF,
@@ -839,7 +849,7 @@ impl<'ctx> MirLowering<'ctx> {
         });
 
         func.blocks[0].terminator = Terminator::Call {
-            func: CallTarget::Extern(free_idx),
+            func: CallTarget::Direct(dealloc_id),
             args: vec![Operand::Copy(env_place, None)],
             destination: Place::from_local(sink),
             target: Some(bb1),
@@ -852,43 +862,62 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Resolves (declaring on first use) the stdlib `malloc` extern used to
-    /// allocate heap env blocks.
-    fn malloc_extern(&mut self) -> usize {
-        let usize_ty = self.usize_ty();
-        let ptr_ty = self.void_ptr_ty();
-        self.get_or_decl_extern("malloc", vec![usize_ty], ptr_ty)
-    }
+    /// Resolves (declaring on first use) the `std.alloc` `Allocator` method
+    /// with the given name. Allocates envs through `Allocator.alloc` and
+    /// releases them through `Allocator.dealloc` instead of raw libc
+    /// `malloc`/`free`.
+    fn resolve_allocator_method(&mut self, method_name: &str) -> (DefId, DefId) {
+        let allocator = if let Some(def) = self.allocator_struct {
+            def
+        } else {
+            let def = self
+                .resolution
+                .defs
+                .iter()
+                .find_map(|(def, info)| {
+                    matches!(info.kind, DefKind::Struct)
+                        .then(|| self.rodeo.borrow().resolve(&info.name) == "Allocator")
+                        .filter(|found| *found)
+                        .map(|_| *def)
+                })
+                .expect("`std.alloc` `Allocator` is missing: fat envs need a heap allocator");
+            self.allocator_struct = Some(def);
+            def
+        };
 
-    /// Resolves (declaring on first use) the stdlib `free` extern used to
-    /// release heap env blocks.
-    fn free_extern(&mut self) -> usize {
-        let ptr_ty = self.void_ptr_ty();
-        let ret_ty = self.void_ty();
-        self.get_or_decl_extern("free", vec![ptr_ty], ret_ty)
-    }
+        let get_method = |name: &str, cache: Option<DefId>| -> Option<DefId> {
+            match cache {
+                Some(def) => Some(def),
+                None => self.resolution.defs.iter().find_map(|(def, info)| {
+                    let owner_matches = self
+                        .typecheck
+                        .method_owner
+                        .get(def)
+                        .copied()
+                        .map(|owner| Some(owner) == self.allocator_struct)
+                        .unwrap_or(false);
+                    let name_matches = self.rodeo.borrow().resolve(&info.name) == name;
+                    (owner_matches && name_matches).then_some(*def)
+                }),
+            }
+        };
 
-    fn get_or_decl_extern(
-        &mut self,
-        symbol: &str,
-        param_types: Vec<TypeId>,
-        ret_ty: TypeId,
-    ) -> usize {
-        if let Some(idx) = self
-            .program
-            .extern_fns
-            .iter()
-            .position(|decl| decl.symbol_name == symbol)
-        {
-            return idx;
-        }
-        self.program.extern_fns.push(ExternFnDecl {
-            symbol_name: symbol.to_string(),
-            param_types,
-            ret_ty,
-            is_variadic: false,
-        });
-        self.program.extern_fns.len() - 1
+        let method = match method_name {
+            "alloc" => {
+                let method = get_method("alloc", self.allocator_alloc)
+                    .expect("`Allocator` struct has no such method");
+                self.allocator_alloc = Some(method);
+                method
+            }
+            "dealloc" => {
+                let method = get_method("dealloc", self.allocator_dealloc)
+                    .expect("`Allocator` struct has no such method");
+                self.allocator_dealloc = Some(method);
+                method
+            }
+            _ => panic!("resolve_allocator_method: no such method `{method_name}`"),
+        };
+        (allocator, method)
     }
 
     fn void_ty(&mut self) -> TypeId {
@@ -1390,8 +1419,9 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Malloc a heap block for `env_ty` and return the raw `*void` pointer to
-    /// it, as a moved operand.
+    /// Call `Allocator.alloc` for a heap block of `env_ty` and return the
+    /// raw `*void` pointer to it, as a moved operand. Panics on allocation
+    /// failure inside `Allocator.alloc`.
     fn heap_alloc_env(
         &mut self,
         fb: &mut FnBuilder,
@@ -1399,7 +1429,8 @@ impl<'ctx> MirLowering<'ctx> {
         env_ty: TypeId,
         source_expr: &HirExpr,
     ) -> (BlockId, Operand) {
-        let idx = self.malloc_extern();
+        let (allocator_def, alloc_def) = self.resolve_allocator_method("alloc");
+        let alloc_id = self.monomorphize_fn(alloc_def, Vec::new(), Some(allocator_def), &[]);
         let ptr_ty = self.void_ptr_ty();
         let size_ty = self.usize_ty();
 
@@ -1418,7 +1449,7 @@ impl<'ctx> MirLowering<'ctx> {
         fb.set_terminator(
             block,
             Terminator::Call {
-                func: CallTarget::Extern(idx),
+                func: CallTarget::Direct(alloc_id),
                 args: vec![Operand::Copy(Place::from_local(size_temp), None)],
                 destination: Place::from_local(ptr_temp),
                 target: Some(next),
