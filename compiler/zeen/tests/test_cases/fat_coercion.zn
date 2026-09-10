@@ -1,0 +1,37 @@
+fn apply(f: Fn(i32) i32, x: i32) i32 {
+    return f(x);
+}
+
+fn double(x: i32) i32 { return x * 2; }
+
+struct Holder {
+    pub f: Fn(i32) i32,
+}
+
+struct OnceHolder {
+    pub f: FnOnce(i32) i32,
+}
+
+struct Wrap {
+    pub v: i32,
+}
+
+fn main() i32 {
+    @println("static={}", apply(double, 21));
+
+    let adder = fn(x: i32) i32 { return x + 7; };
+    let h = Holder { .f = adder };
+    @println("field={}", h.f(10));
+
+    let w = Wrap { .v = 30 };
+    let once = fn(x: i32) i32 { return x + w.v; };
+    let oh = OnceHolder { .f = once };
+    @println("once_field={}", oh.f(5));
+
+    @println("immediate={}", (fn(a: i32) i32 { return a * 3; })(5));
+
+    let base = 100;
+    let owned = fn(x: i32) i32 { return x + base; };
+    @println("twice={}", owned(1) + owned(2));
+    return 0;
+}

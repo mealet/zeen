@@ -1,0 +1,23 @@
+use std.alloc;
+
+pub struct Fn {
+    ptr: *void,
+    env: *void,
+}
+
+pub struct FnOnce {
+    ptr: *void,
+    env: *void,
+}
+
+implement Drop : Fn {
+    fn drop(self) {
+        Allocator.dealloc(self.env);
+    }
+}
+
+implement Drop : FnOnce {
+    fn drop(self) {
+        Allocator.dealloc(self.env);
+    }
+}

@@ -356,17 +356,6 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("a `Fn`/`FnOnce` value cannot be stored in this position yet")]
-    #[diagnostic(severity(Error), code(zeen::typechecker::fat_storage_unsupported))]
-    FatStorageUnsupported {
-        what: SmolStr,
-
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("closure value in `{what}`")]
-        span: SourceSpan,
-    },
-
     #[error("a function returning `Fn`/`FnOnce` must return the same closure from every path")]
     #[diagnostic(
         severity(Error),
@@ -710,4 +699,20 @@ pub enum TypeError {
         span: SourceSpan,
     },
     // <-- Format Errors
+    #[error("type `{name}` is used as a value")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::type_name_as_value),
+        help(
+            "a type name has no value: construct an instance (`{name} {{ ... }}`) or call a static method on it"
+        )
+    )]
+    TypeNameAsValue {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }

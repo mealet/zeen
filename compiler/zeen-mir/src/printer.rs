@@ -584,6 +584,7 @@ impl<'a> MirPrinter<'a> {
             zeen_types::CLOSURE_FAT_DEF => "$fat".to_string(),
             zeen_types::CLOSURE_FAT_FN_FIELD => "$fn".to_string(),
             zeen_types::CLOSURE_FAT_ENV_FIELD => "$env".to_string(),
+            zeen_types::CLOSURE_FAT_DROP_FIELD => "$drop".to_string(),
             _ => self
                 .resolution
                 .defs

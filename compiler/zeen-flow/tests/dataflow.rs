@@ -53,7 +53,7 @@ fn compile(src: &str) -> Result<Compiled, Vec<String>> {
     let mut context = CompilationContext {
         paths: PathsConfig {
             project_root: PathBuf::from("/"),
-            std_root: None,
+            std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")),
             linked: HashSet::new(),
         },
         core_files: core_files(),
@@ -448,16 +448,31 @@ fn main() i32 {
 }
 
 #[test]
-fn fn_closure_value_is_copy() {
-    // `Fn` closure values hold only Copy captures, so the value itself is
-    // Copy: copying it to a new name keeps both usable.
-    flow_ok(
+fn fn_closure_value_is_move_only() {
+    // `Fn` closure values are move-only (their env block is owned): binding
+    // one to a new name moves it, so the old name is gone. Calling the same
+    // `Fn` value twice stays fine - sure, it is read, never moved.
+    let errors = flow_err(
         r#"
 fn main() i32 {
     let n = 5;
     let add = fn(a: i32) i32 { return a + n; };
     let g = add;
     return add(1) + g(2);
+}
+"#,
+    );
+    assert!(
+        !errors.is_empty(),
+        "using an `Fn` closure after it was moved must be rejected"
+    );
+
+    flow_ok(
+        r#"
+fn main() i32 {
+    let n = 5;
+    let add = fn(a: i32) i32 { return a + n; };
+    return add(1) + add(2);
 }
 "#,
     );
