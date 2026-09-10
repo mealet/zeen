@@ -2986,13 +2986,21 @@ impl<'ctx> MirLowering<'ctx> {
                         func: call_target,
                         args: arg_operands,
                         destination: dest_place.clone(),
-                        target: if is_diverging { None } else { Some(next_block) },
+                        target: Some(next_block),
                         source: Some(expr.source.clone()),
                     },
                 );
 
                 if is_diverging {
-                    fb.set_terminator(next_block, Terminator::Unreachable);
+                    self.lower_diverging_macro(
+                        fb,
+                        HirMacroKind::Unreachable,
+                        next_block,
+                        &expr.source,
+                    );
+
+                    let next_block = fb.new_block();
+                    // fb.set_terminator(next_block, Terminator::Unreachable);
                     (next_block, Operand::Constant(ConstValue::Void, None))
                 } else {
                     (
