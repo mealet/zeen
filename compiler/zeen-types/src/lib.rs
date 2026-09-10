@@ -17,13 +17,16 @@ pub const SLICE_PTR_FIELD: DefId = DefId(u32::MAX - 2);
 pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
 pub const ARRAY_LEN_FIELD: DefId = DefId(u32::MAX - 4);
 
-/// Synthetic `DefId`s for the canonical fat closure-value struct `{ ptr, env }`
-/// (type `Type::FatFn`). The struct def and its two fields are shared by every
-/// fat value: `ptr` is the function pointer, `env` is the heap-allocated
-/// environment (null when the closure has no captures).
+/// Synthetic `DefId`s for the canonical fat closure-value struct
+/// `{ fn, env, drop }` (type `Type::FatFn`). The struct def and its three
+/// fields are shared by every fat value: `fn` is the function pointer, `env`
+/// is the heap-allocated environment (null when the closure has no captures),
+/// and `drop` is a `fn(*void) void` that tears down that environment's captured
+/// values (a shared no-op when nothing needs tearing down).
 pub const CLOSURE_FAT_DEF: DefId = DefId(u32::MAX - 5);
 pub const CLOSURE_FAT_FN_FIELD: DefId = DefId(u32::MAX - 6);
 pub const CLOSURE_FAT_ENV_FIELD: DefId = DefId(u32::MAX - 7);
+pub const CLOSURE_FAT_DROP_FIELD: DefId = DefId(u32::MAX - 8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeId(pub u32);

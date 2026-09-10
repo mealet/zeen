@@ -24,8 +24,8 @@ use zeen_typecheck::{
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use zeen_types::{
-    CLOSURE_FAT_DEF, CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD, SLICE_LEN_FIELD, SLICE_PTR_FIELD,
-    SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
+    CLOSURE_FAT_DEF, CLOSURE_FAT_DROP_FIELD, CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD,
+    SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
 };
 
 use crate::error::{MirError, MirWarning};
@@ -148,9 +148,25 @@ pub struct MirLowering<'ctx> {
     /// the plain `fn` signature type each adapter forwards for.
     fat_pointer_adapter_cache: HashMap<TypeId, MirFunctionId>,
 
-    /// Cache of synthesized per-fat-type drop functions (env `free`), keyed by
-    /// the fat `TypeId`.
+    /// Cache of synthesized per-fat-type drop functions (env teardown + `free`),
+    /// keyed by the fat `TypeId`.
     fat_drop_cache: HashMap<TypeId, MirFunctionId>,
+
+    /// Cache of synthesized per-fat-type frees-only functions (env `free`
+    /// without capture teardown), keyed by the fat `TypeId`. Used after a
+    /// consuming `FnOnce` call.
+    fat_free_cache: HashMap<TypeId, MirFunctionId>,
+
+    /// Cache of synthesized per-env-struct capture teardown functions
+    /// (`*const void env` -> drops the env's captured values), keyed by the
+    /// env struct `TypeId`. Stored in the canonical fat envelope's `$drop`
+    /// field and called before the env block is freed.
+    env_drop_cache: HashMap<TypeId, MirFunctionId>,
+
+    /// The shared no-op teardown function `fn(*void) void` stored in `$drop`
+    /// for fat values with nothing to tear down (zero captures, plain fn /
+    /// builtin-fn coercions, captures without `Drop`).
+    env_drop_noop: Option<MirFunctionId>,
 
     /// Synthesized env struct `TypeId`s, keyed by the closure `DefId` they
     /// belong to. A heap-owning fat value's `$env` points at storage of this
@@ -349,6 +365,9 @@ impl<'ctx> MirLowering<'ctx> {
             fat_adapter_cache: HashMap::new(),
             fat_pointer_adapter_cache: HashMap::new(),
             fat_drop_cache: HashMap::new(),
+            fat_free_cache: HashMap::new(),
+            env_drop_cache: HashMap::new(),
+            env_drop_noop: None,
             closure_envs: HashMap::new(),
             unused_fat_types: HashSet::new(),
             errors: Vec::new(),
@@ -668,6 +687,25 @@ impl<'ctx> MirLowering<'ctx> {
             })
             .collect();
 
+        // Drop-impl structs reachable only through a struct layout (e.g. an
+        // env capture field) never become locals of their own; pull every
+        // struct-typed field out of the registered layouts too.
+        let mut candidate_types = candidate_types;
+        let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
+        for layout_ty in struct_keys {
+            let fields: Vec<StructFieldLayout> =
+                self.program.struct_layouts[&layout_ty].fields.clone();
+            for field in fields {
+                if let Type::Struct {
+                    def_id,
+                    generic_args,
+                } = self.typecheck.interner.get(field.ty).clone()
+                {
+                    candidate_types.push((field.ty, def_id, generic_args));
+                }
+            }
+        }
+
         let mut seen: HashSet<(DefId, Vec<TypeId>)> = HashSet::new();
         for (ty, struct_def, generic_args) in candidate_types {
             let is_new = seen.insert((struct_def, generic_args.clone()));
@@ -791,8 +829,8 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     /// Returns (synthesizing on first use) the drop function of a fat type:
-    /// it `free`s the heap env block. Consuming `FnOnce` calls reuse it to
-    /// release the env right after the call.
+    /// it runs the envelope's capture teardown and frees the heap env block.
+    /// Used when a fat value dies without being called.
     fn fat_drop_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
         if let Some(&id) = self.fat_drop_cache.get(&fat_ty) {
             return id;
@@ -802,11 +840,23 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Builds the drop function of a fat type: the value is passed by value
-    /// and `$env` is handed to `Allocator.dealloc` (a no-op on the `null`
-    /// used for wrapped bare fns). Captures are not torn down individually -
-    /// captured values in env structs are never ownership-bearing, so freeing
-    /// the block is all their death needs.
+    /// Returns (synthesizing on first use) the frees-only variant of a fat
+    /// type: it just releases the heap env block. Used after a consuming
+    /// `FnOnce` call, whose body already consumed (or dropped) every captured
+    /// value, so the env teardown must not touch them again.
+    fn fat_free_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
+        if let Some(&id) = self.fat_free_cache.get(&fat_ty) {
+            return id;
+        }
+        let id = self.synthesize_fat_free_function(fat_ty);
+        self.fat_free_cache.insert(fat_ty, id);
+        id
+    }
+
+    /// Builds the drop function of a fat type: the value is passed by value,
+    /// `$env` is handed to the env's teardown function stored in `$drop` (a
+    /// no-op for zero-capture / non-owning envelopes), then the block is
+    /// released through `Allocator.dealloc`.
     fn synthesize_fat_drop_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
         self.register_fat_layout(fat_ty);
 
@@ -828,7 +878,9 @@ impl<'ctx> MirLowering<'ctx> {
             is_drop_impl: true,
         };
         func.new_block(); // block 0 (entry)
-        let bb1 = func.new_block();
+        let bb_drop_env = func.new_block();
+        let bb_dealloc = func.new_block();
+        let bb_ret = func.new_block();
 
         let self_param = func.new_local(LocalDecl {
             ty: fat_ty,
@@ -839,7 +891,102 @@ impl<'ctx> MirLowering<'ctx> {
         });
         func.params.push(self_param);
 
-        let env_place = Place::from_local(self_param).field(CLOSURE_FAT_ENV_FIELD);
+        let drop_fn = func.new_local(LocalDecl {
+            ty: self.env_drop_fn_ty(),
+            mutability: Mutability::Mut,
+            kind: LocalKind::Temporary,
+            name: None,
+            source: None,
+        });
+        func.blocks[0].statements.push(MirStatement::Assign {
+            place: Place::from_local(drop_fn),
+            rvalue: Rvalue::Use(Operand::Copy(
+                Place::from_local(self_param).field(CLOSURE_FAT_DROP_FIELD),
+                None,
+            )),
+            source: None,
+        });
+        func.blocks[0].terminator = Terminator::Goto(bb_drop_env);
+
+        // The envelope's `$drop` is never null: envelopes without a owning
+        // env carry the shared no-op. It receives `$env` straight - the no-op
+        // ignores it, per-env teardowns cast it to their env struct.
+        func.blocks[bb_drop_env.0 as usize].terminator = Terminator::Call {
+            func: CallTarget::Indirect(Operand::Copy(Place::from_local(drop_fn), None)),
+            args: vec![Operand::Copy(
+                Place::from_local(self_param).field(CLOSURE_FAT_ENV_FIELD),
+                None,
+            )],
+            destination: Place::from_local(func.new_local(LocalDecl {
+                ty: void_ty,
+                mutability: Mutability::Mut,
+                kind: LocalKind::Temporary,
+                name: None,
+                source: None,
+            })),
+            target: Some(bb_dealloc),
+            source: None,
+        };
+
+        func.blocks[bb_dealloc.0 as usize].terminator = Terminator::Call {
+            func: CallTarget::Direct(dealloc_id),
+            args: vec![Operand::Copy(
+                Place::from_local(self_param).field(CLOSURE_FAT_ENV_FIELD),
+                None,
+            )],
+            destination: Place::from_local(func.new_local(LocalDecl {
+                ty: void_ty,
+                mutability: Mutability::Mut,
+                kind: LocalKind::Temporary,
+                name: None,
+                source: None,
+            })),
+            target: Some(bb_ret),
+            source: None,
+        };
+        func.blocks[bb_ret.0 as usize].terminator =
+            Terminator::Return(Operand::Constant(ConstValue::Void, None));
+
+        self.program.functions.insert(id, func);
+        id
+    }
+
+    /// Builds the frees-only function of a fat type: the value is passed by
+    /// value and `$env` is handed straight to `Allocator.dealloc`. The env's
+    /// captures were consumed by the closure body on its single run, so no
+    /// teardown runs on them.
+    fn synthesize_fat_free_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
+        self.register_fat_layout(fat_ty);
+
+        let id = self.mono_cache.fresh_id();
+        self.set_function_name(id, format!("$fatfree#{}", id.0));
+
+        let void_ty = self.void_ty();
+        let (allocator_def, dealloc_def) = self.resolve_allocator_method("dealloc");
+        let dealloc_id = self.monomorphize_fn(dealloc_def, Vec::new(), Some(allocator_def), &[]);
+
+        let mut func = MirFunction {
+            source_def: CLOSURE_FAT_DEF,
+            mono_args: Vec::new(),
+            locals: Vec::new(),
+            blocks: Vec::new(),
+            params: Vec::new(),
+            entry_block: BlockId(0),
+            ret_ty: void_ty,
+            is_drop_impl: true,
+        };
+        func.new_block(); // block 0 (entry)
+        let bb_ret = func.new_block();
+
+        let self_param = func.new_local(LocalDecl {
+            ty: fat_ty,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Param,
+            name: None,
+            source: None,
+        });
+        func.params.push(self_param);
+
         let sink = func.new_local(LocalDecl {
             ty: void_ty,
             mutability: Mutability::Mut,
@@ -847,19 +994,188 @@ impl<'ctx> MirLowering<'ctx> {
             name: None,
             source: None,
         });
-
         func.blocks[0].terminator = Terminator::Call {
             func: CallTarget::Direct(dealloc_id),
-            args: vec![Operand::Copy(env_place, None)],
+            args: vec![Operand::Copy(
+                Place::from_local(self_param).field(CLOSURE_FAT_ENV_FIELD),
+                None,
+            )],
             destination: Place::from_local(sink),
-            target: Some(bb1),
+            target: Some(bb_ret),
             source: None,
         };
-        func.blocks[bb1.0 as usize].terminator =
+        func.blocks[bb_ret.0 as usize].terminator =
             Terminator::Return(Operand::Constant(ConstValue::Void, None));
 
         self.program.functions.insert(id, func);
         id
+    }
+
+    /// Returns (synthesizing on first use) the `fn(*void) void` teardown
+    /// function of a capturing closure's env struct: it casts its argument to
+    /// the env struct and drops the captured values that need it. Envs with
+    /// nothing to tear down share the no-op instead.
+    fn env_drop_for_env(&mut self, env_ty: TypeId) -> MirFunctionId {
+        if let Some(&id) = self.env_drop_cache.get(&env_ty) {
+            return id;
+        }
+        let id = self.env_drop_function(env_ty);
+        self.env_drop_cache.insert(env_ty, id);
+        id
+    }
+
+    /// The shared `fn(*void) void` that does nothing, stored in `$drop` for
+    /// fat values whose env block holds nothing ownership-bearing.
+    fn env_drop_noop(&mut self) -> MirFunctionId {
+        if let Some(id) = self.env_drop_noop {
+            return id;
+        }
+
+        let id = self.mono_cache.fresh_id();
+        self.set_function_name(id, format!("$envnoop#{}", id.0));
+
+        let void_ty = self.void_ty();
+        let mut func = MirFunction {
+            source_def: CLOSURE_FAT_DEF,
+            mono_args: Vec::new(),
+            locals: Vec::new(),
+            blocks: Vec::new(),
+            params: Vec::new(),
+            entry_block: BlockId(0),
+            ret_ty: void_ty,
+            is_drop_impl: true,
+        };
+        func.new_block(); // block 0 (entry)
+        let env_param = func.new_local(LocalDecl {
+            ty: self.void_ptr_ty(),
+            mutability: Mutability::Const,
+            kind: LocalKind::Param,
+            name: None,
+            source: None,
+        });
+        func.params.push(env_param);
+        func.blocks[0].terminator = Terminator::Return(Operand::Constant(ConstValue::Void, None));
+
+        self.program.functions.insert(id, func);
+        self.env_drop_noop = Some(id);
+        id
+    }
+
+    /// Builds the `fn(*void) void` teardown of a capturing closure's env
+    /// struct: casts the arg to `*const EnvTy` and drops each captured value
+    /// that needs it (reverse order). The teardown functions of explicit-drop
+    /// structs and fat values live in `program.drop_functions`, populated
+    /// after lowering, so the drops are deferred to codegen by place.
+    fn env_drop_function(&mut self, env_ty: TypeId) -> MirFunctionId {
+        let Type::Struct {
+            def_id: env_def, ..
+        } = self.typecheck.interner.get(env_ty).clone()
+        else {
+            unreachable!("env teardown requires an env struct type");
+        };
+
+        let void_ty = self.void_ty();
+        let id = self.mono_cache.fresh_id();
+        self.set_function_name(id, format!("$envdrop#{}", id.0));
+
+        let mut func = MirFunction {
+            source_def: CLOSURE_FAT_DEF,
+            mono_args: Vec::new(),
+            locals: Vec::new(),
+            blocks: Vec::new(),
+            params: Vec::new(),
+            entry_block: BlockId(0),
+            ret_ty: void_ty,
+            is_drop_impl: true,
+        };
+        func.new_block(); // block 0 (entry)
+
+        let env_param = func.new_local(LocalDecl {
+            ty: self.void_ptr_ty(),
+            mutability: Mutability::Const,
+            kind: LocalKind::Param,
+            name: None,
+            source: None,
+        });
+        func.params.push(env_param);
+
+        let boxed_ty = self.typecheck.interner.intern(Type::Pointer {
+            inner: env_ty,
+            is_const: true,
+        });
+        let env_ptr = func.new_local(LocalDecl {
+            ty: boxed_ty,
+            mutability: Mutability::Const,
+            kind: LocalKind::Temporary,
+            name: None,
+            source: None,
+        });
+        func.blocks[0].statements.push(MirStatement::Assign {
+            place: Place::from_local(env_ptr),
+            rvalue: Rvalue::Cast {
+                operand: Operand::Copy(Place::from_local(env_param), None),
+                target: boxed_ty,
+            },
+            source: None,
+        });
+
+        let mut leaf_places = self.env_drop_leaf_places(env_ty, Place::from_local(env_ptr).deref());
+        leaf_places.reverse();
+        for (place, _) in leaf_places {
+            func.blocks[0].statements.push(MirStatement::Drop(place));
+        }
+        func.blocks[0].terminator = Terminator::Return(Operand::Constant(ConstValue::Void, None));
+
+        self.program.functions.insert(id, func);
+        id
+    }
+
+    /// The places of `env_ty`'s captured values that are dropped when the env
+    /// dies, mirroring codegen's `emit_drop_ptr` recursion: explicit-drop
+    /// structs and fat values are leaves, structs without a drop but with
+    /// teardown-bearing fields recurse, arrays of teardown-bearing elements
+    /// drop as a whole (codegen expands them element-wise).
+    fn env_drop_leaf_places(&self, env_ty: TypeId, base: Place) -> Vec<(Place, TypeId)> {
+        let mut leaves = Vec::new();
+        self.env_drop_leaves_into(env_ty, base, &mut leaves);
+        leaves
+    }
+
+    fn env_drop_leaves_into(&self, ty: TypeId, place: Place, leaves: &mut Vec<(Place, TypeId)>) {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Struct { def_id, .. } => {
+                let Some(info) = self.typecheck.struct_info.get(&def_id) else {
+                    return;
+                };
+                if info.capabalities.has_explicit_drop {
+                    leaves.push((place, ty));
+                } else {
+                    for field in &info.fields {
+                        self.env_drop_leaves_into(
+                            field.field_ty,
+                            place.clone().field(field.field_def),
+                            leaves,
+                        );
+                    }
+                }
+            }
+            Type::FatFn { .. } => leaves.push((place, ty)),
+            Type::Array { element, .. } if self.type_needs_teardown(element) => {
+                leaves.push((place, ty));
+            }
+            _ => {}
+        }
+    }
+
+    /// The `fn(*void) void` signature stored in the canonical fat envelope's
+    /// `$drop` field: takes the raw env pointer, tears the captures down.
+    fn env_drop_fn_ty(&mut self) -> TypeId {
+        let env_ptr_ty = self.void_ptr_ty();
+        let void_ty = self.void_ty();
+        self.typecheck.interner.intern(Type::Fn {
+            params: vec![env_ptr_ty],
+            ret: void_ty,
+        })
     }
 
     /// Resolves (declaring on first use) the `std.alloc` `Allocator` method
@@ -1228,6 +1544,7 @@ impl<'ctx> MirLowering<'ctx> {
         }
 
         let ptr_ty = self.void_ptr_ty();
+        let drop_fn_ty = self.env_drop_fn_ty();
 
         self.program.struct_layouts.insert(
             fat_ty,
@@ -1242,6 +1559,10 @@ impl<'ctx> MirLowering<'ctx> {
                     StructFieldLayout {
                         def_id: CLOSURE_FAT_ENV_FIELD,
                         ty: ptr_ty,
+                    },
+                    StructFieldLayout {
+                        def_id: CLOSURE_FAT_DROP_FIELD,
+                        ty: drop_fn_ty,
                     },
                 ],
             },
@@ -1302,6 +1623,7 @@ impl<'ctx> MirLowering<'ctx> {
                         operands: vec![
                             Operand::Copy(Place::from_local(fn_ptr_temp), None),
                             Operand::Constant(ConstValue::NullPtr, None),
+                            Operand::Constant(ConstValue::Fn(self.env_drop_noop()), None),
                         ],
                     },
                     source: Some(source_expr.source.clone()),
@@ -1407,6 +1729,7 @@ impl<'ctx> MirLowering<'ctx> {
                     operands: vec![
                         Operand::Copy(Place::from_local(fn_ptr_temp), None),
                         Operand::Copy(Place::from_local(cast_ptr), None),
+                        Operand::Constant(ConstValue::Fn(self.env_drop_for_env(env_ty)), None),
                     ],
                 },
                 source: Some(source_expr.source.clone()),
@@ -1938,6 +2261,7 @@ impl<'ctx> MirLowering<'ctx> {
                                 operands: vec![
                                     Operand::Copy(Place::from_local(fn_ptr_temp), None),
                                     Operand::Constant(ConstValue::NullPtr, None),
+                                    Operand::Constant(ConstValue::Fn(self.env_drop_noop()), None),
                                 ],
                             },
                             source: Some(expr.source.clone()),
@@ -1977,6 +2301,7 @@ impl<'ctx> MirLowering<'ctx> {
                                 operands: vec![
                                     Operand::Copy(Place::from_local(adapter_temp), None),
                                     Operand::Copy(Place::from_local(env_field), None),
+                                    Operand::Constant(ConstValue::Fn(self.env_drop_noop()), None),
                                 ],
                             },
                             source: Some(expr.source.clone()),
@@ -6067,13 +6392,15 @@ impl<'ctx> MirLowering<'ctx> {
             callee,
         );
 
-        // A consuming call ends the value's life here: free its env right
-        // after the call returns. Diverging calls never return.
+        // A consuming call ends the value's life here: its body consumed the
+        // captures on its single run, so free the env block right after the
+        // call returns without tearing the captures down again. Diverging
+        // calls never return.
         if !once || diverging {
             return (block, result);
         }
 
-        let drop_id = self.fat_drop_function(callee_ty);
+        let drop_id = self.fat_free_function(callee_ty);
         let sink = fb.new_temp(void_ty);
         let next = fb.new_block();
         fb.set_terminator(
