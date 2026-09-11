@@ -420,6 +420,9 @@ fn compile(args: cli::Args) {
         source_file_name: filename.to_string(),
     };
 
+    let mut linked_files: Vec<std::path::PathBuf> = context.paths.linked.iter().cloned().collect();
+    linked_files.sort();
+
     let context = inkwell::context::Context::create();
 
     let mut codegen = zeen_codegen_llvm::CodeGen::new(
@@ -488,28 +491,56 @@ fn compile(args: cli::Args) {
         }
 
         CompilationOutput::Binary => {
-            let linker =
-                zeen_linker::linker::ObjectLinker::detect(&target_triple).unwrap_or_else(|err| {
+            let mut linker = zeen_linker::linker::ObjectLinker::detect(&target_triple)
+                .unwrap_or_else(|err| {
                     cli::println_error(err);
                     exit(1);
                 });
 
-            let object_path = std::env::temp_dir().join(format!(
-                "zeen-{}.{}",
-                std::process::id(),
-                linker.object_extension()
-            ));
+            if let Some(linker_path) = args.linker_path.as_deref() {
+                let Some(program) = linker_path.to_str() else {
+                    cli::println_error(format!(
+                        "Linker path is not valid UTF-8: `{}`",
+                        linker_path.display()
+                    ));
+                    exit(1);
+                };
+                linker.with_linker(program);
+            }
+
+            let object_file = tempfile::Builder::new()
+                .prefix("zeen-")
+                .suffix(&format!(".{}", linker.object_extension()))
+                .tempfile()
+                .unwrap_or_else(|err| {
+                    cli::println_error(format!("Failed to create temporary file: {err}"));
+                    exit(1);
+                });
+
+            let object_path = object_file.path().to_path_buf();
 
             if let Err(err) = codegen.emit_object(&object_path) {
-                let report_string = driver.report(&err).unwrap();
+                let report_string = driver.report(&err).unwrap_or_default();
                 eprintln!("{}", report_string);
+                drop(object_file);
                 cli::println_error("Codegen failed");
                 exit(1);
             }
 
-            let result = linker.link(std::slice::from_ref(&object_path), &output, &[]);
+            // Pass `extern link` sources to toolchains able to compile them;
+            // object-only linkers skip them.
+            let extra: Vec<std::path::PathBuf> = if linker.accepts_c_sources() {
+                linked_files.clone()
+            } else {
+                if !linked_files.is_empty() {
+                    cli::println_warn(
+                        "skipped `extern link` sources: this toolchain only links object files",
+                    );
+                }
+                Vec::new()
+            };
 
-            std::fs::remove_file(&object_path).ok();
+            let result = linker.link(std::slice::from_ref(&object_path), &output, &extra);
 
             match result {
                 Ok(output_path) => cli::println_info(
@@ -526,6 +557,7 @@ fn compile(args: cli::Args) {
                         linker.name()
                     ));
                     eprintln!("\n{err}\n");
+                    drop(object_file);
                     exit(1);
                 }
             }
