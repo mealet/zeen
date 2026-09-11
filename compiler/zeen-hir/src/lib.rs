@@ -983,6 +983,7 @@ mod tests {
             mode: CompilationMode::Debug,
             output: CompilationOutput::EmitMIR,
             target: None,
+            warnings: Vec::new(),
         };
 
         let mut tokens = zeen_lexer::tokenize(&content);

@@ -205,6 +205,7 @@ fn main() {
         mode: args.mode,
         output: args.emit,
         target: Some(target_triple.clone()),
+        warnings: Vec::new(),
     };
 
     cli::println_info(
@@ -273,6 +274,12 @@ fn main() {
     let hir_module = hir_lowering.lower_module(resolved_program);
 
     drop(bump);
+
+    if !args.no_warns {
+        for warning in &context.warnings {
+            cli::println_warn(warning);
+        }
+    }
 
     cli::println_info(
         "Checking",
