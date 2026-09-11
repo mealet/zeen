@@ -58,7 +58,7 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
             TokenKind::Ident => self.parse_named(),
 
             // va args
-            TokenKind::Dot => self.parse_va_args_type(),
+            TokenKind::DotDotDot => self.parse_va_args_type(),
 
             TokenKind::Eof => {
                 self.p.report(ParserError::UnexpectedEof {
@@ -466,15 +466,13 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
     }
 
     fn parse_va_args_type(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
-        let start = self.p.expect(TokenKind::Dot, ".")?;
-        let _ = self.p.expect(TokenKind::Dot, ".")?;
-        let end = self.p.expect(TokenKind::Dot, ".")?;
+        let start = self.p.expect(TokenKind::DotDotDot, "...")?;
 
         let arena = self.p.arena;
 
         let expr = arena.alloc(TypeExpr {
             kind: TypeKind::VaArgs,
-            span: start.merge_span(end.span),
+            span: start.span,
         });
 
         Some(expr)
