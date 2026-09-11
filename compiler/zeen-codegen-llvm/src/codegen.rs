@@ -2901,8 +2901,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         match (operand, spec) {
             (Operand::Constant(c, _), _) => {
                 if let ConstValue::Int(n) = c {
-                    // `{bin}` prints the raw bits, which printf has no
-                    // specifier for, so bake them into a literal string.
+                    // `{bin}` prints the raw bits without leading zeros, which
+                    // printf has no specifier for, so bake them into a literal
+                    // string.
                     if matches!(spec, FormatSpec::Bin) {
                         let bits = arg_ty
                             .map(|t| self.map_basic_type(t).into_int_type().get_bit_width())
@@ -2912,8 +2913,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         } else {
                             (1u64 << bits) - 1
                         };
-                        let bin_str =
-                            format!("{:0>width$b}", (*n as u64) & mask, width = bits as usize);
+                        let bin_str = format!("{:b}", (*n as u64) & mask);
                         let ptr = self.get_str_global(&bin_str).as_pointer_value();
                         return ("%s".to_string(), vec![ptr.into()]);
                     }
@@ -3073,6 +3073,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     /// `bits` bits) into a fresh stack buffer.
     fn emit_bin_buffer(&mut self, value: IntValue<'ctx>, bits: u32) -> PointerValue<'ctx> {
         let i8_ty = self.context.i8_type();
+        let i32_ty = self.context.i32_type();
         let i64_ty = self.context.i64_type();
         let size_ty = self.context.ptr_sized_int_type(&self.target_data, None);
 
@@ -3127,7 +3128,107 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             self.builder.build_store(slot, ch).unwrap();
         }
 
-        buffer
+        // Skip the leading zeros so `%s` prints the minimal digit count.
+        // For a zero value the whole buffer is '0's, so fall back to the last
+        // digit instead of pointing at the NUL terminator.
+        let idx = self.builder.build_alloca(i32_ty, "bin.idx").unwrap();
+        self.builder
+            .build_store(idx, i32_ty.const_int(0, false))
+            .unwrap();
+
+        let current_fn = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let find_head = self.context.append_basic_block(current_fn, "bin.find.head");
+        let find_body = self.context.append_basic_block(current_fn, "bin.find.body");
+        let find_done = self.context.append_basic_block(current_fn, "bin.find.done");
+
+        self.builder.build_unconditional_branch(find_head).unwrap();
+        self.builder.position_at_end(find_head);
+
+        let cur_idx = self
+            .builder
+            .build_load(i32_ty, idx, "cur.idx")
+            .unwrap()
+            .into_int_value();
+        let in_range = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::ULT,
+                cur_idx,
+                i32_ty.const_int(bits as u64, false),
+                "",
+            )
+            .unwrap();
+        let idx_sz = self
+            .builder
+            .build_int_z_extend(cur_idx, size_ty, "")
+            .unwrap();
+        let slot = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, buffer, &[idx_sz], "")
+                .unwrap()
+        };
+        let ch = self
+            .builder
+            .build_load(i8_ty, slot, "probe")
+            .unwrap()
+            .into_int_value();
+        let is_zero = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                ch,
+                i8_ty.const_int(b'0' as u64, false),
+                "",
+            )
+            .unwrap();
+        let keep_looking = self.builder.build_and(in_range, is_zero, "").unwrap();
+        self.builder
+            .build_conditional_branch(keep_looking, find_body, find_done)
+            .unwrap();
+
+        self.builder.position_at_end(find_body);
+        let next = self
+            .builder
+            .build_int_add(cur_idx, i32_ty.const_int(1, false), "next.idx")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(find_head).unwrap();
+
+        self.builder.position_at_end(find_done);
+        let start_idx = self
+            .builder
+            .build_load(i32_ty, idx, "start.idx")
+            .unwrap()
+            .into_int_value();
+        let all_zero = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                start_idx,
+                i32_ty.const_int(bits as u64, false),
+                "",
+            )
+            .unwrap();
+        let last_digit = i32_ty.const_int(bits as u64 - 1, false);
+        let start_idx = self
+            .builder
+            .build_select(all_zero, last_digit, start_idx, "bin.start")
+            .unwrap()
+            .into_int_value();
+        let start_sz = self
+            .builder
+            .build_int_z_extend(start_idx, size_ty, "")
+            .unwrap();
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, buffer, &[start_sz], "")
+                .unwrap()
+        }
     }
 
     /// Length prefix for an integer printf specifier, chosen from the value's
