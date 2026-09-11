@@ -1,0 +1,19 @@
+/// Range bounds structure
+pub struct Range {
+  pub start: usize,
+  pub end: usize,
+}
+
+implement Copy : Range {}
+
+implement Iterator : Range {
+  pub fn next(*self) Option[usize] {
+    if (self.start < self.end) {
+      let result: usize = self.start;
+      self.start = self.start + 1;
+      return Option.Some(result);
+    };
+
+    Option.None()
+  }
+}
