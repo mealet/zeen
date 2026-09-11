@@ -2353,7 +2353,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     &[self.context.ptr_type(AddressSpace::default()).into()],
                     true,
                 );
+
+                // replacing format specifiers characters to avoid undefined behavior on code that
+                // contains formatters
+                let debug_inner = debug_inner.replace('%', "%%");
+
                 let format = format!("[{debug_location}]> `{debug_inner}` = {specifier}\n");
+
                 let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
                     vec![self.get_str_global(&format).as_pointer_value().into()];
                 call_args.push(display_value.into());
