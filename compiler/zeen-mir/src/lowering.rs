@@ -3295,11 +3295,11 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::SliceAccess { object, index } => {
-                // An access through a struct's `Slice`/`SlicePtr` interface
+                // An access through a struct's `Index`/`IndexPtr` interface
                 // dispatches to the method instead of indexing native storage.
-                // A `SlicePtr` result (`ref[i] = v` in an assign) is a pointer
-                // into the struct, so the place keeps dereferencing it; a
-                // `Slice` result is the value itself.
+                // An `IndexPtr` result (`ref[i] = v` in an assign) is a pointer
+                // into the struct, so the place keeps dereferencing it; an
+                // `Index` result is the value itself.
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let result_ty = self.expr_type(fb, expr);
                     let is_pointer = self

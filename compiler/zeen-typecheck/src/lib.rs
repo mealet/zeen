@@ -5698,9 +5698,9 @@ impl<'res> TypeChecker<'res> {
         source: &Source,
     ) -> TypeId {
         let (iface_name, method_name) = if self.expect_assign_interface {
-            ("SlicePtr", "slice_ptr")
+            ("IndexPtr", "index_ptr")
         } else {
-            ("Slice", "slice")
+            ("Index", "index")
         };
 
         let result = self.call_interface_method(
