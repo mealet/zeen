@@ -38,6 +38,7 @@ fn compile_mir_mode(
         mode,
         output: CompilationOutput::EmitMIR,
         target: None,
+        warnings: Vec::new(),
     };
 
     let mut tokens = zeen_lexer::tokenize(&content);
