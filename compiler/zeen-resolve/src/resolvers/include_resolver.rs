@@ -626,6 +626,20 @@ impl<'ctx> IncludeResolver<'ctx> {
                 continue;
             }
 
+            // The std library has its own configured root dir, so only check
+            // non-std uses. A use path that escapes the project root is
+            // usually an accident, so flag it.
+            if !raw.starts_with("std") {
+                let project_root = canonicalize_best_effort(&self.context.paths.project_root);
+                if !target_canonical.starts_with(&project_root) {
+                    self.context.warnings.push(format!(
+                        "use '{}' resolves outside the project root ({})",
+                        raw,
+                        target_canonical.display()
+                    ));
+                }
+            }
+
             let source = Arc::new(match fs::read_to_string(&target) {
                 Ok(content) => content,
                 Err(err) => {

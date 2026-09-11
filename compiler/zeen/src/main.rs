@@ -128,6 +128,19 @@ fn main() {
         exit(0);
     }
 
+    // Surface internal panics as a clean ICE message instead of a raw
+    // unwinding crash. Release builds use `panic = "abort"`, so this only
+    // guards debug builds; release panics still abort.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile(args)));
+    if result.is_err() {
+        cli::println_error(
+            "internal compiler error (ICE). This is a compiler bug; see https://github.com/mealet/zeen",
+        );
+        exit(1);
+    }
+}
+
+fn compile(args: cli::Args) {
     let target_triple = args.target.clone().unwrap_or_else(targets::host_target);
 
     let path = args
@@ -205,6 +218,7 @@ fn main() {
         mode: args.mode,
         output: args.emit,
         target: Some(target_triple.clone()),
+        warnings: Vec::new(),
     };
 
     cli::println_info(
@@ -230,7 +244,7 @@ fn main() {
 
     let program = parser.parse_program().unwrap_or_else(|errors| {
         for err in errors {
-            let report_string = driver.report(err).unwrap();
+            let report_string = driver.report(err).unwrap_or_default();
             eprintln!("{}", report_string);
         }
 
@@ -260,7 +274,7 @@ fn main() {
     )
     .unwrap_or_else(|errors| {
         for err in &errors {
-            let report_string = driver.report(err).unwrap();
+            let report_string = driver.report(err).unwrap_or_default();
             eprintln!("{}", report_string);
         }
 
@@ -273,6 +287,12 @@ fn main() {
     let hir_module = hir_lowering.lower_module(resolved_program);
 
     drop(bump);
+
+    if !args.no_warns {
+        for warning in &context.warnings {
+            cli::println_warn(warning);
+        }
+    }
 
     cli::println_info(
         "Checking",
@@ -288,7 +308,7 @@ fn main() {
 
     let mut typechecker_result = typechecker.finish().unwrap_or_else(|errors| {
         for err in &errors {
-            let report_string = driver.report(err).unwrap();
+            let report_string = driver.report(err).unwrap_or_default();
             eprintln!("{}", report_string);
         }
 
@@ -306,7 +326,7 @@ fn main() {
     )
     .unwrap_or_else(|errors| {
         for err in &errors {
-            let report_string = driver.report(err).unwrap();
+            let report_string = driver.report(err).unwrap_or_default();
             eprintln!("{}", report_string);
         }
 
@@ -336,7 +356,7 @@ fn main() {
 
                 let count = warnings.len();
                 for warning in warnings {
-                    let report_string = driver.report(warning).unwrap();
+                    let report_string = driver.report(warning).unwrap_or_default();
                     eprintln!("{}", report_string);
                 }
 
@@ -347,7 +367,7 @@ fn main() {
         }
         Err(errors) => {
             for err in &errors {
-                let report_string = driver.report(err).unwrap();
+                let report_string = driver.report(err).unwrap_or_default();
                 eprintln!("{}", report_string);
             }
 
@@ -400,6 +420,9 @@ fn main() {
         source_file_name: filename.to_string(),
     };
 
+    let mut linked_files: Vec<std::path::PathBuf> = context.paths.linked.iter().cloned().collect();
+    linked_files.sort();
+
     let context = inkwell::context::Context::create();
 
     let mut codegen = zeen_codegen_llvm::CodeGen::new(
@@ -411,21 +434,21 @@ fn main() {
         codegen_options,
     )
     .unwrap_or_else(|err| {
-        let report_string = driver.report(&err).unwrap();
+        let report_string = driver.report(&err).unwrap_or_default();
         eprintln!("{}", report_string);
         cli::println_error("Codegen failed");
         exit(1);
     });
 
     if let Err(err) = codegen.generate() {
-        let report_string = driver.report(&err).unwrap();
+        let report_string = driver.report(&err).unwrap_or_default();
         eprintln!("{}", report_string);
         cli::println_error("Codegen failed");
         exit(1);
     }
 
     if let Err(err) = codegen.verify() {
-        let report_string = driver.report(&err).unwrap();
+        let report_string = driver.report(&err).unwrap_or_default();
         eprintln!("{}", report_string);
         cli::println_error("Codegen failed");
         exit(1);
@@ -436,7 +459,7 @@ fn main() {
             let output_path = with_default_extension(&output, "ll");
 
             if let Err(err) = codegen.emit_ir(&output_path) {
-                let report_string = driver.report(&err).unwrap();
+                let report_string = driver.report(&err).unwrap_or_default();
                 eprintln!("{}", report_string);
                 cli::println_error("Codegen failed");
                 exit(1);
@@ -455,7 +478,7 @@ fn main() {
             );
 
             if let Err(err) = codegen.emit_object(&output_path) {
-                let report_string = driver.report(&err).unwrap();
+                let report_string = driver.report(&err).unwrap_or_default();
                 eprintln!("{}", report_string);
                 cli::println_error("Codegen failed");
                 exit(1);
@@ -468,28 +491,56 @@ fn main() {
         }
 
         CompilationOutput::Binary => {
-            let linker =
-                zeen_linker::linker::ObjectLinker::detect(&target_triple).unwrap_or_else(|err| {
+            let mut linker = zeen_linker::linker::ObjectLinker::detect(&target_triple)
+                .unwrap_or_else(|err| {
                     cli::println_error(err);
                     exit(1);
                 });
 
-            let object_path = std::env::temp_dir().join(format!(
-                "zeen-{}.{}",
-                std::process::id(),
-                linker.object_extension()
-            ));
+            if let Some(linker_path) = args.linker_path.as_deref() {
+                let Some(program) = linker_path.to_str() else {
+                    cli::println_error(format!(
+                        "Linker path is not valid UTF-8: `{}`",
+                        linker_path.display()
+                    ));
+                    exit(1);
+                };
+                linker.with_linker(program);
+            }
+
+            let object_file = tempfile::Builder::new()
+                .prefix("zeen-")
+                .suffix(&format!(".{}", linker.object_extension()))
+                .tempfile()
+                .unwrap_or_else(|err| {
+                    cli::println_error(format!("Failed to create temporary file: {err}"));
+                    exit(1);
+                });
+
+            let object_path = object_file.path().to_path_buf();
 
             if let Err(err) = codegen.emit_object(&object_path) {
-                let report_string = driver.report(&err).unwrap();
+                let report_string = driver.report(&err).unwrap_or_default();
                 eprintln!("{}", report_string);
+                drop(object_file);
                 cli::println_error("Codegen failed");
                 exit(1);
             }
 
-            let result = linker.link(std::slice::from_ref(&object_path), &output, &[]);
+            // Pass `extern link` sources to toolchains able to compile them;
+            // object-only linkers skip them.
+            let extra: Vec<std::path::PathBuf> = if linker.accepts_c_sources() {
+                linked_files.clone()
+            } else {
+                if !linked_files.is_empty() {
+                    cli::println_warn(
+                        "skipped `extern link` sources: this toolchain only links object files",
+                    );
+                }
+                Vec::new()
+            };
 
-            std::fs::remove_file(&object_path).ok();
+            let result = linker.link(std::slice::from_ref(&object_path), &output, &extra);
 
             match result {
                 Ok(output_path) => cli::println_info(
@@ -506,6 +557,7 @@ fn main() {
                         linker.name()
                     ));
                     eprintln!("\n{err}\n");
+                    drop(object_file);
                     exit(1);
                 }
             }

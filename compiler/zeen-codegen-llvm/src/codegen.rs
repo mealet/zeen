@@ -2259,6 +2259,20 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .unwrap_basic()
                     .into_int_value();
 
+                // `snprintf` returns a negative encoding error on malformed
+                // input; clamp it so the buffer size and the reported length
+                // stay sane.
+                let zero_i32 = self.context.i32_type().const_int(0, false);
+                let negative = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, needed, zero_i32, "")
+                    .unwrap();
+                let needed = self
+                    .builder
+                    .build_select(negative, zero_i32, needed, "snprintf.size")
+                    .unwrap()
+                    .into_int_value();
+
                 // Allocate exactly `needed + 1` bytes for the string.
                 let buffer_size = self
                     .builder
@@ -2269,22 +2283,19 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .build_array_alloca(self.context.i8_type(), buffer_size, "")
                     .unwrap();
 
-                // Second call: write the formatted string into the buffer.
-                let sprintf = self.get_or_declare_runtime_fn(
-                    "sprintf",
-                    self.context.i32_type().into(),
-                    &[
-                        self.context.ptr_type(AddressSpace::default()).into(),
-                        self.context.ptr_type(AddressSpace::default()).into(),
-                    ],
-                    true,
-                );
-
-                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
-                    vec![buffer.into(), fmt_ptr.into()];
+                // Second call: write the formatted string into the buffer,
+                // bounded by its size so the write can never overflow.
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                    buffer.into(),
+                    self.builder
+                        .build_int_z_extend(buffer_size, size_ty, "")
+                        .unwrap()
+                        .into(),
+                    fmt_ptr.into(),
+                ];
                 call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
 
-                self.builder.build_call(sprintf, &call_args, "").unwrap();
+                self.builder.build_call(snprintf, &call_args, "").unwrap();
 
                 let dest_ty = self.place_type(destination, func);
                 if !self.is_void_ty(dest_ty) {
@@ -2317,19 +2328,19 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 let Some(arg) = args.first() else {
                     unreachable!("@dbg always has exactly one argument");
                 };
-                let (specifier, value) = self.debug_operand(arg, func);
+                let (specifier, values, value) = self.debug_operand(arg, func);
 
                 // A plain integer constant is displayed 64-bit wide so a large
                 // literal isn't truncated to `int`, but `value` is kept in its
                 // original type since it's stored back as the `@dbg` result.
-                let (display_value, specifier) =
+                let (display_values, specifier) =
                     if let Operand::Constant(ConstValue::Int(n), _) = arg {
                         (
-                            self.context.i64_type().const_int(*n as u64, true).into(),
+                            vec![self.context.i64_type().const_int(*n as u64, true).into()],
                             "%lld".to_string(),
                         )
                     } else {
-                        (value, specifier)
+                        (values, specifier)
                     };
 
                 let source = source.clone().expect("unhandled None source");
@@ -2362,7 +2373,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
                 let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
                     vec![self.get_str_global(&format).as_pointer_value().into()];
-                call_args.push(display_value.into());
+                call_args.extend(display_values.into_iter().map(BasicMetadataValueEnum::from));
                 self.builder.build_call(printf, &call_args, "").unwrap();
 
                 let dest_ty = self.place_type(destination, func);
@@ -2433,19 +2444,21 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Returns `(printf specifier, value)` for a `@dbg` operand. Constants are
-    /// handled here because `operand_type` only describes place operands.
+    /// Returns `(printf specifier, print values, storable value)` for a `@dbg`
+    /// operand. Constants are handled here because `operand_type` only
+    /// describes place operands. The storable value is the operand in its
+    /// original type, used as the `@dbg` result.
     fn debug_operand(
         &mut self,
         operand: &Operand,
         func: &MirFunction,
-    ) -> (String, BasicValueEnum<'ctx>) {
+    ) -> (String, Vec<BasicValueEnum<'ctx>>, BasicValueEnum<'ctx>) {
         match operand {
             Operand::Constant(c, _) => {
                 if let ConstValue::Bool(b) = c {
                     let s = if *b { "true" } else { "false" };
                     let ptr = self.get_str_global(s).as_pointer_value();
-                    return ("%s".to_string(), ptr.into());
+                    return ("%s".to_string(), vec![ptr.into()], ptr.into());
                 }
                 let value = self.const_value(c, None, func);
                 let specifier = match c {
@@ -2458,20 +2471,27 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     ConstValue::Void => unreachable!("cannot @dbg a void constant"),
                     ConstValue::Int(_) => "%d".to_string(),
                 };
-                (specifier, value)
+                (specifier, vec![value], value)
             }
             Operand::Copy(place, _) | Operand::Move(place, _) => {
                 let ty = self.place_type(place, func);
-                // A `[N]char` array prints as a C string, so pass its address.
-                if let Type::Array { element, .. } = self.typecheck.interner.get(ty).clone()
+                // A `[N]char` array prints as a bounded C string: `%.*s` with
+                // the compile-time length.
+                if let Type::Array { element, len } = self.typecheck.interner.get(ty).clone()
                     && matches!(
                         self.typecheck.interner.get(element).clone(),
                         Type::Builtin(BuiltinType::char)
                     )
                 {
+                    let ptr = self.place_ptr(place, func);
+                    let Some(array_len) = len else {
+                        return ("%s".to_string(), vec![ptr.into()], ptr.into());
+                    };
+                    let len_i32 = self.context.i32_type().const_int(array_len, false);
                     return (
-                        self.display_specifier(ty),
-                        self.place_ptr(place, func).into(),
+                        "%.*s".to_string(),
+                        vec![len_i32.into(), ptr.into()],
+                        ptr.into(),
                     );
                 }
                 if matches!(
@@ -2485,7 +2505,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .builder
                         .build_select(value, true_ptr, false_ptr, "bool.str")
                         .unwrap();
-                    return ("%s".to_string(), ptr);
+                    return ("%s".to_string(), vec![ptr], ptr);
                 }
                 let mut value = self.load_place(place, func);
                 if matches!(self.typecheck.interner.get(ty).clone(), Type::Slice { .. }) {
@@ -2494,7 +2514,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .build_extract_value(value.into_struct_value(), 0, "slice.ptr")
                         .unwrap();
                 }
-                (self.display_specifier(ty), value)
+                let specifier = self.display_specifier(ty);
+                (specifier, vec![value], value)
             }
         }
     }
@@ -2801,38 +2822,46 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     };
                     let arg_ty = ty_iter.next().copied();
 
-                    let (specifier, value) = self.format_arg_value(operand, arg_ty, *spec, func);
+                    let (specifier, arg_values) =
+                        self.format_arg_value(operand, arg_ty, *spec, func);
 
                     // printf-family variadic calls apply default argument
                     // promotion, so an `f32` argument must be widened to the
                     // `f64` that `%f` reads.  Similarly, sub-`int` integer
                     // types (i8, i16) must be sign/zero-extended to `i32`.
-                    let value = match value.get_type() {
-                        BasicTypeEnum::FloatType(t) if t.get_bit_width() == 32 => self
-                            .builder
-                            .build_float_ext(value.into_float_value(), self.context.f64_type(), "")
-                            .unwrap()
-                            .into(),
-                        BasicTypeEnum::IntType(t) if t.get_bit_width() < 32 => {
-                            let iv = value.into_int_value();
-                            let signed = arg_ty.is_none_or(|t| self.is_signed(t));
-                            if signed {
-                                self.builder
-                                    .build_int_s_extend(iv, self.context.i32_type(), "")
-                                    .unwrap()
-                                    .into()
-                            } else {
-                                self.builder
-                                    .build_int_z_extend(iv, self.context.i32_type(), "")
-                                    .unwrap()
-                                    .into()
+                    for value in arg_values {
+                        let value = match value.get_type() {
+                            BasicTypeEnum::FloatType(t) if t.get_bit_width() == 32 => self
+                                .builder
+                                .build_float_ext(
+                                    value.into_float_value(),
+                                    self.context.f64_type(),
+                                    "",
+                                )
+                                .unwrap()
+                                .into(),
+                            BasicTypeEnum::IntType(t) if t.get_bit_width() < 32 => {
+                                let iv = value.into_int_value();
+                                let signed = arg_ty.is_none_or(|t| self.is_signed(t));
+                                if signed {
+                                    self.builder
+                                        .build_int_s_extend(iv, self.context.i32_type(), "")
+                                        .unwrap()
+                                        .into()
+                                } else {
+                                    self.builder
+                                        .build_int_z_extend(iv, self.context.i32_type(), "")
+                                        .unwrap()
+                                        .into()
+                                }
                             }
-                        }
-                        _ => value,
-                    };
+                            _ => value,
+                        };
+
+                        values.push(value);
+                    }
 
                     format.push_str(&specifier);
-                    values.push(value);
                 }
             }
         }
@@ -2851,7 +2880,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         arg_ty: Option<TypeId>,
         spec: FormatSpec,
         func: &MirFunction,
-    ) -> (String, BasicValueEnum<'ctx>) {
+    ) -> (String, Vec<BasicValueEnum<'ctx>>) {
         if let Some(Type::Enum { def_id }) =
             arg_ty.map(|ty| self.typecheck.interner.get(ty).clone())
         {
@@ -2866,20 +2895,36 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 FormatSpec::Debug => format!("{}.%s", self.enum_name(def_id)),
                 _ => "%s".to_string(),
             };
-            return (specifier, name_ptr.into());
+            return (specifier, vec![name_ptr.into()]);
         }
 
-        let (specifier, value) = match (operand, spec) {
+        match (operand, spec) {
             (Operand::Constant(c, _), _) => {
                 if let ConstValue::Int(n) = c {
+                    // `{bin}` prints the raw bits without leading zeros, which
+                    // printf has no specifier for, so bake them into a literal
+                    // string.
+                    if matches!(spec, FormatSpec::Bin) {
+                        let bits = arg_ty
+                            .map(|t| self.map_basic_type(t).into_int_type().get_bit_width())
+                            .unwrap_or(32);
+                        let mask = if bits >= 64 {
+                            u64::MAX
+                        } else {
+                            (1u64 << bits) - 1
+                        };
+                        let bin_str = format!("{:b}", (*n as u64) & mask);
+                        let ptr = self.get_str_global(&bin_str).as_pointer_value();
+                        return ("%s".to_string(), vec![ptr.into()]);
+                    }
+
                     let (len, signed, value) = self.int_format_arg(*n, arg_ty, func);
                     let specifier = match spec {
                         FormatSpec::Hex => format!("%{len}x"),
                         FormatSpec::Oct => format!("%{len}o"),
-                        FormatSpec::Bin => format!("%{len}x"),
                         _ => format!("%{len}{}", if signed { "d" } else { "u" }),
                     };
-                    return (specifier, value);
+                    return (specifier, vec![value]);
                 }
                 let value = match arg_ty {
                     Some(t) => self.const_value(c, Some(t), func),
@@ -2897,19 +2942,19 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     (ConstValue::Bool(b), _) => {
                         let s = if *b { "true" } else { "false" };
                         let ptr = self.get_str_global(s).as_pointer_value();
-                        return ("%s".to_string(), ptr.into());
+                        return ("%s".to_string(), vec![ptr.into()]);
                     }
                     _ => "%d".to_string(),
                 };
-                (specifier, value)
+                (specifier, vec![value])
             }
             _ => {
                 let ty = self.operand_type(operand, func).expect("typed format arg");
 
-                // `[N]char` string arrays print as C strings: `%s` (Display)
-                // or `"%s"` (Debug, wrapped in double quotes) over the
-                // array's address instead of its loaded value.
-                if let Type::Array { element, .. } = self.typecheck.interner.get(ty).clone()
+                // `[N]char` string arrays print as bounded C strings: `%.*s`
+                // with the compile-time length so printf stops at the array
+                // end instead of reading past it.
+                if let Type::Array { element, len } = self.typecheck.interner.get(ty).clone()
                     && matches!(
                         self.typecheck.interner.get(element).clone(),
                         Type::Builtin(BuiltinType::char)
@@ -2919,11 +2964,50 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         unreachable!("string array format arg must come from a place");
                     };
                     let ptr = self.place_ptr(place, func);
-                    let specifier = match spec {
-                        FormatSpec::Debug => "\"%s\"".to_string(),
-                        _ => "%s".to_string(),
+                    let Some(array_len) = len else {
+                        let specifier = match spec {
+                            FormatSpec::Debug => "\"%s\"".to_string(),
+                            _ => "%s".to_string(),
+                        };
+                        return (specifier, vec![ptr.into()]);
                     };
-                    return (specifier, ptr.into());
+                    let len_i32 = self.context.i32_type().const_int(array_len, false);
+                    let specifier = match spec {
+                        FormatSpec::Debug => "\"%.*s\"".to_string(),
+                        _ => "%.*s".to_string(),
+                    };
+                    return (specifier, vec![len_i32.into(), ptr.into()]);
+                }
+
+                // `[]char` slices print as bounded C strings: `%.*s` with the
+                // slice's runtime length.
+                if let Type::Slice { element, .. } = self.typecheck.interner.get(ty).clone()
+                    && matches!(
+                        self.typecheck.interner.get(element).clone(),
+                        Type::Builtin(BuiltinType::char)
+                    )
+                {
+                    let loaded = self
+                        .operand_value(operand, Some(ty), func)
+                        .into_struct_value();
+                    let ptr = self
+                        .builder
+                        .build_extract_value(loaded, 0, "slice.ptr")
+                        .unwrap();
+                    let len = self
+                        .builder
+                        .build_extract_value(loaded, 1, "slice.len")
+                        .unwrap()
+                        .into_int_value();
+                    let len = self
+                        .builder
+                        .build_int_truncate(len, self.context.i32_type(), "")
+                        .unwrap();
+                    let specifier = match spec {
+                        FormatSpec::Debug => "\"%.*s\"".to_string(),
+                        _ => "%.*s".to_string(),
+                    };
+                    return (specifier, vec![len.into(), ptr]);
                 }
 
                 if matches!(
@@ -2937,7 +3021,16 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .builder
                         .build_select(value, true_ptr, false_ptr, "bool.str")
                         .unwrap();
-                    return ("%s".to_string(), ptr);
+                    return ("%s".to_string(), vec![ptr]);
+                }
+
+                // `{bin}` on runtime values renders the digits into a stack
+                // buffer since printf has no binary specifier.
+                if matches!(spec, FormatSpec::Bin) {
+                    let bits = self.map_basic_type(ty).into_int_type().get_bit_width();
+                    let val = self.operand_value(operand, Some(ty), func).into_int_value();
+                    let buf = self.emit_bin_buffer(val, bits);
+                    return ("%s".to_string(), vec![buf.into()]);
                 }
 
                 let value = self.operand_value(operand, Some(ty), func);
@@ -2968,14 +3061,174 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     }
                     FormatSpec::Hex => "%x".to_string(),
                     FormatSpec::Oct => "%o".to_string(),
-                    FormatSpec::Bin => "%x".to_string(), // FIXME: Use hexadecimal specifier, currently not supported
+                    FormatSpec::Bin => unreachable!("handled above"),
                     FormatSpec::Float { precision } => format!("%.{precision}f"),
                 };
-                (specifier, value)
+                (specifier, vec![value])
             }
+        }
+    }
+
+    /// Builds the NUL-terminated binary representation of `value` (its lower
+    /// `bits` bits) into a fresh stack buffer.
+    fn emit_bin_buffer(&mut self, value: IntValue<'ctx>, bits: u32) -> PointerValue<'ctx> {
+        let i8_ty = self.context.i8_type();
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
+        let size_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+
+        let buffer = self
+            .builder
+            .build_array_alloca(
+                i8_ty,
+                self.context.i32_type().const_int(bits as u64 + 1, false),
+                "bin.buf",
+            )
+            .unwrap();
+
+        // NUL terminator.
+        let nul_slot = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, buffer, &[size_ty.const_int(bits as u64, false)], "")
+                .unwrap()
+        };
+        self.builder
+            .build_store(nul_slot, i8_ty.const_zero())
+            .unwrap();
+
+        let value64 = if value.get_type().get_bit_width() >= 64 {
+            value
+        } else {
+            self.builder.build_int_z_extend(value, i64_ty, "").unwrap()
         };
 
-        (specifier, value)
+        for i in 0..bits {
+            let shift = i64_ty.const_int((bits - 1 - i) as u64, false);
+            let bit = self
+                .builder
+                .build_right_shift(value64, shift, false, "")
+                .unwrap();
+            let bit = self
+                .builder
+                .build_and(bit, i64_ty.const_int(1, false), "")
+                .unwrap();
+            let ch = self
+                .builder
+                .build_int_add(
+                    i8_ty.const_int(b'0' as u64, false),
+                    self.builder.build_int_truncate(bit, i8_ty, "").unwrap(),
+                    "",
+                )
+                .unwrap();
+            let slot = unsafe {
+                self.builder
+                    .build_in_bounds_gep(i8_ty, buffer, &[size_ty.const_int(i as u64, false)], "")
+                    .unwrap()
+            };
+            self.builder.build_store(slot, ch).unwrap();
+        }
+
+        // Skip the leading zeros so `%s` prints the minimal digit count.
+        // For a zero value the whole buffer is '0's, so fall back to the last
+        // digit instead of pointing at the NUL terminator.
+        let idx = self.builder.build_alloca(i32_ty, "bin.idx").unwrap();
+        self.builder
+            .build_store(idx, i32_ty.const_int(0, false))
+            .unwrap();
+
+        let current_fn = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let find_head = self.context.append_basic_block(current_fn, "bin.find.head");
+        let find_body = self.context.append_basic_block(current_fn, "bin.find.body");
+        let find_done = self.context.append_basic_block(current_fn, "bin.find.done");
+
+        self.builder.build_unconditional_branch(find_head).unwrap();
+        self.builder.position_at_end(find_head);
+
+        let cur_idx = self
+            .builder
+            .build_load(i32_ty, idx, "cur.idx")
+            .unwrap()
+            .into_int_value();
+        let in_range = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::ULT,
+                cur_idx,
+                i32_ty.const_int(bits as u64, false),
+                "",
+            )
+            .unwrap();
+        let idx_sz = self
+            .builder
+            .build_int_z_extend(cur_idx, size_ty, "")
+            .unwrap();
+        let slot = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, buffer, &[idx_sz], "")
+                .unwrap()
+        };
+        let ch = self
+            .builder
+            .build_load(i8_ty, slot, "probe")
+            .unwrap()
+            .into_int_value();
+        let is_zero = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                ch,
+                i8_ty.const_int(b'0' as u64, false),
+                "",
+            )
+            .unwrap();
+        let keep_looking = self.builder.build_and(in_range, is_zero, "").unwrap();
+        self.builder
+            .build_conditional_branch(keep_looking, find_body, find_done)
+            .unwrap();
+
+        self.builder.position_at_end(find_body);
+        let next = self
+            .builder
+            .build_int_add(cur_idx, i32_ty.const_int(1, false), "next.idx")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(find_head).unwrap();
+
+        self.builder.position_at_end(find_done);
+        let start_idx = self
+            .builder
+            .build_load(i32_ty, idx, "start.idx")
+            .unwrap()
+            .into_int_value();
+        let all_zero = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                start_idx,
+                i32_ty.const_int(bits as u64, false),
+                "",
+            )
+            .unwrap();
+        let last_digit = i32_ty.const_int(bits as u64 - 1, false);
+        let start_idx = self
+            .builder
+            .build_select(all_zero, last_digit, start_idx, "bin.start")
+            .unwrap()
+            .into_int_value();
+        let start_sz = self
+            .builder
+            .build_int_z_extend(start_idx, size_ty, "")
+            .unwrap();
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, buffer, &[start_sz], "")
+                .unwrap()
+        }
     }
 
     /// Length prefix for an integer printf specifier, chosen from the value's

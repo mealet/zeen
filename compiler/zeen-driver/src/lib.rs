@@ -40,6 +40,8 @@ pub struct CompilationContext {
     pub output: CompilationOutput,
     /// Target triple being compiled for (`None` = host).
     pub target: Option<String>,
+    /// Non-fatal warnings collected during compilation.
+    pub warnings: Vec<String>,
 }
 
 /// Whether the compilation target requires a `main` entry point.
