@@ -353,6 +353,15 @@ impl<'ctx> IncludeResolver<'ctx> {
                     self.expr_usage(else_expr, flags);
                 }
             }
+
+            ExpressionKind::Range { start, end, .. } => {
+                if let Some(start) = start {
+                    self.expr_usage(start, flags);
+                }
+                if let Some(end) = end {
+                    self.expr_usage(end, flags);
+                }
+            }
         }
     }
 

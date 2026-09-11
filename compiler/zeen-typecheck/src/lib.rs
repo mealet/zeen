@@ -2131,6 +2131,38 @@ impl<'res> TypeChecker<'res> {
                 })
             }
 
+            HirExprKind::Range {
+                start,
+                end,
+                inclusive: _,
+            } => {
+                let usize_ty = self.result.interner.builtin(BuiltinType::usize);
+
+                if let Some(start) = start {
+                    self.check_expr(start, usize_ty, false);
+                }
+                if let Some(end) = end {
+                    self.check_expr(end, usize_ty, false);
+                }
+
+                let range_def = match self.find_struct_def("Range") {
+                    Some(def) => def,
+                    None => {
+                        self.report(TypeError::DanglingDefId {
+                            id: DefId(u32::MAX).0,
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+                        return self.result.interner.error();
+                    }
+                };
+
+                self.result.interner.intern(Type::Struct {
+                    def_id: range_def,
+                    generic_args: vec![],
+                })
+            }
+
             HirExprKind::Type(_) => self.result.interner.error(),
             HirExprKind::Error => self.result.interner.error(),
         }
@@ -3386,6 +3418,18 @@ impl<'res> TypeChecker<'res> {
 
             _ => false,
         }
+    }
+
+    fn find_struct_def(&self, struct_name: &str) -> Option<DefId> {
+        self.resolution.defs.iter().find_map(|(def, info)| {
+            if matches!(info.kind, DefKind::Struct)
+                && self.interner.borrow().resolve(&info.name) == struct_name
+            {
+                Some(*def)
+            } else {
+                None
+            }
+        })
     }
 
     fn lookup_def_type(&mut self, def_id: DefId, source: Source) -> TypeId {

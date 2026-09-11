@@ -760,6 +760,15 @@ impl<'ctx> NameResolver {
 
             ExpressionKind::TargetVar(_) => {}
 
+            ExpressionKind::Range { start, end, .. } => {
+                if let Some(start) = start {
+                    self.collect_global_deps(start, out);
+                }
+                if let Some(end) = end {
+                    self.collect_global_deps(end, out);
+                }
+            }
+
             ExpressionKind::ConditionalBlock(_) => {}
 
             ExpressionKind::Literal(_) => {}
@@ -1432,6 +1441,15 @@ impl<'ctx> NameResolver {
             }
 
             ExpressionKind::TargetVar(_) => {}
+
+            ExpressionKind::Range { start, end, .. } => {
+                if let Some(start) = start {
+                    self.resolve_expr(start);
+                }
+                if let Some(end) = end {
+                    self.resolve_expr(end);
+                }
+            }
 
             ExpressionKind::ConditionalBlock(_) => {}
         }
