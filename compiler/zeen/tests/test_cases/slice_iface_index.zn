@@ -6,14 +6,14 @@ struct Ref[T] {
   }
 }
 
-implement[T] Slice : Ref[T] {
-  fn slice(*const self, index: usize) T {
+implement[T] Index : Ref[T] {
+  fn index(*const self, index: usize) T {
     *(self.inner + index)
   }
 }
 
-implement[T] SlicePtr : Ref[T] {
-  fn slice_ptr(*self, index: usize) *T {
+implement[T] IndexPtr : Ref[T] {
+  fn index_ptr(*self, index: usize) *T {
     (self.inner + index)
   }
 }
