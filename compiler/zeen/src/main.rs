@@ -128,6 +128,19 @@ fn main() {
         exit(0);
     }
 
+    // Surface internal panics as a clean ICE message instead of a raw
+    // unwinding crash. Release builds use `panic = "abort"`, so this only
+    // guards debug builds; release panics still abort.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile(args)));
+    if result.is_err() {
+        cli::println_error(
+            "internal compiler error (ICE). This is a compiler bug; see https://github.com/mealet/zeen",
+        );
+        exit(1);
+    }
+}
+
+fn compile(args: cli::Args) {
     let target_triple = args.target.clone().unwrap_or_else(targets::host_target);
 
     let path = args
@@ -231,7 +244,7 @@ fn main() {
 
     let program = parser.parse_program().unwrap_or_else(|errors| {
         for err in errors {
-            let report_string = driver.report(err).unwrap();
+            let report_string = driver.report(err).unwrap_or_default();
             eprintln!("{}", report_string);
         }
 
@@ -261,7 +274,7 @@ fn main() {
     )
     .unwrap_or_else(|errors| {
         for err in &errors {
-            let report_string = driver.report(err).unwrap();
+            let report_string = driver.report(err).unwrap_or_default();
             eprintln!("{}", report_string);
         }
 
@@ -295,7 +308,7 @@ fn main() {
 
     let mut typechecker_result = typechecker.finish().unwrap_or_else(|errors| {
         for err in &errors {
-            let report_string = driver.report(err).unwrap();
+            let report_string = driver.report(err).unwrap_or_default();
             eprintln!("{}", report_string);
         }
 
@@ -313,7 +326,7 @@ fn main() {
     )
     .unwrap_or_else(|errors| {
         for err in &errors {
-            let report_string = driver.report(err).unwrap();
+            let report_string = driver.report(err).unwrap_or_default();
             eprintln!("{}", report_string);
         }
 
@@ -343,7 +356,7 @@ fn main() {
 
                 let count = warnings.len();
                 for warning in warnings {
-                    let report_string = driver.report(warning).unwrap();
+                    let report_string = driver.report(warning).unwrap_or_default();
                     eprintln!("{}", report_string);
                 }
 
@@ -354,7 +367,7 @@ fn main() {
         }
         Err(errors) => {
             for err in &errors {
-                let report_string = driver.report(err).unwrap();
+                let report_string = driver.report(err).unwrap_or_default();
                 eprintln!("{}", report_string);
             }
 
@@ -418,21 +431,21 @@ fn main() {
         codegen_options,
     )
     .unwrap_or_else(|err| {
-        let report_string = driver.report(&err).unwrap();
+        let report_string = driver.report(&err).unwrap_or_default();
         eprintln!("{}", report_string);
         cli::println_error("Codegen failed");
         exit(1);
     });
 
     if let Err(err) = codegen.generate() {
-        let report_string = driver.report(&err).unwrap();
+        let report_string = driver.report(&err).unwrap_or_default();
         eprintln!("{}", report_string);
         cli::println_error("Codegen failed");
         exit(1);
     }
 
     if let Err(err) = codegen.verify() {
-        let report_string = driver.report(&err).unwrap();
+        let report_string = driver.report(&err).unwrap_or_default();
         eprintln!("{}", report_string);
         cli::println_error("Codegen failed");
         exit(1);
@@ -443,7 +456,7 @@ fn main() {
             let output_path = with_default_extension(&output, "ll");
 
             if let Err(err) = codegen.emit_ir(&output_path) {
-                let report_string = driver.report(&err).unwrap();
+                let report_string = driver.report(&err).unwrap_or_default();
                 eprintln!("{}", report_string);
                 cli::println_error("Codegen failed");
                 exit(1);
@@ -462,7 +475,7 @@ fn main() {
             );
 
             if let Err(err) = codegen.emit_object(&output_path) {
-                let report_string = driver.report(&err).unwrap();
+                let report_string = driver.report(&err).unwrap_or_default();
                 eprintln!("{}", report_string);
                 cli::println_error("Codegen failed");
                 exit(1);
