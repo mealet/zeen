@@ -3,6 +3,7 @@
 use miette::SourceSpan;
 
 use super::*;
+use crate::token::LiteralKind;
 
 #[test]
 fn ident() {
@@ -699,5 +700,185 @@ fn unterminated_block_comment_then_code() {
             ..
         })
     ));
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn dot_dot_range_token() {
+    const SOURCE: &str = "..";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::DotDot, SourceSpan::new(0.into(), 2)))
+    );
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn dot_dot_eq_range_token() {
+    const SOURCE: &str = "..=";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::DotDotEq,
+            SourceSpan::new(0.into(), 3)
+        ))
+    );
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn dot_dot_dot_varargs_token() {
+    const SOURCE: &str = "...";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::DotDotDot,
+            SourceSpan::new(0.into(), 3)
+        ))
+    );
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn range_dot_edges_with_numbers() {
+    const SOURCE: &str = "1..5";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::Literal {
+                kind: LiteralKind::Int { .. }
+            },
+            ..
+        })
+    ));
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::DotDot, SourceSpan::new(1.into(), 2)))
+    );
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::Literal {
+                kind: LiteralKind::Int { .. }
+            },
+            ..
+        })
+    ));
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn exclusive_range_dot_edges_with_numbers() {
+    const SOURCE: &str = "0..=5";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::Literal {
+                kind: LiteralKind::Int { .. }
+            },
+            ..
+        })
+    ));
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::DotDotEq,
+            SourceSpan::new(1.into(), 3)
+        ))
+    );
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::Literal {
+                kind: LiteralKind::Int { .. }
+            },
+            ..
+        })
+    ));
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn float_literal_still_lexes_as_single_token() {
+    const SOURCE: &str = "0.5";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::Literal {
+                kind: LiteralKind::Float
+            },
+            ..
+        })
+    ));
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn float_followed_by_range_separates() {
+    const SOURCE: &str = "1.5..3";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::Literal {
+                kind: LiteralKind::Float
+            },
+            ..
+        })
+    ));
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::DotDot, SourceSpan::new(3.into(), 2)))
+    );
+    assert!(matches!(
+        tokens.next(),
+        Some(Token {
+            kind: TokenKind::Literal {
+                kind: LiteralKind::Int { .. }
+            },
+            ..
+        })
+    ));
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn single_dot_still_lone_token() {
+    const SOURCE: &str = "a.b";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(0.into(), 1)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Dot, SourceSpan::new(1.into(), 1)))
+    );
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(2.into(), 1)))
+    );
     assert_eq!(tokens.next(), None);
 }
