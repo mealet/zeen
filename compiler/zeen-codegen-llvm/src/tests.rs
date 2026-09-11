@@ -387,9 +387,12 @@ fn f32_division_narrows_to_slot_and_promotes_for_printf() {
     // (which would clobber adjacent memory and fail to verify).
     assert!(!ir.contains("store double"), "{ir}");
     assert!(ir.contains("store float"), "{ir}");
-    // ...and widened back to `double` for the variadic `sprintf` call.
+    // ...and widened back to `double` for the variadic `snprintf` call.
     assert!(ir.contains("fpext float"), "{ir}");
-    assert!(ir.contains("call i32 (ptr, ptr, ...) @sprintf"), "{ir}");
+    assert!(
+        ir.contains("call i32 (ptr, i64, ptr, ...) @snprintf"),
+        "{ir}"
+    );
 }
 
 #[test]
@@ -520,7 +523,7 @@ fn format_returns_a_slice() {
     let ir = compile(&fx, CompilationMode::Debug);
 
     assert!(ir.contains("@snprintf"), "{ir}");
-    assert!(ir.contains("@sprintf"), "{ir}");
+    assert!(!ir.contains("@sprintf"), "{ir}");
     assert!(ir.contains("%slice.char"), "{ir}");
 }
 
@@ -778,9 +781,9 @@ fn string_literal_coerces_to_char_array_param_and_formats() {
 
     // The string literal coerces to a `[7 x i8]` array argument.
     assert!(ir.contains("[7 x i8]"), "{ir}");
-    // The `[N]char` param is printed through `%s` over its address.
+    // The `[N]char` param is printed through `%.*s` with its length.
     assert!(ir.contains("@printf"), "{ir}");
-    assert!(ir.contains("value is %s"), "{ir}");
+    assert!(ir.contains("value is %.*s"), "{ir}");
 }
 
 #[test]

@@ -52,6 +52,14 @@ pub struct Args {
     )]
     pub std: Option<PathBuf>,
 
+    /// `--linker-path` flag to override the detected linker executable
+    #[arg(
+        long = "linker-path",
+        value_name = "PROGRAM",
+        help = "Override the detected linker executable"
+    )]
+    pub linker_path: Option<PathBuf>,
+
     /// `--targets-list` flag to print all supported target triples
     #[arg(long = "targets-list", action, help = "List supported target triples")]
     pub targets_list: bool,

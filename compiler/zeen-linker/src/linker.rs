@@ -142,6 +142,38 @@ impl ObjectLinker {
         Self::apply_extension(&self.target, requested)
     }
 
+    /// Whether the resolved toolchain can compile and link extra C sources
+    /// passed through [`Self::link`]. MSVC `link.exe` and `wasm-ld` only
+    /// accept object files.
+    pub fn accepts_c_sources(&self) -> bool {
+        !self.target.is_wasm() && !matches!(self.toolchain, Toolchain::Msvc { .. })
+    }
+
+    /// Overrides the detected linker executable with `program` (a path or a
+    /// name looked up on `PATH`).
+    pub fn with_linker(&mut self, program: &str) {
+        self.toolchain = match &self.toolchain {
+            Toolchain::Command { args, .. } => Toolchain::Command {
+                program: program.to_owned(),
+                args: args.clone(),
+            },
+            Toolchain::Clang { triple, args, .. } => Toolchain::Clang {
+                program: program.to_owned(),
+                triple: triple.clone(),
+                args: args.clone(),
+            },
+            Toolchain::Msvc {
+                link: _,
+                lib_paths,
+                target_machine,
+            } => Toolchain::Msvc {
+                link: PathBuf::from(program),
+                lib_paths: lib_paths.clone(),
+                target_machine,
+            },
+        };
+    }
+
     /// Links `objects` into `output`.
     ///
     /// Returns the actual output path on success, or the linker's stderr/stdout

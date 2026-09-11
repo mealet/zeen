@@ -5859,6 +5859,7 @@ mod tests {
             mode: CompilationMode::Debug,
             output: CompilationOutput::Binary,
             target: target.map(|triple| triple.to_string()),
+            warnings: Vec::new(),
         };
 
         let mut tokens = zeen_lexer::tokenize(&content);
