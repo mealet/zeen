@@ -615,6 +615,16 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
 
             ExpressionKind::Type(ty) => ExpressionKind::Type(self.resolve_type(ty)),
 
+            ExpressionKind::Range {
+                start,
+                end,
+                inclusive,
+            } => ExpressionKind::Range {
+                start: start.map(|s| self.resolve_expr(s)),
+                end: end.map(|e| self.resolve_expr(e)),
+                inclusive,
+            },
+
             ExpressionKind::ConditionalBlock(_) => {
                 unreachable!("conditional expressions are expanded by resolve_expr")
             }

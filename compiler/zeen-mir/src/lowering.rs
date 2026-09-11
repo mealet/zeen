@@ -591,6 +591,14 @@ impl<'ctx> MirLowering<'ctx> {
                 self.collect_global_expr_deps(object, out);
                 self.collect_global_expr_deps(index, out);
             }
+            HirExprKind::Range { start, end, .. } => {
+                if let Some(start) = start {
+                    self.collect_global_expr_deps(start, out);
+                }
+                if let Some(end) = end {
+                    self.collect_global_expr_deps(end, out);
+                }
+            }
             HirExprKind::StructInit { fields, .. } => {
                 for field in fields {
                     self.collect_global_expr_deps(&field.value, out);
@@ -2614,6 +2622,80 @@ impl<'ctx> MirLowering<'ctx> {
                 (
                     block,
                     self.place_to_operand(elem_place, ty, Some(expr.source.clone())),
+                )
+            }
+
+            HirExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let range_def = self
+                    .find_struct_def("Range")
+                    .expect("core `Range` struct must be present");
+                let usize_ty = self
+                    .typecheck
+                    .interner
+                    .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+                let ty = self.expr_type(fb, expr);
+                self.register_struct_layout(ty, range_def);
+
+                let (block, start_operand) = match start {
+                    Some(s) => self.lower_expr_to_operand(fb, s, block),
+                    None => (
+                        block,
+                        Operand::Constant(ConstValue::Int(0), Some(expr.source.clone())),
+                    ),
+                };
+
+                let (block, mut end_operand) = match end {
+                    Some(e) => self.lower_expr_to_operand(fb, e, block),
+                    None => (
+                        block,
+                        Operand::Constant(
+                            ConstValue::Int(usize::MAX as i128),
+                            Some(expr.source.clone()),
+                        ),
+                    ),
+                };
+
+                if *inclusive {
+                    // Materialize the end into a usize local first: codegen
+                    // widens a const+const add to 32-bit, which would corrupt
+                    // the upper half of the 64-bit usize place.
+                    let end_local = self.operand_to_local(fb, end_operand, usize_ty, block);
+                    let end_plus_one = fb.new_temp(usize_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(end_plus_one),
+                            rvalue: Rvalue::BinaryOp {
+                                op: BinaryOp::Add,
+                                lhs: Operand::Move(Place::from_local(end_local), None),
+                                rhs: Operand::Constant(ConstValue::Int(1), None),
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    end_operand = Operand::Move(Place::from_local(end_plus_one), None);
+                }
+
+                let temp = fb.new_temp(ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::Aggregate {
+                            kind: AggregateKind::Struct(range_def),
+                            operands: vec![start_operand, end_operand],
+                        },
+                        source: Some(expr.source.clone()),
+                    },
+                );
+
+                (
+                    block,
+                    self.place_to_operand(Place::from_local(temp), ty, Some(expr.source.clone())),
                 )
             }
 

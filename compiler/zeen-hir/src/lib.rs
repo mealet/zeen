@@ -658,6 +658,16 @@ impl<'res> HirLowering<'res> {
                 index: Rc::new(self.lower_expr(index)),
             },
 
+            ExpressionKind::Range {
+                start,
+                end,
+                inclusive,
+            } => HirExprKind::Range {
+                start: start.map(|s| Rc::new(self.lower_expr(s))),
+                end: end.map(|e| Rc::new(self.lower_expr(e))),
+                inclusive,
+            },
+
             ExpressionKind::StructInit { ty, fields } => {
                 let ty_def = self.path_expr_def_id(ty);
 

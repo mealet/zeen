@@ -18,6 +18,7 @@ pub struct ExprParser<'tok, 'ctx, 'pr> {
 #[derive(PartialEq, Eq, PartialOrd, Ord, FromRepr, Copy, Clone)]
 pub enum Precedence {
     Lowest,
+    Range,
     LogicalOr,
     LogicalAnd,
     BitwiseOr,
@@ -187,7 +188,121 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
     fn parse_precedence(&mut self, min_prec: Precedence) -> Option<&'ctx Expression<'ctx>> {
         let lhs = self.parse_unary()?;
+
+        if matches!(
+            self.p.current().kind,
+            TokenKind::DotDot | TokenKind::DotDotEq
+        ) && (Precedence::Range as u8) >= (min_prec as u8)
+        {
+            return self.parse_range_from_lhs(lhs);
+        }
+
         self.parse_binary_rest(lhs, min_prec)
+    }
+
+    fn parse_range_from_lhs(
+        &mut self,
+        start: &'ctx Expression<'ctx>,
+    ) -> Option<&'ctx Expression<'ctx>> {
+        let inclusive = self.p.current().kind == TokenKind::DotDotEq;
+        let tok = self.p.current_clone();
+        let _ = self.p.advance_not_eof()?;
+
+        let end = if self.could_start_expr() {
+            Some(self.parse_precedence(Precedence::LogicalOr)?)
+        } else {
+            if inclusive {
+                self.report_range_inclusive_without_end(&tok);
+            }
+            None
+        };
+
+        let span = match &end {
+            Some(e) => start.merge_span(e.span),
+            None => start.merge_span(tok.span),
+        };
+
+        Some(self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Range {
+                start: Some(start),
+                end,
+                inclusive,
+            },
+            span,
+        }))
+    }
+
+    fn parse_prefix_range(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let tok = self.p.current_clone();
+        let inclusive = tok.kind == TokenKind::DotDotEq;
+        let _ = self.p.advance_not_eof()?;
+
+        let end = if self.could_start_expr() {
+            Some(self.parse_precedence(Precedence::LogicalOr)?)
+        } else {
+            if inclusive {
+                self.report_range_inclusive_without_end(&tok);
+            }
+            None
+        };
+
+        let span = match &end {
+            Some(e) => tok.merge_span(e.span),
+            None => tok.span,
+        };
+
+        Some(self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Range {
+                start: None,
+                end,
+                inclusive,
+            },
+            span,
+        }))
+    }
+
+    fn report_range_inclusive_without_end(&mut self, tok: &Token) {
+        self.p.report(ParserError::UnknownExpression {
+            token_kind: format!("{:?}", tok.kind).into(),
+            src: self.p.named_src(),
+            span: tok.span,
+        });
+    }
+
+    fn could_start_expr(&self) -> bool {
+        use zeen_lexer::token::CompilerKeyword;
+        matches!(
+            self.p.current().kind,
+            TokenKind::Literal { .. }
+                | TokenKind::Ident
+                | TokenKind::MacroIdent
+                | TokenKind::Ref
+                | TokenKind::PreprocessorIdent
+                | TokenKind::PreprocessorVar
+                | TokenKind::PreprocessorDebug
+                | TokenKind::PreprocessorRelease
+                | TokenKind::Underscore
+                | TokenKind::Keyword(
+                    CompilerKeyword::If
+                        | CompilerKeyword::Switch
+                        | CompilerKeyword::Fn
+                        | CompilerKeyword::TypeOf
+                        | CompilerKeyword::True
+                        | CompilerKeyword::False
+                        | CompilerKeyword::Null
+                        | CompilerKeyword::SelfLower
+                        | CompilerKeyword::SelfUpper
+                )
+                | TokenKind::Minus
+                | TokenKind::Bang
+                | TokenKind::Tilde
+                | TokenKind::Star
+                | TokenKind::OpenParen
+                | TokenKind::OpenBracket
+                | TokenKind::OpenBrace
+                | TokenKind::DotDot
+                | TokenKind::DotDotEq
+        )
     }
 
     /// Continues parsing binary operators after an already-parsed left-hand
@@ -240,6 +355,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             TokenKind::Tilde => UnaryOp::BitNot,
             TokenKind::Star => UnaryOp::Deref,
             TokenKind::Ref => UnaryOp::AddrOf,
+
+            TokenKind::DotDot | TokenKind::DotDotEq => return self.parse_prefix_range(),
 
             _ => return self.parse_postfix(),
         };

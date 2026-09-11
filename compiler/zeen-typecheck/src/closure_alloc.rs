@@ -271,6 +271,15 @@ impl<'a> Analyzer<'a> {
                 self.expr(index, &Fate::Escaping);
             }
 
+            HirExprKind::Range { start, end, .. } => {
+                if let Some(start) = start {
+                    self.expr(start, &Fate::Escaping);
+                }
+                if let Some(end) = end {
+                    self.expr(end, &Fate::Escaping);
+                }
+            }
+
             HirExprKind::StructInit { fields, .. } => {
                 for field in fields {
                     self.expr(&field.value, &Fate::Escaping);
