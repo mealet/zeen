@@ -1,0 +1,19 @@
+fn main() {
+  let a = 0..2;
+  @println("a {} {}", a.start, a.end);
+
+  let b = 0..=2;
+  @println("b {} {}", b.start, b.end);
+
+  let c = 0..;
+  @println("c {}", c.start);
+
+  let d = ..2;
+  @println("d {}", d.end);
+
+  let e = ..;
+  @println("e {}", e.start);
+
+  let f = 3..7;
+  @println("f {} {}", f.start, f.end);
+}
