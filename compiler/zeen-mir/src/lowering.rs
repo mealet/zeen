@@ -2633,29 +2633,90 @@ impl<'ctx> MirLowering<'ctx> {
                 let range_def = self
                     .find_struct_def("Range")
                     .expect("core `Range` struct must be present");
+                let option_def = self
+                    .find_struct_def("Option")
+                    .expect("core.option `Option` must be present");
                 let usize_ty = self
                     .typecheck
                     .interner
                     .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+                let option_ty = self.typecheck.interner.intern(Type::Struct {
+                    def_id: option_def,
+                    generic_args: vec![usize_ty],
+                });
                 let ty = self.expr_type(fb, expr);
                 self.register_struct_layout(ty, range_def);
+                self.register_struct_layout(option_ty, option_def);
+
+                // Field order of `Option`: `value` then `_is_some`.
+                let option_fields = &self.typecheck.struct_info[&option_def].fields;
+                let rodeo = self.rodeo.borrow();
+                let value_index = option_fields
+                    .iter()
+                    .position(|f| rodeo.resolve(&f.name) == "value")
+                    .expect("Option must have a `value` field");
+                let is_some_index = option_fields
+                    .iter()
+                    .position(|f| rodeo.resolve(&f.name) == "_is_some")
+                    .expect("Option must have an `_is_some` field");
+                drop(rodeo);
+
+                // Builds an `Option[usize]` aggregate from a lowered operand;
+                // `is_some == false` stores a dummy value that is never read.
+                let mut build_option =
+                    |fb: &mut FnBuilder,
+                     block: BlockId,
+                     value: Operand,
+                     is_some: bool,
+                     source: Option<Source>| {
+                        let temp = fb.new_temp(option_ty);
+                        let mut operands = vec![
+                            Operand::Constant(ConstValue::Void, None),
+                            Operand::Constant(ConstValue::Void, None),
+                        ];
+                        operands[value_index] = if is_some {
+                            value
+                        } else {
+                            Operand::Constant(ConstValue::Int(0), source.clone())
+                        };
+                        operands[is_some_index] =
+                            Operand::Constant(ConstValue::Bool(is_some), source.clone());
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::Aggregate {
+                                    kind: AggregateKind::Struct(option_def),
+                                    operands,
+                                },
+                                source,
+                            },
+                        );
+                        (block, Operand::Move(Place::from_local(temp), None))
+                    };
 
                 let (block, start_operand) = match start {
-                    Some(s) => self.lower_expr_to_operand(fb, s, block),
-                    None => (
+                    Some(s) => {
+                        let (block, value) = self.lower_expr_to_operand(fb, s, block);
+                        build_option(fb, block, value, true, Some(expr.source.clone()))
+                    }
+                    None => build_option(
+                        fb,
                         block,
                         Operand::Constant(ConstValue::Int(0), Some(expr.source.clone())),
+                        false,
+                        Some(expr.source.clone()),
                     ),
                 };
 
-                let (block, mut end_operand) = match end {
-                    Some(e) => self.lower_expr_to_operand(fb, e, block),
+                let (block, mut end_value) = match end {
+                    Some(e) => {
+                        let (block, value) = self.lower_expr_to_operand(fb, e, block);
+                        (block, value)
+                    }
                     None => (
                         block,
-                        Operand::Constant(
-                            ConstValue::Int(usize::MAX as i128),
-                            Some(expr.source.clone()),
-                        ),
+                        Operand::Constant(ConstValue::Int(0), Some(expr.source.clone())),
                     ),
                 };
 
@@ -2663,7 +2724,7 @@ impl<'ctx> MirLowering<'ctx> {
                     // Materialize the end into a usize local first: codegen
                     // widens a const+const add to 32-bit, which would corrupt
                     // the upper half of the 64-bit usize place.
-                    let end_local = self.operand_to_local(fb, end_operand, usize_ty, block);
+                    let end_local = self.operand_to_local(fb, end_value, usize_ty, block);
                     let end_plus_one = fb.new_temp(usize_ty);
                     fb.push_stmt(
                         block,
@@ -2677,8 +2738,16 @@ impl<'ctx> MirLowering<'ctx> {
                             source: Some(expr.source.clone()),
                         },
                     );
-                    end_operand = Operand::Move(Place::from_local(end_plus_one), None);
+                    end_value = Operand::Move(Place::from_local(end_plus_one), None);
                 }
+
+                let (block, end_operand) = build_option(
+                    fb,
+                    block,
+                    end_value,
+                    end.is_some(),
+                    Some(expr.source.clone()),
+                );
 
                 let temp = fb.new_temp(ty);
                 fb.push_stmt(
