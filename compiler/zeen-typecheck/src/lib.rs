@@ -2049,22 +2049,67 @@ impl<'res> TypeChecker<'res> {
             HirExprKind::SliceAccess { object, index } => {
                 let obj_ty = self.synth_expr(object);
                 let usize_ty = self.result.interner.builtin(BuiltinType::usize);
-                let index_ty = self.check_expr(index, usize_ty, false);
+
+                // A `Range` index (`arr[a..b]`) is a slice, not a single
+                // element access. The range literal checks its own bounds;
+                // any other index expression must unify with `usize`.
+                let (range_index, usize_index_ty) = match &index.kind {
+                    HirExprKind::Range { inclusive, .. } => {
+                        // Records the range expr type; its bounds are checked
+                        // inside the Range arm itself.
+                        self.synth_expr(index);
+                        (Some(*inclusive), usize_ty)
+                    }
+                    _ => {
+                        let ty = self.check_expr(index, usize_ty, false);
+                        (None, ty)
+                    }
+                };
 
                 match self.result.interner.get(obj_ty).clone() {
-                    Type::Array { element, .. } => element,
-                    Type::Slice { element, .. } => element,
-                    Type::ManyPointer { inner, .. } => inner,
+                    Type::Array { element, .. } => match range_index {
+                        Some(_) => self.result.interner.intern(Type::Slice {
+                            element,
+                            is_const: false,
+                        }),
+                        None => element,
+                    },
+                    Type::Slice { element, is_const } => match range_index {
+                        Some(_) => self
+                            .result
+                            .interner
+                            .intern(Type::Slice { element, is_const }),
+                        None => element,
+                    },
+                    Type::ManyPointer { inner, .. } => match range_index {
+                        Some(_) => {
+                            self.report(TypeError::NotIndexable {
+                                child_type: self.display_type(obj_ty).into(),
+                                src: object.source.src(),
+                                span: object.source.span,
+                            });
+                            self.result.interner.error()
+                        }
+                        None => inner,
+                    },
                     Type::Struct {
                         def_id,
                         generic_args,
-                    } => self.check_slice_access_on_struct(
-                        def_id,
-                        &generic_args,
-                        index_ty,
-                        expr.id,
-                        &expr.source,
-                    ),
+                    } => match range_index {
+                        Some(_) => self.check_range_slice_on_struct(
+                            def_id,
+                            &generic_args,
+                            expr.id,
+                            &expr.source,
+                        ),
+                        None => self.check_slice_access_on_struct(
+                            def_id,
+                            &generic_args,
+                            usize_index_ty,
+                            expr.id,
+                            &expr.source,
+                        ),
+                    },
                     Type::Error => self.result.interner.error(),
                     _ => {
                         self.report(TypeError::NotIndexable {
@@ -5774,6 +5819,45 @@ impl<'res> TypeChecker<'res> {
                 } else {
                     r.ret_ty
                 }
+            }
+            None => self.result.interner.error(),
+        }
+    }
+
+    fn check_range_slice_on_struct(
+        &mut self,
+        def_id: DefId,
+        generic_args: &[TypeId],
+        expr_id: HirId,
+        source: &Source,
+    ) -> TypeId {
+        let range_ty = match self.find_struct_def("Range") {
+            Some(def) => self.result.interner.intern(Type::Struct {
+                def_id: def,
+                generic_args: vec![],
+            }),
+            None => return self.result.interner.error(),
+        };
+
+        let result = self.call_interface_method(
+            def_id,
+            generic_args,
+            ("Sliceable", "slice"),
+            &[range_ty],
+            ReceiverAccess::Value,
+            source,
+        );
+
+        match result {
+            Some(r) => {
+                self.result.operator_resolutions.insert(
+                    expr_id,
+                    OperatorResolution {
+                        method_def: r.method_def,
+                        generic_args: generic_args.to_vec(),
+                    },
+                );
+                r.ret_ty
             }
             None => self.result.interner.error(),
         }
