@@ -303,9 +303,22 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn register_struct_layouts(&mut self) {
+        // A slice's constness is not part of its runtime layout: `[]T` and
+        // `[]const T` type to the same `{ ptr, len }` pair. Sharing one LLVM
+        // struct per name keeps call signatures valid (a const slice passed
+        // into a generic `[]T` param), since LLVM treats name-identical but
+        // distinct handles (`%slice.char` vs `%slice.char.0`) as different
+        // types.
+        let mut by_name: HashMap<String, inkwell::types::StructType<'ctx>> = HashMap::new();
         for &ty in self.program.struct_layouts.keys() {
             let name = self.mangle_struct_name(ty);
-            let opaque = self.context.opaque_struct_type(&name);
+            let opaque = if let Some(existing) = by_name.get(&name) {
+                *existing
+            } else {
+                let created = self.context.opaque_struct_type(&name);
+                by_name.insert(name, created);
+                created
+            };
             self.struct_types.insert(ty, opaque);
         }
 
@@ -1723,6 +1736,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             // flowing into an `Opaque` `Fn`/`FnOnce` slot). Both layouts are
             // the same `{ $fn, $env }` pair, so the value passes through.
             (FatFn { .. }, FatFn { .. }) => value,
+
+            // A slice-to-slice cast only loosens constness (`[]const T` into
+            // a generic `[]T` param slot); the run-time `{ ptr, len }` pair
+            // is unchanged.
+            (Slice { .. }, Type::Slice { .. }) => value,
 
             _ => {
                 unreachable!("cast from {src:?} to {dst_ty:?} reached codegen")
