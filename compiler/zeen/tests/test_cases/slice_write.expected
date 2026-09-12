@@ -1,0 +1,4 @@
+range-write 99
+local-write 7
+shift 5
+const-generic 9
