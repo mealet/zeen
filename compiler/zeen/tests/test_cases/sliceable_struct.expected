@@ -1,0 +1,4 @@
+vec all 5 50
+vec mid 2 20
+vec tail 3 30
+boxed 3 2
