@@ -1,6 +1,6 @@
 fn main() {
   let array = [123, 321, 333, 444] ;
-  let slice = &array;
+  let slice = array[..];
 
   for (element : slice) {
     @println("{}", element);

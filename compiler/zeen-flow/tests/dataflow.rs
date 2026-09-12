@@ -647,7 +647,7 @@ fn last_element[T](slice: []T) T {
 
 fn main() {
     let arr = [1, 2, 3, 4];
-    let slice = &arr;
+    let slice = arr[..];
     let _elem = last_element(slice);
 }
 "#,
@@ -782,7 +782,7 @@ fn slice_is_copy_and_usable_multiple_times() {
         r#"
 fn main() {
     let arr: [3]i32 = [1, 2, 3];
-    let s: []i32 = &arr;
+    let s: []i32 = arr[..];
     let t = s;
     let u = s;
 }
@@ -799,7 +799,7 @@ fn sum(s: []i32) i32 {
 }
 fn main() {
     let arr: [3]i32 = [1, 2, 3];
-    let s: []i32 = &arr;
+    let s: []i32 = arr[..];
     sum(s);
     sum(s);
 }
@@ -813,7 +813,7 @@ fn slice_element_reads_do_not_copy_the_slice() {
         r#"
 fn main() {
     let arr: [3]i32 = [1, 2, 3];
-    let s: []i32 = &arr;
+    let s: []i32 = arr[..];
     let a = s[0];
     let b = s[1];
 }
@@ -822,12 +822,12 @@ fn main() {
 }
 
 #[test]
-fn addr_of_array_yields_a_slice() {
+fn full_range_slice_yields_a_slice() {
     flow_ok(
         r#"
 fn main() {
     let a: [4]i32 = [1, 2, 3, 4];
-    let b: []i32 = &a;
+    let b: []i32 = a[..];
     let _ = b[2];
 }
 "#,
@@ -835,20 +835,27 @@ fn main() {
 }
 
 #[test]
-fn addr_of_array_never_yields_pointer_to_array() {
-    // `&array` types as a slice, never as `*[N]T`; a supposed pointer-to-array
-    // annotation must fail to compile with a type mismatch.
-    assert!(
-        compile(
-            r#"
+fn addr_of_array_yields_pointer_to_array() {
+    // `&array` types as `*[N]T`, never as a slice.
+    flow_ok(
+        r#"
 fn main() {
     let a: [4]i32 = [1, 2, 3, 4];
     let b: *[4]i32 = &a;
 }
 "#,
+    );
+    assert!(
+        compile(
+            r#"
+fn main() {
+    let a: [4]i32 = [1, 2, 3, 4];
+    let b: []i32 = &a;
+}
+"#,
         )
         .is_err(),
-        "`&array` must never type as `*[N]T`, only as a slice"
+        "`&array` must never type as a slice, only as `*[N]T`"
     );
 }
 
