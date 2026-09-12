@@ -38,3 +38,10 @@ implement Iterator : Range {
     Option.None()
   }
 }
+
+/// Range slicing (`arr[start..end]`). Fixed arrays, slices and multi
+/// pointers are handled by the compiler; user structs implement this
+/// interface to participate in range indexing.
+pub interface[T] Sliceable {
+  pub fn slice(*self, range: Range) []T;
+}
