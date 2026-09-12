@@ -1,0 +1,34 @@
+fn main() {
+  let arr: [5]i32 = [10, 20, 30, 40, 50];
+
+  // middle slice
+  let mid = arr[1..4];
+  for (i : 0..mid.len) {
+    @println("mid {}", mid[i]);
+  }
+
+  // empty range start == end
+  let empty = arr[2..2];
+  @println("empty {}", empty.len);
+
+  // full range without bounds
+  let full = arr[..];
+  @println("full {}", full.len);
+
+  // prefix (..n) and suffix (n..)
+  let head = arr[..3];
+  let tail = arr[2..];
+  @println("head {} tail {}", head.len, tail.len);
+
+  // inclusive end
+  let inc = arr[1..=3];
+  @println("inc {} {}", inc.len, inc[0]);
+
+  // slicing a slice yields a subslice
+  let sub = arr[1..4][1..3];
+  @println("sub {} {}", sub.len, sub[0]);
+
+  // outer bound slicing: `..` on a sub slice
+  let all = arr[0..5][..];
+  @println("all {} {}", all.len, all[4]);
+}

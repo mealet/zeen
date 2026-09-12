@@ -1,0 +1,9 @@
+mid 20
+mid 30
+mid 40
+empty 0
+full 5
+head 3 tail 3
+inc 3 20
+sub 2 30
+all 5 50
