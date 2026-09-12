@@ -2081,14 +2081,23 @@ impl<'res> TypeChecker<'res> {
                             .intern(Type::Slice { element, is_const }),
                         None => element,
                     },
-                    Type::ManyPointer { inner, .. } => match range_index {
+                    Type::ManyPointer { inner, is_const } => match range_index {
                         Some(_) => {
-                            self.report(TypeError::NotIndexable {
-                                child_type: self.display_type(obj_ty).into(),
-                                src: object.source.src(),
-                                span: object.source.span,
-                            });
-                            self.result.interner.error()
+                            // An open end (`ptr[..]` / `ptr[n..]`) needs a
+                            // length, which an unsized pointer does not have;
+                            // the end bound must be explicit.
+                            if let HirExprKind::Range { end: None, .. } = &index.kind {
+                                self.report(TypeError::UnsizedPointerSlice {
+                                    child_type: self.display_type(obj_ty).into(),
+                                    src: index.source.src(),
+                                    span: index.source.span,
+                                });
+                                return self.result.interner.error();
+                            }
+                            self.result.interner.intern(Type::Slice {
+                                element: inner,
+                                is_const,
+                            })
                         }
                         None => inner,
                     },
@@ -6771,6 +6780,44 @@ mod tests {
             result.is_ok(),
             "a full-range slice of an array literal should build a slice: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn many_pointer_range_slice_builds_slice() {
+        let result = typecheck_full(
+            r#"
+            fn main() {
+              let a = @as([*]char, "hello");
+              let s = a[0..1];
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "a range slice of a many pointer should build a slice: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn open_ended_many_pointer_slice_is_reported() {
+        let errors = typecheck_full(
+            r#"
+            fn main() {
+              let a = @as([*]char, "hello");
+              let s = a[..];
+            }
+            "#,
+        )
+        .expect_err("an open-ended slice of a many pointer must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnsizedPointerSlice { .. })),
+            "expected TypeError::UnsizedPointerSlice, got: {errors:?}"
         );
     }
 
