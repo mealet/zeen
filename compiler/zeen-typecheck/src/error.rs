@@ -567,7 +567,7 @@ pub enum TypeError {
     #[diagnostic(
         severity(Error),
         code(zeen::typechecker::implicit_array_to_slice),
-        help("take a reference to build a slice: `&[...]` (or `&array`)")
+        help("take a full-range slice to build a slice: `arr[..]` (or `[1, 2, 3][..]`)")
     )]
     ImplicitArrayToSlice {
         expected: SmolStr,

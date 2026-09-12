@@ -5580,16 +5580,7 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         }
 
-        if let UnaryOp::AddrOf = op {
-            // `&array` produces a slice (a fat `{ ptr, len }` view), not a
-            // pointer to the array: slices never alias to `*[N]T`.
-            if let Type::Array { element, .. } = self.result.interner.get(operand).clone() {
-                return self.result.interner.intern(Type::Slice {
-                    element,
-                    is_const: false,
-                });
-            }
-
+        if matches!(op, UnaryOp::AddrOf) {
             return self.result.interner.intern(Type::Pointer {
                 inner: operand,
                 is_const: false,
@@ -5927,6 +5918,7 @@ mod tests {
     const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
     const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
     const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+    const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
     fn typecheck(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
         typecheck_with_target(source, None)
@@ -5970,6 +5962,7 @@ mod tests {
                 ("core.out", CORE_OUT),
                 ("core.iter", CORE_ITER),
                 ("core.option", CORE_OPTION),
+                ("core.slice", CORE_SLICE),
             ]
         } else {
             Vec::new()
@@ -6306,7 +6299,7 @@ mod tests {
 
     #[test]
     fn generic_infers_through_slice_wrapper() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn first[T](items: []T) T {
               return items[0];
@@ -6314,7 +6307,7 @@ mod tests {
 
             fn main() {
               let arr = [1, 2, 3];
-              let first: i32 = first(&arr);
+              let first: i32 = first(arr[..]);
             }
             "#,
         );
@@ -6350,7 +6343,7 @@ mod tests {
 
     #[test]
     fn generic_infers_through_many_pointer_wrapper() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn total[T](items: [*]T) T {
               return items[0];
@@ -6358,7 +6351,7 @@ mod tests {
 
             fn main() {
               let arr = [1, 2, 3];
-              let slice = &arr;
+              let slice = arr[..];
               let total: i32 = total(slice.ptr);
             }
             "#,
@@ -6754,8 +6747,8 @@ mod tests {
     }
 
     #[test]
-    fn explicit_reference_builds_slice() {
-        let result = typecheck(
+    fn slice_of_array_literal_builds_slice() {
+        let result = typecheck_full(
             r#"
             struct Foo {}
 
@@ -6769,14 +6762,14 @@ mod tests {
 
             fn main() {
               let a = Foo {};
-              a.write(&[1, 2, 3]);
+              a.write([1, 2, 3][..]);
             }
             "#,
         );
 
         assert!(
             result.is_ok(),
-            "an explicit `&[...]` should build a slice: {:?}",
+            "a full-range slice of an array literal should build a slice: {:?}",
             result.err()
         );
     }
