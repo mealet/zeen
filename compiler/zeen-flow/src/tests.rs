@@ -8,6 +8,10 @@ use zeen_parser::Parser;
 use crate::{error::FlowError, run_dataflow};
 
 const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
+const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
+const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+const CORE_IO: &str = include_str!("../../../lib/core/io.zn");
+const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
 fn flow_errors(src: &str) -> Vec<FlowError> {
     let rodeo = Rc::new(RefCell::new(Rodeo::default()));
@@ -23,7 +27,13 @@ fn flow_errors(src: &str) -> Vec<FlowError> {
             ),
             linked: HashSet::new(),
         },
-        core_files: vec![("core.ops", CORE_OPS)],
+        core_files: vec![
+            ("core.ops", CORE_OPS),
+            ("core.iter", CORE_ITER),
+            ("core.option", CORE_OPTION),
+            ("core.io", CORE_IO),
+            ("core.slice", CORE_SLICE),
+        ],
         mode: CompilationMode::Debug,
         output: CompilationOutput::EmitMIR,
         target: None,
@@ -99,7 +109,7 @@ fn returning_slice_of_local_is_rejected() {
     let errors = flow_errors(
         "fn make() []const i32 { \
              let a: [4]i32 = [1, 2, 3, 4]; \
-             return &a; \
+             return a[..]; \
          } \
          fn main() { let s = make(); @println(\"{}\", s[0]); }",
     );
@@ -115,7 +125,7 @@ fn returning_slice_of_local_through_temp_is_rejected() {
     let errors = flow_errors(
         "fn make() []const i32 { \
              let a: [4]i32 = [1, 2, 3, 4]; \
-             let s: []const i32 = &a; \
+             let s: []const i32 = a[..]; \
              return s; \
          } \
          fn main() { let s = make(); @println(\"{}\", s[0]); }",
@@ -133,7 +143,7 @@ fn returning_struct_with_local_slice_field_is_rejected() {
         "struct S { pub slc: []const i32 } \
          fn make() S { \
              let a: [4]i32 = [1, 2, 3, 4]; \
-             let s: []const i32 = &a; \
+             let s: []const i32 = a[..]; \
              return S { .slc = s }; \
          } \
          fn main() { let o = make(); @println(\"{}\", o.slc[0]); }",

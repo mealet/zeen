@@ -11,6 +11,7 @@ const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
 const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
 const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
 const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
 fn compile_mir_mode(
     src: &str,
@@ -34,6 +35,7 @@ fn compile_mir_mode(
             ("core.out", CORE_OUT),
             ("core.iter", CORE_ITER),
             ("core.option", CORE_OPTION),
+            ("core.slice", CORE_SLICE),
         ],
         mode,
         output: CompilationOutput::EmitMIR,
@@ -167,8 +169,8 @@ fn address_of_non_lvalue_expression_materializes_temp() {
 }
 
 #[test]
-fn address_of_array_literal_builds_slice() {
-    compile_mir_ok("fn main() { let s: []i32 = &[1, 2, 3]; }");
+fn slice_of_array_literal() {
+    compile_mir_ok("fn main() { let s: []i32 = [1, 2, 3][..]; }");
 }
 
 #[test]
@@ -246,7 +248,7 @@ fn deref_of_call_result_is_lvalue() {
 #[test]
 fn slice_index_on_call_result_materializes_slice() {
     compile_mir_ok(
-        "fn get_slice() []i32 { let arr = [1, 2, 3]; return &arr; } \
+        "fn get_slice() []i32 { let arr = [1, 2, 3]; return arr[..]; } \
          fn main() { let v: i32 = get_slice()[1]; }",
     );
 }
@@ -259,7 +261,7 @@ fn for_loop_over_array_literal_materializes_iterator() {
 #[test]
 fn for_loop_over_rvalue_slice_materializes_iterator() {
     compile_mir_ok(
-        "fn get_slice() []i32 { let arr = [1, 2, 3]; return &arr; } \
+        "fn get_slice() []i32 { let arr = [1, 2, 3]; return arr[..]; } \
          fn main() { for (element : get_slice()) { @println(\"{}\", element); } }",
     );
 }

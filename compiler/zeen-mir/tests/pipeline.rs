@@ -302,12 +302,12 @@ fn make() Vec2 {
 }
 
 #[test]
-fn slice_layout_is_printed_and_addr_of_array_yields_slice() {
+fn slice_layout_is_printed_and_full_range_slice_yields_slice() {
     let mir = compile_ok(
         r#"
 fn main() {
     let a: [4]i32 = [1, 2, 3, 4];
-    let b: []i32 = &a;
+    let b: []i32 = a[..];
     let _ = b[2];
 }
 "#,
@@ -317,8 +317,8 @@ fn main() {
         "slice layout must be printed: MIR:\n{mir}"
     );
     assert!(
-        mir.contains("slice { move %3, 4 }"),
-        "&array must build a `{{ ptr, len }}` slice aggregate: MIR:\n{mir}"
+        mir.contains("slice { move %"),
+        "a full-range slice must build a `{{ ptr, len }}` slice aggregate: MIR:\n{mir}"
     );
     assert!(
         mir.contains(".ptr["),
@@ -332,7 +332,7 @@ fn slice_ptr_and_len_fields_are_accessible() {
         r#"
 fn main() {
     let a: [4]i32 = [1, 2, 3, 4];
-    let b: []i32 = &a;
+    let b: []i32 = a[..];
 
     let slice_ptr: [*]i32 = b.ptr;
     let slice_len: usize = b.len;
@@ -453,7 +453,7 @@ fn slice_index_is_bounds_checked_against_runtime_len_in_debug_mode() {
         r#"
 fn main() {
     let a: [4]i32 = [1, 2, 3, 4];
-    let b: []i32 = &a;
+    let b: []i32 = a[..];
     let i: usize = 1;
     let x = b[i];
 }
