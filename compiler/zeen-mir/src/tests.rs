@@ -174,6 +174,34 @@ fn slice_of_array_literal() {
 }
 
 #[test]
+fn slice_index_write_projects_through_slice_ptr() {
+    let mir = compile_mir_ok(
+        "fn main() { let arr = [1, 2, 3]; let s = arr[..]; s[1] = 5; let _ = s[1]; }",
+    );
+
+    let writes_through_ptr = mir.program.functions.values().any(|func| {
+        func.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                if let crate::MirStatement::Assign { place, .. } = stmt {
+                    matches!(
+                        place.projection.as_slice(),
+                        [crate::PlaceElem::Field(def), crate::PlaceElem::Index(_)]
+                            if *def == zeen_types::SLICE_PTR_FIELD
+                    )
+                } else {
+                    false
+                }
+            })
+        })
+    });
+
+    assert!(
+        writes_through_ptr,
+        "silce store `s[1] = 5` must project through the slice `ptr` field"
+    );
+}
+
+#[test]
 fn generic_pointer_param_accepts_literal_address() {
     compile_mir_ok(
         "struct Box[T] { pub inner: *T } \

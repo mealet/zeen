@@ -3503,7 +3503,17 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(expr.source.clone()),
                 );
 
-                (block, obj_place.index(index_local))
+                let elem_place = match self.typecheck.interner.get(obj_ty).clone() {
+                    Type::Array { .. } | Type::ManyPointer { .. } => obj_place.index(index_local),
+                    Type::Slice { .. } => {
+                        let mut ptr_place = obj_place;
+                        ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
+                        ptr_place.index(index_local)
+                    }
+                    _ => unreachable!(),
+                };
+
+                (block, elem_place)
             }
 
             HirExprKind::Unary {
