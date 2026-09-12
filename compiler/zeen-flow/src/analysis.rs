@@ -1022,6 +1022,18 @@ impl<'ctx> DataFlow<'ctx> {
                 Terminator::Return(op) => {
                     if let Some((root, src)) = check_return_borrow(&state, op) {
                         let info = &snapshot.locals[root.0 as usize];
+                        // A borrow rooted at a pointer parameter points into
+                        // the caller's memory (`slice(*self, ...)` returning
+                        // `self.data[..]`), which outlives this call, so it
+                        // never dangles here.
+                        let pointee_param = snapshot.params.contains(&root)
+                            && matches!(
+                                self.typecheck.interner.get(info.ty),
+                                Type::Pointer { .. } | Type::ManyPointer { .. }
+                            );
+                        if pointee_param {
+                            continue;
+                        }
                         let name = info.name.clone().unwrap_or_else(|| SmolStr::from("value"));
                         let (src, span) =
                             src.as_ref().map(|s| (s.src(), s.span)).unwrap_or_else(|| {
