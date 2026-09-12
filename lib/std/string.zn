@@ -505,6 +505,24 @@ implement IndexPtr : String {
   }
 }
 
+implement Sliceable : String {
+  fn slice(*self, range: Range) []char {
+    let start = if (range.start.is_some()) {
+      range.start.unwrap()
+    } else {
+      0
+    };
+
+    let end = if (range.end.is_some()) {
+      range.end.unwrap()
+    } else {
+      self.len()
+    };
+
+    self.ptr[start..end]
+  }
+}
+
 implement StrWriter : String {
   fn write_str(*self, value: []const char) void {
     self.push_str(value);
