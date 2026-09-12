@@ -563,6 +563,21 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("cannot take an open-ended slice of a many pointer: its length is unknown")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::unsized_pointer_slice),
+        help("provide an explicit end bound: `ptr[0..n]` (or `ptr[..n]`)")
+    )]
+    UnsizedPointerSlice {
+        child_type: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("cannot implicitly convert array `{found}` to slice `{expected}`")]
     #[diagnostic(
         severity(Error),

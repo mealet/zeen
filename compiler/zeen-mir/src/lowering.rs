@@ -3938,31 +3938,47 @@ impl<'ctx> MirLowering<'ctx> {
                             self.place_to_operand(len_place, usize_ty, Some(source.clone()));
                         self.operand_to_local(fb, operand, usize_ty, block)
                     }
-                    _ => unreachable!("range slice must target an array or a slice"),
+                    Type::ManyPointer { .. } => {
+                        unreachable!("open-ended slice of a many pointer is rejected by typecheck")
+                    }
+                    _ => {
+                        unreachable!("range slice must target an array, a slice, or a many pointer")
+                    }
                 };
                 (block, len_local)
             }
         };
 
-        let block = self.lower_range_slice_bounds_check(
-            fb,
-            block,
-            start_local,
-            end_local,
-            &obj_place,
-            obj_ty,
-            usize_ty,
-            source,
-        );
+        // The length of a many pointer is unknown, so no bounds guard can be
+        // built: bounds checks apply to sized objects (arrays and slices).
+        let block = if matches!(
+            self.typecheck.interner.get(obj_ty),
+            Type::ManyPointer { .. }
+        ) {
+            block
+        } else {
+            self.lower_range_slice_bounds_check(
+                fb,
+                block,
+                start_local,
+                end_local,
+                &obj_place,
+                obj_ty,
+                usize_ty,
+                source,
+            )
+        };
 
         let ptr_ty = match self.typecheck.interner.get(obj_ty).clone() {
             Type::Array { element, .. } => element,
             Type::Slice { element, .. } => element,
+            Type::ManyPointer { inner, .. } => inner,
             _ => unreachable!(),
         };
 
         let is_const = match self.typecheck.interner.get(obj_ty).clone() {
             Type::Slice { is_const, .. } => is_const,
+            Type::ManyPointer { is_const, .. } => is_const,
             _ => false,
         };
 
@@ -3973,6 +3989,7 @@ impl<'ctx> MirLowering<'ctx> {
                 ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
                 ptr_place.index(start_local)
             }
+            Type::ManyPointer { .. } => obj_place.index(start_local),
             _ => unreachable!(),
         };
 
