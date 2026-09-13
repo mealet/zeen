@@ -3319,10 +3319,8 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Lower `expr` to a place, materializing it into a temp local first when
-    /// it is not an lvalue (e.g. `get_obj().field` or `*get_ptr()`). The temp
-    /// is a fresh storage cell that lives for the rest of the function, so the
-    /// returned place is valid to read, write or take the address of.
+    /// Lowers `expr` to a place, materializing non-lvalues (e.g.
+    /// `get_obj().field`) into a temporary local first.
     fn lower_expr_to_place_or_temp(
         &mut self,
         fb: &mut FnBuilder,
@@ -4207,12 +4205,10 @@ impl<'ctx> MirLowering<'ctx> {
         ok_block
     }
 
-    /// Inserts a `divisor != 0` guard in front of `/` and `%` on builtin
-    /// numerics when compiling in Debug mode. A zero divisor diverges into a
-    /// `@panic` call. Returns the block the division must be lowered into.
+    /// Inserts a Debug-mode `divisor != 0` guard before `/` and `%` on
+    /// builtin numerics; a zero divisor diverges into a `@panic` call.
     ///
-    /// `rhs_local` must be a plain local holding the divisor; it is only read
-    /// here by Copy, so the division rvalue can use it again.
+    /// `rhs_local` must hold the divisor and be readable by Copy.
     fn lower_div_zero_check(
         &mut self,
         fb: &mut FnBuilder,
@@ -6758,11 +6754,10 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Calls a fat closure value. The `{ $fn, $env }` envelope's two fields are
-    /// copied out and the call goes through the fn pointer with the uniform
-    /// env-first ABI (`fn(*const void, params...) ret`), so callers never
-    /// need to know the value's provenance - a plain body, another closure's
-    /// body, or a boxed fn pointer all look the same through `$fn`.
+    /// Calls a fat closure value through the `{ $fn, $env }` envelope: both
+    /// fields are copied out and the call goes through the fn pointer with
+    /// the uniform env-first ABI (`fn(*const void, params...) ret`), so the
+    /// value's provenance does not matter.
     ///
     /// A `!once` value is read but never consumed: both fields are copied and
     /// the value stays live at its place, so the same `Fn` value can be
