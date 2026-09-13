@@ -1371,23 +1371,6 @@ mod tests {
         );
     }
 
-    // WARNING: Deprecated test
-
-    // #[test]
-    // fn import_decl_with_alias() {
-    //     const SRC: &str = "import std.io.Stdout : default_output;";
-    //
-    //     make_parser!(SRC, tokens, bump, rodeo, parser);
-    //
-    //     assert_matches!(
-    //         parser.parse_program(),
-    //         Ok([Declaration {
-    //             kind: DeclarationKind::Use { module: _ },
-    //             ..
-    //         }])
-    //     );
-    // }
-
     #[test]
     fn link_decl() {
         const SRC: &str = "extern link \"test.c\";";
