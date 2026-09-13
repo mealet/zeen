@@ -1407,11 +1407,9 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Resolves the erased `Fn`/`FnOnce` annotations down to the concrete
-    /// closure types values actually carry. Runs after every body has been
-    /// checked, so functions may be referenced before their defining order:
-    /// return annotations are derived from the recorded return expressions,
-    /// and variables initialized from those calls inherit the resolved type.
+    /// Resolves erased `Fn`/`FnOnce` annotations to concrete closure types
+    /// after all bodies are checked, allowing forward references to functions
+    /// and inferring types from recorded return expressions.
     fn finalize_fat_types(&mut self) {
         let mut resolved: HashMap<DefId, TypeId> = HashMap::new();
         let candidates: Vec<(DefId, Vec<(HirId, Source)>)> = self
@@ -1829,8 +1827,7 @@ impl<'res> TypeChecker<'res> {
     /// Types a closure expression: declares and checks the synthetic closure
     /// function like a regular one, then computes the closure value type.
     /// Zero-capture closures are plain `fn` pointers; capturing ones become
-    /// `Fn`/`FnOnce` fat pointers backed by a synthetic env struct (the env
-    /// type is unreachable from user syntax).
+    /// `Fn`/`FnOnce` fat pointers backed by a synthetic env struct.
     fn check_closure(&mut self, def_id: DefId, def: &Rc<HirFn>, source: &Source) -> TypeId {
         self.declare_fn_signature(def_id, def);
         self.check_fn_body(def_id, def, None, None, None);
