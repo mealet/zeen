@@ -98,7 +98,7 @@ pub struct String {
   /// String's length getter
   pub fn len(*const self) usize {
     self._len
-  }
+}
 
   /// String's capacity getter
   pub fn capacity(*const self) usize {
@@ -224,6 +224,19 @@ pub struct String {
     };
 
     Option.Some(self.ptr[index])
+  }
+
+  /// Get pointer to character by index (out of bounds returns `None`)
+  pub fn get_ptr(*const self, index: usize) Option[*char] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option#[char].None();
+    };
+
+    Option.Some(&self.ptr[index])
   }
 
   /// Set character by index and return old (out of bounds returns `None`)
@@ -465,6 +478,48 @@ implement Eq : String {
     };
 
     return strncmp(self.ptr, other.ptr, self._len) == 0;
+  }
+}
+
+implement Index : String {
+  fn index(*const self, index: usize) char {
+    let opt = self.get(index);
+
+    if (opt.is_none()) {
+      @panic("out of bounds, String len is {} but index is {}", self.len(), index);
+    }
+
+    opt.unwrap()
+  }
+}
+
+implement IndexPtr : String {
+  fn index_ptr(*self, index: usize) *char {
+    let opt = self.get_ptr(index);
+
+    if (opt.is_none()) {
+      @panic("out of bounds, String len is {} but index is {}", self.len(), index);
+    }
+
+    opt.unwrap()
+  }
+}
+
+implement Sliceable : String {
+  fn slice(*self, range: Range) []char {
+    let start = if (range.start.is_some()) {
+      range.start.unwrap()
+    } else {
+      0
+    };
+
+    let end = if (range.end.is_some()) {
+      range.end.unwrap()
+    } else {
+      self.len()
+    };
+
+    self.ptr[start..end]
   }
 }
 

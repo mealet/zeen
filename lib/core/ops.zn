@@ -91,12 +91,12 @@ pub interface[T] DerefPtr {
   fn deref_ptr(*self) *T;
 }
 
-/// Slice operation (expr[index] -> T)
-pub interface[T] Slice {
-  fn slice(*const self, index: usize) T;
+/// Index operation (`expr[index] -> T`)
+pub interface[T] Index {
+  fn index(*const self, index: usize) T;
 }
 
-/// Slice operation with pointer access (`lvalue[index] = rvalue`)
-pub interface[T] SlicePtr {
-  fn slice_ptr(*self, index: usize) *T;
+/// Index operation with pointer access (`lvalue[index] = rvalue`)
+pub interface[T] IndexPtr {
+  fn index_ptr(*self, index: usize) *T;
 }

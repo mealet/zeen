@@ -105,6 +105,13 @@ pub enum ExpressionKind<'arena> {
     /// Resolved by the preprocessor: the whole expression is replaced by the
     /// body of the single matching branch.
     ConditionalBlock(&'arena ExprConditionalBlock<'arena>),
+
+    /// Range expression: `a..b`, `a..=b`, `a..`, `..b`, `..=b`, `..`.
+    Range {
+        start: Option<&'arena Expression<'arena>>,
+        end: Option<&'arena Expression<'arena>>,
+        inclusive: bool,
+    },
 }
 
 /// A `@name[values] { expr }` guard at expression level with an optional `else`.

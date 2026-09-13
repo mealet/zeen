@@ -154,6 +154,15 @@ fn collect_from_expr(expr: &zeen_hir::expr::HirExpr, map: &mut HashMap<DefId, Rc
             collect_from_expr(index, map);
         }
 
+        HirExprKind::Range { start, end, .. } => {
+            if let Some(start) = start {
+                collect_from_expr(start, map);
+            }
+            if let Some(end) = end {
+                collect_from_expr(end, map);
+            }
+        }
+
         HirExprKind::StructInit { fields, .. } => {
             for field in fields {
                 collect_from_expr(&field.value, map);

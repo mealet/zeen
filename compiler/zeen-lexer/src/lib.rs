@@ -272,7 +272,22 @@ impl<'inp> Tokenizer<'inp> {
             ';' => TokenKind::Semicolon,
             ':' => TokenKind::Colon,
             ',' => TokenKind::Comma,
-            '.' => TokenKind::Dot,
+            '.' => {
+                if self.first() == '.' {
+                    let _ = self.bump();
+                    if self.first() == '.' {
+                        let _ = self.bump();
+                        TokenKind::DotDotDot
+                    } else if self.first() == '=' {
+                        let _ = self.bump();
+                        TokenKind::DotDotEq
+                    } else {
+                        TokenKind::DotDot
+                    }
+                } else {
+                    TokenKind::Dot
+                }
+            }
             '~' => TokenKind::Tilde,
             '?' => TokenKind::Question,
             '/' => TokenKind::Slash,
