@@ -2817,11 +2817,8 @@ impl<'res> TypeChecker<'res> {
         let obj_ty = self.synth_expr(object);
         self.type_names_as_values.remove(&object.id);
 
-        // -----------| Hard coded piece of shit section |-----------
-        // > What is this for?
-        // Answer: for arrays and slices builtin `.len` and `.ptr` fields.
-        // `.ptr` is `[*]T`, `.len` is `usize`; both resolve to synthetic
-        // `DefId`s so MIR lowering can project into the slice storage.
+        // Builtin `.len` and `.ptr` fields for arrays/slices resolve to
+        // synthetic `DefId`s so MIR lowering can project into slice storage.
 
         {
             let mut interner = self.interner.borrow_mut();
