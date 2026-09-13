@@ -3338,13 +3338,10 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Computes the storage type a fat coercion produces. A concrete fat
-    /// value flowing into a `Fn`/`FnOnce` bound keeps its own concrete type;
-    /// a basic fn value gets a fresh concrete fat form - a closure value
-    /// with an inline env and a statically known target when the coerced
-    /// expression is a closure literal or a static `fn`, an inline fn
-    /// pointer otherwise (the pointer is a runtime value, so its target
-    /// cannot be known here).
+    /// Computes the concrete storage type produced by a fat coercion.
+    /// Existing concrete fat values are preserved; plain function values
+    /// receive a concrete fat representation with either a static target
+    /// or a runtime function pointer.
     fn fat_coercion_storage(
         &mut self,
         actual: TypeId,
@@ -4376,11 +4373,10 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Seeds generic bindings by walking a generic-containing type (`pattern`,
-    /// e.g. a call's return type) against the expected type in parallel. Only
-    /// new bindings are inserted: explicit call-site arguments and argument
-    /// inference win over expected-derived ones. A `GenericParam` on the
-    /// expected side carries no information and is skipped.
+    /// Seeds generic bindings by walking a generic-containing type against
+    /// the expected type in parallel. Only new bindings are inserted, so
+    /// explicit call-site and argument-inferred bindings win. A `GenericParam`
+    /// on the expected side carries no information and is skipped.
     fn seed_inference_bindings(
         &mut self,
         pattern: TypeId,
@@ -4800,11 +4796,9 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Picks the implementation to use for `(struct, interface)` at the
-    /// concrete instantiation `generic_args`: a specialization registered for
-    /// the exact instantiation wins; then generic implementations whose
-    /// bounds the arguments satisfy; then a boundless wildcard
-    /// implementation. `None` when nothing applies.
+    /// Selects the applicable `(struct, interface)` implementation.
+    /// Priority: exact specialization, matching bounded generic impl,
+    /// then boundless wildcard. `None` when nothing applies.
     fn applicable_impl(
         &self,
         struct_def: DefId,
