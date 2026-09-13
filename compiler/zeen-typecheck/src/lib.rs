@@ -2972,11 +2972,9 @@ impl<'res> TypeChecker<'res> {
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
 
-        // When the expected type is the same struct (e.g. an annotated
-        // `let g: Gen[u32] = Gen { .v = 7 };`), seed its generic arguments
-        // so field literals coerce to the expected fields instead of
-        // inferring a conflicting instantiation. Explicit generic args on
-        // the init still win over the seeded ones.
+        // When the expected type is the same struct, seed its generic
+        // arguments so field literals use the expected instantiation.
+        // Explicit generic arguments still take precedence.
         if let Some(expected) = expected
             && let Type::Struct {
                 def_id: expected_def,
@@ -3266,12 +3264,9 @@ impl<'res> TypeChecker<'res> {
             }
 
             CoerceResult::ArrayToSlice => {
-                // A string literal (`[N]char`) is the one allowed implicit
-                // array→slice coercion: codegen lowers a `ConstValue::Str`
-                // straight into a slice. Any other array (literal or variable)
-                // must be explicitly referenced with `&` to build a
-                // `{ ptr, len }` slice - the implicit path has no MIR/codegen
-                // support and crashes verification.
+                // String literals are the only implicit array -> slice coercion:
+                // codegen lowers `ConstValue::Str` straight into a slice.
+                // Every other array requires an explicit `&`.
                 if matches!(&expr.kind, HirExprKind::Literal(Literal::String(_))) {
                     self.result.record_expr_type(id, expected);
                     expected
@@ -4208,9 +4203,9 @@ impl<'res> TypeChecker<'res> {
 
         // The expected type (annotated `let`, return position, argument
         // position) usually pins the struct's generics for `Self`-returning
-        // methods (`let a: Option[i32] = Option.None();`); the return type is
-        // matched structurally against it. It is the lowest-priority source:
-        // explicit call-site arguments and argument inference stay intact.
+        // methods; the return type is matched structurally against it. It is
+        // the lowest-priority source: explicit call-site arguments and
+        // argument inference stay intact.
         if let Some(expected) = expected {
             self.seed_inference_bindings(sig_ret, expected, &mut bindings);
         }
