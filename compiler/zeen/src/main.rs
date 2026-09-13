@@ -24,11 +24,9 @@ fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
-/// Resolves the std library root directory: the `--std` flag, then the
-/// `ZEEN_STD` environment variable, then the default `~/.zeen/std`
-/// installation. An explicitly configured path must exist; when nothing is
-/// configured the compiler keeps running and reports on `use std.*` usage
-/// instead.
+/// Resolves the std root from `--std`, `ZEEN_STD`, or the default
+/// `~/.zeen/std`. Explicit paths must exist; without a configured root,
+/// std imports are diagnosed later.
 fn resolve_std_root(explicit: Option<&Path>) -> Result<Option<std::path::PathBuf>, String> {
     const REPO: &str = "https://github.com/mealet/zeen";
 
