@@ -1070,10 +1070,8 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     /// Builds the `fn(*void) void` teardown of a capturing closure's env
-    /// struct: casts the arg to `*const EnvTy` and drops each captured value
-    /// that needs it (reverse order). The teardown functions of explicit-drop
-    /// structs and fat values live in `program.drop_functions`, populated
-    /// after lowering, so the drops are deferred to codegen by place.
+    /// struct, dropping each captured value that needs it in reverse order.
+    /// Explicit-drop and fat-value teardowns are deferred to codegen.
     fn env_drop_function(&mut self, env_ty: TypeId) -> MirFunctionId {
         let Type::Struct {
             def_id: env_def, ..
@@ -1138,11 +1136,10 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// The places of `env_ty`'s captured values that are dropped when the env
+    /// The captured value places of `env_ty` that are dropped when the env
     /// dies, mirroring codegen's `emit_drop_ptr` recursion: explicit-drop
-    /// structs and fat values are leaves, structs without a drop but with
-    /// teardown-bearing fields recurse, arrays of teardown-bearing elements
-    /// drop as a whole (codegen expands them element-wise).
+    /// structs and fat values are leaves, structs without a drop recurse
+    /// through fields, arrays of drop-bearing elements drop as a whole.
     fn env_drop_leaf_places(&self, env_ty: TypeId, base: Place) -> Vec<(Place, TypeId)> {
         let mut leaves = Vec::new();
         self.env_drop_leaves_into(env_ty, base, &mut leaves);
