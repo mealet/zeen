@@ -1,6 +1,6 @@
 use crate::{
     Parser,
-    declarations::{DeclParser, IsExtern, IsPub},
+    declarations::{AllowBare, DeclParser, IsExtern, IsPub},
     error::ParserError,
     expressions::{self, ExprParser},
     type_parser::TypeParser,
@@ -77,7 +77,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
 
         let mut decl_parser = DeclParser::new(self.p);
-        let decl = decl_parser.parse_fn(start_span, is_pub, IsExtern(false))?;
+        let decl = decl_parser.parse_fn(start_span, is_pub, IsExtern(false), AllowBare(false))?;
 
         Some(self.p.arena.alloc(Statement {
             kind: StatementKind::FnDecl(decl),
