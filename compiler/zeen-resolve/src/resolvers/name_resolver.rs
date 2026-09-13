@@ -122,12 +122,9 @@ impl<'ctx> NameResolver {
         id
     }
 
-    /// Handles a resolved def reference against active capture boundaries.
-    /// Captures cascade: an inner closure referencing an outer frame's def
-    /// records it in every enclosing closure whose candidates contain the def
-    /// (otherwise the outer closure would miss the capture). A nested `fn`
-    /// boundary forbids the reference entirely. Returns `false` when the
-    /// reference must resolve to an error.
+    /// Captures cascade through enclosing closure boundaries so each
+    /// environment records a definition referenced by nested closures.
+    /// A nested `fn` boundary forbids capture. Returns `false` on error.
     fn process_capture(&mut self, def_id: DefId, span: SourceSpan) -> bool {
         // Function defs are called, not captured: closures can recurse and
         // call sibling/nested functions freely.
