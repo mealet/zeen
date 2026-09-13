@@ -305,10 +305,9 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         )
     }
 
-    /// Continues parsing binary operators after an already-parsed left-hand
-    /// side, as if the whole expression had been parsed at once. Lets callers
-    /// parse the LHS at a higher precedence first (e.g. to sniff an upcoming
-    /// `=`) and then keep going with the rest of the binary expression.
+    /// Continues parsing binary operators from an already-parsed LHS.
+    /// Callers can parse the LHS at higher precedence first, e.g. to sniff an
+    /// upcoming `=`.
     pub fn parse_binary_rest(
         &mut self,
         mut lhs: &'ctx Expression<'ctx>,
@@ -2152,8 +2151,6 @@ mod tests {
 
     #[test]
     fn basic_macro_call() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "@foo(123, 321)";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2163,8 +2160,6 @@ mod tests {
 
     #[test]
     fn type_required_macro_call() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "@as(*const i32, 123) @sizeof([]void) @alignof(some_struct)";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2178,8 +2173,6 @@ mod tests {
 
     #[test]
     fn field_access() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "field.with_generic#[i32].lets_init_struct { .a = 123 } .and_call_fn()";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2191,8 +2184,6 @@ mod tests {
 
     #[test]
     fn if_expr() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "if (1 == 1) 123";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2204,8 +2195,6 @@ mod tests {
 
     #[test]
     fn if_else_expr() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "if (1 == 1) 123 else 321";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2218,8 +2207,6 @@ mod tests {
     #[test]
     #[should_panic]
     fn if_without_parentheses() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "if 1 == 1 123";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2232,8 +2219,6 @@ mod tests {
     #[test]
     #[should_panic]
     fn if_without_then() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "if (1 == 1) ";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2246,8 +2231,6 @@ mod tests {
     #[test]
     #[should_panic]
     fn if_else_without_expr() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "if (1 == 1) 123 else";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2259,8 +2242,6 @@ mod tests {
 
     #[test]
     fn array_init() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "[1, 1.0, \"hello\", foo(), field.sub_field.some_struct#[i32] {.a = 123, .b = 321} .call()]";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2272,8 +2253,6 @@ mod tests {
 
     #[test]
     fn array_repeat_init() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "[0; 1024]";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
@@ -2292,8 +2271,6 @@ mod tests {
 
     #[test]
     fn block_expr() {
-        // In this case we're just assuming that it parses
-
         const SRC: &str = "{ let a = 123; let b = 321; }";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
