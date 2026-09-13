@@ -2103,11 +2103,9 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Registers slice layouts for every `Slice[T]` reachable from a struct
-    /// field. Codegen needs a `{ ptr, len }` body for any slice type that
-    /// shows up as a struct field - `register_slice_layout` alone only sees
-    /// slice-typed locals, so a struct holding a slice (even one pointing at
-    /// static string data) used to crash codegen.
+    /// Registers layouts for slices reachable through struct fields.
+    /// Codegen otherwise misses slice fields and cannot emit their
+    /// `{ ptr, len }` representation.
     fn register_reachable_slice_layouts(&mut self) {
         let mut visited: HashSet<TypeId> = HashSet::new();
         let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
@@ -3770,15 +3768,11 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Inserts a `index < len` guard in front of an array/slice indexing
-    /// access when compiling in Debug mode. An out-of-bounds index diverges
-    /// into a `@panic` call that formats the bounds message. Raw pointers
-    /// carry no length and are never checked. Returns the block the actual
-    /// element access must be lowered into.
+    /// Inserts a Debug-mode `index < len` guard before array/slice access.
+    /// Out-of-bounds access panics; raw pointers are unchecked.
     ///
-    /// `index_local` must be a plain local holding the (copyable) index value;
-    /// it is only read here, never moved, so the element projection can use it
-    /// again.
+    /// `index_local` must be a Copy local because the value is reused by
+    /// the subsequent element projection.
     fn lower_bounds_check(
         &mut self,
         fb: &mut FnBuilder,
@@ -4929,11 +4923,8 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Lowers a `debug`/`display` call on a builtin receiver (`self.x.debug(out)`
-    /// where `x: i32`) into a `Format` macro render of the value followed by a
-    /// `write_str` append into the writer, so builtins written inside struct
-    /// `Display`/`Debug` implementations land in the writer (stdout or a heap
-    /// `String`) instead of leaking straight to stdout.
+    /// Lowers builtin `debug`/`display` calls into `Format` + `write_str`,
+    /// so output lands in the provided writer rather than on stdout.
     #[allow(clippy::too_many_arguments)]
     fn try_lower_builtin_display(
         &mut self,
@@ -5496,11 +5487,9 @@ impl<'ctx> MirLowering<'ctx> {
                     ty
                 };
 
-                // `let _ = expr;` discards the value: evaluate the expression
-                // for its side effects but don't allocate a storage local.
-                // A non-constant operand rooted at a real user variable is
-                // still consumed (reads/moves keep mattering), so it gets a
-                // `Discard` statement; temporaries and literals need none.
+                // `let _ = expr` evaluates `expr` for side effects without
+                // creating storage; user-variable operands are still consumed
+                // via `Discard`.
                 if self.rodeo.borrow().resolve(name) == "_" {
                     return match value {
                         Some(v) => {
