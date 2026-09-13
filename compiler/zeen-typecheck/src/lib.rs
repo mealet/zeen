@@ -1892,13 +1892,21 @@ impl<'res> TypeChecker<'res> {
                     self.result.record_expr_type(block_expr.id, ty);
                     ty
                 } else {
-                    self.check_stmt(stmt);
-                    self.result.interner.void()
+                    let ty = match expected {
+                        Some(exp) => self.check_expr(block_expr, exp, false),
+                        None => self.synth_expr(block_expr),
+                    };
+                    self.result.record_expr_type(block_expr.id, ty);
+                    ty
                 }
             }
             _ => {
                 self.check_stmt(stmt);
-                self.result.interner.void()
+                if self.stmt_diverges(stmt) {
+                    self.result.interner.never()
+                } else {
+                    self.result.interner.void()
+                }
             }
         }
     }
@@ -1909,6 +1917,74 @@ impl<'res> TypeChecker<'res> {
         let ty = self.synth_expr_inner(expr);
         self.result.record_expr_type(expr.id, ty);
         ty
+    }
+
+    /// The value expression a statement produces as a block tail: a bare
+    /// expression statement, or a block's trailing expression.
+    fn stmt_trailing_expr<'a>(&self, stmt: &'a HirStmt) -> Option<&'a HirExpr> {
+        match &stmt.kind {
+            HirStmtKind::Expr(e) => match &e.kind {
+                HirExprKind::Block { trailing, .. } => trailing.as_deref(),
+                _ => Some(e),
+            },
+            _ => None,
+        }
+    }
+
+    /// A string-literal branch in an if-expression is a fixed `[N]char`, so
+    /// branches of different lengths cannot share one array type. Merge them
+    /// into `[]char`: the string globals keep their own lengths and printing
+    /// a char slice bounds by its runtime length.
+    fn unify_string_literal_branches(
+        &mut self,
+        then_stmt: &HirStmt,
+        else_stmt: &HirStmt,
+        then_ty: TypeId,
+        else_ty: TypeId,
+    ) -> Option<TypeId> {
+        let (
+            Type::Array {
+                element: a_elem,
+                len: a_len,
+            },
+            Type::Array {
+                element: b_elem,
+                len: b_len,
+            },
+        ) = (
+            self.result.interner.get(then_ty).clone(),
+            self.result.interner.get(else_ty).clone(),
+        )
+        else {
+            return None;
+        };
+
+        if a_len == b_len {
+            return None;
+        }
+        let element_is_char = |e: TypeId| {
+            matches!(
+                self.result.interner.get(e),
+                Type::Builtin(BuiltinType::char)
+            )
+        };
+        if !(element_is_char(a_elem) && element_is_char(b_elem)) {
+            return None;
+        }
+        let both_literals = || {
+            [then_stmt, else_stmt].into_iter().all(|s| {
+                self.stmt_trailing_expr(s)
+                    .is_some_and(|e| matches!(&e.kind, HirExprKind::Literal(Literal::String(_))))
+            })
+        };
+        if !both_literals() {
+            return None;
+        }
+
+        Some(self.result.interner.intern(Type::Slice {
+            element: a_elem,
+            is_const: false,
+        }))
     }
 
     fn synth_expr_inner(&mut self, expr: &HirExpr) -> TypeId {
@@ -2029,7 +2105,12 @@ impl<'res> TypeChecker<'res> {
                 match else_block {
                     Some(else_b) => {
                         let else_ty = self.check_stmt_as_block_value(else_b, None);
-                        self.unify_branches(then_ty, else_ty, expr.source.clone())
+                        match self
+                            .unify_string_literal_branches(then_block, else_b, then_ty, else_ty)
+                        {
+                            Some(unified) => unified,
+                            None => self.unify_branches(then_ty, else_ty, expr.source.clone()),
+                        }
                     }
                     None => self.result.interner.void(),
                 }
