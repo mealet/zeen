@@ -18,11 +18,9 @@ pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
 pub const ARRAY_LEN_FIELD: DefId = DefId(u32::MAX - 4);
 
 /// Synthetic `DefId`s for the canonical fat closure-value struct
-/// `{ fn, env, drop }` (type `Type::FatFn`). The struct def and its three
-/// fields are shared by every fat value: `fn` is the function pointer, `env`
-/// is the heap-allocated environment (null when the closure has no captures),
-/// and `drop` is a `fn(*void) void` that tears down that environment's captured
-/// values (a shared no-op when nothing needs tearing down).
+/// `{ fn, env, drop }` (type `Type::FatFn`), shared by every fat value:
+/// `fn` holds the closure body, `env` the heap-allocated captures (null when
+/// there are none), `drop` tears them down.
 pub const CLOSURE_FAT_DEF: DefId = DefId(u32::MAX - 5);
 pub const CLOSURE_FAT_FN_FIELD: DefId = DefId(u32::MAX - 6);
 pub const CLOSURE_FAT_ENV_FIELD: DefId = DefId(u32::MAX - 7);
@@ -77,10 +75,8 @@ pub enum Type {
     },
 
     /// Fat closure value backed by the canonical `{ ptr, env }` struct.
-    /// `once` marks `FnOnce` - callable at most once because it owns a
-    /// non-Copy capture. Both `Fn` and `FnOnce` are move-only.
-    /// `erased` marks a user-written annotation (`Fn(T) R` / `FnOnce(T) R`)
-    /// that needs finalization to resolve to a concrete closure type.
+    /// Both `Fn` and `FnOnce` are move-only; `once` marks `FnOnce`.
+    /// `erased` marks a user-written annotation that needs finalization.
     FatFn {
         params: Vec<TypeId>,
         ret: TypeId,
@@ -306,14 +302,11 @@ pub struct StructFieldInfo {
     pub is_pub: bool,
 }
 
-/// Enum for `self` reciever representation:
-/// - `fn method(self)` - Value (takes ownership)
-/// - `fn method(const self)` - ValueConst (takes ownership, const binding)
-/// - `fn method(*self)` - RefMut (no ownership transfer, mutable pointer)
-/// - `fn method(*const self)` - RefMut (no ownership transfer, const pointer)
+/// Representation of a method's `self` receiver:
+/// - `self` / `const self` - owned value
+/// - `*self` / `*const self` - pointer receiver
 ///
-/// **Please note that** pointers of `self` are constant variables (not data, variables), that means
-/// you cannot reassign self pointer.
+/// Pointer receivers themselves cannot be reassigned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelfMode {
     Value,
