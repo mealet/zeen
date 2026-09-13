@@ -92,11 +92,9 @@ impl TypeCheckResult {
 
     /// Whether a concrete type is `Copy`, decided per instantiation so that
     /// bounded implementations like `implement[T: Copy] Copy : Option[T]`
-    /// only make `Option[T]` copyable when `T` itself is copyable.
-    ///
-    /// The generic-bound cases mirror `TypeChecker::applicable_impl` but use
-    /// this Copy-specific predicate for the bounds, since a builtin is always
-    /// Copy even though it does not declare a `Copy` interface impl.
+    /// only make `Option[T]` copyable when `T` itself is. Mirrors
+    /// `TypeChecker::applicable_impl`, but builtins are always Copy even
+    /// without a declared `Copy` impl.
     pub fn is_copy(&self, ty: TypeId) -> bool {
         match self.interner.get(ty).clone() {
             Type::Struct {

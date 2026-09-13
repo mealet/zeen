@@ -30,8 +30,7 @@ pub use result::FlowResult;
 
 /// Runs the whole dataflow pass over a lowered MIR program.
 ///
-/// This is the entry point for wiring the pass into the compiler pipeline
-/// right after MIR lowering.
+/// Entry point wired in right after MIR lowering.
 pub fn run_dataflow(
     program: &mut MirProgram,
     typecheck: &mut TypeCheckResult,
