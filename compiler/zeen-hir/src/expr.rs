@@ -92,6 +92,13 @@ pub enum HirExprKind {
         def: Rc<HirFn>,
     },
 
+    /// Range expression: `a..b`, `a..=b`, `a..`, `..b`, `..=b`, `..`.
+    Range {
+        start: Option<Rc<HirExpr>>,
+        end: Option<Rc<HirExpr>>,
+        inclusive: bool,
+    },
+
     Error,
 }
 

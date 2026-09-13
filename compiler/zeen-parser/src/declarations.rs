@@ -14,6 +14,7 @@ pub struct DeclParser<'tok, 'ctx, 'pr> {
 
 pub(crate) struct IsPub(pub bool);
 pub(crate) struct IsExtern(pub bool);
+pub(crate) struct AllowBare(pub bool);
 
 /// ==@ Declarations Parser @==
 impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
@@ -46,7 +47,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
                 match self.p.current().kind {
                     TokenKind::Keyword(CompilerKeyword::Fn) => {
-                        self.parse_fn(start_span, is_pub, IsExtern(true))
+                        self.parse_fn(start_span, is_pub, IsExtern(true), AllowBare(false))
                     }
                     TokenKind::Keyword(CompilerKeyword::Link) => self.parse_link(start_span),
                     TokenKind::Keyword(CompilerKeyword::Include) => self.parse_include(start_span),
@@ -68,7 +69,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             }
 
             TokenKind::Keyword(CompilerKeyword::Fn) => {
-                self.parse_fn(start_span, is_pub, IsExtern(false))
+                self.parse_fn(start_span, is_pub, IsExtern(false), AllowBare(false))
             }
             TokenKind::Keyword(CompilerKeyword::Let) => {
                 self.parse_global_var(start_span, is_pub, false)
@@ -203,6 +204,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         _start_span: miette::SourceSpan,
         is_pub: IsPub,
         is_extern: IsExtern,
+        allow_bare: AllowBare,
     ) -> Option<&'ctx Declaration<'ctx>> {
         let fn_kw = self
             .p
@@ -282,6 +284,18 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         };
 
         let span = fn_kw.merge_span(latest_span);
+
+        if body.is_none() && !is_extern.0 && !allow_bare.0 {
+            self.p.report(ParserError::SyntaxError {
+                label: "function declaration without a body".into(),
+                help: Some("only `extern fn` may be declared without a body".into()),
+                src: self.p.named_src(),
+                span,
+            });
+
+            // The declaration parses fine, so recovery must not skip the next one.
+            self.p.panic_mode = false;
+        }
 
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::FnDecl {
@@ -388,7 +402,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                     mode = Mode::Methods;
                 }
 
-                let decl = self.parse_fn(start_span, is_pub, IsExtern(false))?;
+                let decl = self.parse_fn(start_span, is_pub, IsExtern(false), AllowBare(false))?;
                 methods_buffer.push(decl);
 
                 let _ = self.p.eat(TokenKind::Comma);
@@ -661,7 +675,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
             let is_extern = IsExtern(false);
 
-            let decl = self.parse_fn(span_start, is_pub, is_extern)?;
+            let decl = self.parse_fn(span_start, is_pub, is_extern, AllowBare(true))?;
 
             debug_assert!(matches!(decl.kind, DeclarationKind::FnDecl { .. }));
 
@@ -750,7 +764,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
             let is_extern = IsExtern(false);
 
-            let decl = self.parse_fn(span_start, is_pub, is_extern)?;
+            let decl = self.parse_fn(span_start, is_pub, is_extern, AllowBare(false))?;
 
             debug_assert!(matches!(decl.kind, DeclarationKind::FnDecl { .. }));
 
@@ -892,7 +906,7 @@ mod tests {
 
     #[test]
     fn fn_decl_basic() {
-        const SRC: &str = "fn foo();";
+        const SRC: &str = "fn foo() {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -904,7 +918,7 @@ mod tests {
                     generics: None,
                     params: [],
                     return_type: None,
-                    body: None,
+                    body: Some(_),
                     is_pub: false,
                     is_extern: false,
                 },
@@ -914,8 +928,18 @@ mod tests {
     }
 
     #[test]
+    fn fn_decl_without_body_rejected() {
+        const SRC: &str = "fn foo();";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        let errors = parser.parse_program().unwrap_err();
+        assert_matches!(errors[0], ParserError::SyntaxError { .. });
+    }
+
+    #[test]
     fn fn_decl_public() {
-        const SRC: &str = "pub fn foo();";
+        const SRC: &str = "pub fn foo() {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -927,7 +951,7 @@ mod tests {
                     generics: None,
                     params: [],
                     return_type: None,
-                    body: None,
+                    body: Some(_),
                     is_pub: true,
                     is_extern: false,
                 },
@@ -984,7 +1008,7 @@ mod tests {
 
     #[test]
     fn fn_decl_with_return_type() {
-        const SRC: &str = "fn foo() i32;";
+        const SRC: &str = "fn foo() i32 {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -999,7 +1023,7 @@ mod tests {
                         kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
                         ..
                     }),
-                    body: None,
+                    body: Some(_),
                     is_pub: false,
                     is_extern: false,
                 },
@@ -1010,7 +1034,7 @@ mod tests {
 
     #[test]
     fn fn_decl_with_unnamed_params() {
-        const SRC: &str = "fn foo(i32, u32) i32;";
+        const SRC: &str = "fn foo(i32, u32) i32 {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -1042,7 +1066,7 @@ mod tests {
                         kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
                         ..
                     }),
-                    body: None,
+                    body: Some(_),
                     is_pub: false,
                     is_extern: false,
                 },
@@ -1053,7 +1077,7 @@ mod tests {
 
     #[test]
     fn fn_decl_with_named_params() {
-        const SRC: &str = "fn foo(a: i32, b: u32) i32;";
+        const SRC: &str = "fn foo(a: i32, b: u32) i32 {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -1085,7 +1109,7 @@ mod tests {
                         kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
                         ..
                     }),
-                    body: None,
+                    body: Some(_),
                     is_pub: false,
                     is_extern: false,
                 },
@@ -1096,7 +1120,7 @@ mod tests {
 
     #[test]
     fn fn_decl_with_generics() {
-        const SRC: &str = "fn foo[T: Add + Display, R: Debug + Copy](a: i32, b: u32) i32;";
+        const SRC: &str = "fn foo[T: Add + Display, R: Debug + Copy](a: i32, b: u32) i32 {}";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -1137,7 +1161,7 @@ mod tests {
                         kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
                         ..
                     }),
-                    body: None,
+                    body: Some(_),
                     is_pub: false,
                     is_extern: false,
                 },
@@ -1370,23 +1394,6 @@ mod tests {
             }])
         );
     }
-
-    // WARNING: Deprecated test
-
-    // #[test]
-    // fn import_decl_with_alias() {
-    //     const SRC: &str = "import std.io.Stdout : default_output;";
-    //
-    //     make_parser!(SRC, tokens, bump, rodeo, parser);
-    //
-    //     assert_matches!(
-    //         parser.parse_program(),
-    //         Ok([Declaration {
-    //             kind: DeclarationKind::Use { module: _ },
-    //             ..
-    //         }])
-    //     );
-    // }
 
     #[test]
     fn link_decl() {
@@ -1781,7 +1788,7 @@ mod tests {
     #[test]
     fn implement_methods_support_pub() {
         const SRC: &str = "implement Display : Foo {
-            pub fn display(*const self) []const char;
+            pub fn display(*const self) void {}
         }";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
@@ -1904,7 +1911,7 @@ mod tests {
 
     #[test]
     fn conditional_block_parses() {
-        const SRC: &str = "@os[linux | macos] { fn a(); }";
+        const SRC: &str = "@os[linux | macos] { fn a() {} }";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
@@ -1928,7 +1935,7 @@ mod tests {
 
     #[test]
     fn conditional_block_with_else() {
-        const SRC: &str = "@os[windows] { fn a(); } else { fn b(); }";
+        const SRC: &str = "@os[windows] { fn a() {} } else { fn b() {} }";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 

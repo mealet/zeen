@@ -353,6 +353,15 @@ impl<'ctx> IncludeResolver<'ctx> {
                     self.expr_usage(else_expr, flags);
                 }
             }
+
+            ExpressionKind::Range { start, end, .. } => {
+                if let Some(start) = start {
+                    self.expr_usage(start, flags);
+                }
+                if let Some(end) = end {
+                    self.expr_usage(end, flags);
+                }
+            }
         }
     }
 
@@ -766,9 +775,8 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
     }
 
-    /// A bare `extern fn` (no body) is a declaration only: repeated
-    /// declarations of the same symbol are harmless, like redeclaring a
-    /// libc function in C when std modules are injected.
+    /// A body-less `extern fn` is declaration-only; repeated declarations
+    /// of the same symbol are allowed.
     fn is_bare_extern_fn(decl: &Declaration<'ctx>) -> bool {
         matches!(
             decl.kind,

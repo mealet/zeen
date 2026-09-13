@@ -1,0 +1,47 @@
+/// Integer range produced by the `..`/`..=` range operators. An endpoint is
+/// `None` when its bound is omitted, so the value carries the shape of the
+/// literal it was spelled with (`0..5`, `0..`, `..5`, `..`). Inclusive
+/// ranges store the end bound as `end + 1`. `Range` is the argument of the
+/// `Sliceable::slice` interface.
+pub struct Range {
+  /// Inclusive lower bound, `None` for `..end` and `..`.
+  pub start: Option[usize],
+
+  /// Exclusive upper bound, `None` for `start..` and `..`.
+  pub end: Option[usize],
+
+  /// Returns the lower bound or `None` when the range starts at the
+  /// collection's beginning.
+  pub fn first(*const self) Option[usize] {
+    self.start
+  }
+
+  /// Returns the exclusive upper bound or `None` when the range runs to the
+  /// collection's end.
+  pub fn last(*const self) Option[usize] {
+    self.end
+  }
+}
+
+implement Copy : Range {}
+
+implement Iterator : Range {
+  pub fn next(*self) Option[usize] {
+    let start = self.start.unwrap_or(0);
+    let done = self.end.is_some() && start >= self.end.unwrap_or(0);
+
+    if (!done) {
+      self.start = Option.Some(start + 1);
+      return Option.Some(start);
+    };
+
+    Option.None()
+  }
+}
+
+/// Range slicing (`arr[start..end]`). Fixed arrays, slices and multi
+/// pointers are handled by the compiler; user structs implement this
+/// interface to participate in range indexing.
+pub interface[T] Sliceable {
+  pub fn slice(*self, range: Range) []T;
+}

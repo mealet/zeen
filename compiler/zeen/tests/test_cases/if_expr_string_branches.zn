@@ -1,0 +1,10 @@
+fn main() {
+  let t = true;
+  let f = false;
+  @println("{}", if (t) "yes" else "no");
+  @println("{}", if (f) "yes" else "no");
+  @println("{}", if (t) { "block" } else { "branch" });
+  @println("{}", if (f) { "block" } else { "branch" });
+  let s = if (t) "longer" else "hi";
+  @println("{}", s);
+}

@@ -1407,11 +1407,9 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Resolves the erased `Fn`/`FnOnce` annotations down to the concrete
-    /// closure types values actually carry. Runs after every body has been
-    /// checked, so functions may be referenced before their defining order:
-    /// return annotations are derived from the recorded return expressions,
-    /// and variables initialized from those calls inherit the resolved type.
+    /// Resolves erased `Fn`/`FnOnce` annotations to concrete closure types
+    /// after all bodies are checked, allowing forward references to functions
+    /// and inferring types from recorded return expressions.
     fn finalize_fat_types(&mut self) {
         let mut resolved: HashMap<DefId, TypeId> = HashMap::new();
         let candidates: Vec<(DefId, Vec<(HirId, Source)>)> = self
@@ -1661,7 +1659,7 @@ impl<'res> TypeChecker<'res> {
                 let final_ty = match (declared_ty, value_ty) {
                     (Some(_), Some(v)) if declared_is_fat_bound => v,
                     (Some(t), _) => t,
-                    (None, Some(t)) => self.default_literal(t),
+                    (None, Some(t)) => self.default_literal_with_value(value.as_ref().unwrap(), t),
                     (None, None) => self.result.interner.error(),
                 };
 
@@ -1829,8 +1827,7 @@ impl<'res> TypeChecker<'res> {
     /// Types a closure expression: declares and checks the synthetic closure
     /// function like a regular one, then computes the closure value type.
     /// Zero-capture closures are plain `fn` pointers; capturing ones become
-    /// `Fn`/`FnOnce` fat pointers backed by a synthetic env struct (the env
-    /// type is unreachable from user syntax).
+    /// `Fn`/`FnOnce` fat pointers backed by a synthetic env struct.
     fn check_closure(&mut self, def_id: DefId, def: &Rc<HirFn>, source: &Source) -> TypeId {
         self.declare_fn_signature(def_id, def);
         self.check_fn_body(def_id, def, None, None, None);
@@ -1895,13 +1892,21 @@ impl<'res> TypeChecker<'res> {
                     self.result.record_expr_type(block_expr.id, ty);
                     ty
                 } else {
-                    self.check_stmt(stmt);
-                    self.result.interner.void()
+                    let ty = match expected {
+                        Some(exp) => self.check_expr(block_expr, exp, false),
+                        None => self.synth_expr(block_expr),
+                    };
+                    self.result.record_expr_type(block_expr.id, ty);
+                    ty
                 }
             }
             _ => {
                 self.check_stmt(stmt);
-                self.result.interner.void()
+                if self.stmt_diverges(stmt) {
+                    self.result.interner.never()
+                } else {
+                    self.result.interner.void()
+                }
             }
         }
     }
@@ -1912,6 +1917,74 @@ impl<'res> TypeChecker<'res> {
         let ty = self.synth_expr_inner(expr);
         self.result.record_expr_type(expr.id, ty);
         ty
+    }
+
+    /// The value expression a statement produces as a block tail: a bare
+    /// expression statement, or a block's trailing expression.
+    fn stmt_trailing_expr<'a>(&self, stmt: &'a HirStmt) -> Option<&'a HirExpr> {
+        match &stmt.kind {
+            HirStmtKind::Expr(e) => match &e.kind {
+                HirExprKind::Block { trailing, .. } => trailing.as_deref(),
+                _ => Some(e),
+            },
+            _ => None,
+        }
+    }
+
+    /// A string-literal branch in an if-expression is a fixed `[N]char`, so
+    /// branches of different lengths cannot share one array type. Merge them
+    /// into `[]char`: the string globals keep their own lengths and printing
+    /// a char slice bounds by its runtime length.
+    fn unify_string_literal_branches(
+        &mut self,
+        then_stmt: &HirStmt,
+        else_stmt: &HirStmt,
+        then_ty: TypeId,
+        else_ty: TypeId,
+    ) -> Option<TypeId> {
+        let (
+            Type::Array {
+                element: a_elem,
+                len: a_len,
+            },
+            Type::Array {
+                element: b_elem,
+                len: b_len,
+            },
+        ) = (
+            self.result.interner.get(then_ty).clone(),
+            self.result.interner.get(else_ty).clone(),
+        )
+        else {
+            return None;
+        };
+
+        if a_len == b_len {
+            return None;
+        }
+        let element_is_char = |e: TypeId| {
+            matches!(
+                self.result.interner.get(e),
+                Type::Builtin(BuiltinType::char)
+            )
+        };
+        if !(element_is_char(a_elem) && element_is_char(b_elem)) {
+            return None;
+        }
+        let both_literals = || {
+            [then_stmt, else_stmt].into_iter().all(|s| {
+                self.stmt_trailing_expr(s)
+                    .is_some_and(|e| matches!(&e.kind, HirExprKind::Literal(Literal::String(_))))
+            })
+        };
+        if !both_literals() {
+            return None;
+        }
+
+        Some(self.result.interner.intern(Type::Slice {
+            element: a_elem,
+            is_const: false,
+        }))
     }
 
     fn synth_expr_inner(&mut self, expr: &HirExpr) -> TypeId {
@@ -2032,7 +2105,12 @@ impl<'res> TypeChecker<'res> {
                 match else_block {
                     Some(else_b) => {
                         let else_ty = self.check_stmt_as_block_value(else_b, None);
-                        self.unify_branches(then_ty, else_ty, expr.source.clone())
+                        match self
+                            .unify_string_literal_branches(then_block, else_b, then_ty, else_ty)
+                        {
+                            Some(unified) => unified,
+                            None => self.unify_branches(then_ty, else_ty, expr.source.clone()),
+                        }
                     }
                     None => self.result.interner.void(),
                 }
@@ -2049,22 +2127,76 @@ impl<'res> TypeChecker<'res> {
             HirExprKind::SliceAccess { object, index } => {
                 let obj_ty = self.synth_expr(object);
                 let usize_ty = self.result.interner.builtin(BuiltinType::usize);
-                let index_ty = self.check_expr(index, usize_ty, false);
+
+                // A `Range` index (`arr[a..b]`) is a slice, not a single
+                // element access. The range literal checks its own bounds;
+                // any other index expression must unify with `usize`.
+                let (range_index, usize_index_ty) = match &index.kind {
+                    HirExprKind::Range { inclusive, .. } => {
+                        // Records the range expr type; its bounds are checked
+                        // inside the Range arm itself.
+                        self.synth_expr(index);
+                        (Some(*inclusive), usize_ty)
+                    }
+                    _ => {
+                        let ty = self.check_expr(index, usize_ty, false);
+                        (None, ty)
+                    }
+                };
 
                 match self.result.interner.get(obj_ty).clone() {
-                    Type::Array { element, .. } => element,
-                    Type::Slice { element, .. } => element,
-                    Type::ManyPointer { inner, .. } => inner,
+                    Type::Array { element, .. } => match range_index {
+                        Some(_) => self.result.interner.intern(Type::Slice {
+                            element,
+                            is_const: false,
+                        }),
+                        None => element,
+                    },
+                    Type::Slice { element, is_const } => match range_index {
+                        Some(_) => self
+                            .result
+                            .interner
+                            .intern(Type::Slice { element, is_const }),
+                        None => element,
+                    },
+                    Type::ManyPointer { inner, is_const } => match range_index {
+                        Some(_) => {
+                            // An open end (`ptr[..]` / `ptr[n..]`) needs a
+                            // length, which an unsized pointer does not have;
+                            // the end bound must be explicit.
+                            if let HirExprKind::Range { end: None, .. } = &index.kind {
+                                self.report(TypeError::UnsizedPointerSlice {
+                                    child_type: self.display_type(obj_ty).into(),
+                                    src: index.source.src(),
+                                    span: index.source.span,
+                                });
+                                return self.result.interner.error();
+                            }
+                            self.result.interner.intern(Type::Slice {
+                                element: inner,
+                                is_const,
+                            })
+                        }
+                        None => inner,
+                    },
                     Type::Struct {
                         def_id,
                         generic_args,
-                    } => self.check_slice_access_on_struct(
-                        def_id,
-                        &generic_args,
-                        index_ty,
-                        expr.id,
-                        &expr.source,
-                    ),
+                    } => match range_index {
+                        Some(_) => self.check_range_slice_on_struct(
+                            def_id,
+                            &generic_args,
+                            expr.id,
+                            &expr.source,
+                        ),
+                        None => self.check_slice_access_on_struct(
+                            def_id,
+                            &generic_args,
+                            usize_index_ty,
+                            expr.id,
+                            &expr.source,
+                        ),
+                    },
                     Type::Error => self.result.interner.error(),
                     _ => {
                         self.report(TypeError::NotIndexable {
@@ -2087,7 +2219,7 @@ impl<'res> TypeChecker<'res> {
                 }
 
                 let first_ty = self.synth_expr(&elements[0]);
-                let first_ty = self.default_literal(first_ty);
+                let first_ty = self.default_literal_with_value(&elements[0], first_ty);
 
                 for el in &elements[1..] {
                     self.check_expr(el, first_ty, false);
@@ -2115,7 +2247,7 @@ impl<'res> TypeChecker<'res> {
                 };
 
                 let elem_ty = self.synth_expr(element);
-                let elem_ty = self.default_literal(elem_ty);
+                let elem_ty = self.default_literal_with_value(element, elem_ty);
 
                 if !self.type_is_copy(elem_ty) {
                     self.report(TypeError::RepeatInitNotCopy {
@@ -2128,6 +2260,38 @@ impl<'res> TypeChecker<'res> {
                 self.result.interner.intern(Type::Array {
                     element: elem_ty,
                     len: Some(len_val),
+                })
+            }
+
+            HirExprKind::Range {
+                start,
+                end,
+                inclusive: _,
+            } => {
+                let usize_ty = self.result.interner.builtin(BuiltinType::usize);
+
+                if let Some(start) = start {
+                    self.check_expr(start, usize_ty, false);
+                }
+                if let Some(end) = end {
+                    self.check_expr(end, usize_ty, false);
+                }
+
+                let range_def = match self.find_struct_def("Range") {
+                    Some(def) => def,
+                    None => {
+                        self.report(TypeError::DanglingDefId {
+                            id: DefId(u32::MAX).0,
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+                        return self.result.interner.error();
+                    }
+                };
+
+                self.result.interner.intern(Type::Struct {
+                    def_id: range_def,
+                    generic_args: vec![],
                 })
             }
 
@@ -2731,11 +2895,8 @@ impl<'res> TypeChecker<'res> {
         let obj_ty = self.synth_expr(object);
         self.type_names_as_values.remove(&object.id);
 
-        // -----------| Hard coded piece of shit section |-----------
-        // > What is this for?
-        // Answer: for arrays and slices builtin `.len` and `.ptr` fields.
-        // `.ptr` is `[*]T`, `.len` is `usize`; both resolve to synthetic
-        // `DefId`s so MIR lowering can project into the slice storage.
+        // Builtin `.len` and `.ptr` fields for arrays/slices resolve to
+        // synthetic `DefId`s so MIR lowering can project into slice storage.
 
         {
             let mut interner = self.interner.borrow_mut();
@@ -2892,11 +3053,9 @@ impl<'res> TypeChecker<'res> {
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
 
-        // When the expected type is the same struct (e.g. an annotated
-        // `let g: Gen[u32] = Gen { .v = 7 };`), seed its generic arguments
-        // so field literals coerce to the expected fields instead of
-        // inferring a conflicting instantiation. Explicit generic args on
-        // the init still win over the seeded ones.
+        // When the expected type is the same struct, seed its generic
+        // arguments so field literals use the expected instantiation.
+        // Explicit generic arguments still take precedence.
         if let Some(expected) = expected
             && let Type::Struct {
                 def_id: expected_def,
@@ -3186,12 +3345,9 @@ impl<'res> TypeChecker<'res> {
             }
 
             CoerceResult::ArrayToSlice => {
-                // A string literal (`[N]char`) is the one allowed implicit
-                // array→slice coercion: codegen lowers a `ConstValue::Str`
-                // straight into a slice. Any other array (literal or variable)
-                // must be explicitly referenced with `&` to build a
-                // `{ ptr, len }` slice - the implicit path has no MIR/codegen
-                // support and crashes verification.
+                // String literals are the only implicit array -> slice coercion:
+                // codegen lowers `ConstValue::Str` straight into a slice.
+                // Every other array requires an explicit `&`.
                 if matches!(&expr.kind, HirExprKind::Literal(Literal::String(_))) {
                     self.result.record_expr_type(id, expected);
                     expected
@@ -3258,13 +3414,10 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Computes the storage type a fat coercion produces. A concrete fat
-    /// value flowing into a `Fn`/`FnOnce` bound keeps its own concrete type;
-    /// a basic fn value gets a fresh concrete fat form - a closure value
-    /// with an inline env and a statically known target when the coerced
-    /// expression is a closure literal or a static `fn`, an inline fn
-    /// pointer otherwise (the pointer is a runtime value, so its target
-    /// cannot be known here).
+    /// Computes the concrete storage type produced by a fat coercion.
+    /// Existing concrete fat values are preserved; plain function values
+    /// receive a concrete fat representation with either a static target
+    /// or a runtime function pointer.
     fn fat_coercion_storage(
         &mut self,
         actual: TypeId,
@@ -3388,6 +3541,18 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn find_struct_def(&self, struct_name: &str) -> Option<DefId> {
+        self.resolution.defs.iter().find_map(|(def, info)| {
+            if matches!(info.kind, DefKind::Struct)
+                && self.interner.borrow().resolve(&info.name) == struct_name
+            {
+                Some(*def)
+            } else {
+                None
+            }
+        })
+    }
+
     fn lookup_def_type(&mut self, def_id: DefId, source: Source) -> TypeId {
         self.result
             .def_types
@@ -3401,6 +3566,31 @@ impl<'res> TypeChecker<'res> {
                 });
                 self.result.interner.error()
             })
+    }
+
+    /// Defaults the type of a literal-valued expression. An integer literal
+    /// that overflows `i32` widens to the smallest integer builtin that fits
+    /// its value, so the constant survives into storage instead of silently
+    /// truncating (`let a = 0x57202c6f6c6c6548;` keeps all 64 bits).
+    fn default_literal_with_value(&mut self, value: &HirExpr, ty: TypeId) -> TypeId {
+        let defaulted = self.default_literal(ty);
+        let defaulted_ty = self.result.interner.get(defaulted).clone();
+
+        let HirExprKind::Literal(Literal::Int(n)) = &value.kind else {
+            return defaulted;
+        };
+        let Type::Builtin(b) = defaulted_ty else {
+            return defaulted;
+        };
+        if b != DEFAULT_INT_LITERAL {
+            return defaulted;
+        }
+
+        match *n {
+            n if n <= i32::MAX as i64 => defaulted,
+            n if n <= u32::MAX as i64 => self.result.interner.builtin(BuiltinType::u32),
+            _ => self.result.interner.builtin(BuiltinType::i64),
+        }
     }
 
     fn default_literal(&mut self, ty: TypeId) -> TypeId {
@@ -3565,7 +3755,7 @@ impl<'res> TypeChecker<'res> {
         // Variadic args have no declared parameter type: just record theirs.
         for arg in args.iter().skip(sig_params.len()) {
             let arg_ty = self.synth_expr(arg);
-            let arg_ty = self.default_literal(arg_ty);
+            let arg_ty = self.default_literal_with_value(arg, arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
         }
 
@@ -4119,9 +4309,9 @@ impl<'res> TypeChecker<'res> {
 
         // The expected type (annotated `let`, return position, argument
         // position) usually pins the struct's generics for `Self`-returning
-        // methods (`let a: Option[i32] = Option.None();`); the return type is
-        // matched structurally against it. It is the lowest-priority source:
-        // explicit call-site arguments and argument inference stay intact.
+        // methods; the return type is matched structurally against it. It is
+        // the lowest-priority source: explicit call-site arguments and
+        // argument inference stay intact.
         if let Some(expected) = expected {
             self.seed_inference_bindings(sig_ret, expected, &mut bindings);
         }
@@ -4284,11 +4474,10 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Seeds generic bindings by walking a generic-containing type (`pattern`,
-    /// e.g. a call's return type) against the expected type in parallel. Only
-    /// new bindings are inserted: explicit call-site arguments and argument
-    /// inference win over expected-derived ones. A `GenericParam` on the
-    /// expected side carries no information and is skipped.
+    /// Seeds generic bindings by walking a generic-containing type against
+    /// the expected type in parallel. Only new bindings are inserted, so
+    /// explicit call-site and argument-inferred bindings win. A `GenericParam`
+    /// on the expected side carries no information and is skipped.
     fn seed_inference_bindings(
         &mut self,
         pattern: TypeId,
@@ -4365,7 +4554,7 @@ impl<'res> TypeChecker<'res> {
 
         if self.type_contains_generic(substituted) {
             let arg_ty = self.synth_expr(arg);
-            let arg_ty = self.default_literal(arg_ty);
+            let arg_ty = self.default_literal_with_value(arg, arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
             self.unify_for_inference(param_ty, arg_ty, bindings, source);
 
@@ -4708,11 +4897,9 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Picks the implementation to use for `(struct, interface)` at the
-    /// concrete instantiation `generic_args`: a specialization registered for
-    /// the exact instantiation wins; then generic implementations whose
-    /// bounds the arguments satisfy; then a boundless wildcard
-    /// implementation. `None` when nothing applies.
+    /// Selects the applicable `(struct, interface)` implementation.
+    /// Priority: exact specialization, matching bounded generic impl,
+    /// then boundless wildcard. `None` when nothing applies.
     fn applicable_impl(
         &self,
         struct_def: DefId,
@@ -5491,16 +5678,7 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         }
 
-        if let UnaryOp::AddrOf = op {
-            // `&array` produces a slice (a fat `{ ptr, len }` view), not a
-            // pointer to the array: slices never alias to `*[N]T`.
-            if let Type::Array { element, .. } = self.result.interner.get(operand).clone() {
-                return self.result.interner.intern(Type::Slice {
-                    element,
-                    is_const: false,
-                });
-            }
-
+        if matches!(op, UnaryOp::AddrOf) {
             return self.result.interner.intern(Type::Pointer {
                 inner: operand,
                 is_const: false,
@@ -5698,9 +5876,9 @@ impl<'res> TypeChecker<'res> {
         source: &Source,
     ) -> TypeId {
         let (iface_name, method_name) = if self.expect_assign_interface {
-            ("SlicePtr", "slice_ptr")
+            ("IndexPtr", "index_ptr")
         } else {
-            ("Slice", "slice")
+            ("Index", "index")
         };
 
         let result = self.call_interface_method(
@@ -5730,6 +5908,45 @@ impl<'res> TypeChecker<'res> {
                 } else {
                     r.ret_ty
                 }
+            }
+            None => self.result.interner.error(),
+        }
+    }
+
+    fn check_range_slice_on_struct(
+        &mut self,
+        def_id: DefId,
+        generic_args: &[TypeId],
+        expr_id: HirId,
+        source: &Source,
+    ) -> TypeId {
+        let range_ty = match self.find_struct_def("Range") {
+            Some(def) => self.result.interner.intern(Type::Struct {
+                def_id: def,
+                generic_args: vec![],
+            }),
+            None => return self.result.interner.error(),
+        };
+
+        let result = self.call_interface_method(
+            def_id,
+            generic_args,
+            ("Sliceable", "slice"),
+            &[range_ty],
+            ReceiverAccess::Value,
+            source,
+        );
+
+        match result {
+            Some(r) => {
+                self.result.operator_resolutions.insert(
+                    expr_id,
+                    OperatorResolution {
+                        method_def: r.method_def,
+                        generic_args: generic_args.to_vec(),
+                    },
+                );
+                r.ret_ty
             }
             None => self.result.interner.error(),
         }
@@ -5799,6 +6016,7 @@ mod tests {
     const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
     const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
     const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+    const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
     fn typecheck(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
         typecheck_with_target(source, None)
@@ -5842,6 +6060,7 @@ mod tests {
                 ("core.out", CORE_OUT),
                 ("core.iter", CORE_ITER),
                 ("core.option", CORE_OPTION),
+                ("core.slice", CORE_SLICE),
             ]
         } else {
             Vec::new()
@@ -6178,7 +6397,7 @@ mod tests {
 
     #[test]
     fn generic_infers_through_slice_wrapper() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn first[T](items: []T) T {
               return items[0];
@@ -6186,7 +6405,7 @@ mod tests {
 
             fn main() {
               let arr = [1, 2, 3];
-              let first: i32 = first(&arr);
+              let first: i32 = first(arr[..]);
             }
             "#,
         );
@@ -6222,7 +6441,7 @@ mod tests {
 
     #[test]
     fn generic_infers_through_many_pointer_wrapper() {
-        let result = typecheck(
+        let result = typecheck_full(
             r#"
             fn total[T](items: [*]T) T {
               return items[0];
@@ -6230,7 +6449,7 @@ mod tests {
 
             fn main() {
               let arr = [1, 2, 3];
-              let slice = &arr;
+              let slice = arr[..];
               let total: i32 = total(slice.ptr);
             }
             "#,
@@ -6626,8 +6845,8 @@ mod tests {
     }
 
     #[test]
-    fn explicit_reference_builds_slice() {
-        let result = typecheck(
+    fn slice_of_array_literal_builds_slice() {
+        let result = typecheck_full(
             r#"
             struct Foo {}
 
@@ -6641,15 +6860,53 @@ mod tests {
 
             fn main() {
               let a = Foo {};
-              a.write(&[1, 2, 3]);
+              a.write([1, 2, 3][..]);
             }
             "#,
         );
 
         assert!(
             result.is_ok(),
-            "an explicit `&[...]` should build a slice: {:?}",
+            "a full-range slice of an array literal should build a slice: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn many_pointer_range_slice_builds_slice() {
+        let result = typecheck_full(
+            r#"
+            fn main() {
+              let a = @as([*]char, "hello");
+              let s = a[0..1];
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "a range slice of a many pointer should build a slice: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn open_ended_many_pointer_slice_is_reported() {
+        let errors = typecheck_full(
+            r#"
+            fn main() {
+              let a = @as([*]char, "hello");
+              let s = a[..];
+            }
+            "#,
+        )
+        .expect_err("an open-ended slice of a many pointer must be reported");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnsizedPointerSlice { .. })),
+            "expected TypeError::UnsizedPointerSlice, got: {errors:?}"
         );
     }
 

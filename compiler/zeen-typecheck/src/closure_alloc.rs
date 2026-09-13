@@ -3,25 +3,11 @@
 //! Every closure expression becomes a fat `Fn`/`FnOnce` value backed by an
 //! environment struct. Whether that environment lives on the stack of the
 //! creating frame or is heap-allocated (`malloc`) is a static per-site
-//! decision, computed here and consumed by MIR lowering (and, later, dataflow
-//! and codegen).
+//! decision, consumed by MIR lowering.
 //!
-//! The rules are deliberately simple and conservative:
-//!
-//! - The closure expression is returned (return statement, function tail, or
-//!   a branch tail that feeds a return) from its defining function -> `Heap`.
-//! - The closure expression is passed as a call argument, stored into an
-//!   aggregate, or otherwise flows into an escaping position -> `Heap`.
-//! - The closure value is bound to a `let` local:
-//!   - the local is never referenced (and not captured by a sibling closure)
-//!     -> `Unused` (the backend must not materialize the value at all);
-//!   - the local is referenced only as a call target -> `Stack`;
-//!   - the local is referenced in any other position (moved into another
-//!     local, passed along, returned, captured by a nested closure, ...)
-//!     -> `Heap`.
-//!
-//! `Heap` never dangles; it may leak or over-allocate in a few cases that
-//! later stages can refine.
+//! `Heap` is the conservative fallback for closures that can outlive their
+//! defining frame. Otherwise a closure bound to a `let` and referenced only
+//! as a call target gets a stack env; one never used at all is `Unused`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -269,6 +255,15 @@ impl<'a> Analyzer<'a> {
             HirExprKind::SliceAccess { object, index } => {
                 self.expr(object, &Fate::Escaping);
                 self.expr(index, &Fate::Escaping);
+            }
+
+            HirExprKind::Range { start, end, .. } => {
+                if let Some(start) = start {
+                    self.expr(start, &Fate::Escaping);
+                }
+                if let Some(end) = end {
+                    self.expr(end, &Fate::Escaping);
+                }
             }
 
             HirExprKind::StructInit { fields, .. } => {

@@ -591,6 +591,14 @@ impl<'ctx> MirLowering<'ctx> {
                 self.collect_global_expr_deps(object, out);
                 self.collect_global_expr_deps(index, out);
             }
+            HirExprKind::Range { start, end, .. } => {
+                if let Some(start) = start {
+                    self.collect_global_expr_deps(start, out);
+                }
+                if let Some(end) = end {
+                    self.collect_global_expr_deps(end, out);
+                }
+            }
             HirExprKind::StructInit { fields, .. } => {
                 for field in fields {
                     self.collect_global_expr_deps(&field.value, out);
@@ -1062,10 +1070,8 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     /// Builds the `fn(*void) void` teardown of a capturing closure's env
-    /// struct: casts the arg to `*const EnvTy` and drops each captured value
-    /// that needs it (reverse order). The teardown functions of explicit-drop
-    /// structs and fat values live in `program.drop_functions`, populated
-    /// after lowering, so the drops are deferred to codegen by place.
+    /// struct, dropping each captured value that needs it in reverse order.
+    /// Explicit-drop and fat-value teardowns are deferred to codegen.
     fn env_drop_function(&mut self, env_ty: TypeId) -> MirFunctionId {
         let Type::Struct {
             def_id: env_def, ..
@@ -1130,11 +1136,10 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// The places of `env_ty`'s captured values that are dropped when the env
+    /// The captured value places of `env_ty` that are dropped when the env
     /// dies, mirroring codegen's `emit_drop_ptr` recursion: explicit-drop
-    /// structs and fat values are leaves, structs without a drop but with
-    /// teardown-bearing fields recurse, arrays of teardown-bearing elements
-    /// drop as a whole (codegen expands them element-wise).
+    /// structs and fat values are leaves, structs without a drop recurse
+    /// through fields, arrays of drop-bearing elements drop as a whole.
     fn env_drop_leaf_places(&self, env_ty: TypeId, base: Place) -> Vec<(Place, TypeId)> {
         let mut leaves = Vec::new();
         self.env_drop_leaves_into(env_ty, base, &mut leaves);
@@ -2098,11 +2103,9 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Registers slice layouts for every `Slice[T]` reachable from a struct
-    /// field. Codegen needs a `{ ptr, len }` body for any slice type that
-    /// shows up as a struct field - `register_slice_layout` alone only sees
-    /// slice-typed locals, so a struct holding a slice (even one pointing at
-    /// static string data) used to crash codegen.
+    /// Registers layouts for slices reachable through struct fields.
+    /// Codegen otherwise misses slice fields and cannot emit their
+    /// `{ ptr, len }` representation.
     fn register_reachable_slice_layouts(&mut self) {
         let mut visited: HashSet<TypeId> = HashSet::new();
         let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
@@ -2411,79 +2414,6 @@ impl<'ctx> MirLowering<'ctx> {
             } => {
                 let result_ty = self.expr_type(fb, expr);
 
-                // `&array` lowers to a slice: build the `{ ptr, len }` fat
-                // pointer as a real slice aggregate instead of shoving a bare
-                // `addr_of` into a slice-typed local.
-                if let Type::Slice { element, is_const } =
-                    self.typecheck.interner.get(result_ty).clone()
-                {
-                    let inner_ty = self.expr_type(fb, inner);
-                    let len_val = match self.typecheck.interner.get(inner_ty).clone() {
-                        Type::Array { len: Some(len), .. } => len,
-                        _ => panic!("&slice: inner operand must be a fixed array"),
-                    };
-
-                    let ptr_ty = self.typecheck.interner.intern(Type::ManyPointer {
-                        inner: element,
-                        is_const,
-                    });
-                    let ptr_temp = fb.new_temp(ptr_ty);
-
-                    // `&` needs a place to point at. When the operand is not an
-                    // lvalue (e.g. an array literal), materialize it into a temp
-                    // local first so we can take its address instead of panicking.
-                    let (block, inner_place) = if self.expr_is_place(inner) {
-                        self.lower_expr_to_place(fb, inner, block)
-                    } else {
-                        let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
-                        let temp = fb.new_temp(inner_ty);
-                        fb.push_stmt(
-                            block,
-                            MirStatement::Assign {
-                                place: Place::from_local(temp),
-                                rvalue: Rvalue::Use(inner_op),
-                                source: Some(inner.source.clone()),
-                            },
-                        );
-                        (block, Place::from_local(temp))
-                    };
-
-                    fb.push_stmt(
-                        block,
-                        MirStatement::Assign {
-                            place: Place::from_local(ptr_temp),
-                            rvalue: Rvalue::Ref {
-                                place: inner_place,
-                                is_const,
-                            },
-                            source: Some(expr.source.clone()),
-                        },
-                    );
-
-                    let len_operand = Operand::Constant(ConstValue::Int(len_val as i128), None);
-
-                    let temp = fb.new_temp(result_ty);
-                    fb.push_stmt(
-                        block,
-                        MirStatement::Assign {
-                            place: Place::from_local(temp),
-                            rvalue: Rvalue::Aggregate {
-                                kind: AggregateKind::Slice,
-                                operands: vec![
-                                    Operand::Move(Place::from_local(ptr_temp), None),
-                                    len_operand,
-                                ],
-                            },
-                            source: Some(expr.source.clone()),
-                        },
-                    );
-
-                    return (
-                        block,
-                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
-                    );
-                }
-
                 let is_const = match self.typecheck.interner.get(result_ty).clone() {
                     Type::Pointer { is_const, .. } => is_const,
                     _ => false,
@@ -2581,6 +2511,24 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
+                // Native range slicing on arrays and slices: `arr[a..b]`.
+                if let HirExprKind::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = &index.kind
+                {
+                    return self.lower_range_slice(
+                        fb,
+                        object,
+                        start.as_deref(),
+                        end.as_deref(),
+                        *inclusive,
+                        block,
+                        &expr.source,
+                    );
+                }
+
                 let obj_ty = self.expr_type(fb, object);
                 let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
                 let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
@@ -2614,6 +2562,149 @@ impl<'ctx> MirLowering<'ctx> {
                 (
                     block,
                     self.place_to_operand(elem_place, ty, Some(expr.source.clone())),
+                )
+            }
+
+            HirExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let range_def = self
+                    .find_struct_def("Range")
+                    .expect("core `Range` struct must be present");
+                let option_def = self
+                    .find_struct_def("Option")
+                    .expect("core.option `Option` must be present");
+                let usize_ty = self
+                    .typecheck
+                    .interner
+                    .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+                let option_ty = self.typecheck.interner.intern(Type::Struct {
+                    def_id: option_def,
+                    generic_args: vec![usize_ty],
+                });
+                let ty = self.expr_type(fb, expr);
+                self.register_struct_layout(ty, range_def);
+                self.register_struct_layout(option_ty, option_def);
+
+                // Field order of `Option`: `value` then `_is_some`.
+                let option_fields = &self.typecheck.struct_info[&option_def].fields;
+                let rodeo = self.rodeo.borrow();
+                let value_index = option_fields
+                    .iter()
+                    .position(|f| rodeo.resolve(&f.name) == "value")
+                    .expect("Option must have a `value` field");
+                let is_some_index = option_fields
+                    .iter()
+                    .position(|f| rodeo.resolve(&f.name) == "_is_some")
+                    .expect("Option must have an `_is_some` field");
+                drop(rodeo);
+
+                // Builds an `Option[usize]` aggregate from a lowered operand;
+                // `is_some == false` stores a dummy value that is never read.
+                let mut build_option =
+                    |fb: &mut FnBuilder,
+                     block: BlockId,
+                     value: Operand,
+                     is_some: bool,
+                     source: Option<Source>| {
+                        let temp = fb.new_temp(option_ty);
+                        let mut operands = vec![
+                            Operand::Constant(ConstValue::Void, None),
+                            Operand::Constant(ConstValue::Void, None),
+                        ];
+                        operands[value_index] = if is_some {
+                            value
+                        } else {
+                            Operand::Constant(ConstValue::Int(0), source.clone())
+                        };
+                        operands[is_some_index] =
+                            Operand::Constant(ConstValue::Bool(is_some), source.clone());
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::Aggregate {
+                                    kind: AggregateKind::Struct(option_def),
+                                    operands,
+                                },
+                                source,
+                            },
+                        );
+                        (block, Operand::Move(Place::from_local(temp), None))
+                    };
+
+                let (block, start_operand) = match start {
+                    Some(s) => {
+                        let (block, value) = self.lower_expr_to_operand(fb, s, block);
+                        build_option(fb, block, value, true, Some(expr.source.clone()))
+                    }
+                    None => build_option(
+                        fb,
+                        block,
+                        Operand::Constant(ConstValue::Int(0), Some(expr.source.clone())),
+                        false,
+                        Some(expr.source.clone()),
+                    ),
+                };
+
+                let (block, mut end_value) = match end {
+                    Some(e) => {
+                        let (block, value) = self.lower_expr_to_operand(fb, e, block);
+                        (block, value)
+                    }
+                    None => (
+                        block,
+                        Operand::Constant(ConstValue::Int(0), Some(expr.source.clone())),
+                    ),
+                };
+
+                if *inclusive {
+                    // Materialize the end into a usize local first: codegen
+                    // widens a const+const add to 32-bit, which would corrupt
+                    // the upper half of the 64-bit usize place.
+                    let end_local = self.operand_to_local(fb, end_value, usize_ty, block);
+                    let end_plus_one = fb.new_temp(usize_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(end_plus_one),
+                            rvalue: Rvalue::BinaryOp {
+                                op: BinaryOp::Add,
+                                lhs: Operand::Move(Place::from_local(end_local), None),
+                                rhs: Operand::Constant(ConstValue::Int(1), None),
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    end_value = Operand::Move(Place::from_local(end_plus_one), None);
+                }
+
+                let (block, end_operand) = build_option(
+                    fb,
+                    block,
+                    end_value,
+                    end.is_some(),
+                    Some(expr.source.clone()),
+                );
+
+                let temp = fb.new_temp(ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(temp),
+                        rvalue: Rvalue::Aggregate {
+                            kind: AggregateKind::Struct(range_def),
+                            operands: vec![start_operand, end_operand],
+                        },
+                        source: Some(expr.source.clone()),
+                    },
+                );
+
+                (
+                    block,
+                    self.place_to_operand(Place::from_local(temp), ty, Some(expr.source.clone())),
                 )
             }
 
@@ -3228,10 +3319,8 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Lower `expr` to a place, materializing it into a temp local first when
-    /// it is not an lvalue (e.g. `get_obj().field` or `*get_ptr()`). The temp
-    /// is a fresh storage cell that lives for the rest of the function, so the
-    /// returned place is valid to read, write or take the address of.
+    /// Lowers `expr` to a place, materializing non-lvalues (e.g.
+    /// `get_obj().field`) into a temporary local first.
     fn lower_expr_to_place_or_temp(
         &mut self,
         fb: &mut FnBuilder,
@@ -3295,11 +3384,35 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::SliceAccess { object, index } => {
-                // An access through a struct's `Slice`/`SlicePtr` interface
+                // A native range slice yields a fresh slice value, never a
+                // place into the object: materialize it into a temp. Struct
+                // `Sliceable` dispatches stay on the method-call path below.
+                if let HirExprKind::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = &index.kind
+                    && !self.typecheck.operator_resolutions.contains_key(&expr.id)
+                {
+                    let (block, operand) = self.lower_range_slice(
+                        fb,
+                        object,
+                        start.as_deref(),
+                        end.as_deref(),
+                        *inclusive,
+                        block,
+                        &expr.source,
+                    );
+                    let ty = self.expr_type(fb, expr);
+                    let temp = self.operand_to_local(fb, operand, ty, block);
+                    return (block, Place::from_local(temp));
+                }
+
+                // An access through a struct's `Index`/`IndexPtr` interface
                 // dispatches to the method instead of indexing native storage.
-                // A `SlicePtr` result (`ref[i] = v` in an assign) is a pointer
-                // into the struct, so the place keeps dereferencing it; a
-                // `Slice` result is the value itself.
+                // An `IndexPtr` result (`ref[i] = v` in an assign) is a pointer
+                // into the struct, so the place keeps dereferencing it; an
+                // `Index` result is the value itself.
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let result_ty = self.expr_type(fb, expr);
                     let is_pointer = self
@@ -3383,7 +3496,17 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(expr.source.clone()),
                 );
 
-                (block, obj_place.index(index_local))
+                let elem_place = match self.typecheck.interner.get(obj_ty).clone() {
+                    Type::Array { .. } | Type::ManyPointer { .. } => obj_place.index(index_local),
+                    Type::Slice { .. } => {
+                        let mut ptr_place = obj_place;
+                        ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
+                        ptr_place.index(index_local)
+                    }
+                    _ => unreachable!(),
+                };
+
+                (block, elem_place)
             }
 
             HirExprKind::Unary {
@@ -3643,15 +3766,11 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Inserts a `index < len` guard in front of an array/slice indexing
-    /// access when compiling in Debug mode. An out-of-bounds index diverges
-    /// into a `@panic` call that formats the bounds message. Raw pointers
-    /// carry no length and are never checked. Returns the block the actual
-    /// element access must be lowered into.
+    /// Inserts a Debug-mode `index < len` guard before array/slice access.
+    /// Out-of-bounds access panics; raw pointers are unchecked.
     ///
-    /// `index_local` must be a plain local holding the (copyable) index value;
-    /// it is only read here, never moved, so the element projection can use it
-    /// again.
+    /// `index_local` must be a Copy local because the value is reused by
+    /// the subsequent element projection.
     fn lower_bounds_check(
         &mut self,
         fb: &mut FnBuilder,
@@ -3745,12 +3864,351 @@ impl<'ctx> MirLowering<'ctx> {
         ok_block
     }
 
-    /// Inserts a `divisor != 0` guard in front of `/` and `%` on builtin
-    /// numerics when compiling in Debug mode. A zero divisor diverges into a
-    /// `@panic` call. Returns the block the division must be lowered into.
+    /// Lowers `arr[start..end]` on a fixed array or a slice into a fresh
+    /// slice value. Missing bounds default to `0` and the object's length;
+    /// an inclusive range adds `1` to the upper bound. Debug mode inserts
+    /// the `start <= end <= len` guard. Structs with a `Sliceable` impl are
+    /// dispatched through `operator_resolutions`, never here.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_range_slice(
+        &mut self,
+        fb: &mut FnBuilder,
+        object: &HirExpr,
+        start: Option<&HirExpr>,
+        end: Option<&HirExpr>,
+        inclusive: bool,
+        block: BlockId,
+        source: &Source,
+    ) -> (BlockId, Operand) {
+        let usize_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+        let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
+        let obj_ty = self.expr_type(fb, object);
+
+        let (block, start_local) = match start {
+            Some(start) => {
+                let (block, operand) = self.lower_expr_to_operand(fb, start, block);
+                (block, self.operand_to_local(fb, operand, usize_ty, block))
+            }
+            None => (
+                block,
+                self.const_to_local(fb, block, ConstValue::Int(0), usize_ty, source),
+            ),
+        };
+
+        let (block, end_local) = match end {
+            Some(end) => {
+                let (block, operand) = self.lower_expr_to_operand(fb, end, block);
+                let local = self.operand_to_local(fb, operand, usize_ty, block);
+                if inclusive {
+                    (
+                        block,
+                        self.add_one_to_local(fb, block, local, usize_ty, source),
+                    )
+                } else {
+                    (block, local)
+                }
+            }
+            None => {
+                let len_local = match self.typecheck.interner.get(obj_ty).clone() {
+                    Type::Array { len: Some(len), .. } => self.const_to_local(
+                        fb,
+                        block,
+                        ConstValue::Int(len as i128),
+                        usize_ty,
+                        source,
+                    ),
+                    Type::Slice { .. } => {
+                        let mut len_place = obj_place.clone();
+                        len_place.projection.push(PlaceElem::Field(SLICE_LEN_FIELD));
+                        let operand =
+                            self.place_to_operand(len_place, usize_ty, Some(source.clone()));
+                        self.operand_to_local(fb, operand, usize_ty, block)
+                    }
+                    Type::ManyPointer { .. } => {
+                        unreachable!("open-ended slice of a many pointer is rejected by typecheck")
+                    }
+                    _ => {
+                        unreachable!("range slice must target an array, a slice, or a many pointer")
+                    }
+                };
+                (block, len_local)
+            }
+        };
+
+        // The length of a many pointer is unknown, so no bounds guard can be
+        // built: bounds checks apply to sized objects (arrays and slices).
+        let block = if matches!(
+            self.typecheck.interner.get(obj_ty),
+            Type::ManyPointer { .. }
+        ) {
+            block
+        } else {
+            self.lower_range_slice_bounds_check(
+                fb,
+                block,
+                start_local,
+                end_local,
+                &obj_place,
+                obj_ty,
+                usize_ty,
+                source,
+            )
+        };
+
+        let ptr_ty = match self.typecheck.interner.get(obj_ty).clone() {
+            Type::Array { element, .. } => element,
+            Type::Slice { element, .. } => element,
+            Type::ManyPointer { inner, .. } => inner,
+            _ => unreachable!(),
+        };
+
+        let is_const = match self.typecheck.interner.get(obj_ty).clone() {
+            Type::Slice { is_const, .. } => is_const,
+            Type::ManyPointer { is_const, .. } => is_const,
+            _ => false,
+        };
+
+        let elem_place = match self.typecheck.interner.get(obj_ty).clone() {
+            Type::Array { .. } => obj_place.index(start_local),
+            Type::Slice { .. } => {
+                let mut ptr_place = obj_place;
+                ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
+                ptr_place.index(start_local)
+            }
+            Type::ManyPointer { .. } => obj_place.index(start_local),
+            _ => unreachable!(),
+        };
+
+        let ptr_temp = fb.new_temp(self.typecheck.interner.intern(Type::ManyPointer {
+            inner: ptr_ty,
+            is_const,
+        }));
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(ptr_temp),
+                rvalue: Rvalue::Ref {
+                    place: elem_place,
+                    is_const,
+                },
+                source: Some(source.clone()),
+            },
+        );
+
+        let len_temp = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(len_temp),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Sub,
+                    lhs: Operand::Move(Place::from_local(end_local), None),
+                    rhs: Operand::Move(Place::from_local(start_local), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+
+        let result_ty = self.typecheck.interner.intern(Type::Slice {
+            element: ptr_ty,
+            is_const,
+        });
+        let temp = fb.new_temp(result_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Slice,
+                    operands: vec![
+                        Operand::Move(Place::from_local(ptr_temp), None),
+                        Operand::Move(Place::from_local(len_temp), None),
+                    ],
+                },
+                source: Some(source.clone()),
+            },
+        );
+
+        (
+            block,
+            Operand::Move(Place::from_local(temp), Some(source.clone())),
+        )
+    }
+
+    /// Creates a fresh local holding a constant.
+    fn const_to_local(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        value: ConstValue,
+        ty: TypeId,
+        source: &Source,
+    ) -> LocalId {
+        let temp = fb.new_temp(ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Use(Operand::Constant(value, Some(source.clone()))),
+                source: Some(source.clone()),
+            },
+        );
+        temp
+    }
+
+    /// Writes `local + 1` into a fresh local.
+    fn add_one_to_local(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        local: LocalId,
+        ty: TypeId,
+        source: &Source,
+    ) -> LocalId {
+        let plus_one = fb.new_temp(ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(plus_one),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Add,
+                    lhs: Operand::Copy(Place::from_local(local), None),
+                    rhs: Operand::Constant(ConstValue::Int(1), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        plus_one
+    }
+
+    /// Inserts the `start <= end <= len` guard before a range slice in Debug
+    /// mode. A violation diverges into a `@panic` that formats the bounds.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_range_slice_bounds_check(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        start_local: LocalId,
+        end_local: LocalId,
+        obj_place: &Place,
+        obj_ty: TypeId,
+        usize_ty: TypeId,
+        source: &Source,
+    ) -> BlockId {
+        if self.mode != CompilationMode::Debug {
+            return block;
+        }
+
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let start_le_end = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(start_le_end),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Le,
+                    lhs: Operand::Copy(Place::from_local(start_local), None),
+                    rhs: Operand::Copy(Place::from_local(end_local), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+
+        let len_operand = match self.typecheck.interner.get(obj_ty).clone() {
+            Type::Array { len: Some(len), .. } => {
+                Operand::Constant(ConstValue::Int(len as i128), None)
+            }
+            Type::Slice { .. } => {
+                let mut len_place = obj_place.clone();
+                len_place.projection.push(PlaceElem::Field(SLICE_LEN_FIELD));
+                self.place_to_operand(len_place, usize_ty, Some(source.clone()))
+            }
+            _ => unreachable!(),
+        };
+
+        let end_le_len = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(end_le_len),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Le,
+                    lhs: Operand::Copy(Place::from_local(end_local), None),
+                    rhs: len_operand.clone(),
+                },
+                source: Some(source.clone()),
+            },
+        );
+
+        let ok = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(ok),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::LogicalAnd,
+                    lhs: Operand::Move(Place::from_local(start_le_end), None),
+                    rhs: Operand::Move(Place::from_local(end_le_len), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+
+        let ok_block = fb.new_block();
+        let panic_block = fb.new_block();
+        fb.set_terminator(
+            block,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(ok), None),
+                targets: vec![(1, ok_block)],
+                otherwise: panic_block,
+            },
+        );
+
+        let void_ty = self.typecheck.interner.intern(Type::Void);
+        let dest = fb.new_temp(void_ty);
+        let panic_next = fb.new_block();
+        let header_block = self.emit_panic_header_segment(fb, panic_block, Some(source));
+
+        fb.set_terminator(
+            header_block,
+            Terminator::MacroCall {
+                kind: HirMacroKind::Panic,
+                format_chunks: Some(vec![
+                    FormatChunk::Literal("slice index out of bounds: the len is ".into()),
+                    FormatChunk::Arg(FormatSpec::Display),
+                    FormatChunk::Literal(" but the range is ".into()),
+                    FormatChunk::Arg(FormatSpec::Display),
+                    FormatChunk::Literal("..".into()),
+                    FormatChunk::Arg(FormatSpec::Display),
+                ]),
+                args: vec![
+                    len_operand,
+                    Operand::Copy(Place::from_local(start_local), None),
+                    Operand::Copy(Place::from_local(end_local), None),
+                ],
+                arg_types: vec![usize_ty, usize_ty, usize_ty],
+                destination: Place::from_local(dest),
+                target: None,
+                source: Some(source.clone()),
+            },
+        );
+        fb.set_terminator(panic_next, Terminator::Unreachable);
+
+        ok_block
+    }
+
+    /// Inserts a Debug-mode `divisor != 0` guard before `/` and `%` on
+    /// builtin numerics; a zero divisor diverges into a `@panic` call.
     ///
-    /// `rhs_local` must be a plain local holding the divisor; it is only read
-    /// here by Copy, so the division rvalue can use it again.
+    /// `rhs_local` must hold the divisor and be readable by Copy.
     fn lower_div_zero_check(
         &mut self,
         fb: &mut FnBuilder,
@@ -4461,11 +4919,8 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Lowers a `debug`/`display` call on a builtin receiver (`self.x.debug(out)`
-    /// where `x: i32`) into a `Format` macro render of the value followed by a
-    /// `write_str` append into the writer, so builtins written inside struct
-    /// `Display`/`Debug` implementations land in the writer (stdout or a heap
-    /// `String`) instead of leaking straight to stdout.
+    /// Lowers builtin `debug`/`display` calls into `Format` + `write_str`,
+    /// so output lands in the provided writer rather than on stdout.
     #[allow(clippy::too_many_arguments)]
     fn try_lower_builtin_display(
         &mut self,
@@ -5028,11 +5483,9 @@ impl<'ctx> MirLowering<'ctx> {
                     ty
                 };
 
-                // `let _ = expr;` discards the value: evaluate the expression
-                // for its side effects but don't allocate a storage local.
-                // A non-constant operand rooted at a real user variable is
-                // still consumed (reads/moves keep mattering), so it gets a
-                // `Discard` statement; temporaries and literals need none.
+                // `let _ = expr` evaluates `expr` for side effects without
+                // creating storage; user-variable operands are still consumed
+                // via `Discard`.
                 if self.rodeo.borrow().resolve(name) == "_" {
                     return match value {
                         Some(v) => {
@@ -6301,11 +6754,10 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Calls a fat closure value. The `{ $fn, $env }` envelope's two fields are
-    /// copied out and the call goes through the fn pointer with the uniform
-    /// env-first ABI (`fn(*const void, params...) ret`), so callers never
-    /// need to know the value's provenance - a plain body, another closure's
-    /// body, or a boxed fn pointer all look the same through `$fn`.
+    /// Calls a fat closure value through the `{ $fn, $env }` envelope: both
+    /// fields are copied out and the call goes through the fn pointer with
+    /// the uniform env-first ABI (`fn(*const void, params...) ret`), so the
+    /// value's provenance does not matter.
     ///
     /// A `!once` value is read but never consumed: both fields are copied and
     /// the value stays live at its place, so the same `Fn` value can be

@@ -1,0 +1,42 @@
+struct Vector {
+  items: [5]i32,
+}
+
+implement Sliceable : Vector {
+  pub fn slice(*self, range: Range) []i32 {
+    let start = range.first().unwrap_or(0);
+    let end = range.last().unwrap_or(5);
+    self.items[start..end]
+  }
+}
+
+struct Boxed[T] {
+  data: [5]T,
+}
+
+implement[T] Sliceable : Boxed[T] {
+  pub fn slice(*self, range: Range) []T {
+    let start = range.first().unwrap_or(0);
+    let end = range.last().unwrap_or(5);
+    self.data[start..end]
+  }
+}
+
+fn main() {
+  let vec: Vector = Vector { .items = [10, 20, 30, 40, 50] };
+
+  // full range: first()/last() are None
+  let all = vec[..];
+  @println("vec all {} {}", all.len, all[4]);
+
+  // single-sided ranges route through the user impl
+  let mid = vec[1..3];
+  @println("vec mid {} {}", mid.len, mid[0]);
+
+  let tail = vec[2..];
+  @println("vec tail {} {}", tail.len, tail[0]);
+
+  let boxed: Boxed[i32] = Boxed { .data = [1, 2, 3, 4, 5] };
+  let bslice = boxed[0..=2];
+  @println("boxed {} {}", bslice.len, bslice[1]);
+}
