@@ -11,6 +11,18 @@ pub interface Drop {
   fn drop(self) void;
 }
 
+/// Comparison interface between Self structs
+pub interface Ord {
+  fn cmp(*const self, other: *const Self) Ordering;
+}
+
+/// An ordering result between two values
+pub enum Ordering {
+  Less,
+  Equal,
+  Greater
+}
+
 /// Interface for `==` operator between structures.
 pub interface Eq {
   fn eq(*const self, other: *const Self) bool;
