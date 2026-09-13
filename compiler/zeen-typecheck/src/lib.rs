@@ -1659,7 +1659,7 @@ impl<'res> TypeChecker<'res> {
                 let final_ty = match (declared_ty, value_ty) {
                     (Some(_), Some(v)) if declared_is_fat_bound => v,
                     (Some(t), _) => t,
-                    (None, Some(t)) => self.default_literal(t),
+                    (None, Some(t)) => self.default_literal_with_value(value.as_ref().unwrap(), t),
                     (None, None) => self.result.interner.error(),
                 };
 
@@ -2138,7 +2138,7 @@ impl<'res> TypeChecker<'res> {
                 }
 
                 let first_ty = self.synth_expr(&elements[0]);
-                let first_ty = self.default_literal(first_ty);
+                let first_ty = self.default_literal_with_value(&elements[0], first_ty);
 
                 for el in &elements[1..] {
                     self.check_expr(el, first_ty, false);
@@ -2166,7 +2166,7 @@ impl<'res> TypeChecker<'res> {
                 };
 
                 let elem_ty = self.synth_expr(element);
-                let elem_ty = self.default_literal(elem_ty);
+                let elem_ty = self.default_literal_with_value(element, elem_ty);
 
                 if !self.type_is_copy(elem_ty) {
                     self.report(TypeError::RepeatInitNotCopy {
@@ -3487,6 +3487,31 @@ impl<'res> TypeChecker<'res> {
             })
     }
 
+    /// Defaults the type of a literal-valued expression. An integer literal
+    /// that overflows `i32` widens to the smallest integer builtin that fits
+    /// its value, so the constant survives into storage instead of silently
+    /// truncating (`let a = 0x57202c6f6c6c6548;` keeps all 64 bits).
+    fn default_literal_with_value(&mut self, value: &HirExpr, ty: TypeId) -> TypeId {
+        let defaulted = self.default_literal(ty);
+        let defaulted_ty = self.result.interner.get(defaulted).clone();
+
+        let HirExprKind::Literal(Literal::Int(n)) = &value.kind else {
+            return defaulted;
+        };
+        let Type::Builtin(b) = defaulted_ty else {
+            return defaulted;
+        };
+        if b != DEFAULT_INT_LITERAL {
+            return defaulted;
+        }
+
+        match *n {
+            n if n <= i32::MAX as i64 => defaulted,
+            n if n <= u32::MAX as i64 => self.result.interner.builtin(BuiltinType::u32),
+            _ => self.result.interner.builtin(BuiltinType::i64),
+        }
+    }
+
     fn default_literal(&mut self, ty: TypeId) -> TypeId {
         match self.result.interner.get(ty).clone() {
             Type::IntLiteral => self.result.interner.builtin(DEFAULT_INT_LITERAL),
@@ -3649,7 +3674,7 @@ impl<'res> TypeChecker<'res> {
         // Variadic args have no declared parameter type: just record theirs.
         for arg in args.iter().skip(sig_params.len()) {
             let arg_ty = self.synth_expr(arg);
-            let arg_ty = self.default_literal(arg_ty);
+            let arg_ty = self.default_literal_with_value(arg, arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
         }
 
@@ -4448,7 +4473,7 @@ impl<'res> TypeChecker<'res> {
 
         if self.type_contains_generic(substituted) {
             let arg_ty = self.synth_expr(arg);
-            let arg_ty = self.default_literal(arg_ty);
+            let arg_ty = self.default_literal_with_value(arg, arg_ty);
             self.result.record_expr_type(arg.id, arg_ty);
             self.unify_for_inference(param_ty, arg_ty, bindings, source);
 
