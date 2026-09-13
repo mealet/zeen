@@ -31,15 +31,10 @@ pub enum FormatParseError {
     InvalidPrecision { raw: String, offset: usize },
 }
 
-/// Parses format string into vec of `FormatChunk`s
+/// Parses a format string into `FormatChunk`s.
 ///
-/// Possible format specifiers:
-/// * `{}` - Display
-/// * `{:?}` - Debug
-/// * `{hex} - Hex (integer)
-/// * `{oct} - Oct (integer)
-/// * `{bin} - Bin (integer)
-/// * `{:.N} - Float with N decimal places
+/// Supports Display, Debug, hex/oct/bin integer formats and fixed-precision
+/// float formatting.
 pub fn parse_format_string(input: &str) -> Result<Vec<FormatChunk>, FormatParseError> {
     let mut chunks = Vec::new();
     let mut literal = String::new();
