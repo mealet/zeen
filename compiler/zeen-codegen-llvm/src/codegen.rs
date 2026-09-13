@@ -3077,8 +3077,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                             _ => base,
                         }
                     }
-                    FormatSpec::Hex => "%x".to_string(),
-                    FormatSpec::Oct => "%o".to_string(),
+                    FormatSpec::Hex => format!("%{}x", self.int_spec_width(ty)),
+                    FormatSpec::Oct => format!("%{}o", self.int_spec_width(ty)),
                     FormatSpec::Bin => unreachable!("handled above"),
                     FormatSpec::Float { precision } => format!("%.{precision}f"),
                 };

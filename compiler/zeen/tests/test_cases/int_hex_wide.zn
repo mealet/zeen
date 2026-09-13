@@ -1,0 +1,8 @@
+fn main() {
+  let a = 0x57202c6f6c6c6548;
+  let b = 0xFFFFFFFF;
+  @println("{hex}", a);
+  @println("{hex}", b);
+  @println("{}", a);
+  @println("{oct}", a);
+}
