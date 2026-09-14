@@ -2321,172 +2321,122 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::Binary { lhs, rhs, op } => {
-                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
-                    if let Some(cmp) = op_res.ordering_cmp {
-                        let mut op_res = op_res;
+                let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned()
+                else {
+                    return self.lower_raw_binary(fb, lhs, rhs, *op, expr, block);
+                };
 
-                        // A bounded generic receiver resolves its interface
-                        // method to the concrete implementation here; a
-                        // builtin instantiation has no `Ord` impl and falls
-                        // back to comparing the values directly.
-                        if self
-                            .typecheck
-                            .interface_method_owners
-                            .contains_key(&op_res.method_def)
-                            && !self.resolve_generic_ordering_impl(&mut op_res, lhs, fb)
-                        {
-                            let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
-                            let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
-                            let temp = fb.new_temp(self.expr_type(fb, expr));
-                            fb.push_stmt(
-                                block,
-                                MirStatement::Assign {
-                                    place: Place::from_local(temp),
-                                    rvalue: Rvalue::BinaryOp {
-                                        op: *op,
-                                        lhs: lhs_op,
-                                        rhs: rhs_op,
-                                    },
-                                    source: Some(expr.source.clone()),
-                                },
-                            );
-                            return (
-                                block,
-                                Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
-                            );
-                        }
+                if let Some(cmp) = op_res.ordering_cmp {
+                    let mut op_res = op_res;
 
-                        let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
-                        let rhs_ty = self.expr_type(fb, rhs);
-                        let ordering_ty = self
-                            .typecheck
-                            .def_types
-                            .get(&op_res.method_def)
-                            .and_then(|ty| match self.typecheck.interner.get(*ty) {
-                                Type::Fn { ret, .. } => Some(*ret),
-                                _ => None,
-                            })
-                            .unwrap_or_else(|| self.expr_type(fb, expr));
-
-                        let (block, call_op) = self.lower_operator_method_call_with_extra_args(
-                            fb,
-                            lhs,
-                            &[(rhs_op, rhs_ty)],
-                            &op_res,
-                            block,
-                            ordering_ty,
-                        );
-
-                        let temp = fb.new_temp(self.expr_type(fb, expr));
-                        fb.push_stmt(
-                            block,
-                            MirStatement::Assign {
-                                place: Place::from_local(temp),
-                                rvalue: Rvalue::BinaryOp {
-                                    op: if cmp.negate {
-                                        BinaryOp::Ne
-                                    } else {
-                                        BinaryOp::Eq
-                                    },
-                                    lhs: call_op,
-                                    rhs: Operand::Constant(
-                                        ConstValue::Int(cmp.variant as i128),
-                                        Some(expr.source.clone()),
-                                    ),
-                                },
-                                source: Some(expr.source.clone()),
-                            },
-                        );
-                        return (
-                            block,
-                            Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
-                        );
+                    // A bounded generic receiver resolves its interface
+                    // method to the concrete implementation here; a
+                    // builtin instantiation has no `Ord` impl and falls
+                    // back to comparing the values directly.
+                    if self
+                        .typecheck
+                        .interface_method_owners
+                        .contains_key(&op_res.method_def)
+                        && !self.resolve_generic_interface_impl(&mut op_res, lhs, fb)
+                    {
+                        return self.lower_raw_binary(fb, lhs, rhs, *op, expr, block);
                     }
 
                     let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
                     let rhs_ty = self.expr_type(fb, rhs);
-                    let result_ty = self.expr_type(fb, expr);
+                    let ordering_ty = self
+                        .typecheck
+                        .def_types
+                        .get(&op_res.method_def)
+                        .and_then(|ty| match self.typecheck.interner.get(*ty) {
+                            Type::Fn { ret, .. } => Some(*ret),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| self.expr_type(fb, expr));
+
                     let (block, call_op) = self.lower_operator_method_call_with_extra_args(
                         fb,
                         lhs,
                         &[(rhs_op, rhs_ty)],
                         &op_res,
                         block,
-                        result_ty,
+                        ordering_ty,
                     );
 
-                    // `!=` dispatches to `Eq.eq` and negates the result.
-                    if matches!(op, BinaryOp::Ne) {
-                        let temp = fb.new_temp(result_ty);
-                        fb.push_stmt(
-                            block,
-                            MirStatement::Assign {
-                                place: Place::from_local(temp),
-                                rvalue: Rvalue::UnaryOp {
-                                    op: UnaryOp::Not,
-                                    operand: call_op,
+                    let temp = fb.new_temp(self.expr_type(fb, expr));
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::BinaryOp {
+                                op: if cmp.negate {
+                                    BinaryOp::Ne
+                                } else {
+                                    BinaryOp::Eq
                                 },
-                                source: Some(expr.source.clone()),
+                                lhs: call_op,
+                                rhs: Operand::Constant(
+                                    ConstValue::Int(cmp.variant as i128),
+                                    Some(expr.source.clone()),
+                                ),
                             },
-                        );
-                        return (
-                            block,
-                            Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
-                        );
-                    }
-
-                    return (block, call_op);
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    return (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    );
                 }
 
-                let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
+                let mut op_res = op_res;
+
+                // A bounded generic receiver resolves its interface method to
+                // the concrete implementation here; a builtin or non-struct
+                // receiver has no impl and falls back to the raw operator.
+                let dispatch = !self
+                    .typecheck
+                    .interface_method_owners
+                    .contains_key(&op_res.method_def)
+                    || self.resolve_generic_interface_impl(&mut op_res, lhs, fb);
+
+                if !dispatch {
+                    return self.lower_raw_binary(fb, lhs, rhs, *op, expr, block);
+                }
+
                 let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
-
-                let result_ty = self.expr_type(fb, expr);
-
                 let rhs_ty = self.expr_type(fb, rhs);
-                let is_float_div = self.is_float_ty(rhs_ty);
-
-                // `/` and `%` panic on a zero divisor in Debug builds; the
-                // divisor is materialized into a local so the guard can read it
-                // without moving the value the division itself uses. Floats are
-                // excluded: IEEE-754 division by zero yields inf/nan.
-                let (block, rhs_op) =
-                    if matches!(op, BinaryOp::Div | BinaryOp::Mod) && !is_float_div {
-                        let rhs_local = self.operand_to_local(fb, rhs_op, rhs_ty, block);
-                        let block = self.lower_div_zero_check(
-                            fb,
-                            block,
-                            rhs_local,
-                            rhs_ty,
-                            Some(expr.source.clone()),
-                        );
-                        (
-                            block,
-                            Operand::Copy(Place::from_local(rhs_local), Some(expr.source.clone())),
-                        )
-                    } else {
-                        (block, rhs_op)
-                    };
-
-                let temp = fb.new_temp(result_ty);
-
-                fb.push_stmt(
+                let result_ty = self.expr_type(fb, expr);
+                let (block, call_op) = self.lower_operator_method_call_with_extra_args(
+                    fb,
+                    lhs,
+                    &[(rhs_op, rhs_ty)],
+                    &op_res,
                     block,
-                    MirStatement::Assign {
-                        place: Place::from_local(temp),
-                        rvalue: Rvalue::BinaryOp {
-                            op: *op,
-                            lhs: lhs_op,
-                            rhs: rhs_op,
-                        },
-                        source: Some(expr.source.clone()),
-                    },
+                    result_ty,
                 );
 
-                (
-                    block,
-                    Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
-                )
+                // `!=` dispatches to `Eq.eq` and negates the result.
+                if matches!(op, BinaryOp::Ne) {
+                    let temp = fb.new_temp(result_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::UnaryOp {
+                                op: UnaryOp::Not,
+                                operand: call_op,
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    return (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    );
+                }
+
+                (block, call_op)
             }
 
             HirExprKind::Unary {
@@ -2548,9 +2498,23 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::Unary { expr: inner, op } => {
-                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
-                    let result_ty = self.expr_type(fb, expr);
-                    return self.lower_operator_method_call(fb, inner, &op_res, block, result_ty);
+                if let Some(mut op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned()
+                {
+                    // A bounded generic receiver resolves its interface method
+                    // to the concrete implementation here; a builtin or
+                    // non-struct receiver has no impl and falls through to the
+                    // raw operator below.
+                    let dispatch = !self
+                        .typecheck
+                        .interface_method_owners
+                        .contains_key(&op_res.method_def)
+                        || self.resolve_generic_interface_impl(&mut op_res, inner, fb);
+
+                    if dispatch {
+                        let result_ty = self.expr_type(fb, expr);
+                        return self
+                            .lower_operator_method_call(fb, inner, &op_res, block, result_ty);
+                    }
                 }
 
                 let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
@@ -4286,6 +4250,62 @@ impl<'ctx> MirLowering<'ctx> {
         ok_block
     }
 
+    /// Lowers a builtin binary operation that has no interface dispatch:
+    /// literals on numeric types, and generic receivers whose concrete
+    /// instantiation has no struct implementation.
+    fn lower_raw_binary(
+        &mut self,
+        fb: &mut FnBuilder,
+        lhs: &HirExpr,
+        rhs: &HirExpr,
+        op: BinaryOp,
+        expr: &HirExpr,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
+        let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
+
+        let result_ty = self.expr_type(fb, expr);
+        let rhs_ty = self.expr_type(fb, rhs);
+        let is_float_div = self.is_float_ty(rhs_ty);
+
+        // `/` and `%` panic on a zero divisor in Debug builds; the
+        // divisor is materialized into a local so the guard can read it
+        // without moving the value the division itself uses. Floats are
+        // excluded: IEEE-754 division by zero yields inf/nan.
+        let (block, rhs_op) = if matches!(op, BinaryOp::Div | BinaryOp::Mod) && !is_float_div {
+            let rhs_local = self.operand_to_local(fb, rhs_op, rhs_ty, block);
+            let block =
+                self.lower_div_zero_check(fb, block, rhs_local, rhs_ty, Some(expr.source.clone()));
+            (
+                block,
+                Operand::Copy(Place::from_local(rhs_local), Some(expr.source.clone())),
+            )
+        } else {
+            (block, rhs_op)
+        };
+
+        let temp = fb.new_temp(result_ty);
+
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::BinaryOp {
+                    op,
+                    lhs: lhs_op,
+                    rhs: rhs_op,
+                },
+                source: Some(expr.source.clone()),
+            },
+        );
+
+        (
+            block,
+            Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+        )
+    }
+
     /// Inserts a Debug-mode `divisor != 0` guard before `/` and `%` on
     /// builtin numerics; a zero divisor diverges into a `@panic` call.
     ///
@@ -5338,11 +5358,11 @@ impl<'ctx> MirLowering<'ctx> {
         })
     }
 
-    /// Resolves the interface method a bounded generic ordering operator
-    /// records to the concrete implementation, given the receiver type in
-    /// this monomorphized copy. Returns `false` when the receiver is not a
-    /// struct so the caller falls back to a direct comparison.
-    fn resolve_generic_ordering_impl(
+    /// Resolves the interface method a bounded generic operator records to
+    /// the concrete implementation, given the receiver type in this
+    /// monomorphized copy. Returns `false` when the receiver is not a struct
+    /// so the caller falls back to the raw operator.
+    fn resolve_generic_interface_impl(
         &mut self,
         op_res: &mut OperatorResolution,
         receiver_expr: &HirExpr,
