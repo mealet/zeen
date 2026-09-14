@@ -1211,6 +1211,16 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .into();
         }
 
+        let is_aggregate_eq = matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+            && matches!(
+                self.typecheck.interner.get(operand_ty),
+                Type::Array { .. } | Type::Slice { .. }
+            );
+
+        if is_aggregate_eq {
+            return self.build_aggregate_equality(op, lhs_v, rhs_v, operand_ty);
+        }
+
         let l = lhs_v.into_int_value();
         let r = rhs_v.into_int_value();
         let signed = self.is_signed(operand_ty);
@@ -1301,6 +1311,269 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             BinaryOp::LogicalAnd => b.build_and(l, r, "").unwrap().into(),
             BinaryOp::LogicalOr => b.build_or(l, r, "").unwrap().into(),
+        }
+    }
+
+    fn build_aggregate_equality(
+        &mut self,
+        op: BinaryOp,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+        ty: TypeId,
+    ) -> BasicValueEnum<'ctx> {
+        let eq = match self.typecheck.interner.get(ty).clone() {
+            // Fixed-size arrays: compare each element, unrolled.
+            Type::Array { element, len } => {
+                let len = len.unwrap_or(0) as u32;
+                let mut acc: Option<BasicValueEnum<'ctx>> = None;
+                for i in 0..len {
+                    let l = self
+                        .builder
+                        .build_extract_value(lhs.into_array_value(), i, "")
+                        .unwrap();
+                    let r = self
+                        .builder
+                        .build_extract_value(rhs.into_array_value(), i, "")
+                        .unwrap();
+                    let e = self.build_aggregate_equality(BinaryOp::Eq, l, r, element);
+                    acc = Some(match acc {
+                        None => e,
+                        Some(prev) => self
+                            .builder
+                            .build_and(prev.into_int_value(), e.into_int_value(), "")
+                            .unwrap()
+                            .into(),
+                    });
+                }
+                match acc {
+                    Some(eq) => eq,
+                    None => self.context.bool_type().const_int(1, false).into(),
+                }
+            }
+
+            // Slices: equal lengths, then a loop over the shared prefix.
+            Type::Slice { element, .. } => {
+                let int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+                let l = lhs.into_struct_value();
+                let r = rhs.into_struct_value();
+                let l_ptr = self
+                    .builder
+                    .build_extract_value(l, 0, "slice.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let r_ptr = self
+                    .builder
+                    .build_extract_value(r, 0, "slice.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let l_len = self
+                    .builder
+                    .build_extract_value(l, 1, "slice.len")
+                    .unwrap()
+                    .into_int_value();
+                let r_len = self
+                    .builder
+                    .build_extract_value(r, 1, "slice.len")
+                    .unwrap()
+                    .into_int_value();
+                let len_eq = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, l_len, r_len, "")
+                    .unwrap();
+                // Different lengths mean false, and skipping the loop avoids
+                // indexing past the shorter side's valid elements.
+                let loop_until = self
+                    .builder
+                    .build_select(len_eq, l_len, int_ty.const_zero(), "")
+                    .unwrap();
+
+                let current = self.builder.get_insert_block().unwrap();
+                let f = current.get_parent().unwrap();
+                let loop_head = self.context.append_basic_block(f, "slice.eq.head");
+                let loop_body = self.context.append_basic_block(f, "slice.eq.body");
+                let done = self.context.append_basic_block(f, "slice.eq.done");
+                self.builder.build_unconditional_branch(loop_head).unwrap();
+
+                self.builder.position_at_end(loop_head);
+                let i = self.builder.build_phi(int_ty, "slice.eq.i").unwrap();
+                let acc = self
+                    .builder
+                    .build_phi(self.context.bool_type(), "slice.eq.acc")
+                    .unwrap();
+                let in_range = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::ULT,
+                        i.as_basic_value().into_int_value(),
+                        loop_until.into_int_value(),
+                        "",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, loop_body, done)
+                    .unwrap();
+
+                self.builder.position_at_end(loop_body);
+                let elem_ty = self.map_basic_type(element);
+                let elem_idx = i.as_basic_value().into_int_value();
+                let l_elem_ptr = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, l_ptr, &[elem_idx], "")
+                        .unwrap()
+                };
+                let r_elem_ptr = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, r_ptr, &[elem_idx], "")
+                        .unwrap()
+                };
+                let l_elem = self.builder.build_load(elem_ty, l_elem_ptr, "").unwrap();
+                let r_elem = self.builder.build_load(elem_ty, r_elem_ptr, "").unwrap();
+                let e = self.build_aggregate_equality(BinaryOp::Eq, l_elem, r_elem, element);
+                let acc_next = self
+                    .builder
+                    .build_and(
+                        acc.as_basic_value().into_int_value(),
+                        e.into_int_value(),
+                        "",
+                    )
+                    .unwrap();
+                let i_next = self
+                    .builder
+                    .build_int_add(elem_idx, int_ty.const_int(1, false), "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(loop_head).unwrap();
+                i.add_incoming(&[(&int_ty.const_zero(), current), (&i_next, loop_body)]);
+                let all_true = self.context.bool_type().const_int(1, false);
+                acc.add_incoming(&[(&all_true, current), (&acc_next, loop_body)]);
+
+                self.builder.position_at_end(done);
+                self.builder
+                    .build_and(len_eq, acc.as_basic_value().into_int_value(), "slice.eq")
+                    .unwrap()
+                    .into()
+            }
+
+            // Structs compare structurally over their layout fields; a fat
+            // closure is its `{ $fn, $env, $drop }` pointer envelope.
+            Type::Struct { .. } | Type::FatFn { .. } => {
+                let Some(fields) = self.program.struct_layouts.get(&ty) else {
+                    debug_assert!(
+                        matches!(self.typecheck.interner.get(ty), Type::FatFn { .. }),
+                        "missing struct layout for a non-fat struct"
+                    );
+                    let int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+                    let l = lhs.into_struct_value();
+                    let r = rhs.into_struct_value();
+                    let mut acc: Option<BasicValueEnum<'ctx>> = None;
+                    for idx in 0..3 {
+                        let lv = self
+                            .builder
+                            .build_extract_value(l, idx, "")
+                            .unwrap()
+                            .into_pointer_value();
+                        let rv = self
+                            .builder
+                            .build_extract_value(r, idx, "")
+                            .unwrap()
+                            .into_pointer_value();
+                        let le = self.builder.build_ptr_to_int(lv, int_ty, "").unwrap();
+                        let re = self.builder.build_ptr_to_int(rv, int_ty, "").unwrap();
+                        let e = self
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, le, re, "")
+                            .unwrap();
+                        acc = Some(match acc {
+                            None => e.into(),
+                            Some(prev) => self
+                                .builder
+                                .build_and(prev.into_int_value(), e, "")
+                                .unwrap()
+                                .into(),
+                        });
+                    }
+                    return match op {
+                        BinaryOp::Eq => acc.expect("fat envelope has three fields"),
+                        BinaryOp::Ne => self
+                            .builder
+                            .build_not(
+                                acc.expect("fat envelope has three fields").into_int_value(),
+                                "",
+                            )
+                            .unwrap()
+                            .into(),
+                        _ => unreachable!("aggregate comparison op must be eq or ne"),
+                    };
+                };
+                let mut acc: Option<BasicValueEnum<'ctx>> = None;
+                for (idx, field) in fields.fields.iter().enumerate() {
+                    let l = self
+                        .builder
+                        .build_extract_value(lhs.into_struct_value(), idx as u32, "")
+                        .unwrap();
+                    let r = self
+                        .builder
+                        .build_extract_value(rhs.into_struct_value(), idx as u32, "")
+                        .unwrap();
+                    let e = self.build_aggregate_equality(BinaryOp::Eq, l, r, field.ty);
+                    acc = Some(match acc {
+                        None => e,
+                        Some(prev) => self
+                            .builder
+                            .build_and(prev.into_int_value(), e.into_int_value(), "")
+                            .unwrap()
+                            .into(),
+                    });
+                }
+                match acc {
+                    Some(eq) => eq,
+                    None => self.context.bool_type().const_int(1, false).into(),
+                }
+            }
+
+            // Scalars: `icmp` covers integers, pointers and enums; floats are
+            // compared with `fcmp`.
+            _ => {
+                let b = &self.builder;
+                match self.typecheck.interner.get(ty).clone() {
+                    Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral => b
+                        .build_float_compare(
+                            FloatPredicate::OEQ,
+                            lhs.into_float_value(),
+                            rhs.into_float_value(),
+                            "",
+                        )
+                        .unwrap()
+                        .into(),
+                    Type::Builtin(BuiltinType::void | BuiltinType::never)
+                    | Type::Void
+                    | Type::Never
+                    | Type::Error => unreachable!("non-comparable leaf in aggregate equality"),
+                    _ => {
+                        let ptr_int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+                        let to_int = |b: &Builder<'ctx>, v: BasicValueEnum<'ctx>| match v {
+                            BasicValueEnum::PointerValue(p) => {
+                                b.build_ptr_to_int(p, ptr_int_ty, "").unwrap()
+                            }
+                            v => v.into_int_value(),
+                        };
+                        let l = to_int(b, lhs);
+                        let r = to_int(b, rhs);
+                        b.build_int_compare(IntPredicate::EQ, l, r, "")
+                            .unwrap()
+                            .into()
+                    }
+                }
+            }
+        };
+
+        match op {
+            BinaryOp::Eq => eq,
+            BinaryOp::Ne => self
+                .builder
+                .build_not(eq.into_int_value(), "")
+                .unwrap()
+                .into(),
+            _ => unreachable!("aggregate comparison op must be eq or ne"),
         }
     }
 
