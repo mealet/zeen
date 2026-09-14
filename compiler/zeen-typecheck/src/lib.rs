@@ -4727,20 +4727,22 @@ impl<'res> TypeChecker<'res> {
 
         match b {
             i8 | i16 | i32 | i64 | isize => &[
-                "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
-                "BitXor", "BitShl", "BitShr", "BitNot", "Neg",
+                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
+                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Neg",
             ],
 
             u8 | u16 | u32 | u64 | usize => &[
-                "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
-                "BitXor", "BitShl", "BitShr", "BitNot",
+                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
+                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot",
             ],
 
-            f32 | f64 => &["Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Neg"],
+            f32 | f64 => &[
+                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Neg",
+            ],
 
             bool => &["Display", "Debug", "Eq", "Not"],
 
-            char => &["Display", "Debug", "Eq"],
+            char => &["Display", "Debug", "Eq", "Ord"],
 
             void => &[],
             never => &[],
@@ -5636,6 +5638,63 @@ impl<'res> TypeChecker<'res> {
                     method_def: r.method_def,
                     generic_args: generic_args.to_vec(),
                     ordering_cmp: self.ordering_cmp_target(r.ret_ty, op),
+                },
+            );
+
+            return self.result.interner.builtin(BuiltinType::bool);
+        }
+
+        // A generic parameter bound by `Ord` compares through `cmp`; the
+        // concrete implementation is resolved per instantiation during MIR.
+        if let Type::GenericParam(g) = self.result.interner.get(lhs).clone() {
+            let Some(iface_def) = self.interface_registry.get("Ord") else {
+                self.report(TypeError::InterfaceNotAvailable {
+                    name: "Ord".into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+                return self.result.interner.error();
+            };
+
+            if !self.ctx.generic_bounds(g).contains(&iface_def) {
+                self.report(TypeError::GenericMissingBound {
+                    generic: self.def_name(g).unwrap_or_default().into(),
+                    bound: "Ord".into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+                return self.result.interner.error();
+            }
+
+            if rhs != lhs && !try_coerce(&mut self.result.interner, rhs, lhs).is_ok() {
+                self.report(TypeError::Mismatch {
+                    expected: self.display_type(lhs).into(),
+                    found: self.display_type(rhs).into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+            }
+
+            let Some(method_def) = self.interface_methods.get(&iface_def).and_then(|methods| {
+                methods
+                    .iter()
+                    .copied()
+                    .find(|&m| self.def_name(m).as_deref() == Some("cmp"))
+            }) else {
+                return self.result.interner.error();
+            };
+
+            let Some(ordering_cmp) = self.ordering_cmp_target(self.fn_sigs[&method_def].ret, op)
+            else {
+                return self.result.interner.error();
+            };
+
+            self.result.operator_resolutions.insert(
+                expr_id,
+                OperatorResolution {
+                    method_def,
+                    generic_args: vec![lhs],
+                    ordering_cmp: Some(ordering_cmp),
                 },
             );
 

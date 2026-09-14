@@ -1,0 +1,9 @@
+min ints: 3
+max ints: 7
+min floats: 1.250000
+chars: a
+range: true
+range false: false
+nested: 5
+min ticket: 1
+max ticket: 2

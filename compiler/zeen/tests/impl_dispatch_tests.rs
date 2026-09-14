@@ -324,3 +324,40 @@ fn main() {
         "zeen::typechecker::mismatch",
     );
 }
+
+/// An ordering operator on an unbounded generic parameter reports a missing
+/// `Ord` bound instead of silently comparing the representation.
+#[test]
+fn ordering_op_on_unbounded_generic() {
+    compile_fails(
+        "ordering_unbounded_generic",
+        r#"
+fn less_than[T](a: T, b: T) bool {
+  return a < b;
+}
+
+fn main() {
+  @println("{}", less_than(1, 2));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}
+
+/// An `Eq` bound does not license ordering operators.
+#[test]
+fn ordering_op_on_eq_only_generic() {
+    compile_fails(
+        "ordering_eq_only_generic",
+        r#"
+fn less_than[T: Eq](a: T, b: T) bool {
+  return a > b;
+}
+
+fn main() {
+  @println("{}", less_than(1, 2));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}
