@@ -2321,6 +2321,39 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Binary { lhs, rhs, op } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     if let Some(cmp) = op_res.ordering_cmp {
+                        let mut op_res = op_res;
+
+                        // A bounded generic receiver resolves its interface
+                        // method to the concrete implementation here; a
+                        // builtin instantiation has no `Ord` impl and falls
+                        // back to comparing the values directly.
+                        if self
+                            .typecheck
+                            .interface_method_owners
+                            .contains_key(&op_res.method_def)
+                            && !self.resolve_generic_ordering_impl(&mut op_res, lhs, fb)
+                        {
+                            let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
+                            let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
+                            let temp = fb.new_temp(self.expr_type(fb, expr));
+                            fb.push_stmt(
+                                block,
+                                MirStatement::Assign {
+                                    place: Place::from_local(temp),
+                                    rvalue: Rvalue::BinaryOp {
+                                        op: *op,
+                                        lhs: lhs_op,
+                                        rhs: rhs_op,
+                                    },
+                                    source: Some(expr.source.clone()),
+                                },
+                            );
+                            return (
+                                block,
+                                Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                            );
+                        }
+
                         let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
                         let rhs_ty = self.expr_type(fb, rhs);
                         let ordering_ty = self
@@ -5301,6 +5334,55 @@ impl<'ctx> MirLowering<'ctx> {
             };
             self.rodeo.borrow().resolve(&info.name) == method_name
         })
+    }
+
+    /// Resolves the interface method a bounded generic ordering operator
+    /// records to the concrete implementation, given the receiver type in
+    /// this monomorphized copy. Returns `false` when the receiver is not a
+    /// struct so the caller falls back to a direct comparison.
+    fn resolve_generic_ordering_impl(
+        &mut self,
+        op_res: &mut OperatorResolution,
+        receiver_expr: &HirExpr,
+        fb: &FnBuilder,
+    ) -> bool {
+        let recv_ty = self.expr_type(fb, receiver_expr);
+        let Type::Struct {
+            def_id,
+            generic_args,
+        } = self.typecheck.interner.get(recv_ty).clone()
+        else {
+            return false;
+        };
+
+        let Some(iface_def) = self
+            .typecheck
+            .interface_method_owners
+            .get(&op_res.method_def)
+            .copied()
+        else {
+            return false;
+        };
+
+        let method_name = self
+            .rodeo
+            .borrow()
+            .resolve(&self.resolution.defs[&op_res.method_def].name)
+            .to_string();
+        let iface_name = self
+            .rodeo
+            .borrow()
+            .resolve(&self.resolution.defs[&iface_def].name)
+            .to_string();
+
+        match self.resolve_interface_method(def_id, &iface_name, &method_name, &generic_args) {
+            Some(method_def) => {
+                op_res.method_def = method_def;
+                op_res.generic_args = generic_args;
+                true
+            }
+            None => false,
+        }
     }
 
     fn lower_diverging_macro(
