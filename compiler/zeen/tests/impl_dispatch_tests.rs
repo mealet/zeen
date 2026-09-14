@@ -361,3 +361,59 @@ fn main() {
         "zeen::typechecker::generic_missing_bound",
     );
 }
+
+/// An equality operator on an unbounded generic parameter reports a missing
+/// `Eq` bound instead of comparing the representation.
+#[test]
+fn equality_op_on_unbounded_generic() {
+    compile_fails(
+        "equality_unbounded_generic",
+        r#"
+fn same[T](a: T, b: T) bool {
+  return a == b;
+}
+
+fn main() {
+  @println("{}", same(1, 2));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}
+
+/// An `Ord` bound does not license arithmetic operators.
+#[test]
+fn arithmetic_op_on_ord_only_generic() {
+    compile_fails(
+        "arithmetic_ord_only_generic",
+        r#"
+fn plus[T: Ord](a: T, b: T) T {
+  return a + b;
+}
+
+fn main() {
+  @println("{}", plus(1, 2));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}
+
+/// A unary operator on an unbounded generic parameter reports a missing
+/// bound instead of applying the raw operation.
+#[test]
+fn unary_op_on_unbounded_generic() {
+    compile_fails(
+        "unary_unbounded_generic",
+        r#"
+fn minus[T](a: T) T {
+  return -a;
+}
+
+fn main() {
+  @println("{}", minus(5));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}

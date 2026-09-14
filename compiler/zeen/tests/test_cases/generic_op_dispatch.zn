@@ -1,0 +1,64 @@
+struct Foo {
+  pub x: i32
+}
+
+implement Copy : Foo {}
+
+implement Eq : Foo {
+  fn eq(*const self, other: *const Foo) bool {
+    self.x % 10 == other.x % 10
+  }
+}
+
+implement Add : Foo {
+  fn add(self, other: Foo) Foo { Foo { .x = self.x + other.x } }
+}
+
+struct OrdOnly {
+  pub v: i32
+}
+
+implement Copy : OrdOnly {}
+
+implement Ord : OrdOnly {
+  fn cmp(*const self, other: *const Self) Ordering {
+    if (self.v < other.v) {
+      Ordering.Less
+    } else if (self.v > other.v) {
+      Ordering.Greater
+    } else {
+      Ordering.Equal
+    }
+  }
+}
+
+struct Counter {
+  pub n: i32
+}
+
+implement Copy : Counter {}
+
+implement Neg : Counter {
+  fn neg(self) Counter { Counter { .n = -self.n } }
+}
+
+fn eq_generic[T: Eq](a: T, b: T) bool { a == b }
+fn ne_generic[T: Eq](a: T, b: T) bool { a != b }
+fn add_generic[T: Add](a: T, b: T) T { a + b }
+fn ord_eq[T: Ord](a: T, b: T) bool { a == b }
+fn neg_generic[T: Neg](a: T) T { -a }
+
+fn main() i32 {
+  @println("struct eq true: {}", eq_generic(Foo { .x = 11 }, Foo { .x = 21 }));
+  @println("struct eq false: {}", eq_generic(Foo { .x = 11 }, Foo { .x = 123 }));
+  @println("struct ne: {}", ne_generic(Foo { .x = 11 }, Foo { .x = 123 }));
+  @println("int eq: {}", eq_generic(3, 3));
+  @println("int ne: {}", ne_generic(3, 5));
+  @println("struct add: {}", add_generic(Foo { .x = 2 }, Foo { .x = 5 }).x);
+  @println("int add: {}", add_generic(2, 5));
+  @println("ord eq: {}", ord_eq(OrdOnly { .v = 7 }, OrdOnly { .v = 7 }));
+  @println("ord ne: {}", ord_eq(OrdOnly { .v = 7 }, OrdOnly { .v = 8 }));
+  @println("struct neg: {}", neg_generic(Counter { .n = 5 }).n);
+  @println("int neg: {}", neg_generic(5));
+  return 0;
+}

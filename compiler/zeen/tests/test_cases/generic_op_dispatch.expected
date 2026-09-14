@@ -1,0 +1,11 @@
+struct eq true: true
+struct eq false: false
+struct ne: true
+int eq: true
+int ne: true
+struct add: 7
+int add: 7
+ord eq: true
+ord ne: false
+struct neg: -5
+int neg: -5
