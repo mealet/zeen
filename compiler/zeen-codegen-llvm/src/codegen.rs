@@ -1098,13 +1098,26 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         // Pointer equality (`ptr == nullptr`, `p1 != p2`): LLVM's `icmp` works
         // on pointers, so cast both to the pointer-size integer and compare as
         // integers. The `operand_ty` check covers pointer-typed operands; the
-        // `NullPtr` checks cover the all-constant `nullptr == nullptr` case.
+        // constant checks cover the all-constant cases: `nullptr == nullptr`,
+        // `fn == fn` and string-literal equality, where no operand carries a
+        // pointer TypeId to inspect.
         let is_pointer_cmp = matches!(op, BinaryOp::Eq | BinaryOp::Ne)
             && (matches!(
                 self.typecheck.interner.get(operand_ty),
                 Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Fn { .. }
-            ) || matches!(lhs, Operand::Constant(ConstValue::NullPtr, _))
-                || matches!(rhs, Operand::Constant(ConstValue::NullPtr, _)));
+            ) || matches!(
+                lhs,
+                Operand::Constant(
+                    ConstValue::NullPtr | ConstValue::Str(_) | ConstValue::Fn(_),
+                    _
+                )
+            ) || matches!(
+                rhs,
+                Operand::Constant(
+                    ConstValue::NullPtr | ConstValue::Str(_) | ConstValue::Fn(_),
+                    _
+                )
+            ));
 
         if is_pointer_cmp {
             let int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
