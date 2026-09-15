@@ -1,0 +1,36 @@
+struct Score {
+  pub value: i32
+}
+
+implement Ord : Score {
+  fn cmp(*const self, other: *const Self) Ordering {
+    if (self.value < other.value) {
+      Ordering.Less
+    } else if (self.value > other.value) {
+      Ordering.Greater
+    } else {
+      Ordering.Equal
+    }
+  }
+}
+
+fn main() i32 {
+  let low = Score { .value = 5 };
+  let mid = Score { .value = 7 };
+  let high = Score { .value = 9 };
+
+  @println("{}", low < high);
+  @println("{}", low > high);
+  @println("{}", high > low);
+  @println("{}", low <= mid);
+  @println("{}", low <= low);
+  @println("{}", high <= mid);
+  @println("{}", high >= mid);
+  @println("{}", mid >= mid);
+  @println("{}", mid >= high);
+  @println("{}", low == low);
+  @println("{}", low == high);
+  @println("{}", low != high);
+  @println("{}", low != low);
+  return 0;
+}

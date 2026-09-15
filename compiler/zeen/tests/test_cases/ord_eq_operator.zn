@@ -1,0 +1,42 @@
+struct Pair {
+  pub rank: i32,
+  pub label: i32
+}
+
+implement Ord : Pair {
+  fn cmp(*const self, other: *const Self) Ordering {
+    if (self.rank < other.rank) {
+      Ordering.Less
+    } else if (self.rank > other.rank) {
+      Ordering.Greater
+    } else {
+      Ordering.Equal
+    }
+  }
+}
+
+implement Eq : Pair {
+  fn eq(*const self, other: *const Self) bool {
+    (self.rank == other.rank) && (self.label == other.label)
+  }
+}
+
+fn main() i32 {
+  let a = Pair { .rank = 5, .label = 1 };
+  let b = Pair { .rank = 5, .label = 2 };
+  let c = Pair { .rank = 7, .label = 2 };
+
+  @println("{}", a == a);
+  @println("{}", a == b);
+  @println("{}", a != b);
+  @println("{}", a <= b);
+  @println("{}", a >= b);
+  @println("{}", a < b);
+  @println("{}", a < c);
+  @println("{}", a > c);
+  @println("{}", c > a);
+  @println("{}", b <= a);
+  @println("{}", b == c);
+  @println("{}", b < c);
+  return 0;
+}

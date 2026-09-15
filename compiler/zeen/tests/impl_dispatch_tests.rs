@@ -265,3 +265,62 @@ fn main() {}
         "zeen::typechecker::interface_signature_mismatch",
     );
 }
+
+/// Ordering operators exist only via `Ord`; a struct with just `Eq` rejects
+/// them like any unsupported binary operator.
+#[test]
+fn ordering_op_needs_ord() {
+    compile_fails(
+        "ordering_needs_ord",
+        r#"
+struct Foo {
+  pub x: i32
+}
+
+implement Eq : Foo {
+  fn eq(*const self, other: *const Self) bool {
+    self.x == other.x
+  }
+}
+
+fn main() {
+  let a = Foo { .x = 1 };
+  let b = Foo { .x = 2 };
+  @println("{}", a < b);
+}
+"#,
+        "zeen::typechecker::not_supported_binary",
+    );
+}
+
+/// `Ord.cmp` takes `*const Self`; a mixed comparison with a non-struct value
+/// is a mismatched argument, not a valid ordering.
+#[test]
+fn ordering_op_type_mismatch() {
+    compile_fails(
+        "ordering_type_mismatch",
+        r#"
+struct Foo {
+  pub x: i32
+}
+
+implement Ord : Foo {
+  fn cmp(*const self, other: *const Self) Ordering {
+    if (self.x < other.x) {
+      Ordering.Less
+    } else if (self.x > other.x) {
+      Ordering.Greater
+    } else {
+      Ordering.Equal
+    }
+  }
+}
+
+fn main() {
+  let a = Foo { .x = 1 };
+  @println("{}", a < 5);
+}
+"#,
+        "zeen::typechecker::mismatch",
+    );
+}
