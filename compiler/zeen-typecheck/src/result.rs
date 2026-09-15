@@ -266,4 +266,11 @@ pub struct CallResolution {
 pub struct OperatorResolution {
     pub method_def: DefId,
     pub generic_args: Vec<TypeId>,
+    pub ordering_cmp: Option<OrderingCmpTarget>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct OrderingCmpTarget {
+    pub variant: usize,
+    pub negate: bool,
 }
