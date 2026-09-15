@@ -14,7 +14,7 @@ use crate::{
     coerce::{CoerceResult, try_coerce},
     context::{FnCtx, InterfaceRegistry, TypeCheckCtx},
     format_str::FormatSpec,
-    result::{CallResolution, ImplEntry, OperatorResolution, TypeCheckResult},
+    result::{CallResolution, ImplEntry, OperatorResolution, OrderingCmpTarget, TypeCheckResult},
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -5422,7 +5422,7 @@ impl<'res> TypeChecker<'res> {
         use BinaryOp::*;
 
         if matches!(op, Lt | Gt | Le | Ge) {
-            return self.check_ordering_op(lhs, rhs, &source);
+            return self.check_ordering_op(op, lhs, rhs, expr_id, &source);
         }
 
         if matches!(op, LogicalAnd | LogicalOr) {
@@ -5434,15 +5434,36 @@ impl<'res> TypeChecker<'res> {
                 def_id,
                 generic_args,
             } => {
-                let Some((iface_name, method_name)) = binary_op_interface(op) else {
-                    self.report(TypeError::BinaryNotSupported {
-                        op,
-                        lhs_type: self.display_type(lhs).into(),
-                        rhs_type: self.display_type(rhs).into(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-                    return self.result.interner.error();
+                // `==`/`!=` prefer `Eq.eq` and fall back to `Ord.cmp`; a
+                // missing `Eq` keeps the old `Eq` impl diagnostic.
+                let (iface_name, method_name) = if matches!(op, Eq | Ne) {
+                    if self.struct_implements_interface(def_id, "Eq", &generic_args) {
+                        ("Eq", "eq")
+                    } else if self.struct_implements_interface(def_id, "Ord", &generic_args) {
+                        ("Ord", "cmp")
+                    } else {
+                        self.call_interface_method(
+                            def_id,
+                            &generic_args,
+                            ("Eq", "eq"),
+                            &[rhs],
+                            ReceiverAccess::Value,
+                            &source,
+                        );
+                        return self.result.interner.error();
+                    }
+                } else {
+                    let Some(mapping) = binary_op_interface(op) else {
+                        self.report(TypeError::BinaryNotSupported {
+                            op,
+                            lhs_type: self.display_type(lhs).into(),
+                            rhs_type: self.display_type(rhs).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                        return self.result.interner.error();
+                    };
+                    mapping
                 };
 
                 match self.call_interface_method(
@@ -5459,10 +5480,15 @@ impl<'res> TypeChecker<'res> {
                             OperatorResolution {
                                 method_def: r.method_def,
                                 generic_args: generic_args.to_vec(),
+                                ordering_cmp: self.ordering_cmp_target(r.ret_ty, op),
                             },
                         );
 
-                        r.ret_ty
+                        if iface_name == "Ord" && matches!(op, Eq | Ne) {
+                            self.result.interner.builtin(BuiltinType::bool)
+                        } else {
+                            r.ret_ty
+                        }
                     }
                     None => self.result.interner.error(),
                 }
@@ -5577,7 +5603,45 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_ordering_op(&mut self, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
+    fn check_ordering_op(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypeId,
+        rhs: TypeId,
+        expr_id: HirId,
+        source: &Source,
+    ) -> TypeId {
+        // A struct implementing `Ord` compares through `cmp` against the
+        // `Ordering` variant that makes the operator true.
+        if let Type::Struct {
+            def_id,
+            generic_args,
+        } = self.result.interner.get(lhs).clone()
+            && self.struct_implements_interface(def_id, "Ord", &generic_args)
+        {
+            let Some(r) = self.call_interface_method(
+                def_id,
+                &generic_args,
+                ("Ord", "cmp"),
+                &[rhs],
+                ReceiverAccess::Value,
+                source,
+            ) else {
+                return self.result.interner.error();
+            };
+
+            self.result.operator_resolutions.insert(
+                expr_id,
+                OperatorResolution {
+                    method_def: r.method_def,
+                    generic_args: generic_args.to_vec(),
+                    ordering_cmp: self.ordering_cmp_target(r.ret_ty, op),
+                },
+            );
+
+            return self.result.interner.builtin(BuiltinType::bool);
+        }
+
         let comparable = lhs == rhs
             || try_coerce(&mut self.result.interner, lhs, rhs).is_ok()
             || try_coerce(&mut self.result.interner, rhs, lhs).is_ok();
@@ -5610,6 +5674,47 @@ impl<'res> TypeChecker<'res> {
             });
             self.result.interner.error()
         }
+    }
+
+    /// Whether `struct_def` has an applicable implementation of the interface.
+    fn struct_implements_interface(
+        &self,
+        struct_def: DefId,
+        iface_name: &str,
+        generic_args: &[TypeId],
+    ) -> bool {
+        self.interface_registry
+            .get(iface_name)
+            .is_some_and(|iface_def| {
+                self.applicable_impl(struct_def, iface_def, generic_args)
+                    .is_some()
+            })
+    }
+
+    /// Maps a comparison operator to the `Ordering` variant it accepts. Only
+    /// meaningful when the operand type is the `Ordering` enum `cmp` returns.
+    fn ordering_cmp_target(&self, ty: TypeId, op: BinaryOp) -> Option<OrderingCmpTarget> {
+        let Type::Enum { def_id } = self.result.interner.get(ty).clone() else {
+            return None;
+        };
+
+        let (name, negate) = match op {
+            BinaryOp::Lt => ("Less", false),
+            BinaryOp::Gt => ("Greater", false),
+            BinaryOp::Eq => ("Equal", false),
+            BinaryOp::Ne => ("Equal", true),
+            BinaryOp::Le => ("Greater", true),
+            BinaryOp::Ge => ("Less", true),
+            _ => return None,
+        };
+
+        let variant = self
+            .enum_variants
+            .get(&def_id)?
+            .iter()
+            .position(|&variant| self.def_name(variant).as_deref() == Some(name))?;
+
+        Some(OrderingCmpTarget { variant, negate })
     }
 
     fn check_binary_op_on_generic(
@@ -5718,6 +5823,7 @@ impl<'res> TypeChecker<'res> {
                             OperatorResolution {
                                 method_def: r.method_def,
                                 generic_args: generic_args.clone(),
+                                ordering_cmp: None,
                             },
                         );
 
@@ -5851,6 +5957,7 @@ impl<'res> TypeChecker<'res> {
                     OperatorResolution {
                         method_def: res.method_def,
                         generic_args: generic_args.to_vec(),
+                        ordering_cmp: None,
                     },
                 );
 
@@ -5897,6 +6004,7 @@ impl<'res> TypeChecker<'res> {
                     OperatorResolution {
                         method_def: r.method_def,
                         generic_args: generic_args.to_vec(),
+                        ordering_cmp: None,
                     },
                 );
 
@@ -5944,6 +6052,7 @@ impl<'res> TypeChecker<'res> {
                     OperatorResolution {
                         method_def: r.method_def,
                         generic_args: generic_args.to_vec(),
+                        ordering_cmp: None,
                     },
                 );
                 r.ret_ty

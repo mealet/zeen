@@ -2320,6 +2320,54 @@ impl<'ctx> MirLowering<'ctx> {
 
             HirExprKind::Binary { lhs, rhs, op } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                    if let Some(cmp) = op_res.ordering_cmp {
+                        let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
+                        let rhs_ty = self.expr_type(fb, rhs);
+                        let ordering_ty = self
+                            .typecheck
+                            .def_types
+                            .get(&op_res.method_def)
+                            .and_then(|ty| match self.typecheck.interner.get(*ty) {
+                                Type::Fn { ret, .. } => Some(*ret),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| self.expr_type(fb, expr));
+
+                        let (block, call_op) = self.lower_operator_method_call_with_extra_args(
+                            fb,
+                            lhs,
+                            &[(rhs_op, rhs_ty)],
+                            &op_res,
+                            block,
+                            ordering_ty,
+                        );
+
+                        let temp = fb.new_temp(self.expr_type(fb, expr));
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::BinaryOp {
+                                    op: if cmp.negate {
+                                        BinaryOp::Ne
+                                    } else {
+                                        BinaryOp::Eq
+                                    },
+                                    lhs: call_op,
+                                    rhs: Operand::Constant(
+                                        ConstValue::Int(cmp.variant as i128),
+                                        Some(expr.source.clone()),
+                                    ),
+                                },
+                                source: Some(expr.source.clone()),
+                            },
+                        );
+                        return (
+                            block,
+                            Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                        );
+                    }
+
                     let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
                     let rhs_ty = self.expr_type(fb, rhs);
                     let result_ty = self.expr_type(fb, expr);
