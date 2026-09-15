@@ -5405,6 +5405,17 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    /// Returns the concrete return type of the monomorphized operator method,
+    /// resolving through the same substitution the function-body lowering uses.
+    /// The typechecker records interface-method types for bounded generic
+    /// receivers; only the monomorphized copy knows the pointee/element type.
+    fn operator_call_ret_type(&mut self, fb: &FnBuilder, op_res: &OperatorResolution) -> TypeId {
+        let mono_args = self.substitute_generic_args(fb, &op_res.generic_args);
+        let owner = self.typecheck.method_owner.get(&op_res.method_def).copied();
+        let mir_fn_id = self.monomorphize_fn(op_res.method_def, mono_args, owner, &[]);
+        self.program.functions[&mir_fn_id].ret_ty
+    }
+
     fn lower_diverging_macro(
         &mut self,
         fb: &mut FnBuilder,

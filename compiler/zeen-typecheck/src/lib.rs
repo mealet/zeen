@@ -2198,6 +2198,62 @@ impl<'res> TypeChecker<'res> {
                         ),
                     },
                     Type::Error => self.result.interner.error(),
+                    Type::GenericParam(g) if range_index.is_none() => {
+                        let (iface_name, method_name) = if self.expect_assign_interface {
+                            ("IndexPtr", "index_ptr")
+                        } else {
+                            ("Index", "index")
+                        };
+
+                        let Some(iface_def) = self.interface_registry.get(iface_name) else {
+                            self.report(TypeError::InterfaceNotAvailable {
+                                name: iface_name.into(),
+                                src: object.source.src(),
+                                span: object.source.span,
+                            });
+                            return self.result.interner.error();
+                        };
+
+                        if !self.ctx.generic_bounds(g).contains(&iface_def) {
+                            self.report(TypeError::GenericMissingBound {
+                                generic: self.def_name(g).unwrap_or_default().into(),
+                                bound: iface_name.into(),
+                                src: object.source.src(),
+                                span: object.source.span,
+                            });
+                            return self.result.interner.error();
+                        }
+
+                        let Some(method_def) =
+                            self.interface_methods.get(&iface_def).and_then(|methods| {
+                                methods
+                                    .iter()
+                                    .copied()
+                                    .find(|&m| self.def_name(m).as_deref() == Some(method_name))
+                            })
+                        else {
+                            return self.result.interner.error();
+                        };
+
+                        self.result.operator_resolutions.insert(
+                            expr.id,
+                            OperatorResolution {
+                                method_def,
+                                generic_args: vec![obj_ty],
+                                ordering_cmp: None,
+                            },
+                        );
+
+                        self.fn_sigs[&method_def].ret
+                    }
+                    Type::GenericParam(_) if range_index.is_some() => {
+                        self.report(TypeError::NotIndexable {
+                            child_type: self.display_type(obj_ty).into(),
+                            src: object.source.src(),
+                            span: object.source.span,
+                        });
+                        self.result.interner.error()
+                    }
                     _ => {
                         self.report(TypeError::NotIndexable {
                             child_type: self.display_type(obj_ty).into(),
@@ -5951,7 +6007,7 @@ impl<'res> TypeChecker<'res> {
             Type::GenericParam(g) => {
                 let (iface_name, method_name) =
                     if matches!(op, UnaryOp::Deref) && self.expect_assign_interface {
-                        ("DerefAssign", "deref_assign")
+                        ("DerefPtr", "deref_ptr")
                     } else {
                         let Some((iface, method)) = unary_op_interface(op) else {
                             self.report(TypeError::UnaryNotSupported {
@@ -5985,31 +6041,28 @@ impl<'res> TypeChecker<'res> {
                     return self.result.interner.error();
                 }
 
-                // Deref is not dispatchable from a generic parameter: the
-                // method return type (`*Self`) is not awaited by the caller
-                // (`T`). Neg/Not/BitNot return `Self` and dispatch normally.
-                if !matches!(op, UnaryOp::Deref) {
-                    let Some(method_def) =
-                        self.interface_methods.get(&iface_def).and_then(|methods| {
-                            methods
-                                .iter()
-                                .copied()
-                                .find(|&m| self.def_name(m).as_deref() == Some(method_name))
-                        })
-                    else {
-                        return self.result.interner.error();
-                    };
+                let Some(method_def) = self.interface_methods.get(&iface_def).and_then(|methods| {
+                    methods
+                        .iter()
+                        .copied()
+                        .find(|&m| self.def_name(m).as_deref() == Some(method_name))
+                }) else {
+                    return self.result.interner.error();
+                };
 
-                    self.result.operator_resolutions.insert(
-                        expr_id,
-                        OperatorResolution {
-                            method_def,
-                            generic_args: vec![operand],
-                            ordering_cmp: None,
-                        },
-                    );
-                }
+                self.result.operator_resolutions.insert(
+                    expr_id,
+                    OperatorResolution {
+                        method_def,
+                        generic_args: vec![operand],
+                        ordering_cmp: None,
+                    },
+                );
 
+                // The pointee type is unknown at check time (`T: Deref`
+                // doesn't carry the inner `U`). Return the receiver type as
+                // a placeholder; MIR corrects `result_ty` from the
+                // monomorphized method signature.
                 operand
             }
 
