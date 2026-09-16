@@ -25,16 +25,16 @@ use zeen_ast::{
 use zeen_driver::{CompilationContext, CompilationOutput};
 use zeen_hir::{
     HirId, HirModule,
-    decl::{HirDecl, HirDeclKind, HirFn},
+    decl::{HirDecl, HirDeclKind, HirEnumVariantPayload, HirFn},
     expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind},
     stmt::{HirStmt, HirStmtKind},
     types::{HirTypeExpr, HirTypeKind},
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_types::{
-    ARRAY_LEN_FIELD, Capabilities, ReceiverAccess, SLICE_LEN_FIELD, SLICE_PTR_FIELD, SelfMode,
-    StructFieldInfo, StructTypeInfo, Type, TypeId, binary_op_interface, self_mode_of,
-    unary_op_interface,
+    ARRAY_LEN_FIELD, Capabilities, EnumTypeInfo, EnumVariantInfo, ReceiverAccess, SLICE_LEN_FIELD,
+    SLICE_PTR_FIELD, SelfMode, StructFieldInfo, StructTypeInfo, Type, TypeId, VariantPayload,
+    binary_op_interface, self_mode_of, unary_op_interface,
 };
 
 pub mod closure_alloc;
@@ -72,6 +72,7 @@ pub struct TypeChecker<'res> {
     struct_generics: HashMap<DefId, Vec<DefId>>,
     struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
     enum_variants: HashMap<DefId, Vec<DefId>>,
+    enum_generics: HashMap<DefId, Vec<DefId>>,
 
     type_aliases: HashMap<DefId, AliasDef>,
 
@@ -161,6 +162,7 @@ impl<'res> TypeChecker<'res> {
             struct_generics: HashMap::new(),
             struct_methods: HashMap::new(),
             enum_variants: HashMap::new(),
+            enum_generics: HashMap::new(),
             type_aliases: HashMap::new(),
             in_progress_aliases: HashSet::new(),
             all_generic_bounds: HashMap::new(),
@@ -173,6 +175,7 @@ impl<'res> TypeChecker<'res> {
     pub fn finish(mut self) -> Result<TypeCheckResult, Vec<TypeError>> {
         self.result.struct_generics = self.struct_generics;
         self.result.enum_variants = self.enum_variants;
+        self.result.enum_generics = self.enum_generics;
         self.result.interface_registry = self.interface_registry.into_name_map();
 
         if self.errors.is_empty() {
@@ -225,6 +228,16 @@ impl<'res> TypeChecker<'res> {
                     .insert(decl.def_id, s.generics.iter().map(|g| g.def_id).collect());
 
                 for generic in &s.generics {
+                    self.all_generic_bounds
+                        .insert(generic.def_id, generic.bounds.clone());
+                }
+            }
+
+            if let HirDeclKind::Enum(e) = &decl.kind {
+                self.enum_generics
+                    .insert(decl.def_id, e.generics.iter().map(|g| g.def_id).collect());
+
+                for generic in &e.generics {
                     self.all_generic_bounds
                         .insert(generic.def_id, generic.bounds.clone());
                 }
@@ -378,8 +391,80 @@ impl<'res> TypeChecker<'res> {
                 let variant_ids: Vec<DefId> = e.variants.iter().map(|v| v.def_id).collect();
                 self.enum_variants.insert(decl.def_id, variant_ids);
 
+                let mut variants_info = Vec::with_capacity(e.variants.len());
+
                 for variant in &e.variants {
                     self.result.def_types.insert(variant.def_id, enum_ty);
+
+                    let payload = variant.payload.as_ref().map(|payload| match payload {
+                        HirEnumVariantPayload::Single(ty) => {
+                            VariantPayload::Single(self.lower_hir_type(ty))
+                        }
+
+                        HirEnumVariantPayload::Anonymous {
+                            def_id: payload_def,
+                            fields,
+                        } => {
+                            let field_infos: Vec<StructFieldInfo> = fields
+                                .iter()
+                                .map(|f| {
+                                    let ty = self.lower_hir_type(&f.ty);
+                                    self.result.def_types.insert(f.def_id, ty);
+
+                                    StructFieldInfo {
+                                        name: f.name,
+                                        field_def: f.def_id,
+                                        field_ty: ty,
+                                        struct_def: *payload_def,
+                                        is_pub: true,
+                                    }
+                                })
+                                .collect();
+
+                            self.result.struct_info.insert(
+                                *payload_def,
+                                StructTypeInfo {
+                                    def_id: *payload_def,
+                                    fields: field_infos,
+                                    capabalities: Capabilities::MOVE_ONLY,
+                                },
+                            );
+
+                            let payload_struct_ty = self.result.interner.intern(Type::Struct {
+                                def_id: *payload_def,
+                                generic_args: Vec::new(),
+                            });
+
+                            VariantPayload::Struct(payload_struct_ty)
+                        }
+                    });
+
+                    variants_info.push(EnumVariantInfo {
+                        def_id: variant.def_id,
+                        name: variant.name,
+                        payload,
+                    });
+                }
+
+                self.result.enum_info.insert(
+                    decl.def_id,
+                    EnumTypeInfo {
+                        def_id: decl.def_id,
+                        variants: variants_info,
+                        capabalities: Capabilities::MOVE_ONLY,
+                    },
+                );
+
+                for method in &e.methods {
+                    self.result.method_owner.insert(method.def_id, decl.def_id);
+                    self.declare_signature(method);
+
+                    if let HirDeclKind::Fn(f) = &method.kind {
+                        self.struct_methods
+                            .entry(decl.def_id)
+                            .or_default()
+                            .insert(f.name.0, method.def_id);
+                    }
                 }
             }
 
@@ -534,7 +619,10 @@ impl<'res> TypeChecker<'res> {
         let Some(object_def) = imp.object else { return };
 
         // implement block on enum
-        if !matches!(self.def_kind(object_def), Some(DefKind::Struct)) {
+        if !matches!(
+            self.def_kind(object_def),
+            Some(DefKind::Struct) | Some(DefKind::Enum)
+        ) {
             self.report(TypeError::ImplementNonStruct {
                 src: source.src(),
                 span: imp.object_bindings_span,
@@ -542,11 +630,8 @@ impl<'res> TypeChecker<'res> {
             return;
         }
 
-        let struct_generics = self
-            .struct_generics
-            .get(&object_def)
-            .cloned()
-            .unwrap_or_default();
+        let member_generics = self.type_member_generics(object_def);
+        let struct_generics = &member_generics;
 
         let (object_args, is_specialized) = self.impl_object_args(imp, true);
 
@@ -847,20 +932,23 @@ impl<'res> TypeChecker<'res> {
                         .intern(Type::InterfaceSelfPlaceholder(*def_id)),
 
                     _ => {
-                        let struct_generics = self
-                            .struct_generics
-                            .get(def_id)
-                            .cloned()
-                            .unwrap_or_default();
-                        let generic_args: Vec<TypeId> = struct_generics
+                        let generic_args: Vec<TypeId> = self
+                            .type_member_generics(*def_id)
                             .iter()
                             .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
                             .collect();
 
-                        self.result.interner.intern(Type::Struct {
-                            def_id: *def_id,
-                            generic_args,
-                        })
+                        match self.def_kind(*def_id) {
+                            Some(DefKind::Enum) => self.result.interner.intern(Type::Enum {
+                                def_id: *def_id,
+                                generic_args,
+                            }),
+
+                            _ => self.result.interner.intern(Type::Struct {
+                                def_id: *def_id,
+                                generic_args,
+                            }),
+                        }
                     }
                 }
             }
@@ -886,10 +974,31 @@ impl<'res> TypeChecker<'res> {
                         .interner
                         .intern(Type::Interface { def_id: *def_id }),
 
-                    Some(DefKind::Enum) => self.result.interner.intern(Type::Enum {
-                        def_id: *def_id,
-                        generic_args: Vec::new(),
-                    }),
+                    Some(DefKind::Enum) => {
+                        let enum_generics =
+                            self.enum_generics.get(def_id).cloned().unwrap_or_default();
+
+                        if !enum_generics.is_empty() && args.len() != enum_generics.len() {
+                            let interner = self.interner.borrow();
+                            let name = interner.resolve(&self.resolution.defs[def_id].name).into();
+                            drop(interner);
+
+                            self.report(TypeError::GenericArgCountMismatch {
+                                name,
+                                expected: enum_generics.len(),
+                                found: args.len(),
+                                src: ty.source.src(),
+                                span: ty.source.span,
+                            });
+
+                            return self.result.interner.error();
+                        }
+
+                        self.result.interner.intern(Type::Enum {
+                            def_id: *def_id,
+                            generic_args: args,
+                        })
+                    }
 
                     Some(DefKind::TypeAlias) => self.lower_alias_ref(*def_id, args, ty),
 
@@ -1100,18 +1209,32 @@ impl<'res> TypeChecker<'res> {
     // > Pass 2
 
     fn compute_structs_capabilities(&mut self, decl: &HirDecl) {
-        let HirDeclKind::Struct(_) = &decl.kind else {
-            return;
-        };
+        match &decl.kind {
+            HirDeclKind::Struct(_) => {
+                let is_copy = self.struct_implements_by_name(decl.def_id, "Copy");
+                let has_explicit_drop = self.struct_implements_by_name(decl.def_id, "Drop");
 
-        let is_copy = self.struct_implements_by_name(decl.def_id, "Copy");
-        let has_explicit_drop = self.struct_implements_by_name(decl.def_id, "Drop");
+                if let Some(info) = self.result.struct_info.get_mut(&decl.def_id) {
+                    info.capabalities = Capabilities {
+                        is_copy,
+                        has_explicit_drop,
+                    };
+                }
+            }
 
-        if let Some(info) = self.result.struct_info.get_mut(&decl.def_id) {
-            info.capabalities = Capabilities {
-                is_copy,
-                has_explicit_drop,
-            };
+            HirDeclKind::Enum(_) => {
+                let is_copy = self.struct_implements_by_name(decl.def_id, "Copy");
+                let has_explicit_drop = self.struct_implements_by_name(decl.def_id, "Drop");
+
+                if let Some(info) = self.result.enum_info.get_mut(&decl.def_id) {
+                    info.capabalities = Capabilities {
+                        is_copy,
+                        has_explicit_drop,
+                    };
+                }
+            }
+
+            _ => {}
         }
     }
 
@@ -1120,6 +1243,14 @@ impl<'res> TypeChecker<'res> {
             return false;
         };
         self.resolution.impls.contains_key(&(struct_def, iface_def))
+    }
+
+    fn type_member_generics(&self, def: DefId) -> Vec<DefId> {
+        self.struct_generics
+            .get(&def)
+            .cloned()
+            .or_else(|| self.enum_generics.get(&def).cloned())
+            .unwrap_or_default()
     }
 
     // > Pass 3
@@ -1137,6 +1268,12 @@ impl<'res> TypeChecker<'res> {
                 });
 
                 for method in &s.methods {
+                    self.check_decl_body_as_method(method, decl.def_id, None, None);
+                }
+            }
+
+            HirDeclKind::Enum(e) => {
+                for method in &e.methods {
                     self.check_decl_body_as_method(method, decl.def_id, None, None);
                 }
             }
@@ -1180,8 +1317,7 @@ impl<'res> TypeChecker<'res> {
                 self.check_expr(value, declared_ty, true);
             }
 
-            HirDeclKind::Enum(_)
-            | HirDeclKind::Alias(_)
+            HirDeclKind::Alias(_)
             | HirDeclKind::ExternVar { .. }
             | HirDeclKind::ExternLink
             | HirDeclKind::ExternInclude => {}
@@ -6314,7 +6450,7 @@ mod tests {
     use lasso::Rodeo;
     use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
     use zeen_hir::HirLowering;
-    use zeen_resolve::resolve;
+    use zeen_resolve::{DefId, resolve};
 
     use crate::{TypeCheckResult, TypeChecker, TypeError};
 
@@ -7897,5 +8033,196 @@ mod tests {
             "#,
         )
         .expect("a static method call receiver must not be flagged");
+    }
+
+    #[test]
+    fn enum_payloads_lower_into_enum_info() {
+        let result = typecheck(
+            r#"
+            enum Foo {
+                a,
+                b: i32,
+                c: {
+                    inner: i32,
+                    hello: u32,
+                },
+            }
+            fn main() {
+                let _ = Foo.a;
+            }
+            "#,
+        )
+        .expect("enum with payload variants should typecheck");
+
+        let foo_def = *result.enum_info.keys().next().unwrap();
+        let info = &result.enum_info[&foo_def];
+
+        assert_eq!(info.variants.len(), 3);
+        assert!(info.variants[0].payload.is_none());
+        assert!(matches!(
+            info.variants[1].payload,
+            Some(zeen_types::VariantPayload::Single(_))
+        ));
+
+        let Some(zeen_types::VariantPayload::Struct(payload_ty)) = info.variants[2].payload else {
+            panic!("anonymous payload must lower to a struct type");
+        };
+
+        let zeen_types::Type::Struct {
+            def_id: payload_def,
+            ..
+        } = result.interner.get(payload_ty).clone()
+        else {
+            panic!("anonymous payload type must be a struct");
+        };
+
+        let payload_info = &result.struct_info[&payload_def];
+        assert_eq!(payload_info.fields.len(), 2);
+        assert!(payload_info.fields.iter().all(|f| f.is_pub));
+
+        assert_eq!(
+            result.enum_variants[&foo_def].len(),
+            3,
+            "all variants carry a DefId"
+        );
+    }
+
+    #[test]
+    fn enum_generic_params_are_registered_and_checked() {
+        let errors = typecheck(
+            r#"
+            enum Opt[T] {
+                some: T,
+                none,
+            }
+            fn take(o: Opt[i32]) {}
+            fn take_bad(o: Opt[i32, i32]) {}
+            fn main() {
+                let _ = take;
+            }
+            "#,
+        )
+        .expect_err("enum generic arity mismatch must be reported");
+
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::GenericArgCountMismatch {
+                    name,
+                    expected: 1,
+                    found: 2,
+                    ..
+                } if name.as_str() == "Opt"
+            )),
+            "expected GenericArgCountMismatch(Opt), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_generics_registered_in_result() {
+        let result = typecheck(
+            r#"
+            enum Opt[T] {
+                some: T,
+                none,
+            }
+            fn take(o: Opt[i32]) {}
+            fn main() {
+                let _ = take;
+            }
+            "#,
+        )
+        .expect("generic enum must typecheck");
+
+        let opt_def = *result.enum_info.keys().next().unwrap();
+        assert_eq!(result.enum_generics[&opt_def].len(), 1);
+
+        let Some(zeen_types::VariantPayload::Single(payload_ty)) =
+            result.enum_info[&opt_def].variants[0].payload
+        else {
+            panic!("`some: T` must lower to a single payload");
+        };
+
+        assert!(matches!(
+            result.interner.get(payload_ty),
+            zeen_types::Type::GenericParam(_)
+        ));
+    }
+
+    #[test]
+    fn enum_methods_are_registered_and_bodies_checked() {
+        let result = typecheck(
+            r#"
+            enum Foo {
+                a,
+                fn first(self) i32 {
+                    return 1;
+                }
+                fn static_val() i32 {
+                    return 2;
+                }
+            }
+            fn main() {
+                let _ = Foo.a;
+            }
+            "#,
+        )
+        .expect("enum methods should typecheck");
+
+        let foo_def = *result.enum_info.keys().next().unwrap();
+
+        let enum_methods: Vec<DefId> = result
+            .method_owner
+            .iter()
+            .filter(|(_, owner)| **owner == foo_def)
+            .map(|(method, _)| *method)
+            .collect();
+
+        assert_eq!(enum_methods.len(), 2);
+    }
+
+    #[test]
+    fn implement_copy_on_enum_is_allowed() {
+        let result = typecheck(
+            r#"
+            interface Copy {}
+            enum Color {
+                red,
+                green,
+            }
+            implement Copy : Color {}
+            fn main() {
+                let _ = Color.red;
+            }
+            "#,
+        )
+        .expect("implement Copy on enum must be allowed");
+
+        let color_def = *result.enum_info.keys().next().unwrap();
+        assert!(result.enum_info[&color_def].capabalities.is_copy);
+    }
+
+    #[test]
+    fn implement_drop_on_enum_is_allowed() {
+        let result = typecheck(
+            r#"
+            interface Drop {}
+            enum Resource {
+                handle: i32,
+            }
+            implement Drop : Resource {}
+            fn main() {
+                let _ = Resource.handle;
+            }
+            "#,
+        )
+        .expect("implement Drop on enum must be allowed");
+
+        let resource_def = *result.enum_info.keys().next().unwrap();
+        assert!(
+            result.enum_info[&resource_def]
+                .capabalities
+                .has_explicit_drop
+        );
     }
 }

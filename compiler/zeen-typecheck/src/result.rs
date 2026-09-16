@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use zeen_ast::Source;
 use zeen_hir::HirId;
 use zeen_resolve::DefId;
-use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
+use zeen_types::{EnumTypeInfo, StructTypeInfo, Type, TypeId, TypeInterner};
 
 use crate::closure_alloc::ClosureAllocKind;
 use crate::format_str::FormatChunk;
@@ -19,6 +19,8 @@ pub struct TypeCheckResult {
     pub operator_resolutions: HashMap<HirId, OperatorResolution>,
     pub struct_info: HashMap<DefId, StructTypeInfo>,
     pub struct_generics: HashMap<DefId, Vec<DefId>>,
+    pub enum_info: HashMap<DefId, EnumTypeInfo>,
+    pub enum_generics: HashMap<DefId, Vec<DefId>>,
     /// Interface names -> their `DefId`, so downstream passes (MIR, flow) can
     /// resolve capabilities like `Copy` per concrete instantiation.
     pub interface_registry: HashMap<String, DefId>,
