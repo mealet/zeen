@@ -119,6 +119,11 @@ pub struct ResolutionResult {
     /// deduplicated) list of `DefId`s it captures from its environment. Env
     /// values become extra params of the generated closure function.
     pub closure_captures: HashMap<DefId, Vec<DefId>>,
+
+    /// Maps an enum variant carrying an anonymous struct payload to the
+    /// synthetic `DefKind::Struct` that models the payload. Fields of that
+    /// struct are plain `DefKind::Field` defs reachable via `def_of_field`.
+    pub enum_payload_struct_defs: HashMap<DefId, DefId>,
 }
 
 impl ResolutionResult {
@@ -146,5 +151,9 @@ impl ResolutionResult {
 
     pub fn def_of_variant(&self, v: &zeen_ast::declarations::EnumVariant) -> Option<DefId> {
         self.binding_sites.get(&NodeKey::from_variant(v)).copied()
+    }
+
+    pub fn def_of_enum_payload_struct(&self, variant: DefId) -> Option<DefId> {
+        self.enum_payload_struct_defs.get(&variant).copied()
     }
 }

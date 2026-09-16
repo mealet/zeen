@@ -810,7 +810,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                     (NamespaceTag::Type, name.0, name.1, is_pub)
                 }
                 DeclarationKind::EnumDecl { name, is_pub, .. } => {
-                    (NamespaceTag::Value, name.0, name.1, is_pub)
+                    (NamespaceTag::Type, name.0, name.1, is_pub)
                 }
                 DeclarationKind::ExternVar { name, is_pub, .. } => {
                     (NamespaceTag::Value, name.0, name.1, is_pub)

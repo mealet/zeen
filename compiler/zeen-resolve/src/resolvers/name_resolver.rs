@@ -10,7 +10,7 @@ use std::{
 };
 
 use zeen_ast::{
-    declarations::{Declaration, DeclarationKind, GenericType},
+    declarations::{Declaration, DeclarationKind, EnumVariantPayload, GenericType},
     expressions::{Expression, ExpressionKind},
     statements::{Statement, StatementKind},
     types::{TypeExpr, TypeKind},
@@ -380,7 +380,41 @@ impl<'ctx> NameResolver {
                         },
                     );
 
-                    self.table.declare_value(variant.name, variant_id);
+                    if let Some(EnumVariantPayload::Anonymous(fields)) = variant.payload {
+                        let enum_name = self.interner_resolve(&name.0);
+                        let variant_name = self.interner_resolve(&variant.name);
+                        let struct_id = {
+                            let struct_name_spur = self
+                                .interner
+                                .borrow_mut()
+                                .get_or_intern(format!("{enum_name}.{variant_name}"));
+
+                            self.define(DefInfo {
+                                name: struct_name_spur,
+                                kind: DefKind::Struct,
+                                span: decl.source.clone(),
+                                decl: Some(NodeKey::from_decl(decl)),
+                                is_pub: true,
+                            })
+                        };
+
+                        self.result
+                            .enum_payload_struct_defs
+                            .insert(variant_id, struct_id);
+
+                        for field in fields {
+                            self.define_at(
+                                NodeKey::from_field(field),
+                                DefInfo {
+                                    name: field.name,
+                                    kind: DefKind::Field,
+                                    span: decl.source.clone(),
+                                    decl: Some(NodeKey::from_decl(decl)),
+                                    is_pub: true,
+                                },
+                            );
+                        }
+                    }
                 }
             }
 
