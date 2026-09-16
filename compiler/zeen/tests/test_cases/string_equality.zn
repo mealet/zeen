@@ -1,0 +1,11 @@
+fn foo() i32 { return 42; }
+fn bar() i32 { return 0; }
+
+fn main() i32 {
+  @println("{}", "Hello" == "Hello");
+  @println("{}", "Hello" != "World");
+  @println("{}", foo == foo);
+  @println("{}", foo == bar);
+  @println("{}", foo != bar);
+  return 0;
+}

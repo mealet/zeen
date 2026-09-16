@@ -1,0 +1,35 @@
+struct Item {
+  pub id: i32
+}
+
+struct Ticket[T] {
+  pub priority: i32,
+  pub payload: T
+}
+
+implement[T] Ord : Ticket[T] {
+  fn cmp(*const self, other: *const Self) Ordering {
+    if (self.priority < other.priority) {
+      Ordering.Less
+    } else if (self.priority > other.priority) {
+      Ordering.Greater
+    } else {
+      Ordering.Equal
+    }
+  }
+}
+
+fn main() i32 {
+  let p1 = Ticket { .priority = 1, .payload = Item { .id = 1 } };
+  let p2 = Ticket { .priority = 2, .payload = Item { .id = 2 } };
+  let p2b = Ticket { .priority = 2, .payload = Item { .id = 3 } };
+
+  @println("{}", p1 < p2);
+  @println("{}", p2 > p1);
+  @println("{}", p1 > p2b);
+  @println("{}", p2 <= p2b);
+  @println("{}", p2 == p2b);
+  @println("{}", p2 >= p1);
+  @println("{}", p2 != p1);
+  return 0;
+}

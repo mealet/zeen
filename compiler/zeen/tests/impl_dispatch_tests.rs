@@ -265,3 +265,155 @@ fn main() {}
         "zeen::typechecker::interface_signature_mismatch",
     );
 }
+
+/// Ordering operators exist only via `Ord`; a struct with just `Eq` rejects
+/// them like any unsupported binary operator.
+#[test]
+fn ordering_op_needs_ord() {
+    compile_fails(
+        "ordering_needs_ord",
+        r#"
+struct Foo {
+  pub x: i32
+}
+
+implement Eq : Foo {
+  fn eq(*const self, other: *const Self) bool {
+    self.x == other.x
+  }
+}
+
+fn main() {
+  let a = Foo { .x = 1 };
+  let b = Foo { .x = 2 };
+  @println("{}", a < b);
+}
+"#,
+        "zeen::typechecker::not_supported_binary",
+    );
+}
+
+/// `Ord.cmp` takes `*const Self`; a mixed comparison with a non-struct value
+/// is a mismatched argument, not a valid ordering.
+#[test]
+fn ordering_op_type_mismatch() {
+    compile_fails(
+        "ordering_type_mismatch",
+        r#"
+struct Foo {
+  pub x: i32
+}
+
+implement Ord : Foo {
+  fn cmp(*const self, other: *const Self) Ordering {
+    if (self.x < other.x) {
+      Ordering.Less
+    } else if (self.x > other.x) {
+      Ordering.Greater
+    } else {
+      Ordering.Equal
+    }
+  }
+}
+
+fn main() {
+  let a = Foo { .x = 1 };
+  @println("{}", a < 5);
+}
+"#,
+        "zeen::typechecker::mismatch",
+    );
+}
+
+/// An ordering operator on an unbounded generic parameter reports a missing
+/// `Ord` bound instead of silently comparing the representation.
+#[test]
+fn ordering_op_on_unbounded_generic() {
+    compile_fails(
+        "ordering_unbounded_generic",
+        r#"
+fn less_than[T](a: T, b: T) bool {
+  return a < b;
+}
+
+fn main() {
+  @println("{}", less_than(1, 2));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}
+
+/// An `Eq` bound does not license ordering operators.
+#[test]
+fn ordering_op_on_eq_only_generic() {
+    compile_fails(
+        "ordering_eq_only_generic",
+        r#"
+fn less_than[T: Eq](a: T, b: T) bool {
+  return a > b;
+}
+
+fn main() {
+  @println("{}", less_than(1, 2));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}
+
+/// An equality operator on an unbounded generic parameter reports a missing
+/// `Eq` bound instead of comparing the representation.
+#[test]
+fn equality_op_on_unbounded_generic() {
+    compile_fails(
+        "equality_unbounded_generic",
+        r#"
+fn same[T](a: T, b: T) bool {
+  return a == b;
+}
+
+fn main() {
+  @println("{}", same(1, 2));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}
+
+/// An `Ord` bound does not license arithmetic operators.
+#[test]
+fn arithmetic_op_on_ord_only_generic() {
+    compile_fails(
+        "arithmetic_ord_only_generic",
+        r#"
+fn plus[T: Ord](a: T, b: T) T {
+  return a + b;
+}
+
+fn main() {
+  @println("{}", plus(1, 2));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}
+
+/// A unary operator on an unbounded generic parameter reports a missing
+/// bound instead of applying the raw operation.
+#[test]
+fn unary_op_on_unbounded_generic() {
+    compile_fails(
+        "unary_unbounded_generic",
+        r#"
+fn minus[T](a: T) T {
+  return -a;
+}
+
+fn main() {
+  @println("{}", minus(5));
+}
+"#,
+        "zeen::typechecker::generic_missing_bound",
+    );
+}
