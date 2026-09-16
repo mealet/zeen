@@ -2313,7 +2313,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
         let (specifier, value): (String, BasicValueEnum<'ctx>) =
             match self.typecheck.interner.get(pointee).clone() {
-                Type::Enum { def_id } => {
+                Type::Enum { def_id, .. } => {
                     let elem_ty = self.map_basic_type(pointee);
                     let disc = self
                         .builder
@@ -3185,7 +3185,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         spec: FormatSpec,
         func: &MirFunction,
     ) -> (String, Vec<BasicValueEnum<'ctx>>) {
-        if let Some(Type::Enum { def_id }) =
+        if let Some(Type::Enum { def_id, .. }) =
             arg_ty.map(|ty| self.typecheck.interner.get(ty).clone())
         {
             let disc = match operand {
@@ -3967,7 +3967,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 )
             }
             Type::Slice { element, .. } => format!("slice.{}", self.mangle_type_name(*element)),
-            Type::Enum { def_id } => self.resolve_def_name(*def_id),
+            Type::Enum { def_id, .. } => self.resolve_def_name(*def_id),
             Type::Fn { .. } => "fn".to_string(),
             Type::IntLiteral => "i32".to_string(),
             Type::FloatLiteral => "f64".to_string(),

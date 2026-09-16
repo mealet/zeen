@@ -516,7 +516,7 @@ impl<'a> MirPrinter<'a> {
             }
 
             Type::Interface { def_id } => self.resolve_def_name(def_id),
-            Type::Enum { def_id } => self.resolve_def_name(def_id),
+            Type::Enum { def_id, .. } => self.resolve_def_name(def_id),
 
             Type::Pointer { inner, is_const } => {
                 let inner_s = self.display_type(inner);

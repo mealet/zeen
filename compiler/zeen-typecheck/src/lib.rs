@@ -372,6 +372,7 @@ impl<'res> TypeChecker<'res> {
             HirDeclKind::Enum(e) => {
                 let enum_ty = self.result.interner.intern(Type::Enum {
                     def_id: decl.def_id,
+                    generic_args: Vec::new(),
                 });
 
                 let variant_ids: Vec<DefId> = e.variants.iter().map(|v| v.def_id).collect();
@@ -885,9 +886,10 @@ impl<'res> TypeChecker<'res> {
                         .interner
                         .intern(Type::Interface { def_id: *def_id }),
 
-                    Some(DefKind::Enum) => {
-                        self.result.interner.intern(Type::Enum { def_id: *def_id })
-                    }
+                    Some(DefKind::Enum) => self.result.interner.intern(Type::Enum {
+                        def_id: *def_id,
+                        generic_args: Vec::new(),
+                    }),
 
                     Some(DefKind::TypeAlias) => self.lower_alias_ref(*def_id, args, ty),
 
@@ -4268,7 +4270,10 @@ impl<'res> TypeChecker<'res> {
                 .unwrap_or(false)
         });
 
-        let enum_ty = self.result.interner.intern(Type::Enum { def_id: enum_def });
+        let enum_ty = self.result.interner.intern(Type::Enum {
+            def_id: enum_def,
+            generic_args: Vec::new(),
+        });
 
         match variant_def_id {
             Some(&variant_def) => {
@@ -5811,7 +5816,7 @@ impl<'res> TypeChecker<'res> {
     /// Maps a comparison operator to the `Ordering` variant it accepts. Only
     /// meaningful when the operand type is the `Ordering` enum `cmp` returns.
     fn ordering_cmp_target(&self, ty: TypeId, op: BinaryOp) -> Option<OrderingCmpTarget> {
-        let Type::Enum { def_id } = self.result.interner.get(ty).clone() else {
+        let Type::Enum { def_id, .. } = self.result.interner.get(ty).clone() else {
             return None;
         };
 

@@ -728,6 +728,7 @@ mod tests {
         let mut it = TypeInterner::new();
         let enum_ty = it.intern(Type::Enum {
             def_id: zeen_resolve::DefId(1),
+            generic_args: Vec::new(),
         });
         let i32 = it.intern(builtin(BuiltinType::i32));
 
