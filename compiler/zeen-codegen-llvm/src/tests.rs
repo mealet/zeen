@@ -405,7 +405,10 @@ fn enum_display_and_debug() {
     fx.typecheck
         .enum_variants
         .insert(color_def, vec![red, green, blue]);
-    let color_ty = fx.ty(Type::Enum { def_id: color_def });
+    let color_ty = fx.ty(Type::Enum {
+        def_id: color_def,
+        generic_args: Vec::new(),
+    });
 
     let print_def = fx.def("print", DefKind::Function);
     let void = fx.void();
@@ -441,7 +444,10 @@ fn enum_debug_prints_enum_name() {
     let color_def = fx.def("Color", DefKind::Enum);
     let red = fx.def("Red", DefKind::EnumVariant);
     fx.typecheck.enum_variants.insert(color_def, vec![red]);
-    let color_ty = fx.ty(Type::Enum { def_id: color_def });
+    let color_ty = fx.ty(Type::Enum {
+        def_id: color_def,
+        generic_args: Vec::new(),
+    });
 
     let print_def = fx.def("print", DefKind::Function);
     let void = fx.void();

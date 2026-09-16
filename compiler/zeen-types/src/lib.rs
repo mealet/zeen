@@ -47,6 +47,7 @@ pub enum Type {
 
     Enum {
         def_id: DefId,
+        generic_args: Vec<TypeId>,
     },
 
     Pointer {
@@ -117,28 +118,50 @@ impl Type {
                 if generic_args.is_empty() {
                     name
                 } else {
-                    let args: Vec<String> = generic_args
-                        .iter()
-                        .map(|&a| {
-                            type_interner.get(a).to_display(
-                                Rc::clone(&interner),
-                                type_interner,
-                                resolution_result,
-                            )
-                        })
-                        .collect();
-
-                    format!("{}[{}]", name, args.join(", "))
+                    format!(
+                        "{}{}",
+                        name,
+                        Type::display_args(
+                            generic_args,
+                            interner,
+                            type_interner,
+                            resolution_result
+                        )
+                    )
                 }
             }
 
-            Type::Interface { def_id } | Type::Enum { def_id } | Type::GenericParam(def_id) => {
-                resolution_result
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => {
+                let name = resolution_result
                     .defs
                     .get(def_id)
                     .map(|info| interner.borrow().resolve(&info.name).to_string())
-                    .unwrap_or("undefined".to_string())
+                    .unwrap_or("undefined".to_string());
+
+                if generic_args.is_empty() {
+                    name
+                } else {
+                    format!(
+                        "{}{}",
+                        name,
+                        Type::display_args(
+                            generic_args,
+                            interner,
+                            type_interner,
+                            resolution_result
+                        )
+                    )
+                }
             }
+
+            Type::Interface { def_id } | Type::GenericParam(def_id) => resolution_result
+                .defs
+                .get(def_id)
+                .map(|info| interner.borrow().resolve(&info.name).to_string())
+                .unwrap_or("undefined".to_string()),
 
             Type::Pointer { inner, is_const } => format!(
                 "*{}{}",
@@ -199,6 +222,26 @@ impl Type {
             Type::Never => "never".into(),
             Type::Error => "error".into(),
         }
+    }
+
+    fn display_args(
+        generic_args: &[TypeId],
+        interner: Rc<RefCell<lasso::Rodeo>>,
+        type_interner: &TypeInterner,
+        resolution_result: &zeen_resolve::ResolutionResult,
+    ) -> String {
+        let args: Vec<String> = generic_args
+            .iter()
+            .map(|&a| {
+                type_interner.get(a).to_display(
+                    Rc::clone(&interner),
+                    type_interner,
+                    resolution_result,
+                )
+            })
+            .collect();
+
+        format!("[{}]", args.join(", "))
     }
 }
 
@@ -300,6 +343,33 @@ pub struct StructFieldInfo {
     pub field_ty: TypeId,
     pub struct_def: DefId,
     pub is_pub: bool,
+}
+
+// Enum
+
+#[derive(Debug, Clone)]
+pub struct EnumTypeInfo {
+    pub def_id: DefId,
+    /// Variants in declaration order; the ordinal is the runtime tag value.
+    pub variants: Vec<EnumVariantInfo>,
+    pub capabalities: Capabilities,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariantInfo {
+    pub def_id: DefId,
+    pub name: Spur,
+    /// The variant payload; `None` for empty variants.
+    pub payload: Option<VariantPayload>,
+}
+
+#[derive(Debug, Clone)]
+pub enum VariantPayload {
+    /// `b: i32` - a single typed value.
+    Single(TypeId),
+    /// `c: { fields }` - an anonymous struct, stored as a synthetic
+    /// `Type::Struct` that reuses the regular struct machinery.
+    Struct(TypeId),
 }
 
 /// Representation of a method's `self` receiver:
@@ -786,6 +856,25 @@ mod tests {
     }
 
     #[test]
+    fn display_enum_type_with_generic_args() {
+        let mut interner = TypeInterner::new();
+        let mut resolution = ResolutionResult::default();
+        let mut rodeo = Rodeo::default();
+
+        let enum_def = DefId(1);
+        insert_def(&mut resolution, &mut rodeo, enum_def, "Opt", DefKind::Enum);
+
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let ty = interner.intern(Type::Enum {
+            def_id: enum_def,
+            generic_args: vec![i32],
+        });
+
+        let result = interner.display_type(ty, Rc::new(RefCell::new(rodeo)), &resolution);
+        assert_eq!(result, "Opt[i32]");
+    }
+
+    #[test]
     fn display_named_types_by_name() {
         let mut interner = TypeInterner::new();
         let mut resolution = ResolutionResult::default();
@@ -811,7 +900,10 @@ mod tests {
         );
 
         let iface_ty = interner.intern(Type::Interface { def_id: iface });
-        let enum_ty = interner.intern(Type::Enum { def_id: en });
+        let enum_ty = interner.intern(Type::Enum {
+            def_id: en,
+            generic_args: Vec::new(),
+        });
         let generic_ty = interner.intern(Type::GenericParam(generic));
 
         assert_eq!(
