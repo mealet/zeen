@@ -4,7 +4,7 @@ use lasso::{Rodeo, Spur};
 use smol_str::SmolStr;
 
 use zeen_ast::{
-    declarations::{Declaration, DeclarationKind, FnParam, GenericType},
+    declarations::{Declaration, DeclarationKind, EnumVariantPayload, FnParam, GenericType},
     expressions::{Expression, ExpressionKind},
     statements::{Statement, StatementKind},
     types::{TypeExpr, TypeKind},
@@ -32,8 +32,8 @@ pub struct HirModule {
 // =========| Public Exports |=========
 
 pub use decl::{
-    HirAlias, HirDecl, HirDeclKind, HirEnum, HirEnumVariant, HirField, HirFn, HirGenericParam,
-    HirImplement, HirInterface, HirParam, HirStruct,
+    HirAlias, HirDecl, HirDeclKind, HirEnum, HirEnumVariant, HirEnumVariantPayload, HirField,
+    HirFn, HirGenericParam, HirImplement, HirInterface, HirParam, HirStruct,
 };
 
 pub use expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind};
@@ -294,24 +294,70 @@ impl<'res> HirLowering<'res> {
                 name,
                 variants,
                 is_pub,
-                ..
+                generics,
+                methods,
             } => {
+                let enum_def = def_id.expect("EnumDecl must have DefId, something went wrong");
+
                 let hir_variants: Vec<HirEnumVariant> = variants
                     .iter()
-                    .map(|variant| HirEnumVariant {
-                        def_id: self
+                    .map(|variant| {
+                        let variant_def = self
                             .resolution
                             .def_of_variant(variant)
-                            .unwrap_or(DefId(u32::MAX)),
-                        name: variant.name,
-                        span: variant.span,
+                            .unwrap_or(DefId(u32::MAX));
+
+                        let payload = variant.payload.map(|payload| match payload {
+                            EnumVariantPayload::Single(ty) => {
+                                HirEnumVariantPayload::Single(Rc::new(self.lower_type(ty)))
+                            }
+
+                            EnumVariantPayload::Anonymous(fields) => {
+                                let payload_def = self
+                                    .resolution
+                                    .def_of_enum_payload_struct(variant_def)
+                                    .unwrap_or(enum_def);
+
+                                let hir_fields: Vec<HirField> = fields
+                                    .iter()
+                                    .map(|field| HirField {
+                                        def_id: self
+                                            .resolution
+                                            .def_of_field(field)
+                                            .unwrap_or(payload_def),
+                                        name: field.name,
+                                        ty: Rc::new(self.lower_type(field.ty)),
+                                        is_pub: true,
+                                    })
+                                    .collect();
+
+                                HirEnumVariantPayload::Anonymous {
+                                    def_id: payload_def,
+                                    fields: hir_fields,
+                                }
+                            }
+                        });
+
+                        HirEnumVariant {
+                            def_id: variant_def,
+                            name: variant.name,
+                            span: variant.span,
+                            payload,
+                        }
                     })
+                    .collect();
+
+                let hir_methods: Vec<Rc<HirDecl>> = methods
+                    .iter()
+                    .filter_map(|method| self.lower_decl_as_method(method, Some(enum_def)))
                     .collect();
 
                 HirDeclKind::Enum(Rc::new(HirEnum {
                     name,
                     is_pub,
+                    generics: self.lower_generics(generics),
                     variants: hir_variants,
+                    methods: hir_methods,
                 }))
             }
 
@@ -1182,7 +1228,45 @@ mod tests {
 
         for variant in &color.variants {
             assert_ne!(variant.def_id, DefId(u32::MAX));
+            assert!(variant.payload.is_none());
         }
+    }
+
+    #[test]
+    fn enum_lowers_with_payload_variants() {
+        let fx = lower_ok("enum Foo { a, b: i32, c: { inner: i32, hello: u32 } }");
+        let foo = fx.enum_decl("Foo");
+
+        assert_eq!(foo.variants.len(), 3);
+        assert!(foo.variants[0].payload.is_none());
+        assert!(matches!(
+            foo.variants[1].payload,
+            Some(HirEnumVariantPayload::Single(_))
+        ));
+
+        match &foo.variants[2].payload {
+            Some(HirEnumVariantPayload::Anonymous { def_id, fields }) => {
+                assert_ne!(*def_id, DefId(u32::MAX));
+                assert_eq!(fields.len(), 2);
+            }
+            other => panic!("expected Anonymous payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn enum_lowers_generics() {
+        let fx = lower_ok("enum Opt[T: Copy] { none, some: T }");
+        let opt = fx.enum_decl("Opt");
+
+        assert_eq!(opt.generics.len(), 1);
+        assert_ne!(opt.generics[0].def_id, DefId(u32::MAX));
+    }
+
+    #[test]
+    fn enum_lowers_methods() {
+        let fx = lower_ok("enum Foo { a, fn tag(self) u8 { return 0; } }");
+        let foo = fx.enum_decl("Foo");
+        assert_eq!(foo.methods.len(), 1);
     }
 
     #[test]

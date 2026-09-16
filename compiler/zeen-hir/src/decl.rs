@@ -141,7 +141,10 @@ pub struct HirImplement {
 pub struct HirEnum {
     pub name: (Spur, SourceSpan),
     pub is_pub: bool,
+
+    pub generics: Vec<HirGenericParam>,
     pub variants: Vec<HirEnumVariant>,
+    pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +152,19 @@ pub struct HirEnumVariant {
     pub def_id: DefId,
     pub name: Spur,
     pub span: SourceSpan,
+    pub payload: Option<HirEnumVariantPayload>,
+}
+
+#[derive(Debug, Clone)]
+pub enum HirEnumVariantPayload {
+    /// `b: i32` - a single typed value.
+    Single(Rc<HirTypeExpr>),
+    /// `c: { fields }` - an anonymous struct payload. The synthetic struct's
+    /// template only; monomorphization happens in the typechecker.
+    Anonymous {
+        def_id: DefId,
+        fields: Vec<HirField>,
+    },
 }
 
 // -> Alias
