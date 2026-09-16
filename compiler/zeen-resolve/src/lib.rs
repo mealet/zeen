@@ -338,6 +338,14 @@ mod tests {
     }
 
     #[test]
+    fn enum_generic_param_registered() {
+        let fx = resolve_ok("enum Opt[T: Copy] { none, some: T }");
+
+        let t = fx.find_def("T").expect("generic T must be defined");
+        assert!(matches!(t.kind, DefKind::GenericParam));
+    }
+
+    #[test]
     fn duplicate_type_definition_is_reported() {
         let errs = resolve_full("struct Foo {} struct Foo {}").unwrap_err();
 

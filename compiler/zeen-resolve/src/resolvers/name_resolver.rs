@@ -539,6 +539,41 @@ impl<'ctx> NameResolver {
                 self.table.pop();
             }
 
+            DeclarationKind::EnumDecl {
+                name,
+                generics,
+                variants,
+                methods,
+                ..
+            } => {
+                let self_def = self
+                    .table
+                    .lookup_type(name.0)
+                    .expect("enum is not registered in name resolver pass 1");
+
+                self.table.push(ScopeKind::Block);
+                self.declare_generics(generics, &decl.source.src);
+
+                for variant in variants {
+                    if let Some(payload) = variant.payload {
+                        match payload {
+                            EnumVariantPayload::Single(ty) => self.resolve_type(ty),
+                            EnumVariantPayload::Anonymous(fields) => {
+                                for field in fields {
+                                    self.resolve_type(field.ty);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for method in methods {
+                    self.resolve_method(method, self_def);
+                }
+
+                self.table.pop();
+            }
+
             DeclarationKind::InterfaceDecl {
                 generics, methods, ..
             } => {
@@ -648,10 +683,6 @@ impl<'ctx> NameResolver {
                 }
 
                 self.table.pop();
-            }
-
-            DeclarationKind::EnumDecl { .. } => {
-                // nothing to resolve (for now at least)
             }
 
             DeclarationKind::Alias(alias) => {
