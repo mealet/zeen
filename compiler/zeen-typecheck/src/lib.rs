@@ -14,7 +14,7 @@ use crate::{
     coerce::{CoerceResult, try_coerce},
     context::{FnCtx, InterfaceRegistry, TypeCheckCtx},
     format_str::FormatSpec,
-    result::{CallResolution, ImplEntry, OperatorResolution, TypeCheckResult},
+    result::{CallResolution, ImplEntry, OperatorResolution, OrderingCmpTarget, TypeCheckResult},
 };
 use crate::{error::TypeError, format_str::FormatParseError};
 
@@ -2198,6 +2198,62 @@ impl<'res> TypeChecker<'res> {
                         ),
                     },
                     Type::Error => self.result.interner.error(),
+                    Type::GenericParam(g) if range_index.is_none() => {
+                        let (iface_name, method_name) = if self.expect_assign_interface {
+                            ("IndexPtr", "index_ptr")
+                        } else {
+                            ("Index", "index")
+                        };
+
+                        let Some(iface_def) = self.interface_registry.get(iface_name) else {
+                            self.report(TypeError::InterfaceNotAvailable {
+                                name: iface_name.into(),
+                                src: object.source.src(),
+                                span: object.source.span,
+                            });
+                            return self.result.interner.error();
+                        };
+
+                        if !self.ctx.generic_bounds(g).contains(&iface_def) {
+                            self.report(TypeError::GenericMissingBound {
+                                generic: self.def_name(g).unwrap_or_default().into(),
+                                bound: iface_name.into(),
+                                src: object.source.src(),
+                                span: object.source.span,
+                            });
+                            return self.result.interner.error();
+                        }
+
+                        let Some(method_def) =
+                            self.interface_methods.get(&iface_def).and_then(|methods| {
+                                methods
+                                    .iter()
+                                    .copied()
+                                    .find(|&m| self.def_name(m).as_deref() == Some(method_name))
+                            })
+                        else {
+                            return self.result.interner.error();
+                        };
+
+                        self.result.operator_resolutions.insert(
+                            expr.id,
+                            OperatorResolution {
+                                method_def,
+                                generic_args: vec![obj_ty],
+                                ordering_cmp: None,
+                            },
+                        );
+
+                        self.fn_sigs[&method_def].ret
+                    }
+                    Type::GenericParam(_) if range_index.is_some() => {
+                        self.report(TypeError::NotIndexable {
+                            child_type: self.display_type(obj_ty).into(),
+                            src: object.source.src(),
+                            span: object.source.span,
+                        });
+                        self.result.interner.error()
+                    }
                     _ => {
                         self.report(TypeError::NotIndexable {
                             child_type: self.display_type(obj_ty).into(),
@@ -4727,20 +4783,22 @@ impl<'res> TypeChecker<'res> {
 
         match b {
             i8 | i16 | i32 | i64 | isize => &[
-                "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
-                "BitXor", "BitShl", "BitShr", "BitNot", "Neg",
+                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
+                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Neg",
             ],
 
             u8 | u16 | u32 | u64 | usize => &[
-                "Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd", "BitOr",
-                "BitXor", "BitShl", "BitShr", "BitNot",
+                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
+                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot",
             ],
 
-            f32 | f64 => &["Display", "Debug", "Eq", "Add", "Sub", "Mul", "Div", "Neg"],
+            f32 | f64 => &[
+                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Neg",
+            ],
 
             bool => &["Display", "Debug", "Eq", "Not"],
 
-            char => &["Display", "Debug", "Eq"],
+            char => &["Display", "Debug", "Eq", "Ord"],
 
             void => &[],
             never => &[],
@@ -5422,7 +5480,7 @@ impl<'res> TypeChecker<'res> {
         use BinaryOp::*;
 
         if matches!(op, Lt | Gt | Le | Ge) {
-            return self.check_ordering_op(lhs, rhs, &source);
+            return self.check_ordering_op(op, lhs, rhs, expr_id, &source);
         }
 
         if matches!(op, LogicalAnd | LogicalOr) {
@@ -5434,15 +5492,36 @@ impl<'res> TypeChecker<'res> {
                 def_id,
                 generic_args,
             } => {
-                let Some((iface_name, method_name)) = binary_op_interface(op) else {
-                    self.report(TypeError::BinaryNotSupported {
-                        op,
-                        lhs_type: self.display_type(lhs).into(),
-                        rhs_type: self.display_type(rhs).into(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-                    return self.result.interner.error();
+                // `==`/`!=` prefer `Eq.eq` and fall back to `Ord.cmp`; a
+                // missing `Eq` keeps the old `Eq` impl diagnostic.
+                let (iface_name, method_name) = if matches!(op, Eq | Ne) {
+                    if self.struct_implements_interface(def_id, "Eq", &generic_args) {
+                        ("Eq", "eq")
+                    } else if self.struct_implements_interface(def_id, "Ord", &generic_args) {
+                        ("Ord", "cmp")
+                    } else {
+                        self.call_interface_method(
+                            def_id,
+                            &generic_args,
+                            ("Eq", "eq"),
+                            &[rhs],
+                            ReceiverAccess::Value,
+                            &source,
+                        );
+                        return self.result.interner.error();
+                    }
+                } else {
+                    let Some(mapping) = binary_op_interface(op) else {
+                        self.report(TypeError::BinaryNotSupported {
+                            op,
+                            lhs_type: self.display_type(lhs).into(),
+                            rhs_type: self.display_type(rhs).into(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                        return self.result.interner.error();
+                    };
+                    mapping
                 };
 
                 match self.call_interface_method(
@@ -5459,16 +5538,23 @@ impl<'res> TypeChecker<'res> {
                             OperatorResolution {
                                 method_def: r.method_def,
                                 generic_args: generic_args.to_vec(),
+                                ordering_cmp: self.ordering_cmp_target(r.ret_ty, op),
                             },
                         );
 
-                        r.ret_ty
+                        if iface_name == "Ord" && matches!(op, Eq | Ne) {
+                            self.result.interner.builtin(BuiltinType::bool)
+                        } else {
+                            r.ret_ty
+                        }
                     }
                     None => self.result.interner.error(),
                 }
             }
 
-            Type::GenericParam(g) => self.check_binary_op_on_generic(op, g, lhs, rhs, &source),
+            Type::GenericParam(g) => {
+                self.check_binary_op_on_generic(op, g, lhs, rhs, expr_id, &source)
+            }
 
             _ => self.check_binary_op_builtin(op, lhs, rhs, &source),
         }
@@ -5577,7 +5663,102 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_ordering_op(&mut self, lhs: TypeId, rhs: TypeId, source: &Source) -> TypeId {
+    fn check_ordering_op(
+        &mut self,
+        op: BinaryOp,
+        lhs: TypeId,
+        rhs: TypeId,
+        expr_id: HirId,
+        source: &Source,
+    ) -> TypeId {
+        // A struct implementing `Ord` compares through `cmp` against the
+        // `Ordering` variant that makes the operator true.
+        if let Type::Struct {
+            def_id,
+            generic_args,
+        } = self.result.interner.get(lhs).clone()
+            && self.struct_implements_interface(def_id, "Ord", &generic_args)
+        {
+            let Some(r) = self.call_interface_method(
+                def_id,
+                &generic_args,
+                ("Ord", "cmp"),
+                &[rhs],
+                ReceiverAccess::Value,
+                source,
+            ) else {
+                return self.result.interner.error();
+            };
+
+            self.result.operator_resolutions.insert(
+                expr_id,
+                OperatorResolution {
+                    method_def: r.method_def,
+                    generic_args: generic_args.to_vec(),
+                    ordering_cmp: self.ordering_cmp_target(r.ret_ty, op),
+                },
+            );
+
+            return self.result.interner.builtin(BuiltinType::bool);
+        }
+
+        // A generic parameter bound by `Ord` compares through `cmp`; the
+        // concrete implementation is resolved per instantiation during MIR.
+        if let Type::GenericParam(g) = self.result.interner.get(lhs).clone() {
+            let Some(iface_def) = self.interface_registry.get("Ord") else {
+                self.report(TypeError::InterfaceNotAvailable {
+                    name: "Ord".into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+                return self.result.interner.error();
+            };
+
+            if !self.ctx.generic_bounds(g).contains(&iface_def) {
+                self.report(TypeError::GenericMissingBound {
+                    generic: self.def_name(g).unwrap_or_default().into(),
+                    bound: "Ord".into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+                return self.result.interner.error();
+            }
+
+            if rhs != lhs && !try_coerce(&mut self.result.interner, rhs, lhs).is_ok() {
+                self.report(TypeError::Mismatch {
+                    expected: self.display_type(lhs).into(),
+                    found: self.display_type(rhs).into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+            }
+
+            let Some(method_def) = self.interface_methods.get(&iface_def).and_then(|methods| {
+                methods
+                    .iter()
+                    .copied()
+                    .find(|&m| self.def_name(m).as_deref() == Some("cmp"))
+            }) else {
+                return self.result.interner.error();
+            };
+
+            let Some(ordering_cmp) = self.ordering_cmp_target(self.fn_sigs[&method_def].ret, op)
+            else {
+                return self.result.interner.error();
+            };
+
+            self.result.operator_resolutions.insert(
+                expr_id,
+                OperatorResolution {
+                    method_def,
+                    generic_args: vec![lhs],
+                    ordering_cmp: Some(ordering_cmp),
+                },
+            );
+
+            return self.result.interner.builtin(BuiltinType::bool);
+        }
+
         let comparable = lhs == rhs
             || try_coerce(&mut self.result.interner, lhs, rhs).is_ok()
             || try_coerce(&mut self.result.interner, rhs, lhs).is_ok();
@@ -5612,23 +5793,95 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    /// Whether `struct_def` has an applicable implementation of the interface.
+    fn struct_implements_interface(
+        &self,
+        struct_def: DefId,
+        iface_name: &str,
+        generic_args: &[TypeId],
+    ) -> bool {
+        self.interface_registry
+            .get(iface_name)
+            .is_some_and(|iface_def| {
+                self.applicable_impl(struct_def, iface_def, generic_args)
+                    .is_some()
+            })
+    }
+
+    /// Maps a comparison operator to the `Ordering` variant it accepts. Only
+    /// meaningful when the operand type is the `Ordering` enum `cmp` returns.
+    fn ordering_cmp_target(&self, ty: TypeId, op: BinaryOp) -> Option<OrderingCmpTarget> {
+        let Type::Enum { def_id } = self.result.interner.get(ty).clone() else {
+            return None;
+        };
+
+        let (name, negate) = match op {
+            BinaryOp::Lt => ("Less", false),
+            BinaryOp::Gt => ("Greater", false),
+            BinaryOp::Eq => ("Equal", false),
+            BinaryOp::Ne => ("Equal", true),
+            BinaryOp::Le => ("Greater", true),
+            BinaryOp::Ge => ("Less", true),
+            _ => return None,
+        };
+
+        let variant = self
+            .enum_variants
+            .get(&def_id)?
+            .iter()
+            .position(|&variant| self.def_name(variant).as_deref() == Some(name))?;
+
+        Some(OrderingCmpTarget { variant, negate })
+    }
+
     fn check_binary_op_on_generic(
         &mut self,
         op: BinaryOp,
         g: DefId,
         lhs: TypeId,
         rhs: TypeId,
+        expr_id: HirId,
         source: &Source,
     ) -> TypeId {
-        let Some((iface_name, _method_name)) = binary_op_interface(op) else {
-            self.report(TypeError::BinaryNotSupported {
-                op: BinaryOp::Lt,
-                lhs_type: self.display_type(lhs).into(),
-                rhs_type: self.display_type(rhs).into(),
-                src: source.src(),
-                span: source.span,
-            });
-            return self.result.interner.error();
+        use BinaryOp::*;
+
+        // `==`/`!=` dispatch through the `Eq` bound and fall back to `Ord`,
+        // mirroring the concrete struct path; every other operator uses its
+        // `binary_op_interface` mapping.
+        let (iface_name, method_name) = if matches!(op, Eq | Ne) {
+            let eq_bound = self
+                .interface_registry
+                .get("Eq")
+                .is_some_and(|d| self.ctx.generic_bounds(g).contains(&d));
+            let ord_bound = self
+                .interface_registry
+                .get("Ord")
+                .is_some_and(|d| self.ctx.generic_bounds(g).contains(&d));
+            if eq_bound {
+                ("Eq", "eq")
+            } else if ord_bound {
+                ("Ord", "cmp")
+            } else {
+                self.report(TypeError::GenericMissingBound {
+                    generic: self.def_name(g).unwrap_or_default().into(),
+                    bound: "Eq".into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+                return self.result.interner.error();
+            }
+        } else {
+            let Some((iface, method)) = binary_op_interface(op) else {
+                self.report(TypeError::BinaryNotSupported {
+                    op: BinaryOp::Lt,
+                    lhs_type: self.display_type(lhs).into(),
+                    rhs_type: self.display_type(rhs).into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+                return self.result.interner.error();
+            };
+            (iface, method)
         };
 
         let Some(iface_def) = self.interface_registry.get(iface_name) else {
@@ -5640,8 +5893,7 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         };
 
-        let bounds = self.ctx.generic_bounds(g);
-        if !bounds.contains(&iface_def) {
+        if !self.ctx.generic_bounds(g).contains(&iface_def) {
             self.report(TypeError::GenericMissingBound {
                 generic: self.def_name(g).unwrap_or_default().into(),
                 bound: iface_name.into(),
@@ -5659,6 +5911,30 @@ impl<'res> TypeChecker<'res> {
                 span: source.span,
             });
         }
+
+        let Some(method_def) = self.interface_methods.get(&iface_def).and_then(|methods| {
+            methods
+                .iter()
+                .copied()
+                .find(|&m| self.def_name(m).as_deref() == Some(method_name))
+        }) else {
+            return self.result.interner.error();
+        };
+
+        let ordering_cmp = if method_name == "cmp" {
+            self.ordering_cmp_target(self.fn_sigs[&method_def].ret, op)
+        } else {
+            None
+        };
+
+        self.result.operator_resolutions.insert(
+            expr_id,
+            OperatorResolution {
+                method_def,
+                generic_args: vec![lhs],
+                ordering_cmp,
+            },
+        );
 
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
             self.result.interner.builtin(BuiltinType::bool)
@@ -5718,6 +5994,7 @@ impl<'res> TypeChecker<'res> {
                             OperatorResolution {
                                 method_def: r.method_def,
                                 generic_args: generic_args.clone(),
+                                ordering_cmp: None,
                             },
                         );
 
@@ -5728,21 +6005,20 @@ impl<'res> TypeChecker<'res> {
             }
 
             Type::GenericParam(g) => {
-                let Some((iface_name, method_name)) = unary_op_interface(op) else {
-                    self.report(TypeError::UnaryNotSupported {
-                        op,
-                        child_type: self.display_type(operand).into(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-                    return self.result.interner.error();
-                };
-
-                let (iface_name, _) =
+                let (iface_name, method_name) =
                     if matches!(op, UnaryOp::Deref) && self.expect_assign_interface {
-                        ("DerefAssign", "deref_assign")
+                        ("DerefPtr", "deref_ptr")
                     } else {
-                        (iface_name, method_name)
+                        let Some((iface, method)) = unary_op_interface(op) else {
+                            self.report(TypeError::UnaryNotSupported {
+                                op,
+                                child_type: self.display_type(operand).into(),
+                                src: source.src(),
+                                span: source.span,
+                            });
+                            return self.result.interner.error();
+                        };
+                        (iface, method)
                     };
 
                 let Some(iface_def) = self.interface_registry.get(iface_name) else {
@@ -5765,6 +6041,28 @@ impl<'res> TypeChecker<'res> {
                     return self.result.interner.error();
                 }
 
+                let Some(method_def) = self.interface_methods.get(&iface_def).and_then(|methods| {
+                    methods
+                        .iter()
+                        .copied()
+                        .find(|&m| self.def_name(m).as_deref() == Some(method_name))
+                }) else {
+                    return self.result.interner.error();
+                };
+
+                self.result.operator_resolutions.insert(
+                    expr_id,
+                    OperatorResolution {
+                        method_def,
+                        generic_args: vec![operand],
+                        ordering_cmp: None,
+                    },
+                );
+
+                // The pointee type is unknown at check time (`T: Deref`
+                // doesn't carry the inner `U`). Return the receiver type as
+                // a placeholder; MIR corrects `result_ty` from the
+                // monomorphized method signature.
                 operand
             }
 
@@ -5851,6 +6149,7 @@ impl<'res> TypeChecker<'res> {
                     OperatorResolution {
                         method_def: res.method_def,
                         generic_args: generic_args.to_vec(),
+                        ordering_cmp: None,
                     },
                 );
 
@@ -5897,6 +6196,7 @@ impl<'res> TypeChecker<'res> {
                     OperatorResolution {
                         method_def: r.method_def,
                         generic_args: generic_args.to_vec(),
+                        ordering_cmp: None,
                     },
                 );
 
@@ -5944,6 +6244,7 @@ impl<'res> TypeChecker<'res> {
                     OperatorResolution {
                         method_def: r.method_def,
                         generic_args: generic_args.to_vec(),
+                        ordering_cmp: None,
                     },
                 );
                 r.ret_ty

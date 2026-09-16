@@ -1,0 +1,62 @@
+struct Item {
+  pub id: i32
+}
+
+implement Copy : Item {}
+
+struct Ticket[T] {
+  pub priority: i32,
+  pub payload: T
+}
+
+implement[T] Ord : Ticket[T] {
+  fn cmp(*const self, other: *const Self) Ordering {
+    if (self.priority < other.priority) {
+      Ordering.Less
+    } else if (self.priority > other.priority) {
+      Ordering.Greater
+    } else {
+      Ordering.Equal
+    }
+  }
+}
+
+fn min_order[T: Ord](a: T, b: T) T {
+  if (a < b) {
+    a
+  } else {
+    b
+  }
+}
+
+fn max_order[T: Ord](a: T, b: T) T {
+  if (a > b) {
+    a
+  } else {
+    b
+  }
+}
+
+fn in_range[T: Ord](a: T, lo: T, hi: T) bool {
+  return a >= lo && a <= hi;
+}
+
+fn outer_min[U: Ord](a: U, b: U) U {
+  min_order(a, b)
+}
+
+fn main() i32 {
+  let item1 = Item { .id = 1 };
+  let item2 = Item { .id = 2 };
+
+  @println("min ints: {}", min_order(3, 7));
+  @println("max ints: {}", max_order(3, 7));
+  @println("min floats: {}", min_order(2.5, 1.25));
+  @println("chars: {}", min_order('a', 'b'));
+  @println("range: {}", in_range(5, 1, 10));
+  @println("range false: {}", in_range(11, 1, 10));
+  @println("nested: {}", outer_min(5, 9));
+  @println("min ticket: {}", min_order(Ticket { .priority = 1, .payload = item1 }, Ticket { .priority = 2, .payload = item2 }).priority);
+  @println("max ticket: {}", max_order(Ticket { .priority = 1, .payload = item1 }, Ticket { .priority = 2, .payload = item2 }).priority);
+  return 0;
+}

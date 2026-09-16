@@ -1,0 +1,18 @@
+fn main() i32 {
+  @println("{}", "Hello, World!"[..] == "Hello, World"[..]);
+  @println("{}", "abc"[..] == "abc"[..]);
+  @println("{}", "abc"[..] == "abd"[..]);
+  @println("{}", "abc"[..] != "abd"[..]);
+  let a: [3]i32 = [1, 2, 3];
+  let b: [3]i32 = [1, 2, 3];
+  let c: [3]i32 = [1, 2, 4];
+  @println("{}", a == b);
+  @println("{}", a == c);
+  @println("{}", a != c);
+  let f1: []f64 = [1.5, 2.5][..];
+  let f2: []f64 = [1.5, 2.5][..];
+  let f3: []f64 = [1.5, 2.6][..];
+  @println("{}", f1 == f2);
+  @println("{}", f1 == f3);
+  return 0;
+}
