@@ -294,6 +294,7 @@ impl<'res> HirLowering<'res> {
                 name,
                 variants,
                 is_pub,
+                ..
             } => {
                 let hir_variants: Vec<HirEnumVariant> = variants
                     .iter()

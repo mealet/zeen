@@ -61,8 +61,11 @@ pub enum DeclarationKind<'arena> {
 
     EnumDecl {
         name: (Spur, SourceSpan),
-        variants: &'arena [EnumVariant],
         is_pub: bool,
+
+        generics: Option<&'arena [GenericType<'arena>]>,
+        variants: &'arena [EnumVariant<'arena>],
+        methods: &'arena [&'arena Declaration<'arena>], // FnDecl
     },
 
     ExternVar {
@@ -179,7 +182,17 @@ pub struct StructField<'arena> {
 // Enum
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct EnumVariant {
+pub enum EnumVariantPayload<'arena> {
+    /// `b: i32` - a single typed value.
+    Single(&'arena TypeExpr<'arena>),
+    /// `c: { fields }` - an anonymous struct payload; its fields are all public
+    /// and carry no methods of their own.
+    Anonymous(&'arena [StructField<'arena>]),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnumVariant<'arena> {
     pub name: Spur,
     pub span: SourceSpan,
+    pub payload: Option<EnumVariantPayload<'arena>>,
 }
