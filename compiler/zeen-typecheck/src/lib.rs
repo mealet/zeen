@@ -1223,8 +1223,49 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Enum(_) => {
-                let is_copy = self.struct_implements_by_name(decl.def_id, "Copy");
+                let variant_payloads: Vec<Option<VariantPayload>> = self
+                    .result
+                    .enum_info
+                    .get(&decl.def_id)
+                    .map(|info| info.variants.iter().map(|v| v.payload.clone()).collect())
+                    .unwrap_or_default();
+
+                let mut anon_payload_copy: HashMap<DefId, bool> = HashMap::new();
+
+                for payload in &variant_payloads {
+                    if let Some(VariantPayload::Struct(payload_ty)) = payload
+                        && let Type::Struct {
+                            def_id: payload_def,
+                            ..
+                        } = self.result.interner.get(*payload_ty).clone()
+                    {
+                        let all_copy = self
+                            .result
+                            .struct_info
+                            .get(&payload_def)
+                            .map(|info| info.fields.iter().all(|f| self.type_is_copy(f.field_ty)))
+                            .unwrap_or(false);
+
+                        anon_payload_copy.insert(payload_def, all_copy);
+                    }
+                }
+
+                for (payload_def, all_copy) in &anon_payload_copy {
+                    if let Some(struct_info) = self.result.struct_info.get_mut(payload_def) {
+                        struct_info.capabalities.is_copy = *all_copy;
+                    }
+                }
+
+                let explicit_copy = self.struct_implements_by_name(decl.def_id, "Copy");
                 let has_explicit_drop = self.struct_implements_by_name(decl.def_id, "Drop");
+
+                let all_payloads_copy = variant_payloads.iter().all(|payload| match payload {
+                    None => true,
+                    Some(VariantPayload::Single(ty)) => self.type_is_copy(*ty),
+                    Some(VariantPayload::Struct(payload_ty)) => self.type_is_copy(*payload_ty),
+                });
+
+                let is_copy = explicit_copy || all_payloads_copy;
 
                 if let Some(info) = self.result.enum_info.get_mut(&decl.def_id) {
                     info.capabalities = Capabilities {
@@ -3864,7 +3905,7 @@ impl<'res> TypeChecker<'res> {
 
     fn type_is_copy(&self, ty: TypeId) -> bool {
         match self.result.interner.get(ty).clone() {
-            Type::Struct { .. } | Type::Array { .. } | Type::FatFn { .. } => {
+            Type::Struct { .. } | Type::Enum { .. } | Type::Array { .. } | Type::FatFn { .. } => {
                 self.result.is_copy(ty)
             }
             _ => true,
