@@ -405,6 +405,14 @@ impl<'res> TypeChecker<'res> {
                             def_id: payload_def,
                             fields,
                         } => {
+                            let enum_generic_defs: Vec<DefId> =
+                                e.generics.iter().map(|g| g.def_id).collect();
+
+                            if !enum_generic_defs.is_empty() {
+                                self.struct_generics
+                                    .insert(*payload_def, enum_generic_defs.clone());
+                            }
+
                             let field_infos: Vec<StructFieldInfo> = fields
                                 .iter()
                                 .map(|f| {
@@ -2233,9 +2241,10 @@ impl<'res> TypeChecker<'res> {
                 fields,
                 generic_args,
             } => {
-                let (ty_def, ty_span) = *ty;
+                let (ty_def, variant_name, ty_span) = *ty;
                 let struct_ty = self.check_struct_init(
                     ty_def,
+                    variant_name,
                     generic_args,
                     fields,
                     ty_span,
@@ -3160,6 +3169,21 @@ impl<'res> TypeChecker<'res> {
 
         // ----------------------------------------------------------
 
+        if let Type::Enum {
+            def_id: enum_def,
+            generic_args: enum_generic_args,
+        } = self.result.interner.get(obj_ty).clone()
+        {
+            return self.check_enum_extraction_read(
+                id,
+                enum_def,
+                &enum_generic_args,
+                field_name,
+                field_span,
+                &object.source,
+            );
+        }
+
         let (struct_def, struct_generic_args) = match self.result.interner.get(obj_ty).clone() {
             Type::Struct {
                 def_id,
@@ -3209,11 +3233,7 @@ impl<'res> TypeChecker<'res> {
                     .map(|def| def == f.struct_def)
                     .unwrap_or(false);
 
-                let struct_generics = self
-                    .struct_generics
-                    .get(&struct_def)
-                    .cloned()
-                    .unwrap_or_default();
+                let type_generics = self.type_member_generics(struct_def);
 
                 if !f.is_pub && !same_struct {
                     let interner = self.interner.borrow();
@@ -3228,7 +3248,7 @@ impl<'res> TypeChecker<'res> {
                     });
                 }
 
-                let bindings: HashMap<DefId, TypeId> = struct_generics
+                let bindings: HashMap<DefId, TypeId> = type_generics
                     .iter()
                     .copied()
                     .zip(struct_generic_args.iter().copied())
@@ -3257,9 +3277,11 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_struct_init(
         &mut self,
         ty_def: Option<DefId>,
+        variant_name: Option<Spur>,
         ty_generic_args: &[Rc<HirTypeExpr>],
         fields: &[HirFieldInit],
         ty_span: SourceSpan,
@@ -3272,6 +3294,17 @@ impl<'res> TypeChecker<'res> {
             }
             return self.result.interner.error();
         };
+
+        if matches!(self.def_kind(def_id), Some(DefKind::Enum)) {
+            return self.check_enum_struct_construct(
+                def_id,
+                variant_name,
+                ty_generic_args,
+                fields,
+                ty_span,
+                init_source,
+            );
+        }
 
         let struct_generics = self
             .struct_generics
@@ -3508,9 +3541,10 @@ impl<'res> TypeChecker<'res> {
                 fields,
                 generic_args,
             } => {
-                let (ty_def, ty_span) = *ty;
+                let (ty_def, variant_name, ty_span) = *ty;
                 let struct_ty = self.check_struct_init(
                     ty_def,
+                    variant_name,
                     generic_args,
                     fields,
                     ty_span,
@@ -3921,8 +3955,23 @@ impl<'res> TypeChecker<'res> {
         source: Source,
         expected: Option<TypeId>,
     ) -> TypeId {
-        if let HirExprKind::FieldAccess { object, field } = &callee.kind
-            && let Some(result) = self.try_check_method_call(
+        if let HirExprKind::FieldAccess { object, field } = &callee.kind {
+            if let HirExprKind::VarRef(enum_def) = &object.kind
+                && matches!(self.def_kind(*enum_def), Some(DefKind::Enum))
+                && self.enum_variants.get(enum_def).is_some_and(|defs| {
+                    defs.iter().any(|&v| {
+                        self.resolution
+                            .defs
+                            .get(&v)
+                            .map(|i| i.name == field.0)
+                            .unwrap_or(false)
+                    })
+                })
+            {
+                return self.check_enum_single_construct(call_id, *enum_def, *field, args, source);
+            }
+
+            if let Some(result) = self.try_check_method_call(
                 call_id,
                 object,
                 *field,
@@ -3930,9 +3979,9 @@ impl<'res> TypeChecker<'res> {
                 explicit_generic_args,
                 source.clone(),
                 expected,
-            )
-        {
-            return result;
+            ) {
+                return result;
+            }
         }
 
         let callee_def = match &callee.kind {
@@ -4201,7 +4250,10 @@ impl<'res> TypeChecker<'res> {
 
         // If object is a direct ref to struct type - associated fn call
         if let HirExprKind::VarRef(referenced_def) = &object.kind
-            && matches!(self.def_kind(*referenced_def), Some(DefKind::Struct))
+            && matches!(
+                self.def_kind(*referenced_def),
+                Some(DefKind::Struct | DefKind::Enum)
+            )
         {
             return self.check_associated_fn_call(
                 (call_id, object),
@@ -4234,6 +4286,10 @@ impl<'res> TypeChecker<'res> {
         let (struct_def, struct_generic_args, obj_is_ptr, ptr_is_const) =
             match self.result.interner.get(obj_ty).clone() {
                 Type::Struct {
+                    def_id,
+                    generic_args,
+                } => (def_id, generic_args, false, false),
+                Type::Enum {
                     def_id,
                     generic_args,
                 } => (def_id, generic_args, false, false),
@@ -4327,12 +4383,8 @@ impl<'res> TypeChecker<'res> {
             _ => {}
         }
 
-        let struct_generics = self
-            .struct_generics
-            .get(&struct_def)
-            .cloned()
-            .unwrap_or_default();
-        let mut bindings: HashMap<DefId, TypeId> = struct_generics
+        let type_generics = self.type_member_generics(struct_def);
+        let mut bindings: HashMap<DefId, TypeId> = type_generics
             .iter()
             .copied()
             .zip(struct_generic_args.iter().copied())
@@ -4475,6 +4527,410 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn check_enum_single_construct(
+        &mut self,
+        call_id: HirId,
+        enum_def: DefId,
+        field: (Spur, SourceSpan),
+        args: &[Rc<HirExpr>],
+        source: Source,
+    ) -> TypeId {
+        let (field_name, field_span) = field;
+
+        let Some(enum_info) = self.result.enum_info.get(&enum_def).cloned() else {
+            return self.result.interner.error();
+        };
+
+        let Some(variant) = enum_info.variants.iter().find(|v| v.name == field_name) else {
+            let interner = self.interner.borrow();
+            let field_name = interner.resolve(&field_name).into();
+            drop(interner);
+
+            let enum_ty = self.result.interner.intern(Type::Enum {
+                def_id: enum_def,
+                generic_args: Vec::new(),
+            });
+
+            self.report(TypeError::UnknownEnumVariant {
+                name: self.display_type(enum_ty).into(),
+                variant: field_name,
+                src: source.src(),
+                span: field_span,
+            });
+
+            return self.result.interner.error();
+        };
+
+        let interner = self.interner.borrow();
+        let variant_name = interner.resolve(&variant.name).into();
+        drop(interner);
+
+        let payload_ty = match variant.payload {
+            None => {
+                let enum_ty = self.result.interner.intern(Type::Enum {
+                    def_id: enum_def,
+                    generic_args: Vec::new(),
+                });
+                self.report(TypeError::EnumCallOnEmpty {
+                    name: self.display_type(enum_ty).into(),
+                    variant: variant_name,
+                    src: source.src(),
+                    span: field_span,
+                });
+                return self.result.interner.error();
+            }
+            Some(VariantPayload::Struct(_)) => {
+                let enum_ty = self.result.interner.intern(Type::Enum {
+                    def_id: enum_def,
+                    generic_args: Vec::new(),
+                });
+                self.report(TypeError::EnumCallOnStruct {
+                    name: self.display_type(enum_ty).into(),
+                    variant: variant_name,
+                    src: source.src(),
+                    span: field_span,
+                });
+                return self.result.interner.error();
+            }
+            Some(VariantPayload::Single(payload_ty)) => payload_ty,
+        };
+
+        if args.len() != 1 {
+            self.report(TypeError::ArgCountMismatch {
+                expected: 1,
+                found: args.len(),
+                src: source.src(),
+                span: source.span,
+            });
+            return self.result.interner.error();
+        }
+
+        let enum_generics = self.type_member_generics(enum_def);
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+
+        if !enum_generics.is_empty() {
+            let value_ty = self.synth_expr(&args[0]);
+            self.unify_for_inference(
+                payload_ty,
+                value_ty,
+                &mut bindings,
+                (args[0].source.span, source.src()).into(),
+            );
+
+            for g in &enum_generics {
+                if !bindings.contains_key(g) {
+                    let interner = self.interner.borrow();
+                    let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                    drop(interner);
+
+                    self.report(TypeError::CannotInferGeneric {
+                        generic_name,
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    bindings.insert(*g, self.result.interner.error());
+                }
+            }
+
+            let resolved_args: Vec<TypeId> = enum_generics.iter().map(|g| bindings[g]).collect();
+            let enum_ty = self.result.interner.intern(Type::Enum {
+                def_id: enum_def,
+                generic_args: resolved_args,
+            });
+
+            let substituted_payload = self.substitute_generics(payload_ty, &bindings);
+            self.check_expr(&args[0], substituted_payload, false);
+            self.result
+                .field_resolutions
+                .insert(call_id, variant.def_id);
+            return enum_ty;
+        }
+
+        self.check_expr(&args[0], payload_ty, false);
+
+        let enum_ty = self.result.interner.intern(Type::Enum {
+            def_id: enum_def,
+            generic_args: Vec::new(),
+        });
+
+        self.result
+            .field_resolutions
+            .insert(call_id, variant.def_id);
+        enum_ty
+    }
+
+    fn check_enum_extraction_read(
+        &mut self,
+        id: HirId,
+        enum_def: DefId,
+        enum_generic_args: &[TypeId],
+        field_name: Spur,
+        field_span: SourceSpan,
+        source: &Source,
+    ) -> TypeId {
+        let Some(enum_info) = self.result.enum_info.get(&enum_def).cloned() else {
+            return self.result.interner.error();
+        };
+
+        let enum_ty = self.result.interner.intern(Type::Enum {
+            def_id: enum_def,
+            generic_args: enum_generic_args.to_vec(),
+        });
+
+        let Some(variant) = enum_info.variants.iter().find(|v| v.name == field_name) else {
+            let interner = self.interner.borrow();
+            let field_name = interner.resolve(&field_name).into();
+            drop(interner);
+
+            self.report(TypeError::UnknownEnumVariant {
+                name: self.display_type(enum_ty).into(),
+                variant: field_name,
+                src: source.src(),
+                span: field_span,
+            });
+
+            return self.result.interner.error();
+        };
+
+        let interner = self.interner.borrow();
+        let variant_name = interner.resolve(&variant.name).into();
+        drop(interner);
+
+        let enum_generics = self.type_member_generics(enum_def);
+        let bindings: HashMap<DefId, TypeId> = enum_generics
+            .iter()
+            .copied()
+            .zip(enum_generic_args.iter().copied())
+            .collect();
+
+        let Some(payload) = variant.payload.as_ref() else {
+            self.report(TypeError::EnumExtractEmpty {
+                name: self.display_type(enum_ty).into(),
+                variant: variant_name,
+                src: source.src(),
+                span: field_span,
+            });
+            return self.result.interner.error();
+        };
+
+        let payload_ty = match payload {
+            VariantPayload::Single(ty) => self.substitute_generics(*ty, &bindings),
+            VariantPayload::Struct(payload_ty) => {
+                match self.result.interner.get(*payload_ty).clone() {
+                    Type::Struct {
+                        def_id: payload_def,
+                        ..
+                    } => self.result.interner.intern(Type::Struct {
+                        def_id: payload_def,
+                        generic_args: enum_generic_args.to_vec(),
+                    }),
+                    _ => return self.result.interner.error(),
+                }
+            }
+        };
+
+        if !self.type_is_copy(payload_ty) {
+            self.report(TypeError::EnumExtractNotCopy {
+                name: self.display_type(enum_ty).into(),
+                src: source.src(),
+                span: field_span,
+            });
+            return self.result.interner.error();
+        }
+
+        self.result.field_resolutions.insert(id, variant.def_id);
+        payload_ty
+    }
+
+    fn check_enum_struct_construct(
+        &mut self,
+        enum_def: DefId,
+        variant_name: Option<Spur>,
+        ty_generic_args: &[Rc<HirTypeExpr>],
+        fields: &[HirFieldInit],
+        ty_span: SourceSpan,
+        init_source: &Source,
+    ) -> TypeId {
+        let enum_ty = self.result.interner.intern(Type::Enum {
+            def_id: enum_def,
+            generic_args: Vec::new(),
+        });
+
+        let Some(enum_info) = self.result.enum_info.get(&enum_def).cloned() else {
+            return self.result.interner.error();
+        };
+
+        let Some(variant_name) = variant_name else {
+            self.report(TypeError::UnknownEnumVariant {
+                name: self.display_type(enum_ty).into(),
+                variant: "<unknown>".into(),
+                src: init_source.src(),
+                span: ty_span,
+            });
+            return self.result.interner.error();
+        };
+
+        let Some(variant) = enum_info.variants.iter().find(|v| v.name == variant_name) else {
+            let interner = self.interner.borrow();
+            let variant_name = interner.resolve(&variant_name).into();
+            drop(interner);
+
+            self.report(TypeError::UnknownEnumVariant {
+                name: self.display_type(enum_ty).into(),
+                variant: variant_name,
+                src: init_source.src(),
+                span: ty_span,
+            });
+            return self.result.interner.error();
+        };
+
+        let interner = self.interner.borrow();
+        let variant_label = interner.resolve(&variant.name).into();
+        drop(interner);
+
+        let Some(VariantPayload::Struct(payload_ty)) = variant.payload else {
+            self.report(TypeError::EnumInitOnNonStruct {
+                name: self.display_type(enum_ty).into(),
+                variant: variant_label,
+                src: init_source.src(),
+                span: ty_span,
+            });
+            return self.result.interner.error();
+        };
+
+        let Type::Struct {
+            def_id: payload_def,
+            ..
+        } = self.result.interner.get(payload_ty).clone()
+        else {
+            return self.result.interner.error();
+        };
+
+        let Some(payload_info) = self.result.struct_info.get(&payload_def).cloned() else {
+            return self.result.interner.error();
+        };
+
+        let enum_generics = self.type_member_generics(enum_def);
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+
+        if !ty_generic_args.is_empty() {
+            for (g, explicit) in enum_generics.iter().zip(ty_generic_args.iter()) {
+                let lower_ty = self.lower_hir_type(explicit);
+                bindings.insert(*g, lower_ty);
+            }
+        }
+
+        let mut provided_names: HashSet<Spur> = HashSet::with_capacity(fields.len());
+        let mut field_value_types: HashMap<Spur, TypeId> = HashMap::with_capacity(fields.len());
+
+        for f in fields {
+            provided_names.insert(f.name);
+            let value_ty = self.synth_expr(&f.value);
+            field_value_types.insert(f.name, value_ty);
+
+            let Some(info) = payload_info.fields.iter().find(|i| i.name == f.name) else {
+                let interner = self.interner.borrow();
+                let field = interner.resolve(&f.name).into();
+                drop(interner);
+
+                self.report(TypeError::UnknownField {
+                    field,
+                    struct_name: variant_label.clone(),
+                    src: init_source.src(),
+                    span: f.span,
+                });
+                continue;
+            };
+
+            if self.type_contains_generic(info.field_ty) {
+                let substituted = self.substitute_generics(info.field_ty, &bindings);
+                if self.type_contains_generic(substituted) {
+                    self.unify_for_inference(
+                        info.field_ty,
+                        value_ty,
+                        &mut bindings,
+                        (f.span, init_source.src()).into(),
+                    );
+                }
+            }
+        }
+
+        for g in &enum_generics {
+            if !bindings.contains_key(g) {
+                let interner = self.interner.borrow();
+                let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                drop(interner);
+
+                self.report(TypeError::CannotInferGeneric {
+                    generic_name,
+                    src: init_source.src(),
+                    span: init_source.span,
+                });
+
+                bindings.insert(*g, self.result.interner.error());
+            }
+        }
+
+        let resolved_args: Vec<TypeId> = enum_generics.iter().map(|g| bindings[g]).collect();
+        let enum_ty = self.result.interner.intern(Type::Enum {
+            def_id: enum_def,
+            generic_args: resolved_args,
+        });
+
+        for f in fields {
+            let Some(info) = payload_info
+                .fields
+                .iter()
+                .find(|i| i.name == f.name)
+                .cloned()
+            else {
+                continue;
+            };
+
+            let expected_ty = self.substitute_generics(info.field_ty, &bindings);
+            let actual_ty = field_value_types
+                .get(&f.name)
+                .copied()
+                .unwrap_or(expected_ty);
+
+            if matches!(
+                f.value.kind,
+                HirExprKind::ArrayInit { .. } | HirExprKind::ArrayRepeatInit { .. }
+            ) {
+                self.check_expr(&f.value, expected_ty, false);
+            } else {
+                self.coerce_or_error(actual_ty, expected_ty, &f.value, false);
+            }
+        }
+
+        let expected_names: HashSet<Spur> = payload_info.fields.iter().map(|i| i.name).collect();
+        let missing: Vec<Spur> = expected_names
+            .difference(&provided_names)
+            .copied()
+            .collect();
+
+        if !missing.is_empty() {
+            let interner = self.interner.borrow();
+            let missing_stringified: Vec<String> = missing
+                .iter()
+                .map(|x| format!("`{}`", interner.resolve(x)))
+                .collect();
+            drop(interner);
+
+            let fields = missing_stringified.join(", ").into();
+
+            self.report(TypeError::MissingFields {
+                fields,
+                struct_name: variant_label,
+                src: init_source.src(),
+                span: init_source.span,
+            });
+        }
+
+        enum_ty
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn check_associated_fn_call(
         &mut self,
@@ -4511,11 +4967,7 @@ impl<'res> TypeChecker<'res> {
         let sig_ret = self.fn_sigs[&method_def_id].ret;
         let sig_generics = self.fn_sigs[&method_def_id].generics.clone();
 
-        let struct_generics = self
-            .struct_generics
-            .get(&struct_def)
-            .cloned()
-            .unwrap_or_default();
+        let type_generics = self.type_member_generics(struct_def);
 
         if args.len() != sig_params.len() {
             self.report(TypeError::ArgCountMismatch {
@@ -4530,7 +4982,7 @@ impl<'res> TypeChecker<'res> {
 
         // Explicit call-site arguments bind the struct's generics first (there
         // is no receiver to provide them), then the method's own.
-        let bind_order: Vec<DefId> = struct_generics
+        let bind_order: Vec<DefId> = type_generics
             .iter()
             .copied()
             .chain(sig_generics.iter().copied())
@@ -4603,7 +5055,7 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
-        for g in &struct_generics {
+        for g in &type_generics {
             if !bindings.contains_key(g) {
                 let interner = self.interner.borrow();
                 let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
@@ -4619,7 +5071,7 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        let resolved_struct_args: Vec<TypeId> = struct_generics
+        let resolved_struct_args: Vec<TypeId> = type_generics
             .iter()
             .map(|g| {
                 bindings
@@ -5223,12 +5675,8 @@ impl<'res> TypeChecker<'res> {
 
         let sig_ret = self.fn_sigs[&next_def].ret;
 
-        let struct_generics = self
-            .struct_generics
-            .get(&struct_def)
-            .cloned()
-            .unwrap_or_default();
-        let mut bindings: HashMap<DefId, TypeId> = struct_generics
+        let type_generics = self.type_member_generics(struct_def);
+        let mut bindings: HashMap<DefId, TypeId> = type_generics
             .iter()
             .copied()
             .zip(generic_args.iter().copied())
@@ -6494,6 +6942,7 @@ mod tests {
     use zeen_resolve::{DefId, resolve};
 
     use crate::{TypeCheckResult, TypeChecker, TypeError};
+    use zeen_types::TypeId;
 
     const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
     const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
@@ -8265,5 +8714,430 @@ mod tests {
                 .capabalities
                 .has_explicit_drop
         );
+    }
+
+    #[test]
+    fn enum_single_construct_checks_call_shape() {
+        let errors = typecheck(
+            r#"
+            enum Opt {
+                some: i32,
+                none,
+            }
+            fn main() {
+                let a = Opt.some(1);
+                let b = Opt.some(1, 2);
+                let c = Opt.none(1);
+                let d = Opt.missing(1);
+            }
+            "#,
+        )
+        .expect_err("single/empty/missing variant construction must be checked");
+
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::ArgCountMismatch {
+                    expected: 1,
+                    found: 2,
+                    ..
+                }
+            )),
+            "expected ArgCountMismatch for too many args, got: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumCallOnEmpty { .. })),
+            "expected EnumCallOnEmpty for calling an empty variant, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::UnknownEnumVariant { variant, .. } if variant == "missing"
+            )),
+            "expected UnknownEnumVariant for a missing variant, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_generic_single_construct_infers_from_arg() {
+        let result = typecheck(
+            r#"
+            enum Opt[T] {
+                some: T,
+                none,
+            }
+            fn main() {
+                let a = Opt.some(5);
+                let _ = Opt.some(6);
+            }
+            "#,
+        )
+        .expect("generic enum construction should infer T from the argument");
+
+        let opt_def = *result.enum_info.keys().next().unwrap();
+        let some_variant = result.enum_variants[&opt_def][0];
+
+        let constructed_args: Vec<zeen_types::TypeId> = result
+            .expr_types
+            .values()
+            .copied()
+            .filter(|ty| {
+                matches!(
+                    result.interner.get(*ty),
+                    zeen_types::Type::Enum { def_id, .. } if *def_id == opt_def
+                )
+            })
+            .collect();
+
+        assert!(
+            !constructed_args.is_empty(),
+            "constructed values must be typed"
+        );
+        assert!(
+            constructed_args.iter().any(|&ty| matches!(
+                result.interner.get(ty),
+                zeen_types::Type::Enum { def_id, generic_args } if def_id == &opt_def
+                    && generic_args.len() == 1
+            )),
+            "constructed values must carry one generic arg, got: {constructed_args:?}"
+        );
+
+        assert!(
+            constructed_args
+                .iter()
+                .any(|&ty| matches!(
+                    result.interner.get(ty),
+                    zeen_types::Type::Enum { def_id, generic_args, } if def_id == &opt_def
+                        && generic_args.len() == 1
+                        && matches!(
+                            result.interner.get(generic_args[0]),
+                            zeen_types::Type::IntLiteral | zeen_types::Type::Builtin(zeen_ast::types::BuiltinType::i32)
+                        )
+                )),
+            "`Opt.some(5)` must infer Opt[i32], got: {constructed_args:?}"
+        );
+
+        let _ = some_variant;
+    }
+
+    #[test]
+    fn enum_struct_construct_checks_payload_fields() {
+        let errors = typecheck(
+            r#"
+            enum Foo {
+                a,
+                b: i32,
+                c: {
+                    inner: i32,
+                    hello: u32,
+                },
+            }
+            fn main() {
+                let ok = Foo.c { .inner = 1, .hello = 2 };
+                let missing = Foo.c { .inner = 1 };
+                let wrong_field = Foo.c { .nope = 1, .hello = 2 };
+                let single_lit = Foo.c(5);
+            }
+            "#,
+        )
+        .expect_err("malformed struct payload construction must be checked");
+
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::MissingFields { fields, .. } if fields.as_str() == "`hello`"
+            )),
+            "expected MissingFields for omitted payload field, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::UnknownField { field, .. } if field == "nope"
+            )),
+            "expected UnknownField for unknown payload field, got: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumCallOnStruct { .. })),
+            "expected EnumCallOnStruct for calling a struct variant, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_extraction_reads_copy_payload() {
+        let result = typecheck(
+            r#"
+            enum Foo {
+                a,
+                b: i32,
+                c: {
+                    inner: i32,
+                    hello: u32,
+                },
+            }
+            fn main() {
+                let e = Foo.b(1);
+                let v: i32 = e.b;
+                let e2 = Foo.c { .inner = 1, .hello = 2 };
+                let w: i32 = e2.c.inner;
+            }
+            "#,
+        )
+        .expect("copy payload extraction must typecheck");
+
+        let foo_def = *result.enum_info.keys().next().unwrap();
+        let variant_defs = &result.enum_variants[&foo_def];
+        assert_eq!(variant_defs.len(), 3);
+
+        let extracted: Vec<TypeId> = result
+            .expr_types
+            .iter()
+            .filter(|(id, _)| {
+                result.field_resolutions.contains_key(id)
+                    && result.enum_variants[&foo_def].contains(&result.field_resolutions[id])
+            })
+            .map(|(_, ty)| *ty)
+            .collect();
+
+        assert!(
+            extracted.len() >= 2,
+            "construct plus both extractions must reach enum payload reads"
+        );
+    }
+
+    #[test]
+    fn enum_extraction_rejects_empty_and_non_copy() {
+        let errors = typecheck(
+            r#"
+            interface Copy {}
+            interface Drop {}
+            struct NoCopy {
+                x: i32,
+            }
+            implement Drop : NoCopy {}
+            enum Foo {
+                a,
+                b: NoCopy,
+            }
+            fn main() {
+                let e0 = Foo.a;
+                let empty = e0.a;
+                let e1 = Foo.b(NoCopy { .x = 1 });
+                let moved = e1.b;
+            }
+            "#,
+        )
+        .expect_err("extraction of empty or non-copy payload must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumExtractEmpty { .. })),
+            "expected EnumExtractEmpty, got: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumExtractNotCopy { .. })),
+            "expected EnumExtractNotCopy, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_extraction_types_the_payload_value() {
+        let result = typecheck(
+            r#"
+            enum Foo {
+                a,
+                b: i32,
+                c: {
+                    inner: i32,
+                    hello: u32,
+                },
+            }
+            fn get_b(e: Foo) i32 {
+                return e.b;
+            }
+            fn get_payload(e: Foo) {
+                let payload = e.c;
+                let inner: i32 = payload.inner;
+            }
+            fn main() {
+                let _ = get_b;
+                let _ = get_payload;
+            }
+            "#,
+        )
+        .expect("extraction in return position must resolve the payload type");
+
+        let foo_def = *result.enum_info.keys().next().unwrap();
+
+        let extracted: Vec<TypeId> = result
+            .expr_types
+            .iter()
+            .filter(|(id, _)| {
+                result.field_resolutions.contains_key(id)
+                    && result.enum_variants[&foo_def].contains(&result.field_resolutions[id])
+            })
+            .map(|(_, ty)| *ty)
+            .collect();
+
+        assert_eq!(
+            extracted.len(),
+            2,
+            "both extractions must reach enum payload reads"
+        );
+        let i32_count = extracted
+            .iter()
+            .filter(|ty| {
+                matches!(
+                    result.interner.get(**ty),
+                    zeen_types::Type::Builtin(zeen_ast::types::BuiltinType::i32)
+                )
+            })
+            .count();
+        let struct_count = extracted
+            .iter()
+            .filter(|ty| matches!(result.interner.get(**ty), zeen_types::Type::Struct { .. }))
+            .count();
+        assert_eq!(
+            i32_count, 1,
+            "e.b payload must type to i32, got: {extracted:?}"
+        );
+        assert_eq!(
+            struct_count, 1,
+            "e.c payload must type to the anonymous payload struct, got: {extracted:?}"
+        );
+    }
+
+    #[test]
+    fn enum_auto_copy_when_all_payloads_copy() {
+        let result = typecheck(
+            r#"
+            interface Copy {}
+            struct Pt {
+                x: i32,
+                y: i32,
+            }
+            implement Copy : Pt {}
+            enum Foo {
+                a,
+                b: i32,
+                c: {
+                    inner: i32,
+                },
+                d: Pt,
+            }
+            fn main() {
+                let _ = Foo.a;
+            }
+            "#,
+        )
+        .expect("enum with all-copy payloads must typecheck");
+
+        let foo_def = *result.enum_info.keys().next().unwrap();
+        let info = &result.enum_info[&foo_def];
+        assert!(
+            info.capabalities.is_copy,
+            "all payloads Copy -> enum is Copy"
+        );
+    }
+
+    #[test]
+    fn enum_is_move_when_payload_is_not_copy() {
+        let result = typecheck(
+            r#"
+            interface Drop {}
+            struct NoCopy {
+                x: i32,
+            }
+            implement Drop : NoCopy {}
+            enum Foo {
+                a,
+                b: NoCopy,
+            }
+            fn main() {
+                let _ = Foo.a;
+            }
+            "#,
+        )
+        .expect("enum with a non-copy payload must still typecheck");
+
+        let foo_def = *result.enum_info.keys().next().unwrap();
+        let info = &result.enum_info[&foo_def];
+        assert!(
+            !info.capabalities.is_copy,
+            "non-copy payload -> enum is Move"
+        );
+    }
+
+    #[test]
+    fn implement_drop_and_copy_on_enum_conflict() {
+        let errors = typecheck(
+            r#"
+            interface Copy {}
+            interface Drop {}
+            enum Foo {
+                a,
+            }
+            implement Copy : Foo {}
+            implement Drop : Foo {}
+            fn main() {
+                let _ = Foo.a;
+            }
+            "#,
+        )
+        .expect_err("legal enum type must still reject Copy + Drop together");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CopyWithDrop { .. })),
+            "expected CopyWithDrop, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_method_call_dispatches() {
+        let result = typecheck(
+            r#"
+            enum Foo {
+                a,
+                pub fn tag(self) i32 {
+                    return 1;
+                }
+                pub fn static_name() i32 {
+                    return 2;
+                }
+            }
+            fn main() {
+                let e = Foo.a;
+                let t = e.tag();
+                let s = Foo.static_name();
+            }
+            "#,
+        )
+        .expect("instance and static enum method calls must typecheck");
+
+        let foo_def = *result.enum_info.keys().next().unwrap();
+        let call_types: Vec<TypeId> = result
+            .expr_types
+            .iter()
+            .filter(|(_, ty)| matches!(result.interner.get(**ty), zeen_types::Type::Builtin(_)))
+            .map(|(_, ty)| *ty)
+            .collect();
+
+        assert!(
+            call_types.iter().any(|ty| matches!(
+                result.interner.get(*ty),
+                zeen_types::Type::Builtin(zeen_ast::types::BuiltinType::i32)
+            )),
+            "method calls must type to i32, got: {call_types:?}"
+        );
+
+        let _ = foo_def;
     }
 }

@@ -101,16 +101,35 @@ impl<'res> HirLowering<'res> {
             .map(|(id, _)| *id)
     }
 
-    fn path_expr_def_id(&self, expr: &Expression) -> Option<DefId> {
-        let target = match expr.kind {
-            ExpressionKind::FieldAccess { field, .. } => field,
-            _ => expr,
-        };
+    fn struct_init_path_def(&self, expr: &Expression) -> (Option<DefId>, Option<Spur>) {
+        if let ExpressionKind::FieldAccess { object, field } = &expr.kind {
+            // enum variant struct init: `Foo.c { ... }` - the enum def comes
+            // from the object, the variant name stays in the HIR for the
+            // typechecker to resolve against the enum's variants
+            let enum_def = match self.resolution.resolution_of_expr(object) {
+                Some(Resolution::Def(id))
+                    if matches!(
+                        self.resolution.defs.get(&id).map(|i| &i.kind),
+                        Some(DefKind::Enum)
+                    ) =>
+                {
+                    Some(id)
+                }
+                _ => None,
+            };
 
-        match self.resolution.resolution_of_expr(target) {
-            Some(Resolution::Def(id)) => Some(id),
-            Some(Resolution::SelfType(id)) => Some(id),
-            _ => None,
+            let variant_name = match field.kind {
+                ExpressionKind::Ident { name, .. } => Some(name),
+                _ => None,
+            };
+
+            return (enum_def, variant_name);
+        }
+
+        match self.resolution.resolution_of_expr(expr) {
+            Some(Resolution::Def(id)) => (Some(id), None),
+            Some(Resolution::SelfType(id)) => (Some(id), None),
+            _ => (None, None),
         }
     }
 
@@ -716,7 +735,7 @@ impl<'res> HirLowering<'res> {
             },
 
             ExpressionKind::StructInit { ty, fields } => {
-                let ty_def = self.path_expr_def_id(ty);
+                let (ty_def, variant_name) = self.struct_init_path_def(ty);
 
                 let hir_fields: Vec<HirFieldInit> = fields
                     .map(|fields| {
@@ -734,7 +753,7 @@ impl<'res> HirLowering<'res> {
                 let generic_args = self.generic_args_of_expr(ty);
 
                 HirExprKind::StructInit {
-                    ty: (ty_def, ty.span),
+                    ty: (ty_def, variant_name, ty.span),
                     generic_args,
                     fields: hir_fields,
                 }
