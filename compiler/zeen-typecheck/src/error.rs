@@ -635,6 +635,81 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("cannot extract value from empty variant `{variant}` of `{name}`")]
+    #[diagnostic(severity(Error), code(zeen::typecheck::enum_extract_empty))]
+    EnumExtractEmpty {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("cannot extract non-Copy payload from `{name}` (move out of variant)")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_extract_not_copy),
+        help("implement Copy on the payload type, or read individual Copy fields")
+    )]
+    EnumExtractNotCopy {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("empty variant `{variant}` of `{name}` cannot be constructed with an argument")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_call_on_empty),
+        help("construct empty variants with `{name}.{variant}`")
+    )]
+    EnumCallOnEmpty {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("struct variant `{variant}` of `{name}` requires a struct literal")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_call_on_struct),
+        help("construct struct variants with `{name}.{variant} {{ .field = value }}`")
+    )]
+    EnumCallOnStruct {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("struct literal used to construct non-struct variant `{variant}` of `{name}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_init_on_non_struct),
+        help("construct single-value variants with `{name}.{variant}(value)`")
+    )]
+    EnumInitOnNonStruct {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("recursive type `{ty}` is infinite")]
     #[diagnostic(
         severity(Error),
