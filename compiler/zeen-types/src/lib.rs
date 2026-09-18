@@ -10,17 +10,14 @@ pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
 /// Synthetic `DefId`s for the builtin slice's `{ ptr, len }` view and for a
-/// fixed array's compile-time `.len`. They never appear in user declarations
-/// and share no numbering with real `DefId`s (which stay small).
+/// fixed array's compile-time `.len`.
 pub const SLICE_STRUCT_DEF: DefId = DefId(u32::MAX - 3);
 pub const SLICE_PTR_FIELD: DefId = DefId(u32::MAX - 2);
 pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
 pub const ARRAY_LEN_FIELD: DefId = DefId(u32::MAX - 4);
 
 /// Synthetic `DefId`s for the canonical fat closure-value struct
-/// `{ fn, env, drop }` (type `Type::FatFn`), shared by every fat value:
-/// `fn` holds the closure body, `env` the heap-allocated captures (null when
-/// there are none), `drop` tears them down.
+/// `{ fn, env, drop }` (type `Type::FatFn`), shared by every fat value.
 pub const CLOSURE_FAT_DEF: DefId = DefId(u32::MAX - 5);
 pub const CLOSURE_FAT_FN_FIELD: DefId = DefId(u32::MAX - 6);
 pub const CLOSURE_FAT_ENV_FIELD: DefId = DefId(u32::MAX - 7);
@@ -75,9 +72,7 @@ pub enum Type {
         ret: TypeId,
     },
 
-    /// Fat closure value backed by the canonical `{ ptr, env }` struct.
-    /// Both `Fn` and `FnOnce` are move-only; `once` marks `FnOnce`.
-    /// `erased` marks a user-written annotation that needs finalization.
+    /// Fat closure value. Both `Fn` and `FnOnce` are move-only.
     FatFn {
         params: Vec<TypeId>,
         ret: TypeId,
@@ -429,8 +424,6 @@ pub enum ReceiverAccess {
     RefMut,
     RefConst,
 }
-
-// Below is maps for interface operators.
 
 pub fn binary_op_interface(
     op: zeen_ast::expressions::BinaryOp,
