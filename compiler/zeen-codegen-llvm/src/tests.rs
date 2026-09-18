@@ -610,6 +610,123 @@ fn empty_only_enum_tag_reads_bare_scalar() {
 }
 
 #[test]
+fn enum_drop_dispatch_calls_registered_drop_fn() {
+    let mut fx = Fixture::new();
+    let res_def = fx.def("Resource", DefKind::Enum);
+    let none = fx.def("None", DefKind::EnumVariant);
+    let owned = fx.def("Owned", DefKind::EnumVariant);
+    let i32 = fx.i32();
+    let none_name = fx.intern("None");
+    let owned_name = fx.intern("Owned");
+    fx.typecheck
+        .enum_variants
+        .insert(res_def, vec![none, owned]);
+
+    let res_ty = fx.ty(Type::Enum {
+        def_id: res_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        res_ty,
+        EnumLayout {
+            def_id: res_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: none,
+                    name: none_name,
+                    payload: None,
+                },
+                EnumVariantLayout {
+                    def_id: owned,
+                    name: owned_name,
+                    payload: Some(i32),
+                },
+            ],
+        },
+    );
+
+    let void = fx.void();
+    let drop_def = fx.def("$enumdrop", DefKind::Function);
+    let mut d = fx.fn_builder("$enumdrop", drop_def, void);
+    d.func_mut().is_drop_impl = true;
+    d.param("self", res_ty);
+    d.entry("bb0");
+    d.ret_void();
+    let drop_id = d.finish();
+    fx.program.drop_functions.insert(res_ty, drop_id);
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, void);
+    let slot = f.temp(res_ty);
+    f.entry("bb0");
+    f.drop_place(place(slot));
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(
+        ir.lines()
+            .any(|l| l.contains("call") && l.contains("%enum.Resource")),
+        "{ir}"
+    );
+}
+
+#[test]
+fn enum_without_drop_fn_emits_no_drop_call() {
+    let mut fx = Fixture::new();
+    let opt_def = fx.def("Opt", DefKind::Enum);
+    let none = fx.def("None", DefKind::EnumVariant);
+    let some = fx.def("Some", DefKind::EnumVariant);
+    let i32 = fx.i32();
+    let none_name = fx.intern("None");
+    let some_name = fx.intern("Some");
+    fx.typecheck.enum_variants.insert(opt_def, vec![none, some]);
+
+    let opt_ty = fx.ty(Type::Enum {
+        def_id: opt_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        opt_ty,
+        EnumLayout {
+            def_id: opt_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: none,
+                    name: none_name,
+                    payload: None,
+                },
+                EnumVariantLayout {
+                    def_id: some,
+                    name: some_name,
+                    payload: Some(i32),
+                },
+            ],
+        },
+    );
+
+    let void = fx.void();
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, void);
+    let slot = f.temp(opt_ty);
+    f.entry("bb0");
+    f.drop_place(place(slot));
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(
+        !ir.lines()
+            .any(|l| l.contains("call") && l.contains("%enum.Opt")),
+        "{ir}"
+    );
+}
+
+#[test]
 fn format_returns_a_slice() {
     let mut fx = Fixture::new();
     let fmt_def = fx.def("fmt", DefKind::Function);
