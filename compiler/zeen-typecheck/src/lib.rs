@@ -2847,7 +2847,13 @@ impl<'res> TypeChecker<'res> {
 
                 let value_ty = self.synth_expr(&args[0]);
 
-                if !matches!(self.result.interner.get(value_ty), Type::Enum { .. }) {
+                let is_enum = matches!(self.result.interner.get(value_ty), Type::Enum { .. })
+                    || matches!(
+                        self.result.interner.get(value_ty),
+                        Type::Pointer { inner, .. }
+                        if matches!(self.result.interner.get(*inner), Type::Enum { .. })
+                    );
+                if !is_enum {
                     self.report(TypeError::EnumTagOnNonEnum {
                         ty: self.display_type(value_ty).into(),
                         src: source.src(),
@@ -3241,6 +3247,22 @@ impl<'res> TypeChecker<'res> {
             def_id: enum_def,
             generic_args: enum_generic_args,
         } = self.result.interner.get(obj_ty).clone()
+        {
+            return self.check_enum_extraction_read(
+                id,
+                enum_def,
+                &enum_generic_args,
+                field_name,
+                field_span,
+                &object.source,
+            );
+        }
+
+        if let Type::Pointer { inner, .. } = self.result.interner.get(obj_ty).clone()
+            && let Type::Enum {
+                def_id: enum_def,
+                generic_args: enum_generic_args,
+            } = self.result.interner.get(inner).clone()
         {
             return self.check_enum_extraction_read(
                 id,
@@ -9075,6 +9097,30 @@ mod tests {
                 .any(|err| matches!(err, TypeError::EnumTagOnNonEnum { .. })),
             "expected EnumTagOnNonEnum, got: {errors:?}"
         );
+    }
+
+    #[test]
+    fn enum_ptr_receiver_extraction_reads_are_allowed() {
+        typecheck(
+            r#"
+            enum Foo {
+                a,
+                b: i32,
+                pub fn get(*self) i32 {
+                    self.b
+                }
+                pub fn tag_of(*self) u8 {
+                    @enumTag(self)
+                }
+            }
+            fn main() {
+                let x = Foo.b(3);
+                let _ = x.get();
+                let _ = x.tag_of();
+            }
+            "#,
+        )
+        .expect("pointer-receiver enum extraction and @enumTag must typecheck");
     }
 
     #[test]

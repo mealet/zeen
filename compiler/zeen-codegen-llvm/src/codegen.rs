@@ -367,39 +367,68 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Sets the body of each payload-enum struct: `{ tag: u8, union }` where
-    /// the union member is the payload type with the largest abi size (ties
-    /// break on alignment). Runs after all struct bodies so payload structs
-    /// are sized.
+    /// Sets the body of each payload-enum struct: `{ tag: u8, union }`. The
+    /// union member must cover the largest payload size *and* satisfy the
+    /// strictest payload alignment, or payload accesses through the union
+    /// would be misaligned (UB): a single payload rarely covers both (e.g.
+    /// `[9]u8` next to a `u64`), so the fallback pads the most-aligned
+    /// payload up to the largest size. Runs after all struct bodies so
+    /// payload structs are sized.
     fn fill_enum_layouts(&mut self) {
         for &ty in self.program.enum_layouts.keys() {
             let Some(opaque) = self.enum_types.get(&ty).copied() else {
                 continue;
             };
 
-            let largest = self.program.enum_layouts[&ty]
+            let payloads: Vec<TypeId> = self.program.enum_layouts[&ty]
                 .variants
                 .iter()
                 .filter_map(|v| v.payload)
-                .fold(
-                    (0u64, 0u64, TypeId(0)),
-                    |(max_size, max_align, largest_ty), payload| {
-                        let ty = self.map_basic_type(payload);
-                        let size = self.target_data.get_abi_size(&ty);
-                        let align = u64::from(self.target_data.get_abi_alignment(&ty));
-                        if size > max_size || (size == max_size && align > max_align) {
-                            (size, align, payload)
-                        } else {
-                            (max_size, max_align, largest_ty)
-                        }
-                    },
-                );
-
-            if largest.0 == 0 {
+                .collect();
+            if payloads.is_empty() {
                 continue;
             }
 
-            let union_ty = self.map_basic_type(largest.2);
+            let mut measured: Vec<(u64, u64, TypeId)> = Vec::new();
+            for payload in payloads {
+                let llvm_ty = self.map_basic_type(payload);
+                measured.push((
+                    self.target_data.get_abi_size(&llvm_ty),
+                    u64::from(self.target_data.get_abi_alignment(&llvm_ty)),
+                    payload,
+                ));
+            }
+            let max_size = measured.iter().map(|m| m.0).max().unwrap_or(0);
+            let max_align = measured.iter().map(|m| m.1).max().unwrap_or(1);
+
+            let union_ty: BasicTypeEnum<'ctx> = if max_size == 0 {
+                self.context.i8_type().into()
+            } else if let Some(&(_, _, payload)) = measured
+                .iter()
+                .find(|m| m.0 == max_size && m.1 == max_align)
+            {
+                self.map_basic_type(payload)
+            } else {
+                let (_, _, align_payload) = measured
+                    .iter()
+                    .filter(|m| m.1 == max_align)
+                    .max_by_key(|m| m.0)
+                    .copied()
+                    .expect("max alignment comes from a payload");
+                let pad = max_size
+                    - self
+                        .target_data
+                        .get_abi_size(&self.map_basic_type(align_payload));
+                if pad == 0 {
+                    self.map_basic_type(align_payload)
+                } else {
+                    let pad_ty = self.context.i8_type().array_type(pad as u32);
+                    let fields: [BasicTypeEnum<'ctx>; 2] =
+                        [self.map_basic_type(align_payload), pad_ty.into()];
+                    BasicTypeEnum::StructType(self.context.struct_type(&fields, false))
+                }
+            };
+
             let tag_ty = self.context.i8_type().into();
             opaque.set_body(&[tag_ty, union_ty], false);
         }
