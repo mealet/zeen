@@ -10,7 +10,10 @@ use std::rc::Rc;
 use inkwell::context::Context;
 use zeen_ast::expressions::BinaryOp;
 use zeen_driver::CompilationMode;
-use zeen_mir::{CallTarget, ConstValue, Operand, Rvalue, StructFieldLayout, StructLayout};
+use zeen_mir::{
+    AggregateKind, CallTarget, ConstValue, EnumLayout, EnumVariantLayout, Operand, Rvalue,
+    StructFieldLayout, StructLayout,
+};
 use zeen_resolve::DefKind;
 use zeen_typecheck::format_str::{FormatChunk, FormatSpec};
 use zeen_types::Type;
@@ -471,6 +474,84 @@ fn enum_debug_prints_enum_name() {
 
     assert!(ir.contains("Color.%s"), "{ir}");
     assert!(ir.contains("Red"), "{ir}");
+}
+
+#[test]
+fn payload_enum_builds_tagged_aggregate_and_reads_payload() {
+    let mut fx = Fixture::new();
+    let shape_def = fx.def("Shape", DefKind::Enum);
+    let empty = fx.def("Empty", DefKind::EnumVariant);
+    let single = fx.def("Single", DefKind::EnumVariant);
+    let i32 = fx.i32();
+    let empty_name = fx.intern("Empty");
+    let single_name = fx.intern("Single");
+    fx.typecheck
+        .enum_variants
+        .insert(shape_def, vec![empty, single]);
+
+    let shape_ty = fx.ty(Type::Enum {
+        def_id: shape_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        shape_ty,
+        EnumLayout {
+            def_id: shape_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: empty,
+                    name: empty_name,
+                    payload: None,
+                },
+                EnumVariantLayout {
+                    def_id: single,
+                    name: single_name,
+                    payload: Some(i32),
+                },
+            ],
+        },
+    );
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, i32);
+    let agg = f.temp(shape_ty);
+    let payload = f.temp(i32);
+
+    f.entry("bb0");
+    // Shape.Single(42): tag 1, payload 42.
+    f.assign(
+        place(agg),
+        Rvalue::Aggregate {
+            kind: AggregateKind::Enum {
+                enum_def: shape_def,
+                variant_def: single,
+            },
+            operands: vec![const_int(42)],
+        },
+    );
+    // payload = agg.enum_payload(Single)
+    f.assign(
+        place(payload),
+        Rvalue::Use(copy_of_place(place(agg).enum_payload(single))),
+    );
+    f.ret(copy_of(payload));
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    // Verify the tagged-union struct layout.
+    assert!(ir.contains("%enum.Shape = type { i8, i32 }"), "{ir}");
+    // Tag stored at field 0.
+    assert!(ir.contains("store i8 1"), "{ir}");
+    // Payload stored at field 1.
+    assert!(ir.contains("store i32 42"), "{ir}");
+    // Payload extracted from union member (GEP field index 1 → load).
+    assert!(
+        ir.contains("%enum.Shape, ptr %aggregate, i32 0, i32 1"),
+        "{ir}"
+    );
+    assert!(ir.contains("load i32"), "{ir}");
 }
 
 #[test]
