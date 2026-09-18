@@ -83,10 +83,7 @@ pub enum HirExprKind {
     },
     Type(Rc<HirTypeExpr>),
 
-    /// Anonymous function expression `fn(params) ret { body }`. `def_id` is the
-    /// synthetic closure function's `DefId`, `def` its lowered `HirFn`. The
-    /// closure's captured environment (`resolution.closure_captures[def_id]`)
-    /// is appended as extra parameters at MIR lowering.
+    /// Anonymous function expression `fn(params) ret { body }`.
     Closure {
         def_id: DefId,
         def: Rc<HirFn>,

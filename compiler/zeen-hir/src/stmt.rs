@@ -56,8 +56,7 @@ pub enum HirStmtKind {
 
     Expr(Rc<HirExpr>),
 
-    /// Nested function declaration. The function itself is collected and
-    /// lowered like any other, but it is only nameable from its parent.
+    /// Nested function declaration, only nameable from its parent.
     FnDecl(Rc<HirDecl>),
 
     Error,

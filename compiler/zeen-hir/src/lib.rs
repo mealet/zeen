@@ -103,9 +103,6 @@ impl<'res> HirLowering<'res> {
 
     fn struct_init_path_def(&self, expr: &Expression) -> (Option<DefId>, Option<Spur>) {
         if let ExpressionKind::FieldAccess { object, field } = &expr.kind {
-            // enum variant struct init: `Foo.c { ... }` - the enum def comes
-            // from the object, the variant name stays in the HIR for the
-            // typechecker to resolve against the enum's variants
             let enum_def = match self.resolution.resolution_of_expr(object) {
                 Some(Resolution::Def(id))
                     if matches!(
@@ -657,9 +654,6 @@ impl<'res> HirLowering<'res> {
             },
 
             ExpressionKind::Call { callee, args } => {
-                // Explicit generic args may sit on the callee ident
-                // (`make#[T](...)`) or on the field of a method access
-                // (`Type.make#[T](...)`).
                 let callee_args: Option<&[&zeen_ast::TypeExpr<'_>]> = match callee.kind {
                     ExpressionKind::Ident { generic_args, .. } => generic_args,
                     ExpressionKind::FieldAccess { field, .. } => match field.kind {
