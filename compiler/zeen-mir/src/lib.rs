@@ -38,6 +38,7 @@ pub struct MirProgram {
     pub functions: HashMap<MirFunctionId, MirFunction>,
     pub function_names: HashMap<MirFunctionId, String>,
     pub struct_layouts: HashMap<TypeId, StructLayout>,
+    pub enum_layouts: HashMap<TypeId, EnumLayout>,
 
     /// Maps a concrete struct `TypeId` that implements `Drop` to the
     /// monomorphized drop function that codegen must call to drop a value of
@@ -82,6 +83,22 @@ pub struct StructLayout {
 pub struct StructFieldLayout {
     pub def_id: DefId,
     pub ty: TypeId,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumLayout {
+    pub def_id: DefId,
+    pub generic_args: Vec<TypeId>,
+    /// Variants in declaration order; the ordinal is the runtime tag.
+    pub variants: Vec<EnumVariantLayout>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariantLayout {
+    pub def_id: DefId,
+    pub name: Spur,
+    /// The concrete payload type; `None` for empty variants.
+    pub payload: Option<TypeId>,
 }
 
 #[derive(Debug)]
@@ -224,6 +241,12 @@ impl Place {
         self.projection.push(PlaceElem::Index(index_local));
         self
     }
+
+    /// Enters the union member of enum variant `variant_def`.
+    pub fn enum_payload(mut self, variant_def: DefId) -> Self {
+        self.projection.push(PlaceElem::EnumPayload(variant_def));
+        self
+    }
 }
 
 pub fn place_is_global(place: &Place) -> bool {
@@ -236,6 +259,8 @@ pub enum PlaceElem {
     Index(LocalId),
     Deref,
     Global(MirGlobalVarId),
+    /// Index into the union of an enum value, tagged by the variant's ordinal.
+    EnumPayload(DefId),
 }
 
 #[derive(Debug, Clone)]
@@ -299,6 +324,7 @@ pub enum AggregateKind {
     Struct(DefId),
     Array,
     Slice,
+    Enum { enum_def: DefId, variant_def: DefId },
 }
 
 #[derive(Debug, Clone)]
