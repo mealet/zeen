@@ -5,6 +5,7 @@ use lasso::Rodeo;
 use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
 use zeen_parser::Parser;
 
+use crate::MirProgram;
 use crate::lowering::{MirLoweringResult, lower_program};
 
 const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
@@ -1436,6 +1437,120 @@ fn sizeof_of_unused_struct_registers_layout() {
     assert!(
         layouts.iter().any(|(len, first)| *len == 2 && *first != 0),
         "expected `Foo` layout (2 fields) to be registered for `@sizeof(Foo)`, got {layouts:?}"
+    );
+}
+
+fn enum_aggregates_in(program: &MirProgram) -> usize {
+    program
+        .functions
+        .values()
+        .flat_map(|f| &f.blocks)
+        .flat_map(|block| &block.statements)
+        .filter(|stmt| {
+            matches!(
+                stmt,
+                crate::MirStatement::Assign {
+                    rvalue: crate::Rvalue::Aggregate { kind, .. },
+                    ..
+                } if matches!(kind, crate::AggregateKind::Enum { .. })
+            )
+        })
+        .count()
+}
+
+#[test]
+fn enum_empty_constructs_register_layout() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b } \
+         fn main() { let e = Foo.b; @println(\"{}\", e); }",
+    );
+
+    assert!(
+        mir.program
+            .enum_layouts
+            .values()
+            .any(|l| { l.variants.len() == 2 && l.variants.iter().all(|v| v.payload.is_none()) }),
+        "expected `Foo` layout with two payloadless variants"
+    );
+}
+
+#[test]
+fn enum_single_construct_builds_aggregate() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32 } \
+         fn main() { let e = Foo.b(42); @println(\"{}\", e); }",
+    );
+
+    assert!(
+        enum_aggregates_in(&mir.program) > 0,
+        "expected a `Foo.b(42)` aggregate in MIR"
+    );
+}
+
+#[test]
+fn enum_payload_read_extracts_and_tag_checks() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32 } \
+         fn main() { let e = Foo.b(7); let v = e.b; @println(\"{}\", v); }",
+    );
+
+    let has_extraction = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| match stmt {
+                crate::MirStatement::Assign { place, rvalue, .. } => {
+                    let in_place = place
+                        .projection
+                        .iter()
+                        .any(|elem| matches!(elem, crate::PlaceElem::EnumPayload(_)));
+                    let in_rvalue = match rvalue {
+                        crate::Rvalue::Use(
+                            crate::Operand::Copy(p, _) | crate::Operand::Move(p, _),
+                        ) => p
+                            .projection
+                            .iter()
+                            .any(|elem| matches!(elem, crate::PlaceElem::EnumPayload(_))),
+                        _ => false,
+                    };
+                    in_place || in_rvalue
+                }
+                _ => false,
+            })
+        })
+    });
+
+    let tag_checked = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            matches!(
+                block.terminator,
+                crate::Terminator::SwitchInt {
+                    discriminant: _,
+                    targets: _,
+                    otherwise: _
+                }
+            )
+        })
+    });
+
+    assert!(
+        has_extraction,
+        "expected `e.b` to project through `EnumPayload`"
+    );
+    assert!(
+        tag_checked,
+        "expected a tag-check switch before the payload read"
+    );
+}
+
+#[test]
+fn enum_struct_payload_construct() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, c: { inner: i32, hello: u32 } } \
+         fn main() { let e = Foo.c { .inner = 1, .hello = 2 }; @println(\"{}\", e.c.inner); }",
+    );
+
+    assert!(
+        enum_aggregates_in(&mir.program) > 0,
+        "expected a `Foo.c {{ ... }}` aggregate in MIR"
     );
 }
 
