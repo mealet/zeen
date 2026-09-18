@@ -306,6 +306,10 @@ impl<'f> FnBuilder<'f> {
         self.stmt(MirStatement::Discard(operand));
     }
 
+    pub fn drop_place(&mut self, place: Place) {
+        self.stmt(MirStatement::Drop(place));
+    }
+
     pub fn ret(&mut self, operand: Operand) {
         self.set_terminator(Terminator::Return(operand));
     }

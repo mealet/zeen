@@ -846,11 +846,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     /// Drops the value stored at `ptr`: either calls the monomorphized `drop`
     /// function of a struct with an explicit `Drop` implementation, calls the
-    /// synthesized env-free of a heap-owning fat closure, or tears down an
+    /// synthesized env-free of a heap-owning fat closure, calls the
+    /// synthesized tag-switch teardown of an enum, or tears down an
     /// aggregate element-by-element (recursively).
     fn emit_drop_ptr(&mut self, ptr: PointerValue<'ctx>, ty: TypeId) {
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } | Type::FatFn { .. } => {
+            Type::Struct { .. } | Type::FatFn { .. } | Type::Enum { .. } => {
                 let drop_id = self.program.drop_functions[&ty];
                 let callee = self.functions[&drop_id];
                 let value = self
@@ -884,7 +885,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     fn place_needs_drop(&self, place: &Place, func: &MirFunction) -> bool {
         let ty = self.place_type(place, func);
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } | Type::FatFn { .. } => {
+            Type::Struct { .. } | Type::FatFn { .. } | Type::Enum { .. } => {
                 self.program.drop_functions.contains_key(&ty)
             }
             Type::Array { element, .. } => self.place_elem_needs_drop(element),
@@ -894,7 +895,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     fn place_elem_needs_drop(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } | Type::FatFn { .. } => {
+            Type::Struct { .. } | Type::FatFn { .. } | Type::Enum { .. } => {
                 self.program.drop_functions.contains_key(&ty)
             }
             Type::Array { element, .. } => self.place_elem_needs_drop(element),

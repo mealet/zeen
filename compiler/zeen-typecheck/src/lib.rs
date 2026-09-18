@@ -1418,7 +1418,12 @@ impl<'res> TypeChecker<'res> {
         };
 
         let self_type = struct_def.map(|sd| {
-            let struct_generics = self.struct_generics.get(&sd).cloned().unwrap_or_default();
+            let is_enum = matches!(self.def_kind(sd), Some(DefKind::Enum));
+            let owner_generics = if is_enum {
+                self.enum_generics.get(&sd).cloned().unwrap_or_default()
+            } else {
+                self.struct_generics.get(&sd).cloned().unwrap_or_default()
+            };
 
             // An interface implementation's methods see `Self` through the
             // block's own object slots: a specialization pins concrete types
@@ -1426,29 +1431,36 @@ impl<'res> TypeChecker<'res> {
             // parameters.
             let generic_args: Vec<TypeId> = if let Some(ictx) = impl_ctx
                 && iface_def.is_some()
-                && ictx.object_args.len() == struct_generics.len()
+                && ictx.object_args.len() == owner_generics.len()
             {
                 ictx.object_args.clone()
             } else {
-                struct_generics
+                owner_generics
                     .iter()
                     .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
                     .collect()
             };
 
-            let base_struct_ty = self.result.interner.intern(Type::Struct {
-                def_id: sd,
-                generic_args,
-            });
+            let base_ty = if is_enum {
+                self.result.interner.intern(Type::Enum {
+                    def_id: sd,
+                    generic_args,
+                })
+            } else {
+                self.result.interner.intern(Type::Struct {
+                    def_id: sd,
+                    generic_args,
+                })
+            };
 
             match self_mode {
-                Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_struct_ty,
+                Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_ty,
                 Some(SelfMode::RefMut) => self.result.interner.intern(Type::Pointer {
-                    inner: base_struct_ty,
+                    inner: base_ty,
                     is_const: false,
                 }),
                 Some(SelfMode::RefConst) => self.result.interner.intern(Type::Pointer {
-                    inner: base_struct_ty,
+                    inner: base_ty,
                     is_const: true,
                 }),
             }
@@ -1467,8 +1479,12 @@ impl<'res> TypeChecker<'res> {
         // them on the method itself. Seed those so the body sees them bound and
         // `Self` construction keeps the struct's own instantiation.
         if let Some(sd) = struct_def {
-            let struct_generics = self.struct_generics.get(&sd).cloned().unwrap_or_default();
-            for generic in struct_generics {
+            let owner_generics = if matches!(self.def_kind(sd), Some(DefKind::Enum)) {
+                self.enum_generics.get(&sd).cloned().unwrap_or_default()
+            } else {
+                self.struct_generics.get(&sd).cloned().unwrap_or_default()
+            };
+            for generic in owner_generics {
                 generic_bindings
                     .entry(generic)
                     .or_insert_with(|| self.result.interner.intern(Type::GenericParam(generic)));
@@ -5942,6 +5958,9 @@ impl<'res> TypeChecker<'res> {
         let struct_args: Vec<TypeId> = match self.result.interner.get(self_struct_ty) {
             Type::Struct {
                 generic_args: args, ..
+            }
+            | Type::Enum {
+                generic_args: args, ..
             } => args.clone(),
             _ => Vec::new(),
         };
@@ -5963,6 +5982,9 @@ impl<'res> TypeChecker<'res> {
                 .get(def_id)
                 .cloned()
                 .unwrap_or_default(),
+            Type::Enum { def_id, .. } => {
+                self.enum_generics.get(def_id).cloned().unwrap_or_default()
+            }
             _ => Vec::new(),
         };
 
@@ -6087,6 +6109,16 @@ impl<'res> TypeChecker<'res> {
                     def_id: pdi,
                     generic_args: ia,
                 },
+            )
+            | (
+                Type::Enum {
+                    def_id: pd,
+                    generic_args: pa,
+                },
+                Type::Enum {
+                    def_id: pdi,
+                    generic_args: ia,
+                },
             ) if pd == pdi => {
                 for (p, i) in pa.iter().zip(ia.iter()) {
                     self.unify_iface_generics(*p, *i, iface_generics, bindings);
@@ -6109,28 +6141,42 @@ impl<'res> TypeChecker<'res> {
             return;
         };
 
-        let struct_generics = self
-            .struct_generics
-            .get(&object_def)
-            .cloned()
-            .unwrap_or_default();
+        let is_enum = matches!(self.def_kind(object_def), Some(DefKind::Enum));
+        let owner_generics = if is_enum {
+            self.enum_generics
+                .get(&object_def)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.struct_generics
+                .get(&object_def)
+                .cloned()
+                .unwrap_or_default()
+        };
 
         // A specialization compares against its pinned concrete object type
         // (`Box[i32]`); a generic impl keeps the struct's generic slots.
         let self_generic_args: Vec<TypeId> =
-            if sig_ctx.is_specialized && sig_ctx.object_args.len() == struct_generics.len() {
+            if sig_ctx.is_specialized && sig_ctx.object_args.len() == owner_generics.len() {
                 sig_ctx.object_args.to_vec()
             } else {
-                struct_generics
+                owner_generics
                     .iter()
                     .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
                     .collect()
             };
 
-        let self_struct_ty = self.result.interner.intern(Type::Struct {
-            def_id: object_def,
-            generic_args: self_generic_args,
-        });
+        let self_ty = if is_enum {
+            self.result.interner.intern(Type::Enum {
+                def_id: object_def,
+                generic_args: self_generic_args,
+            })
+        } else {
+            self.result.interner.intern(Type::Struct {
+                def_id: object_def,
+                generic_args: self_generic_args,
+            })
+        };
 
         let mut impl_method_names: HashMap<String, DefId> = HashMap::new();
         for method in &imp.methods {
@@ -6161,7 +6207,7 @@ impl<'res> TypeChecker<'res> {
                         iface_def,
                         iface_method_def,
                         impl_method_def,
-                        self_struct_ty,
+                        self_ty,
                         sig_ctx,
                         source,
                     );
