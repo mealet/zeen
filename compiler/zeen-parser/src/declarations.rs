@@ -219,7 +219,6 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let mut type_parser = TypeParser::new(self.p);
 
-        // will give Option::None if not at bracket token
         let generics = type_parser.parse_generics_declarations();
 
         let _ = self.p.expect(TokenKind::OpenParen, "(")?;
@@ -383,7 +382,6 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let mut type_parser = TypeParser::new(self.p);
 
-        // will give Option::None if not at bracket token
         let generics = type_parser.parse_generics_declarations();
 
         let _ = self.p.expect(TokenKind::OpenBrace, "{")?;

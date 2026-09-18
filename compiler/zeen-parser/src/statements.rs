@@ -71,7 +71,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
     }
 
     /// Parses a nested function declaration (`fn foo() { .. }`), optionally
-    /// prefixed with `pub` (parsed here, rejected later by the typechecker).
+    /// prefixed with `pub`.
     fn parse_fn_decl(&mut self) -> Option<&'ctx Statement<'ctx>> {
         let start_span = self.p.current().span;
         let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
@@ -109,9 +109,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
 impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
     /// Parses a statement-level preprocessor guard: `@os[linux] { stmts }`
-    /// followed by an optional `else @os[...] { stmts }` / `else { stmts }`
-    /// chain. The whole statement is replaced by the matching branch's
-    /// statements during preprocessing.
+    /// followed by an optional `else` chain.
     pub fn parse_conditional_stmt(&mut self) -> Option<&'ctx Statement<'ctx>> {
         let start_token = self.p.current_clone();
         let start_span = start_token.span;
@@ -428,7 +426,6 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         let lhs;
 
         if self.p.at(TokenKind::Eof) {
-            // apparently we've already reported that and reached EOF due sync
             return None;
         }
 
@@ -436,8 +433,6 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             let mut expr_parser = ExprParser::new(self.p);
             lhs = expr_parser.parse_non_binary()?;
         }
-
-        // assignment (a = b)
 
         if self.p.eat(TokenKind::Eq) {
             let mut expr_parser = ExprParser::new(self.p);
@@ -455,10 +450,6 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
             return Some(stmt);
         }
-
-        // compound assignment (a += b), but only when the binary operator is
-        // directly followed by `=`. Otherwise the operator starts a plain
-        // binary expression statement, e.g. `a + b` or a trailing `a + b`.
 
         if self.p.peek().is_some_and(|next| next.kind == TokenKind::Eq)
             && let Some(bin_info) = expressions::BinaryInfo::new(self.p.current())
@@ -501,8 +492,6 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
             return Some(stmt);
         }
-
-        // expr in statement (may be a full binary expression)
 
         let expr = {
             let mut expr_parser = ExprParser::new(self.p);

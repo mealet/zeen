@@ -51,7 +51,7 @@ pub enum TypeKind<'arena> {
     },
 
     /// Fat function pointer: `Fn(T, ...) R` (copyable) or `FnOnce(T, ...) R`
-    /// (movable). Layout in the backend is `{ function: ptr, env: ptr }`.
+    /// (movable).
     FatFn {
         params: &'arena [&'arena TypeExpr<'arena>],
         ret: &'arena TypeExpr<'arena>,
