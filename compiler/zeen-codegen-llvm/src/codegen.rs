@@ -4041,7 +4041,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     fn load_enum_tag(&self, place: &Place, func: &MirFunction) -> BasicValueEnum<'ctx> {
         let ptr = self.place_ptr(place, func);
         let enum_ty = self.place_type(place, func);
-        if self.program.enum_layouts.contains_key(&enum_ty) {
+        let is_aggregate = self
+            .program
+            .enum_layouts
+            .get(&enum_ty)
+            .is_some_and(|layout| layout.variants.iter().any(|v| v.payload.is_some()));
+        if is_aggregate {
             let tag_ptr = self
                 .builder
                 .build_struct_gep(self.map_basic_type(enum_ty), ptr, 0, "")

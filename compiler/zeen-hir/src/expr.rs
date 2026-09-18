@@ -124,8 +124,9 @@ pub enum HirMacroKind {
     Unreachable, // @unreachable() -> never
     Todo,        // @todo() -> never
 
-    Dbg,    // @dbg(expr) -> expr
-    Uninit, // @uninit() -> any
+    Dbg,     // @dbg(expr) -> expr
+    Uninit,  // @uninit() -> any
+    EnumTag, // @enumTag(enum value) -> u8
 
     Unknown, // Unknown macro fallback
 }

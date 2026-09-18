@@ -2779,6 +2779,32 @@ impl<'res> TypeChecker<'res> {
                 let value_ty = self.synth_expr(&args[1]);
                 let value_ty = self.default_literal(value_ty);
 
+                let target_is_enum =
+                    matches!(self.result.interner.get(target_ty), Type::Enum { .. });
+                let value_is_enum = matches!(self.result.interner.get(value_ty), Type::Enum { .. });
+
+                if value_is_enum && !target_is_enum {
+                    self.report(TypeError::EnumAsIntForbidden {
+                        name: self.display_type(value_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
+                if target_is_enum
+                    && !value_is_enum
+                    && let Type::Enum { def_id, .. } = self.result.interner.get(target_ty).clone()
+                    && self.enum_has_payloads(def_id)
+                {
+                    self.report(TypeError::EnumFromIntForbidden {
+                        name: self.display_type(target_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
                 if !coerce::verify_cast(&mut self.result.interner, value_ty, target_ty) {
                     self.report(TypeError::InvalidCast {
                         from: self.display_type(value_ty).into(),
@@ -2789,6 +2815,32 @@ impl<'res> TypeChecker<'res> {
                 }
 
                 target_ty
+            }
+
+            HirMacroKind::EnumTag => {
+                if args.len() != 1 {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 1,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                }
+
+                let value_ty = self.synth_expr(&args[0]);
+
+                if !matches!(self.result.interner.get(value_ty), Type::Enum { .. }) {
+                    self.report(TypeError::EnumTagOnNonEnum {
+                        ty: self.display_type(value_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
+                self.result.interner.builtin(BuiltinType::u8)
             }
 
             HirMacroKind::TypeName => {
@@ -2853,7 +2905,7 @@ impl<'res> TypeChecker<'res> {
             }
             Type::IntLiteral | Type::FloatLiteral => true,
             Type::Never | Type::Error => true,
-            Type::Enum { .. } => true,
+            Type::Enum { def_id, .. } => !self.enum_has_payloads(def_id),
 
             // String pointers (`*const char` / `[*]char`) are printable.
             Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
@@ -2900,7 +2952,7 @@ impl<'res> TypeChecker<'res> {
             }
             Type::IntLiteral | Type::FloatLiteral => true,
             Type::Never | Type::Error => true,
-            Type::Enum { .. } => true,
+            Type::Enum { def_id, .. } => !self.enum_has_payloads(def_id),
 
             // String pointers (`*const char` / `[*]char`) are printable.
             Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
@@ -4506,6 +4558,29 @@ impl<'res> TypeChecker<'res> {
 
         match variant_def_id {
             Some(&variant_def) => {
+                let requires_value = self
+                    .result
+                    .enum_info
+                    .get(&enum_def)
+                    .and_then(|info| info.variants.iter().find(|v| v.def_id == variant_def))
+                    .map(|v| v.payload.is_some())
+                    .unwrap_or(false);
+
+                if requires_value {
+                    let interner = self.interner.borrow();
+                    let variant_name = interner.resolve(&field_name).into();
+                    drop(interner);
+
+                    self.report(TypeError::EnumVariantRequiresValue {
+                        name: self.display_type(enum_ty).into(),
+                        variant: variant_name,
+                        src: source.src(),
+                        span: field_span,
+                    });
+
+                    return self.result.interner.error();
+                }
+
                 self.result.field_resolutions.insert(id, variant_def);
                 enum_ty
             }
@@ -5443,6 +5518,14 @@ impl<'res> TypeChecker<'res> {
         &["Display", "Debug", "Eq"]
     }
 
+    fn enum_has_payloads(&self, def_id: DefId) -> bool {
+        self.result
+            .enum_info
+            .get(&def_id)
+            .map(|info| info.variants.iter().any(|v| v.payload.is_some()))
+            .unwrap_or(false)
+    }
+
     fn type_satisfies_interface(&self, ty: TypeId, iface_def: DefId) -> bool {
         match self.result.interner.get(ty).clone() {
             Type::Error => true,
@@ -5466,8 +5549,11 @@ impl<'res> TypeChecker<'res> {
                 None => false,
             },
 
-            Type::Enum { .. } => match self.def_name(iface_def) {
-                Some(name) => Self::enum_interface_names().contains(&name.as_str()),
+            Type::Enum { def_id, .. } => match self.def_name(iface_def) {
+                Some(name) => {
+                    !self.enum_has_payloads(def_id)
+                        && Self::enum_interface_names().contains(&name.as_str())
+                }
                 None => false,
             },
 
@@ -6180,6 +6266,18 @@ impl<'res> TypeChecker<'res> {
                     }
                     None => self.result.interner.error(),
                 }
+            }
+
+            Type::Enum { def_id, .. } => {
+                if matches!(op, Eq | Ne) && self.enum_has_payloads(def_id) {
+                    self.report(TypeError::EnumNotComparable {
+                        name: self.display_type(lhs).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                }
+                self.check_binary_op_builtin(op, lhs, rhs, &source)
             }
 
             Type::GenericParam(g) => {
@@ -8702,7 +8800,7 @@ mod tests {
             }
             implement Drop : Resource {}
             fn main() {
-                let _ = Resource.handle;
+                let _ = Resource.handle(1);
             }
             "#,
         )
@@ -8757,6 +8855,207 @@ mod tests {
                 TypeError::UnknownEnumVariant { variant, .. } if variant == "missing"
             )),
             "expected UnknownEnumVariant for a missing variant, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn payload_enum_rejects_comparison_and_printing() {
+        let errors = typecheck(
+            r#"
+            enum Shape {
+                dot,
+                rect: i32,
+            }
+            fn main() {
+                let a = Shape.rect(1);
+                let b = Shape.rect(2);
+                let _ = a == b;
+                let _ = a != b;
+                @println("{}", a);
+                @println("{:?}", a);
+            }
+            "#,
+        )
+        .expect_err("payload enums must reject ==/!= and Display/Debug");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumNotComparable { .. })),
+            "expected EnumNotComparable, got: {errors:?}"
+        );
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|err| matches!(err, TypeError::InterfaceNotImplemented { .. }))
+                .count(),
+            2,
+            "expected Display + Debug InterfaceNotImplemented, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn empty_only_enum_keeps_comparison_and_printing() {
+        typecheck(
+            r#"
+            enum Color {
+                red,
+                green,
+            }
+            fn main() {
+                let a = Color.red;
+                let b = Color.green;
+                let _ = a == b;
+                let _ = a != b;
+                @println("{}", a);
+                @println("{:?}", b);
+            }
+            "#,
+        )
+        .expect("empty-only enums keep ==/!= and Display/Debug");
+    }
+
+    #[test]
+    fn enum_int_casts_are_restricted() {
+        let errors = typecheck(
+            r#"
+            enum Shape {
+                dot,
+                rect: i32,
+            }
+            fn main() {
+                let a = Shape.rect(1);
+                let _ = @as(i32, a);
+                let _ = @as(Shape, 1);
+            }
+            "#,
+        )
+        .expect_err("enum<->int @as casts must be restricted");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumAsIntForbidden { .. })),
+            "expected EnumAsIntForbidden, got: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumFromIntForbidden { .. })),
+            "expected EnumFromIntForbidden, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn empty_only_enum_allows_int_roundtrip() {
+        let errors = typecheck(
+            r#"
+            enum Color {
+                red,
+                green,
+            }
+            fn main() {
+                let c = @as(Color, 1);
+                let _ = @as(i32, c);
+            }
+            "#,
+        )
+        .expect_err("@as(int, enum) is forbidden even for empty-only enums");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumAsIntForbidden { .. })),
+            "expected EnumAsIntForbidden, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_tag_macro_returns_tag() {
+        let result = typecheck(
+            r#"
+            enum Color {
+                red,
+                green,
+            }
+            enum Shape {
+                dot,
+                rect: i32,
+            }
+            fn main() {
+                let c = Color.red;
+                let t = @enumTag(c);
+                let s = Shape.rect(1);
+                let u = @enumTag(s);
+                @println("{}", t);
+                @println("{}", u);
+            }
+            "#,
+        )
+        .expect("@enumTag must return the u8 tag");
+
+        let tags: Vec<zeen_types::TypeId> = result
+            .expr_types
+            .values()
+            .copied()
+            .filter(|ty| {
+                matches!(
+                    result.interner.get(*ty),
+                    zeen_types::Type::Builtin(zeen_ast::types::BuiltinType::u8)
+                )
+            })
+            .collect();
+
+        assert!(
+            tags.len() >= 2,
+            "@enumTag results must be typed u8, got: {tags:?}"
+        );
+    }
+
+    #[test]
+    fn enum_tag_macro_rejects_non_enum() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let _ = @enumTag(1);
+            }
+            "#,
+        )
+        .expect_err("@enumTag on a non-enum must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumTagOnNonEnum { .. })),
+            "expected EnumTagOnNonEnum, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn payload_variant_access_without_value_hints_syntax() {
+        let errors = typecheck(
+            r#"
+            enum Foo {
+                a: i32,
+                b: {
+                    x: i32,
+                },
+            }
+            fn main() {
+                let _ = Foo.a;
+                let _ = Foo.b;
+            }
+            "#,
+        )
+        .expect_err("payload variants constructed without a value must fail");
+
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|err| matches!(err, TypeError::EnumVariantRequiresValue { .. }))
+                .count(),
+            2,
+            "expected EnumVariantRequiresValue for both variants, got: {errors:?}"
         );
     }
 
