@@ -6,9 +6,9 @@ use zeen_ast::{
     declarations::{EnumVariant, FnParam, GenericType, StructField},
 };
 
-/// A simple representation of allocated AST node as a key.
-/// SAFETY: This thing is very dangerous, can be used when you sure your object is live as long as
-/// NodeKey does. In compiler it is used with arena (lives whole program cycle) allocated objects.
+/// A raw AST node pointer used as a map key.
+/// SAFETY: only valid while the arena object is alive (the arena lives for
+/// the whole program cycle).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeKey(pub usize);
 
@@ -46,9 +46,8 @@ impl NodeKey {
     }
 }
 
-/// `<decl pointer, slot index>` pair used to key the generic bindings of an
-/// `implement` declaration without fabricating synthetic memory addresses the
-/// way `NodeKey::from_binding_slot` did (which risked aliasing real nodes).
+/// `<decl pointer, slot index>` key for the generic bindings of an
+/// `implement` declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BindingSlotKey(pub usize, pub usize);
 
@@ -111,18 +110,13 @@ pub struct ResolutionResult {
     pub implement_names: HashMap<NodeKey, (Resolution, Resolution)>,
     pub interface_self_placeholders: HashMap<DefId, DefId>,
 
-    /// For nested function declarations: maps the nested fn's `DefId` to its
-    /// enclosing function's `DefId`, used to build `<parent>-><name>` symbols.
+    /// Nested fn `DefId` -> enclosing fn `DefId`.
     pub nested_fn_parents: HashMap<DefId, DefId>,
 
-    /// For closures: maps the closure's `DefId` to the ordered (first-use,
-    /// deduplicated) list of `DefId`s it captures from its environment. Env
-    /// values become extra params of the generated closure function.
+    /// Closure `DefId` -> captured `DefId`s in first-use order.
     pub closure_captures: HashMap<DefId, Vec<DefId>>,
 
-    /// Maps an enum variant carrying an anonymous struct payload to the
-    /// synthetic `DefKind::Struct` that models the payload. Fields of that
-    /// struct are plain `DefKind::Field` defs reachable via `def_of_field`.
+    /// Anonymous-struct-payload variant -> synthetic payload `DefKind::Struct`.
     pub enum_payload_struct_defs: HashMap<DefId, DefId>,
 }
 

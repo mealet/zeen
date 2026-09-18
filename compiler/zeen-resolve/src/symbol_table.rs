@@ -121,10 +121,8 @@ impl SymbolTable {
         self.current_mut().types.insert(name, id);
     }
 
-    /// Collects every `DefId` (values and types) visible in all scopes above the
-    /// module one (the enclosing function's params, locals and generics,
-    /// including the current block). Used to forbid nested functions from
-    /// capturing them.
+    /// Every `DefId` visible in scopes above the module one. Used to forbid
+    /// nested functions from capturing them.
     pub fn enclosing_defs(&self) -> std::collections::HashSet<DefId> {
         let mut out = std::collections::HashSet::new();
 
@@ -141,17 +139,13 @@ impl SymbolTable {
         out
     }
 
-    /// Collects the `DefId`s a closure is allowed to capture: everything in the
-    /// enclosing function's live frame (params, locals, generics) - all scopes
-    /// outside the closure's own scope down to and including the first
-    /// function-like scope. Globals are excluded (always reachable, never
-    /// captured), and frames above the enclosing function are dead.
+    /// The `DefId`s a closure may capture: the enclosing function's live frame.
+    /// Globals are excluded, frames above it are dead.
     pub fn closure_capture_candidates(&self) -> std::collections::HashSet<DefId> {
         let mut out = std::collections::HashSet::new();
 
         let mut scopes = self.scopes.iter().rev();
-        // Skip the closure's own scope: its params/generics are locals, not
-        // captures.
+        // Skip the closure's own scope.
         scopes.next();
 
         for scope in scopes {
@@ -163,9 +157,6 @@ impl SymbolTable {
                     out.extend(scope.content.types.values().copied());
                 }
 
-                // Enclosing function/method frame: its params (incl. `self`
-                // and env params of outer closures) are capturable. Frames
-                // above it are not live, so stop here.
                 _ => {
                     out.extend(scope.content.values.values().copied());
                     out.extend(scope.content.types.values().copied());
