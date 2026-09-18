@@ -1771,22 +1771,18 @@ fn enum_ptr_receiver_extraction_tag_checks_through_deref() {
         .map(|(_, f)| f)
         .expect("the enum method must lower");
 
-    let deref_tag_read = get_fn
-        .blocks
-        .iter()
-        .flat_map(|b| &b.statements)
-        .any(|s| {
-            matches!(
-                s,
-                crate::MirStatement::Assign {
-                    rvalue: crate::Rvalue::Discriminant(place),
-                    ..
-                } if place
-                    .projection
-                    .iter()
-                    .any(|e| matches!(e, crate::PlaceElem::Deref))
-            )
-        });
+    let deref_tag_read = get_fn.blocks.iter().flat_map(|b| &b.statements).any(|s| {
+        matches!(
+            s,
+            crate::MirStatement::Assign {
+                rvalue: crate::Rvalue::Discriminant(place),
+                ..
+            } if place
+                .projection
+                .iter()
+                .any(|e| matches!(e, crate::PlaceElem::Deref))
+        )
+    });
     let tag_checked = get_fn
         .blocks
         .iter()

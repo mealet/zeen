@@ -107,7 +107,6 @@ impl<'inp> Tokenizer<'inp> {
                 }
             } else if chr == '/' {
                 match self.second() {
-                    // line comment
                     '/' => {
                         while !self.is_eof() {
                             if self.bump() == Some('\n') {
@@ -116,7 +115,6 @@ impl<'inp> Tokenizer<'inp> {
                         }
                     }
 
-                    // block comment
                     '*' => {
                         let start = self.pos_start();
 
@@ -164,10 +162,8 @@ impl<'inp> Tokenizer<'inp> {
         };
 
         let token_kind = match first_char {
-            // byte char literal
             'b' => self.byte_literal(),
 
-            // raw str literal
             'r' => self.raw_str_literal(),
 
             chr if is_ident_start(chr) => {
@@ -323,16 +319,6 @@ impl<'inp> Tokenizer<'inp> {
         self.eat_while(is_ident_continue);
 
         TokenKind::Ident
-
-        // NOTE: Below code is deprecated version of macro identifier.
-        // It was `macro_name!`, now replaced with `@macro_name`
-        //
-        // if self.first() == '!' {
-        //     let _ = self.bump();
-        //     TokenKind::MacroIdent
-        // } else {
-        //     TokenKind::Ident
-        // }
     }
 
     fn tokenize_ident(&mut self, mut kind: TokenKind) -> TokenKind {

@@ -88,8 +88,7 @@ pub enum ExpressionKind<'arena> {
         trailing: Option<&'arena Expression<'arena>>,
     },
 
-    /// Anonymous function expression: `fn(params) ret { body }`. Lowered to a
-    /// synthetic function capturing its environment by value.
+    /// Anonymous function expression: `fn(params) ret { body }`.
     Closure {
         params: &'arena [crate::declarations::FnParam<'arena>],
         return_type: Option<&'arena crate::types::TypeExpr<'arena>>,
@@ -98,12 +97,10 @@ pub enum ExpressionKind<'arena> {
 
     Type(&'arena crate::types::TypeExpr<'arena>),
 
-    /// Compile-time target constant (`@var[os]`), resolved by the preprocessor.
+    /// Compile-time target constant (`@var[os]`).
     TargetVar(TargetVarKind),
 
     /// An expression guarded by a target condition (`@os[linux] { expr } else { expr }`).
-    /// Resolved by the preprocessor: the whole expression is replaced by the
-    /// body of the single matching branch.
     ConditionalBlock(&'arena ExprConditionalBlock<'arena>),
 
     /// Range expression: `a..b`, `a..=b`, `a..`, `..b`, `..=b`, `..`.
@@ -115,8 +112,6 @@ pub enum ExpressionKind<'arena> {
 }
 
 /// A `@name[values] { expr }` guard at expression level with an optional `else`.
-/// `else_block` is either another expression conditional (else-if) or a bare-else
-/// expression holding the fallback body.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct ExprConditionalBlock<'arena> {
     pub directive: PreprocessorDirective,

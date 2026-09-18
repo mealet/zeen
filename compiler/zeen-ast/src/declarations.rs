@@ -97,7 +97,6 @@ pub enum DeclarationKind<'arena> {
     Alias(AliasDecl<'arena>),
 
     /// A declaration block guarded by a target condition (`@os[linux] { ... }`).
-    /// Resolved by the preprocessor: only one branch survives.
     ConditionalBlock(&'arena ConditionalBlock<'arena>),
 }
 
@@ -136,8 +135,6 @@ pub struct DirectiveValue<'arena> {
 }
 
 /// A `@name[values] { body }` guard with an optional `else` branch.
-/// `else_block` is either another `ConditionalBlock` or `None` for a bare else.
-/// A `bare_else` block takes its body unconditionally.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConditionalBlock<'arena> {
     pub directive: PreprocessorDirective,
@@ -185,8 +182,7 @@ pub struct StructField<'arena> {
 pub enum EnumVariantPayload<'arena> {
     /// `b: i32` - a single typed value.
     Single(&'arena TypeExpr<'arena>),
-    /// `c: { fields }` - an anonymous struct payload; its fields are all public
-    /// and carry no methods of their own.
+    /// `c: { fields }` - an anonymous struct payload.
     Anonymous(&'arena [StructField<'arena>]),
 }
 
