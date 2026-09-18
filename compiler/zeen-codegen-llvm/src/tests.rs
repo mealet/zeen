@@ -555,6 +555,61 @@ fn payload_enum_builds_tagged_aggregate_and_reads_payload() {
 }
 
 #[test]
+fn empty_only_enum_tag_reads_bare_scalar() {
+    let mut fx = Fixture::new();
+    let color_def = fx.def("Color", DefKind::Enum);
+    let red = fx.def("Red", DefKind::EnumVariant);
+    let green = fx.def("Green", DefKind::EnumVariant);
+    let red_name = fx.intern("Red");
+    let green_name = fx.intern("Green");
+    fx.typecheck
+        .enum_variants
+        .insert(color_def, vec![red, green]);
+
+    let color_ty = fx.ty(Type::Enum {
+        def_id: color_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        color_ty,
+        EnumLayout {
+            def_id: color_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: red,
+                    name: red_name,
+                    payload: None,
+                },
+                EnumVariantLayout {
+                    def_id: green,
+                    name: green_name,
+                    payload: None,
+                },
+            ],
+        },
+    );
+
+    let u8 = fx.u8();
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, u8);
+    let slot = f.temp(color_ty);
+    let tag = f.temp(u8);
+
+    f.entry("bb0");
+    // tag = discriminant(slot): the bare-tag scalar loads directly, with no
+    // struct GEP (empty-only enums are not aggregates).
+    f.assign(place(tag), Rvalue::Discriminant(place(slot)));
+    f.ret(copy_of(tag));
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("load i8"), "{ir}");
+    assert!(!ir.contains("%enum.Color"), "{ir}");
+}
+
+#[test]
 fn format_returns_a_slice() {
     let mut fx = Fixture::new();
     let fmt_def = fx.def("fmt", DefKind::Function);

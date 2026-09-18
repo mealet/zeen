@@ -1478,7 +1478,7 @@ fn enum_empty_constructs_register_layout() {
 fn enum_single_construct_builds_aggregate() {
     let mir = compile_mir_ok(
         "enum Foo { a, b: i32 } \
-         fn main() { let e = Foo.b(42); @println(\"{}\", e); }",
+         fn main() { let e = Foo.b(42); let t = @enumTag(e); @println(\"{}\", t); }",
     );
 
     assert!(
@@ -1557,4 +1557,106 @@ fn enum_struct_payload_construct() {
 fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
     let _ = ty;
     true
+}
+
+#[test]
+fn enum_drop_function_tears_down_drop_payload() {
+    let mir = compile_mir_ok(
+        "struct Handle { pub h: i32, } \
+         implement Drop : Handle { fn drop(self) void {} } \
+         enum Resource { none, owned: Handle, } \
+         fn main() { let r = Resource.owned(Handle { .h = 1 }); let t = @enumTag(r); @println(\"{}\", t); }",
+    );
+
+    let (drop_id, drop_fn) = mir
+        .program
+        .functions
+        .iter()
+        .find(|(id, _)| {
+            mir.program
+                .function_names
+                .get(id)
+                .is_some_and(|n| n.starts_with("$enumdrop"))
+        })
+        .expect("a synthesized enum drop fn must exist");
+
+    assert!(
+        mir.program.drop_functions.values().any(|id| id == drop_id),
+        "the synthesized drop fn must be registered in `drop_functions`"
+    );
+    assert!(drop_fn.is_drop_impl);
+    assert!(
+        drop_fn
+            .blocks
+            .iter()
+            .any(|b| matches!(b.terminator, crate::Terminator::SwitchInt { .. })),
+        "the enum drop fn must switch on the tag"
+    );
+    assert!(
+        drop_fn
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .any(|s| matches!(s, crate::MirStatement::Drop(_))),
+        "the enum drop fn must drop the payload"
+    );
+}
+
+#[test]
+fn copy_payload_enum_gets_no_drop_function() {
+    let mir = compile_mir_ok(
+        "enum Opt { none, some: i32, } \
+         fn main() { let o = Opt.some(1); let t = @enumTag(o); @println(\"{}\", t); }",
+    );
+
+    assert!(
+        mir.program.drop_functions.is_empty(),
+        "a Copy-payload enum must not get a drop fn, got: {:?}",
+        mir.program.drop_functions
+    );
+}
+
+#[test]
+fn enum_drop_function_expands_struct_payload_fields() {
+    let mir = compile_mir_ok(
+        "struct Handle { pub h: i32, } \
+         implement Drop : Handle { fn drop(self) void {} } \
+         enum Msg { empty, data: { h: Handle, n: i32, }, } \
+         fn main() { let m = Msg.data { .h = Handle { .h = 1 }, .n = 2 }; let t = @enumTag(m); @println(\"{}\", t); }",
+    );
+
+    let drop_fn = mir
+        .program
+        .functions
+        .iter()
+        .find(|(id, _)| {
+            mir.program
+                .function_names
+                .get(id)
+                .is_some_and(|n| n.starts_with("$enumdrop"))
+        })
+        .map(|(_, f)| f)
+        .expect("a synthesized enum drop fn must exist");
+
+    assert!(
+        drop_fn
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .any(|s| match s {
+                crate::MirStatement::Drop(place) => {
+                    let has_payload = place
+                        .projection
+                        .iter()
+                        .any(|e| matches!(e, crate::PlaceElem::EnumPayload(_)));
+                    let has_field = place
+                        .projection
+                        .iter()
+                        .any(|e| matches!(e, crate::PlaceElem::Field(_)));
+                    has_payload && has_field
+                }
+                _ => false,
+            }),
+        "the anon-struct payload must drop field by field through the union"
+    );
 }

@@ -710,6 +710,80 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("`{name}` enum has value-carrying variants and cannot be compared")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_not_comparable),
+        help("only enums with no value-carrying variants support `==`/`!=`")
+    )]
+    EnumNotComparable {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("cannot cast `{name}` enum to a numeric type with `@as`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_as_int_forbidden),
+        help("use `@enumTag(expr)` to read the variant tag")
+    )]
+    EnumAsIntForbidden {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("cannot cast a numeric value to the `{name}` enum with `@as`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_from_int_forbidden),
+        help("construct variants directly: `{name}.variant(value)` or `{name}.variant {{ ... }}`")
+    )]
+    EnumFromIntForbidden {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("variant `{variant}` of `{name}` requires a value")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_variant_requires_value),
+        help(
+            "construct single-value variants with `{name}.{variant}(value)` and struct variants with `{name}.{variant} {{ .field = value }}`"
+        )
+    )]
+    EnumVariantRequiresValue {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("`@enumTag` expects an enum value, got `{ty}`")]
+    #[diagnostic(severity(Error), code(zeen::typecheck::enum_tag_non_enum))]
+    EnumTagOnNonEnum {
+        ty: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("recursive type `{ty}` is infinite")]
     #[diagnostic(
         severity(Error),
