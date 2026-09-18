@@ -2259,6 +2259,16 @@ impl<'ctx> MirLowering<'ctx> {
 
         let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
 
+        // Extraction through a pointer (`self.variant` where `self: *Foo`,
+        // which the typechecker allows like struct field access): deref
+        // explicitly instead of projecting into the pointer.
+        let obj_ty = self.expr_type(fb, object);
+        let obj_place = if matches!(self.typecheck.interner.get(obj_ty), Type::Pointer { .. }) {
+            obj_place.deref()
+        } else {
+            obj_place
+        };
+
         let mut block = block;
         if matches!(self.mode, CompilationMode::Debug) {
             let ok_block = fb.new_block();
@@ -3572,6 +3582,26 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
+                // Same through a pointer (`self.variant` where `self: *Foo`):
+                // the reader derefs explicitly and keeps the tag check.
+                if let Type::Pointer { inner, .. } = self.typecheck.interner.get(obj_ty).clone()
+                    && let Type::Enum {
+                        def_id: enum_def,
+                        generic_args,
+                    } = self.typecheck.interner.get(inner).clone()
+                {
+                    let variant_def = self.field_resolution(expr.id);
+                    return self.lower_enum_payload_read(
+                        fb,
+                        object,
+                        enum_def,
+                        &generic_args,
+                        variant_def,
+                        block,
+                        &expr.source,
+                    );
+                }
+
                 // `arr.len` on a fixed array is a compile-time constant: arrays
                 // carry no runtime length field, so lower it to a constant
                 // instead of projecting into storage.
@@ -4034,6 +4064,14 @@ impl<'ctx> MirLowering<'ctx> {
                     let (block, value_place) =
                         self.lower_expr_to_place_or_temp(fb, &args[0], block);
 
+                    let arg_ty = self.expr_type(fb, &args[0]);
+                    let value_place =
+                        if matches!(self.typecheck.interner.get(arg_ty), Type::Pointer { .. }) {
+                            value_place.deref()
+                        } else {
+                            value_place
+                        };
+
                     let result_ty = self.expr_type(fb, expr);
                     let temp = fb.new_temp(result_ty);
                     fb.push_stmt(
@@ -4270,6 +4308,11 @@ impl<'ctx> MirLowering<'ctx> {
                 // projects through the payload struct.
                 if let Type::Enum { def_id, .. } = self.typecheck.interner.get(obj_ty).clone() {
                     return (block, obj_place.enum_payload(field_def));
+                }
+                if let Type::Pointer { inner, .. } = self.typecheck.interner.get(obj_ty).clone()
+                    && let Type::Enum { .. } = self.typecheck.interner.get(inner).clone()
+                {
+                    return (block, obj_place.deref().enum_payload(field_def));
                 }
 
                 // Field access through a pointer auto-derefs (`sf.x` where

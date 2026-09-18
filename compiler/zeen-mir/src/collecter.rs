@@ -34,6 +34,11 @@ fn collect_from_decl(decl: &HirDecl, map: &mut HashMap<DefId, Rc<HirFn>>) {
                 collect_from_decl(method, map);
             }
         }
+        HirDeclKind::Enum(e) => {
+            for method in &e.methods {
+                collect_from_decl(method, map);
+            }
+        }
         HirDeclKind::Interface(i) => {
             for method in &i.methods {
                 collect_from_decl(method, map);
@@ -44,8 +49,7 @@ fn collect_from_decl(decl: &HirDecl, map: &mut HashMap<DefId, Rc<HirFn>>) {
                 collect_from_decl(method, map);
             }
         }
-        HirDeclKind::Enum(_)
-        | HirDeclKind::Alias(_)
+        HirDeclKind::Alias(_)
         | HirDeclKind::ExternVar { .. }
         | HirDeclKind::GlobalVar { .. }
         | HirDeclKind::ExternLink

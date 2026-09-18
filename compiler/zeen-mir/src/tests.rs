@@ -1559,6 +1559,96 @@ fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
     true
 }
 
+fn print_mir_ok(src: &str) -> String {
+    let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+    let bump = Bump::default();
+    let content = Arc::new(src.to_string());
+    let filename = Rc::new("test.zn".to_string());
+
+    let mut context = CompilationContext {
+        paths: PathsConfig {
+            project_root: std::path::PathBuf::from("/"),
+            std_root: Some(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std"),
+            ),
+            linked: HashSet::new(),
+        },
+        core_files: vec![
+            ("core.ops", CORE_OPS),
+            ("core.out", CORE_OUT),
+            ("core.iter", CORE_ITER),
+            ("core.option", CORE_OPTION),
+            ("core.slice", CORE_SLICE),
+        ],
+        mode: CompilationMode::Debug,
+        output: CompilationOutput::EmitMIR,
+        target: None,
+        warnings: Vec::new(),
+    };
+
+    let mut tokens = zeen_lexer::tokenize(&content);
+    let mut parser = Parser::new(
+        Rc::clone(&filename),
+        Arc::clone(&content),
+        &mut tokens,
+        &bump,
+        Rc::clone(&rodeo),
+    );
+
+    let program = parser
+        .parse_program()
+        .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())
+        .expect("parse must succeed");
+
+    let (resolved_program, mut resolution_result) = zeen_resolve::resolve(
+        Rc::clone(&filename),
+        Arc::clone(&content),
+        Path::new("/test.zn"),
+        program,
+        &bump,
+        Rc::clone(&rodeo),
+        &mut context,
+    )
+    .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())
+    .expect("resolve must succeed");
+
+    let mut hir_lowering = zeen_hir::HirLowering::new(&resolution_result, Rc::clone(&rodeo));
+    let hir_module = hir_lowering.lower_module(resolved_program);
+
+    let mut typechecker =
+        zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&rodeo));
+    typechecker.check_module(&hir_module);
+
+    let mut typecheck = typechecker
+        .finish()
+        .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())
+        .expect("typecheck must succeed");
+
+    let lowered_mir = lower_program(
+        Rc::clone(&rodeo),
+        &mut typecheck,
+        &resolution_result,
+        &hir_module,
+        CompilationMode::Debug,
+    )
+    .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())
+    .expect("MIR lowering must succeed");
+
+    crate::printer::print_mir_program(&lowered_mir.program, &typecheck, &resolution_result, &rodeo)
+}
+
+#[test]
+fn printed_mir_renders_enum_constructs() {
+    let printed = print_mir_ok(
+        "enum Shape { dot, rect: i32 } \
+         fn main() { let s = Shape.rect(7); let t = @enumTag(s); let v = s.rect; @println(\"{}\", t); @println(\"{}\", v); }",
+    );
+
+    assert!(printed.contains("Shape {"), "{printed}");
+    assert!(printed.contains("discriminant("), "{printed}");
+    assert!(printed.contains(".@payload("), "{printed}");
+}
+
 #[test]
 fn enum_drop_function_tears_down_drop_payload() {
     let mir = compile_mir_ok(
@@ -1658,5 +1748,53 @@ fn enum_drop_function_expands_struct_payload_fields() {
                 _ => false,
             }),
         "the anon-struct payload must drop field by field through the union"
+    );
+}
+
+#[test]
+fn enum_ptr_receiver_extraction_tag_checks_through_deref() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32, pub fn get(*self) i32 { self.b } } \
+         fn main() { let x = Foo.b(3); let v = x.get(); @println(\"{}\", v); }",
+    );
+
+    let get_fn = mir
+        .program
+        .functions
+        .iter()
+        .find(|(id, _)| {
+            mir.program
+                .function_names
+                .get(id)
+                .is_some_and(|n| n.contains("get"))
+        })
+        .map(|(_, f)| f)
+        .expect("the enum method must lower");
+
+    let deref_tag_read = get_fn
+        .blocks
+        .iter()
+        .flat_map(|b| &b.statements)
+        .any(|s| {
+            matches!(
+                s,
+                crate::MirStatement::Assign {
+                    rvalue: crate::Rvalue::Discriminant(place),
+                    ..
+                } if place
+                    .projection
+                    .iter()
+                    .any(|e| matches!(e, crate::PlaceElem::Deref))
+            )
+        });
+    let tag_checked = get_fn
+        .blocks
+        .iter()
+        .any(|b| matches!(b.terminator, crate::Terminator::SwitchInt { .. }));
+
+    assert!(deref_tag_read, "the tag check must read through the deref");
+    assert!(
+        tag_checked,
+        "pointer-receiver extraction must keep the Debug tag check"
     );
 }

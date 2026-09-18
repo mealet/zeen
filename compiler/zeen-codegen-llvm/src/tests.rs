@@ -610,6 +610,66 @@ fn empty_only_enum_tag_reads_bare_scalar() {
 }
 
 #[test]
+fn enum_union_slot_pads_most_aligned_payload() {
+    let mut fx = Fixture::new();
+    let packet_def = fx.def("Packet", DefKind::Enum);
+    let raw = fx.def("Raw", DefKind::EnumVariant);
+    let num = fx.def("Num", DefKind::EnumVariant);
+    let u8 = fx.u8();
+    let u64_ty = fx.ty(Type::Builtin(zeen_ast::types::BuiltinType::u64));
+    let raw_ty = fx.array(u8, 9);
+    let raw_name = fx.intern("Raw");
+    let num_name = fx.intern("Num");
+    fx.typecheck
+        .enum_variants
+        .insert(packet_def, vec![raw, num]);
+
+    let packet_ty = fx.ty(Type::Enum {
+        def_id: packet_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        packet_ty,
+        EnumLayout {
+            def_id: packet_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: raw,
+                    name: raw_name,
+                    payload: Some(raw_ty),
+                },
+                EnumVariantLayout {
+                    def_id: num,
+                    name: num_name,
+                    payload: Some(u64_ty),
+                },
+            ],
+        },
+    );
+
+    let u8_tag = fx.u8();
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, u8_tag);
+    let slot = f.temp(packet_ty);
+    let tag = f.temp(u8_tag);
+    f.entry("bb0");
+    // A tag read forces the enum struct body into the IR.
+    f.assign(place(tag), Rvalue::Discriminant(place(slot)));
+    f.ret(copy_of(tag));
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    // `[9 x i8]` is larger but only aligned to 1; the slot pads the
+    // 8-aligned `u64` up to 9 bytes instead of reusing the array.
+    assert!(
+        ir.contains("%enum.Packet = type { i8, { i64, [1 x i8] } }"),
+        "{ir}"
+    );
+}
+
+#[test]
 fn enum_drop_dispatch_calls_registered_drop_fn() {
     let mut fx = Fixture::new();
     let res_def = fx.def("Resource", DefKind::Enum);
