@@ -303,9 +303,6 @@ impl<'res> TypeChecker<'res> {
 
             HirDeclKind::Struct(s) => {
                 // Code below is moved to `check_module` parent function (Pass 0).
-                //
-                // self.struct_generics
-                //     .insert(decl.def_id, s.generics.iter().map(|g| g.def_id).collect());
 
                 let mut fields = Vec::with_capacity(s.fields.len());
 
@@ -314,8 +311,6 @@ impl<'res> TypeChecker<'res> {
 
                     self.result.def_types.insert(field.def_id, ty);
                     self.result.const_bindings.insert(field.def_id, is_const);
-
-                    // inifinite recursive type checker
 
                     if let Type::Struct { def_id, .. } = self.result.interner.get(ty)
                         && def_id == &decl.def_id
@@ -626,7 +621,6 @@ impl<'res> TypeChecker<'res> {
 
         let Some(object_def) = imp.object else { return };
 
-        // implement block on enum
         if !matches!(
             self.def_kind(object_def),
             Some(DefKind::Struct) | Some(DefKind::Enum)
@@ -663,9 +657,6 @@ impl<'res> TypeChecker<'res> {
                 span: imp.object_bindings_span,
             });
         } else if let Some(iface_def) = imp.interface {
-            // Each implementation carries its own binding of the implement's
-            // generic parameters to the struct's generic slots; a
-            // specialization pins concrete types instead.
             let generic_bindings: Vec<(DefId, DefId)> = object_args
                 .iter()
                 .zip(struct_generics.iter())
