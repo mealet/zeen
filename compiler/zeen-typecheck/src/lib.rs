@@ -5645,12 +5645,18 @@ impl<'res> TypeChecker<'res> {
                 None => false,
             },
 
-            Type::Enum { def_id, .. } => match self.def_name(iface_def) {
-                Some(name) => {
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => match self.def_name(iface_def) {
+                Some(name)
+                    if Self::enum_interface_names().contains(&name.as_str()) =>
+                {
                     !self.enum_has_payloads(def_id)
-                        && Self::enum_interface_names().contains(&name.as_str())
                 }
-                None => false,
+                _ => self
+                    .applicable_impl(def_id, iface_def, &generic_args)
+                    .is_some(),
             },
 
             Type::Array { element, .. } | Type::Slice { element, .. } => {
@@ -5787,11 +5793,17 @@ impl<'res> TypeChecker<'res> {
             return Some(entry.clone());
         }
 
-        let struct_generics = self
-            .struct_generics
-            .get(&struct_def)
-            .cloned()
-            .unwrap_or_default();
+        let struct_generics = if matches!(self.def_kind(struct_def), Some(DefKind::Enum)) {
+            self.enum_generics
+                .get(&struct_def)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.struct_generics
+                .get(&struct_def)
+                .cloned()
+                .unwrap_or_default()
+        };
 
         // The concrete type bound to an implement generic comes from the
         // struct's generic slot the generic is bound to.
