@@ -1912,3 +1912,26 @@ fn main() {
         "enum drops are whole-place (tag dispatch happens inside): {drop_places:?}"
     );
 }
+
+#[test]
+fn generic_enum_value_method_passes() {
+    // Generic method bodies carry unbound params; drop analysis must treat
+    // a parameter bound to itself as unbound instead of recursing forever.
+    flow_ok(
+        r#"
+enum Opt[T] {
+    Some: T,
+    Other: i32,
+    None,
+
+    pub fn answer(self) i32 {
+        42
+    }
+}
+fn main() {
+    let a: Opt[i32] = Opt.Other(41);
+    @println("{}", a.answer());
+}
+"#,
+    );
+}

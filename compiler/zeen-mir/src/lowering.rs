@@ -1076,7 +1076,7 @@ impl<'ctx> MirLowering<'ctx> {
             Type::FatFn { .. } => true,
             Type::GenericParam(def) => bindings
                 .get(&def)
-                .is_some_and(|&bound| self.mir_type_needs_drop(bound, bindings)),
+                .is_some_and(|&bound| bound != ty && self.mir_type_needs_drop(bound, bindings)),
             _ => false,
         }
     }
@@ -2317,12 +2317,9 @@ impl<'ctx> MirLowering<'ctx> {
                     ]),
                     args: vec![
                         Operand::Constant(ConstValue::Int(tag as i128), None),
-                        Operand::Move(Place::from_local(tag_temp), None)
+                        Operand::Move(Place::from_local(tag_temp), None),
                     ],
-                    arg_types: vec![
-                        usize_ty,
-                        usize_ty,
-                    ],
+                    arg_types: vec![usize_ty, usize_ty],
                     destination: Place::from_local(dest),
                     target: None,
                     source: Some(source.clone()),
@@ -2889,6 +2886,20 @@ impl<'ctx> MirLowering<'ctx> {
         for ty in local_tys {
             self.register_slice_layouts_in_type(ty, &mut visited);
         }
+
+        // Enum payloads (e.g. `Err: []const char`) are only reachable
+        // through the enum layout.
+        let enum_keys: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
+        for layout_ty in enum_keys {
+            let payloads: Vec<TypeId> = self.program.enum_layouts[&layout_ty]
+                .variants
+                .iter()
+                .filter_map(|v| v.payload)
+                .collect();
+            for payload_ty in payloads {
+                self.register_slice_layouts_in_type(payload_ty, &mut visited);
+            }
+        }
     }
 
     fn register_slice_layouts_in_type(&mut self, ty: TypeId, visited: &mut HashSet<TypeId>) {
@@ -2901,6 +2912,17 @@ impl<'ctx> MirLowering<'ctx> {
                 self.register_slice_layouts_in_type(element, visited);
             }
             Type::Array { element, .. } => self.register_slice_layouts_in_type(element, visited),
+            Type::Enum { .. } => {
+                let payloads: Vec<TypeId> = self
+                    .program
+                    .enum_layouts
+                    .get(&ty)
+                    .map(|layout| layout.variants.iter().filter_map(|v| v.payload).collect())
+                    .unwrap_or_default();
+                for payload_ty in payloads {
+                    self.register_slice_layouts_in_type(payload_ty, visited);
+                }
+            }
             Type::Struct { .. } => {
                 let fields: Vec<TypeId> = self
                     .program
@@ -3555,10 +3577,16 @@ impl<'ctx> MirLowering<'ctx> {
                 // Debug-only tag check. Pointers deref inside the reader.
                 let obj_ty = self.expr_type(fb, object);
                 let enum_target = match self.typecheck.interner.get(obj_ty).clone() {
-                    Type::Enum { def_id, generic_args } => Some((def_id, generic_args)),
+                    Type::Enum {
+                        def_id,
+                        generic_args,
+                    } => Some((def_id, generic_args)),
                     Type::Pointer { inner, .. } => {
                         match self.typecheck.interner.get(inner).clone() {
-                            Type::Enum { def_id, generic_args } => Some((def_id, generic_args)),
+                            Type::Enum {
+                                def_id,
+                                generic_args,
+                            } => Some((def_id, generic_args)),
                             _ => None,
                         }
                     }
@@ -7314,6 +7342,26 @@ impl<'ctx> MirLowering<'ctx> {
 }
 
 impl<'ctx> MirLowering<'ctx> {
+    /// Generic parameters of a method owner, whether struct or enum.
+    fn owner_generics(&self, owner: DefId) -> Vec<DefId> {
+        if matches!(
+            self.resolution.defs.get(&owner).map(|i| &i.kind),
+            Some(DefKind::Enum)
+        ) {
+            self.typecheck
+                .enum_generics
+                .get(&owner)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.typecheck
+                .struct_generics
+                .get(&owner)
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
+
     fn monomorphize_fn(
         &mut self,
         def_id: DefId,
@@ -7399,19 +7447,14 @@ impl<'ctx> MirLowering<'ctx> {
                 .resolve(&self.resolution.defs[&struct_def].name)
                 .to_string();
 
-            let struct_generics = self
-                .typecheck
-                .struct_generics
-                .get(&struct_def)
-                .cloned()
-                .unwrap_or_default();
+            let owner_generics = self.owner_generics(struct_def);
 
-            let struct_part = if struct_generics.is_empty() {
+            let struct_part = if owner_generics.is_empty() {
                 struct_name
             } else {
                 let arg_names: Vec<String> = generic_args
                     .iter()
-                    .take(struct_generics.len())
+                    .take(owner_generics.len())
                     .map(|&t| self.display_type_name(t))
                     .collect();
                 format!("{}[{}]", struct_name, arg_names.join(", "))
@@ -7461,22 +7504,17 @@ impl<'ctx> MirLowering<'ctx> {
         let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
         let bindings: HashMap<DefId, TypeId> = if !generic_defs.is_empty() {
             if let Some(owner) = owner_struct {
-                // Generic methods are called with their struct's generics
+                // Generic methods are called with their owner's generics
                 // first, then the method's own (`[T, W]` for
                 // `Option[T].debug[W]`); split and bind both.
-                let struct_generics = self
-                    .typecheck
-                    .struct_generics
-                    .get(&owner)
-                    .cloned()
-                    .unwrap_or_default();
-                let struct_count = struct_generics.len();
+                let owner_generics = self.owner_generics(owner);
+                let owner_count = owner_generics.len();
                 let struct_args: Vec<TypeId> =
-                    generic_args.iter().take(struct_count).copied().collect();
+                    generic_args.iter().take(owner_count).copied().collect();
                 let method_args: Vec<TypeId> =
-                    generic_args.iter().skip(struct_count).copied().collect();
+                    generic_args.iter().skip(owner_count).copied().collect();
 
-                let mut bindings: HashMap<DefId, TypeId> = struct_generics
+                let mut bindings: HashMap<DefId, TypeId> = owner_generics
                     .iter()
                     .copied()
                     .zip(struct_args.iter().copied())
@@ -7484,14 +7522,14 @@ impl<'ctx> MirLowering<'ctx> {
 
                 // An implement block's methods may be written with the block's
                 // own generic parameters (`implement[T] Deref : Holder[T]`):
-                // substitute them through the struct's generic slots.
+                // substitute them through the owner's generic slots.
                 for entries in self.typecheck.impl_registry.values() {
                     for entry in entries {
                         if !entry.methods.contains(&def_id) {
                             continue;
                         }
 
-                        for (arg, &struct_g) in entry.object_args.iter().zip(struct_generics.iter())
+                        for (arg, &struct_g) in entry.object_args.iter().zip(owner_generics.iter())
                         {
                             if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
                                 && let Some(&concrete) = bindings.get(&struct_g)
@@ -7517,13 +7555,8 @@ impl<'ctx> MirLowering<'ctx> {
                     .collect()
             }
         } else if let Some(owner) = owner_struct {
-            let struct_generics = self
-                .typecheck
-                .struct_generics
-                .get(&owner)
-                .cloned()
-                .unwrap_or_default();
-            let mut bindings: HashMap<DefId, TypeId> = struct_generics
+            let owner_generics = self.owner_generics(owner);
+            let mut bindings: HashMap<DefId, TypeId> = owner_generics
                 .iter()
                 .copied()
                 .zip(generic_args.iter().copied())
@@ -7531,14 +7564,14 @@ impl<'ctx> MirLowering<'ctx> {
 
             // An implement block's methods may be written with the block's
             // own generic parameters (`implement[T] Deref : Holder[T]`):
-            // substitute them through the struct's generic slots.
+            // substitute them through the owner's generic slots.
             for entries in self.typecheck.impl_registry.values() {
                 for entry in entries {
                     if !entry.methods.contains(&def_id) {
                         continue;
                     }
 
-                    for (arg, &struct_g) in entry.object_args.iter().zip(struct_generics.iter()) {
+                    for (arg, &struct_g) in entry.object_args.iter().zip(owner_generics.iter()) {
                         if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
                             && let Some(&concrete) = bindings.get(&struct_g)
                         {

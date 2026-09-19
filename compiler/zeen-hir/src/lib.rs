@@ -656,9 +656,32 @@ impl<'res> HirLowering<'res> {
             ExpressionKind::Call { callee, args } => {
                 let callee_args: Option<&[&zeen_ast::TypeExpr<'_>]> = match callee.kind {
                     ExpressionKind::Ident { generic_args, .. } => generic_args,
-                    ExpressionKind::FieldAccess { field, .. } => match field.kind {
-                        ExpressionKind::Ident { generic_args, .. } => generic_args,
-                        _ => None,
+                    ExpressionKind::FieldAccess { object, field } => match field.kind {
+                        ExpressionKind::Ident {
+                            generic_args: Some(field_args),
+                            ..
+                        } if !field_args.is_empty() => Some(field_args),
+                        // `Type#[T].assoc(...)`: the object names a type whose
+                        // instantiation the call needs.
+                        _ => match object.kind {
+                            ExpressionKind::Ident {
+                                generic_args: Some(object_args),
+                                ..
+                            } if !object_args.is_empty()
+                                && self.resolution.resolution_of_expr(object).is_some_and(
+                                    |r| {
+                                        matches!(r, Resolution::Def(id)
+                                        if matches!(
+                                            self.resolution.defs.get(&id).map(|i| &i.kind),
+                                            Some(DefKind::Struct) | Some(DefKind::Enum)
+                                        ))
+                                    },
+                                ) =>
+                            {
+                                Some(object_args)
+                            }
+                            _ => None,
+                        },
                     },
                     _ => None,
                 };

@@ -1794,3 +1794,19 @@ fn enum_ptr_receiver_extraction_tag_checks_through_deref() {
         "pointer-receiver extraction must keep the Debug tag check"
     );
 }
+
+#[test]
+fn enum_slice_payload_registers_slice_layout() {
+    let mir = compile_mir_ok(
+        "enum Result[T, E] { ok: T, err: E, } \
+         fn main() { let r: Result[i32, []const char] = Result.ok(1); let t = @enumTag(r); @println(\"{}\", t); }",
+    );
+
+    assert!(
+        mir.program
+            .struct_layouts
+            .values()
+            .any(|l| l.def_id == zeen_types::SLICE_STRUCT_DEF),
+        "a slice enum payload must register its `{{ ptr, len }}` layout"
+    );
+}

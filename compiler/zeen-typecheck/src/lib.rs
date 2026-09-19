@@ -2209,7 +2209,7 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirExprKind::FieldAccess { object, field } => {
-                self.check_field_access(expr.id, object, field)
+                self.check_field_access(expr.id, object, field, None)
             }
 
             HirExprKind::StructInit {
@@ -3149,6 +3149,7 @@ impl<'res> TypeChecker<'res> {
         id: HirId,
         object: &HirExpr,
         field: &(Spur, SourceSpan),
+        expected: Option<TypeId>,
     ) -> TypeId {
         let (field_name, field_span) = *field;
 
@@ -3161,6 +3162,7 @@ impl<'res> TypeChecker<'res> {
                 field_name,
                 field_span,
                 &object.source,
+                expected,
             );
         }
 
@@ -3347,6 +3349,7 @@ impl<'res> TypeChecker<'res> {
                 fields,
                 ty_span,
                 init_source,
+                expected,
             );
         }
 
@@ -3610,6 +3613,12 @@ impl<'res> TypeChecker<'res> {
                     expr.source.clone(),
                     Some(expected),
                 );
+                self.result.record_expr_type(expr.id, ty);
+                ty
+            }
+
+            HirExprKind::FieldAccess { object, field } => {
+                let ty = self.check_field_access(expr.id, object, field, Some(expected));
                 self.result.record_expr_type(expr.id, ty);
                 ty
             }
@@ -3996,7 +4005,15 @@ impl<'res> TypeChecker<'res> {
                     })
                 })
             {
-                return self.check_enum_single_construct(call_id, *enum_def, *field, args, source);
+                return self.check_enum_single_construct(
+                    call_id,
+                    *enum_def,
+                    *field,
+                    args,
+                    explicit_generic_args,
+                    source,
+                    expected,
+                );
             }
 
             if let Some(result) = self.try_check_method_call(
@@ -4319,6 +4336,10 @@ impl<'res> TypeChecker<'res> {
                             def_id,
                             generic_args,
                         } => (def_id, generic_args, true, is_const),
+                        Type::Enum {
+                            def_id,
+                            generic_args,
+                        } => (def_id, generic_args, true, is_const),
                         _ => return None,
                     }
                 }
@@ -4506,6 +4527,7 @@ impl<'res> TypeChecker<'res> {
         field_name: Spur,
         field_span: SourceSpan,
         source: &Source,
+        expected: Option<TypeId>,
     ) -> TypeId {
         let Some(variant_defs) = self.enum_variants.get(&enum_def) else {
             return self.result.interner.error();
@@ -4519,9 +4541,31 @@ impl<'res> TypeChecker<'res> {
                 .unwrap_or(false)
         });
 
+        // Empty-variant construction of a generic enum takes its arguments
+        // from the expected type when it names the same enum.
+        let mut generic_args = Vec::new();
+        if let Some(expected) = expected
+            && let Type::Enum {
+                def_id: expected_def,
+                generic_args: expected_args,
+            } = self.result.interner.get(expected).clone()
+            && expected_def == enum_def
+        {
+            generic_args = expected_args;
+        }
+        if generic_args.is_empty() {
+            for g in self.type_member_generics(enum_def) {
+                generic_args.push(
+                    self.ctx
+                        .generic_binding(g)
+                        .unwrap_or(self.result.interner.intern(Type::GenericParam(g))),
+                );
+            }
+        }
+
         let enum_ty = self.result.interner.intern(Type::Enum {
             def_id: enum_def,
-            generic_args: Vec::new(),
+            generic_args,
         });
 
         match variant_def_id {
@@ -4570,13 +4614,16 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_enum_single_construct(
         &mut self,
         call_id: HirId,
         enum_def: DefId,
         field: (Spur, SourceSpan),
         args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
         source: Source,
+        expected: Option<TypeId>,
     ) -> TypeId {
         let (field_name, field_span) = field;
 
@@ -4650,6 +4697,45 @@ impl<'res> TypeChecker<'res> {
 
         let enum_generics = self.type_member_generics(enum_def);
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+
+        // Expected-type seeding (struct-init parity): an annotation like
+        // `let x: Result[i32, E] = ...` provides what the value cannot.
+        // Explicit generic arguments still take precedence.
+        if let Some(expected) = expected
+            && let Type::Enum {
+                def_id: expected_def,
+                generic_args: expected_args,
+            } = self.result.interner.get(expected).clone()
+            && expected_def == enum_def
+        {
+            for (g, arg) in enum_generics.iter().zip(expected_args.iter()) {
+                bindings.insert(*g, *arg);
+            }
+        }
+
+        // `Self::Variant` inside generic enum methods is already bound.
+        for g in &enum_generics {
+            if let Some(bound) = self.ctx.generic_binding(*g) {
+                bindings.insert(*g, bound);
+            }
+        }
+
+        if !explicit_generic_args.is_empty() {
+            if explicit_generic_args.len() != enum_generics.len() {
+                self.report(TypeError::GenericArgCountMismatch {
+                    name: self.def_name(enum_def).unwrap_or_default().into(),
+                    expected: enum_generics.len(),
+                    found: explicit_generic_args.len(),
+                    src: source.src(),
+                    span: source.span,
+                });
+            }
+
+            for (g, explicit) in enum_generics.iter().zip(explicit_generic_args.iter()) {
+                let ty = self.lower_hir_type(explicit);
+                bindings.insert(*g, ty);
+            }
+        }
 
         if !enum_generics.is_empty() {
             let value_ty = self.synth_expr(&args[0]);
@@ -4786,6 +4872,7 @@ impl<'res> TypeChecker<'res> {
         payload_ty
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_enum_struct_construct(
         &mut self,
         enum_def: DefId,
@@ -4794,6 +4881,7 @@ impl<'res> TypeChecker<'res> {
         fields: &[HirFieldInit],
         ty_span: SourceSpan,
         init_source: &Source,
+        expected: Option<TypeId>,
     ) -> TypeId {
         let enum_ty = self.result.interner.intern(Type::Enum {
             def_id: enum_def,
@@ -4857,7 +4945,35 @@ impl<'res> TypeChecker<'res> {
         let enum_generics = self.type_member_generics(enum_def);
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
 
+        if let Some(expected) = expected
+            && let Type::Enum {
+                def_id: expected_def,
+                generic_args: expected_args,
+            } = self.result.interner.get(expected).clone()
+            && expected_def == enum_def
+        {
+            for (g, arg) in enum_generics.iter().zip(expected_args.iter()) {
+                bindings.insert(*g, *arg);
+            }
+        }
+
+        for g in &enum_generics {
+            if let Some(bound) = self.ctx.generic_binding(*g) {
+                bindings.insert(*g, bound);
+            }
+        }
+
         if !ty_generic_args.is_empty() {
+            if ty_generic_args.len() != enum_generics.len() {
+                self.report(TypeError::GenericArgCountMismatch {
+                    name: self.def_name(enum_def).unwrap_or_default().into(),
+                    expected: enum_generics.len(),
+                    found: ty_generic_args.len(),
+                    src: init_source.src(),
+                    span: ty_span,
+                });
+            }
+
             for (g, explicit) in enum_generics.iter().zip(ty_generic_args.iter()) {
                 let lower_ty = self.lower_hir_type(explicit);
                 bindings.insert(*g, lower_ty);
@@ -5425,6 +5541,16 @@ impl<'res> TypeChecker<'res> {
                     generic_args: pa,
                 },
                 Type::Struct {
+                    def_id: ad,
+                    generic_args: aa,
+                },
+            )
+            | (
+                Type::Enum {
+                    def_id: pd,
+                    generic_args: pa,
+                },
+                Type::Enum {
                     def_id: ad,
                     generic_args: aa,
                 },
@@ -9018,6 +9144,122 @@ mod tests {
             "#,
         )
         .expect("pointer-receiver enum extraction and @enumTag must typecheck");
+    }
+
+    #[test]
+    fn generic_enum_single_construct_seeds_from_annotation() {
+        typecheck(
+            r#"
+            enum Result[T, E] {
+                Ok: T,
+                Err: E,
+            }
+            fn main() {
+                let ok: Result[i32, i32] = Result.Ok(123);
+                let _ = ok;
+            }
+            "#,
+        )
+        .expect("annotation must seed otherwise-uninferrable enum params");
+    }
+
+    #[test]
+    fn generic_enum_single_construct_accepts_explicit_args() {
+        typecheck(
+            r#"
+            enum Result[T, E] {
+                Ok: T,
+                Err: E,
+            }
+            fn main() {
+                let a = Result.Ok#[i32, i32](1);
+                let b = Result#[i32, i32].Ok(2);
+                let _ = a;
+                let _ = b;
+            }
+            "#,
+        )
+        .expect("explicit generic args must seed enum construction");
+    }
+
+    #[test]
+    fn generic_enum_single_construct_rejects_arg_count_mismatch() {
+        let errors = typecheck(
+            r#"
+            enum Result[T, E] {
+                Ok: T,
+                Err: E,
+            }
+            fn main() {
+                let _ = Result.Ok#[i32](1);
+            }
+            "#,
+        )
+        .expect_err("wrong explicit arg count must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::GenericArgCountMismatch { .. })),
+            "expected GenericArgCountMismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn generic_enum_empty_construct_seeds_from_annotation() {
+        typecheck(
+            r#"
+            enum Opt[T] {
+                Some: T,
+                None,
+            }
+            fn main() {
+                let n: Opt[i32] = Opt.None;
+                let _ = n;
+            }
+            "#,
+        )
+        .expect("annotation must seed empty-variant construction");
+    }
+
+    #[test]
+    fn generic_enum_struct_construct_seeds_from_annotation() {
+        typecheck(
+            r#"
+            enum Msg[T] {
+                empty,
+                data: {
+                    x: T,
+                },
+            }
+            fn main() {
+                let m: Msg[i32] = Msg.data { .x = 1 };
+                let _ = m;
+            }
+            "#,
+        )
+        .expect("annotation must seed struct-variant construction");
+    }
+
+    #[test]
+    fn generic_enum_value_method_call_is_allowed() {
+        typecheck(
+            r#"
+            enum Opt[T] {
+                Some: T,
+                Other: i32,
+                None,
+                pub fn answer(self) i32 {
+                    42
+                }
+            }
+            fn main() {
+                let a: Opt[i32] = Opt.Other(41);
+                let _ = a.answer();
+            }
+            "#,
+        )
+        .expect("value method calls on generic enums must typecheck");
     }
 
     #[test]
