@@ -233,7 +233,7 @@ pub struct String {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[char].None();
+      return Option#[*char].None();
     };
 
     Option.Some(&self.ptr[index])

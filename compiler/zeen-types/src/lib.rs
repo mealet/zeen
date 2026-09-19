@@ -532,6 +532,24 @@ pub fn substitute_generics(
             }
         }
 
+        Type::Enum {
+            def_id,
+            generic_args,
+        } => {
+            let new_args: Vec<TypeId> = generic_args
+                .iter()
+                .map(|a| substitute_generics(interner, *a, bindings))
+                .collect();
+            if new_args == generic_args {
+                ty
+            } else {
+                interner.intern(Type::Enum {
+                    def_id,
+                    generic_args: new_args,
+                })
+            }
+        }
+
         Type::Fn { params, ret } => {
             let new_params: Vec<TypeId> = params
                 .iter()
@@ -1273,5 +1291,29 @@ mod tests {
         assert!(SelfMode::ValueConst.is_const());
         assert!(!SelfMode::RefMut.is_const());
         assert!(SelfMode::RefConst.is_const());
+    }
+
+    #[test]
+    fn substitute_generics_replaces_enum_args() {
+        let mut interner = TypeInterner::new();
+
+        let t = DefId(40);
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let param = interner.intern(Type::GenericParam(t));
+        let generic_enum = interner.intern(Type::Enum {
+            def_id: DefId(41),
+            generic_args: vec![param],
+        });
+
+        let bindings: HashMap<DefId, TypeId> = [(t, i32)].into_iter().collect();
+        let substituted = substitute_generics(&mut interner, generic_enum, &bindings);
+
+        assert_eq!(
+            interner.get(substituted).clone(),
+            Type::Enum {
+                def_id: DefId(41),
+                generic_args: vec![i32],
+            }
+        );
     }
 }

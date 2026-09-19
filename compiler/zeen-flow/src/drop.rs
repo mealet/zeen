@@ -92,9 +92,10 @@ fn type_needs_drop_impl(
         // owns nothing, so it never requires a drop.
         Type::Slice { .. } => false,
 
-        Type::GenericParam(def) => bindings
-            .get(&def)
-            .is_some_and(|&bound| type_needs_drop_impl(interner, typecheck, bound, bindings)),
+        Type::GenericParam(def) => bindings.get(&def).is_some_and(|&bound| {
+            // A parameter bound to itself is still unbound: no drop.
+            bound != ty && type_needs_drop_impl(interner, typecheck, bound, bindings)
+        }),
 
         Type::Interface { .. } | Type::InterfaceSelfPlaceholder(_) => false,
     }
