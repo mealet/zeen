@@ -4533,16 +4533,16 @@ impl<'res> TypeChecker<'res> {
             return self.result.interner.error();
         };
 
-        let variant_def_id = variant_defs.iter().find(|&v| {
+        let variant_def_id: Option<DefId> = variant_defs.iter().find_map(|&v| {
             self.resolution
                 .defs
-                .get(v)
+                .get(&v)
                 .map(|info| info.name == field_name)
                 .unwrap_or(false)
+                .then_some(v)
         });
 
-        // Empty-variant construction of a generic enum takes its arguments
-        // from the expected type when it names the same enum.
+        let enum_generics = self.type_member_generics(enum_def);
         let mut generic_args = Vec::new();
         if let Some(expected) = expected
             && let Type::Enum {
@@ -4553,13 +4553,24 @@ impl<'res> TypeChecker<'res> {
         {
             generic_args = expected_args;
         }
-        if generic_args.is_empty() {
-            for g in self.type_member_generics(enum_def) {
-                generic_args.push(
-                    self.ctx
-                        .generic_binding(g)
-                        .unwrap_or(self.result.interner.intern(Type::GenericParam(g))),
-                );
+        if generic_args.is_empty() && !enum_generics.is_empty() {
+            for g in &enum_generics {
+                match self.ctx.generic_binding(*g) {
+                    Some(bound) => generic_args.push(bound),
+                    None => {
+                        let interner = self.interner.borrow();
+                        let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                        drop(interner);
+
+                        self.report(TypeError::CannotInferGeneric {
+                            generic_name,
+                            src: source.src(),
+                            span: field_span,
+                        });
+
+                        generic_args.push(self.result.interner.error());
+                    }
+                }
             }
         }
 
@@ -4569,7 +4580,7 @@ impl<'res> TypeChecker<'res> {
         });
 
         match variant_def_id {
-            Some(&variant_def) => {
+            Some(variant_def) => {
                 let requires_value = self
                     .result
                     .enum_info
@@ -5395,10 +5406,6 @@ impl<'res> TypeChecker<'res> {
         bindings: &mut HashMap<DefId, TypeId>,
         source: Source,
     ) {
-        // Generics already pinned by the receiver, expected type or explicit
-        // call-site arguments make the parameter concrete: check the argument
-        // against it instead of inferring (a defaulted literal would wrongly
-        // conflict with the pinned type).
         let substituted = self.substitute_generics(param_ty, bindings);
 
         if self.type_contains_generic(substituted) {
@@ -5407,10 +5414,6 @@ impl<'res> TypeChecker<'res> {
             self.result.record_expr_type(arg.id, arg_ty);
             self.unify_for_inference(param_ty, arg_ty, bindings, source);
 
-            // If the argument doesn't structurally match the parameter after
-            // inference (e.g. `123` for a `*T` parameter), report a real
-            // mismatch instead of silently leaving the generic unresolved and
-            // cascading into bogus errors downstream.
             let substituted = self.substitute_generics(param_ty, bindings);
             if !try_coerce(&mut self.result.interner, arg_ty, substituted).is_ok() {
                 self.bind_unresolved_generics(param_ty, bindings);
@@ -9260,6 +9263,30 @@ mod tests {
             "#,
         )
         .expect("value method calls on generic enums must typecheck");
+    }
+
+    #[test]
+    fn bare_generic_empty_variant_reports_cannot_infer() {
+        let errors = typecheck(
+            r#"
+            enum Op[T] {
+                Some: T,
+                None,
+            }
+            fn main() {
+                let o = Op.None;
+                let _ = o;
+            }
+            "#,
+        )
+        .expect_err("unannotated generic empty construction must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CannotInferGeneric { .. })),
+            "expected CannotInferGeneric, got: {errors:?}"
+        );
     }
 
     #[test]
