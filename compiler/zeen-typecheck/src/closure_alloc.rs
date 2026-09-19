@@ -199,7 +199,6 @@ impl<'a> Analyzer<'a> {
                     }
                 }
 
-                // Nested closures live in their own function frame.
                 self.scope.push(HashSet::new());
                 if let Some(body) = &def.body {
                     self.stmt_fate(body, &Fate::Escaping);
@@ -298,9 +297,7 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// Resolves captured locals: a local captured by any closure is referenced
-    /// from inside that closure's body, so its environment must survive as
-    /// long as the capturing closure does (conservatively: `Heap`).
+    /// Resolves captured locals to `Heap`.
     fn finish(mut self) -> HashMap<DefId, ClosureAllocKind> {
         for captures in self.captures.values() {
             for captured in captures {

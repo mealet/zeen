@@ -21,29 +21,22 @@ pub struct TypeCheckResult {
     pub struct_generics: HashMap<DefId, Vec<DefId>>,
     pub enum_info: HashMap<DefId, EnumTypeInfo>,
     pub enum_generics: HashMap<DefId, Vec<DefId>>,
-    /// Interface names -> their `DefId`, so downstream passes (MIR, flow) can
-    /// resolve capabilities like `Copy` per concrete instantiation.
+    /// Interface names -> their `DefId`.
     pub interface_registry: HashMap<String, DefId>,
     pub enum_variants: HashMap<DefId, Vec<DefId>>,
     pub method_owner: HashMap<DefId, DefId>,
     pub const_bindings: HashMap<DefId, bool>,
     pub format_specs: HashMap<HirId, Vec<FormatChunk>>,
-    /// Per-closure-site environment allocation decision (key = the closure's
-    /// synthetic fn `DefId`), see `closure_alloc`.
+    /// Per-closure-site environment allocation decision.
     pub closure_allocs: HashMap<DefId, ClosureAllocKind>,
 
-    /// Return expressions of functions whose declared return is a `Fn`/
-    /// `FnOnce` bound. The concrete closure type of the return is derived
-    /// from these after all bodies have been checked.
+    /// Return expressions of functions declared to return a `Fn`/`FnOnce` bound.
     pub fat_return_candidates: HashMap<DefId, Vec<(HirId, Source)>>,
 
-    /// Variable defs whose initializer is a fat (or fat-bound-typed) value;
-    /// used to resolve the erased bound annotations down to concrete closure
-    /// storage types.
+    /// Variable defs whose initializer is a fat (or fat-bound-typed) value.
     pub fat_let_values: HashMap<DefId, HirId>,
 
-    /// VarRef expressions whose recorded type is a fat value; used by the
-    /// finalization to resolve erased bounds through variables.
+    /// VarRef expressions whose recorded type is a fat value.
     pub fat_value_defs: HashMap<HirId, DefId>,
 
     /// Resolved concrete return type of a function declared to return a
@@ -54,15 +47,11 @@ pub struct TypeCheckResult {
     /// including concrete specializations (`implement Display : Box[i32]`).
     pub impl_registry: HashMap<(DefId, DefId), Vec<ImplEntry>>,
 
-    /// Interface method chosen for a struct-typed format argument (`{}` /
-    /// `{:?}`), keyed by the argument expression. Recorded so MIR dispatches
-    /// to the same implementation the checker picked.
+    /// Interface method chosen for a struct-typed format argument.
     pub format_arg_resolutions: HashMap<HirId, DefId>,
 
     /// Every method declared directly inside an `interface` block, mapped to
-    /// the interface that owns it (`write_str` -> `StrWriter`). Used by MIR to
-    /// dispatch a call made on a bounded generic parameter to the concrete
-    /// implementation once the receiver is monomorphized.
+    /// the interface that owns it.
     pub interface_method_owners: HashMap<DefId, DefId>,
 
     /// The concrete `Iterator::next` method resolved for a for-loop over a
