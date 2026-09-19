@@ -1,0 +1,20 @@
+struct Handle {
+  pub h: i32,
+}
+
+implement Drop : Handle {
+  fn drop(self) void {
+    @println("drop {}", self.h);
+  }
+}
+
+enum E {
+  none,
+  h: Handle,
+}
+
+fn main() {
+  let e = E.h(Handle { .h = 1 });
+  let v = e.h;
+  @println("moved {}", v.h);
+}
