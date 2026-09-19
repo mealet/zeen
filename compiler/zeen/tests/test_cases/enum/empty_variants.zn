@@ -1,0 +1,18 @@
+enum Color {
+  red,
+  green,
+  blue,
+}
+
+fn main() {
+  let r = Color.red;
+  let g = Color.green;
+  let b = Color.blue;
+
+  @println("r: {}", r);
+  @println("g: {:?}", g);
+  @println("r == r: {}", r == r);
+  @println("r == g: {}", r == g);
+  @println("r != b: {}", r != b);
+  @println("g == b: {}", g == b);
+}
