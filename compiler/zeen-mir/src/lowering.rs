@@ -2258,9 +2258,6 @@ impl<'ctx> MirLowering<'ctx> {
 
         let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
 
-        // Extraction through a pointer (`self.variant` where `self: *Foo`,
-        // which the typechecker allows like struct field access): deref
-        // explicitly instead of projecting into the pointer.
         let obj_ty = self.expr_type(fb, object);
         let obj_place = if matches!(self.typecheck.interner.get(obj_ty), Type::Pointer { .. }) {
             obj_place.deref()
@@ -2302,15 +2299,30 @@ impl<'ctx> MirLowering<'ctx> {
 
             let header_block = self.emit_panic_header_segment(fb, panic_block, Some(source));
 
+            let usize_ty = self
+                .typecheck
+                .interner
+                .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+
             fb.set_terminator(
                 header_block,
                 Terminator::MacroCall {
                     kind: HirMacroKind::Panic,
-                    format_chunks: Some(vec![FormatChunk::Literal(
-                        "enum payload extract: tag mismatch".into(),
-                    )]),
-                    args: Vec::new(),
-                    arg_types: Vec::new(),
+                    format_chunks: Some(vec![
+                        FormatChunk::Literal("enum tag mismatch: requested tag `".into()),
+                        FormatChunk::Arg(FormatSpec::Display),
+                        FormatChunk::Literal("` but found `".into()),
+                        FormatChunk::Arg(FormatSpec::Display),
+                        FormatChunk::Literal("`".into()),
+                    ]),
+                    args: vec![
+                        Operand::Constant(ConstValue::Int(tag as i128), None),
+                        Operand::Move(Place::from_local(tag_temp), None)
+                    ],
+                    arg_types: vec![
+                        usize_ty,
+                        usize_ty,
+                    ],
                     destination: Place::from_local(dest),
                     target: None,
                     source: Some(source.clone()),
