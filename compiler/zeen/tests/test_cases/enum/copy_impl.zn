@@ -1,0 +1,13 @@
+enum Wrap {
+  empty,
+  val: i32,
+}
+
+implement Copy : Wrap {}
+
+fn main() {
+  let w = Wrap.val(7);
+  let a = w;
+  let b = w;
+  @println("a: {} b: {} w: {}", a.val, b.val, w.val);
+}
