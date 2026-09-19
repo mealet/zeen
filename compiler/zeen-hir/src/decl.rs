@@ -127,8 +127,6 @@ pub struct HirImplement {
 
     pub generics: Vec<HirGenericParam>,
     pub object_generics_bindings: Vec<DefId>,
-    /// Lowered object slots: a generic-parameter name yields
-    /// `HirTypeKind::GenericParam`, everything else is a concrete type.
     pub object_generic_types: Vec<Rc<HirTypeExpr>>,
     pub object_bindings_span: SourceSpan,
 
@@ -141,7 +139,10 @@ pub struct HirImplement {
 pub struct HirEnum {
     pub name: (Spur, SourceSpan),
     pub is_pub: bool,
+
+    pub generics: Vec<HirGenericParam>,
     pub variants: Vec<HirEnumVariant>,
+    pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +150,18 @@ pub struct HirEnumVariant {
     pub def_id: DefId,
     pub name: Spur,
     pub span: SourceSpan,
+    pub payload: Option<HirEnumVariantPayload>,
+}
+
+#[derive(Debug, Clone)]
+pub enum HirEnumVariantPayload {
+    /// `b: i32` - a single typed value.
+    Single(Rc<HirTypeExpr>),
+    /// `c: { fields }` - an anonymous struct payload.
+    Anonymous {
+        def_id: DefId,
+        fields: Vec<HirField>,
+    },
 }
 
 // -> Alias

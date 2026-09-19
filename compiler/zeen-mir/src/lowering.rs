@@ -14,7 +14,7 @@ use zeen_driver::CompilationMode;
 use zeen_hir::{
     HirId, HirMacroKind, HirModule, HirTypeExpr,
     decl::{HirDecl, HirDeclKind, HirFn},
-    expr::{HirExpr, HirExprKind},
+    expr::{HirExpr, HirExprKind, HirFieldInit},
     stmt::{HirStmt, HirStmtKind},
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
@@ -26,13 +26,15 @@ use zeen_typecheck::{
 use zeen_types::{
     CLOSURE_FAT_DEF, CLOSURE_FAT_DROP_FIELD, CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD,
     SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
+    VariantPayload,
 };
 
 use crate::error::{MirError, MirWarning};
 use crate::{
-    AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, ExternFnDecl, LocalDecl, LocalId,
-    LocalKind, MirFunction, MirFunctionId, MirGlobalVar, MirGlobalVarId, MirProgram, MirStatement,
-    Mutability, Operand, Place, PlaceElem, Rvalue, StructFieldLayout, StructLayout, Terminator,
+    AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, EnumLayout, EnumVariantLayout,
+    ExternFnDecl, LocalDecl, LocalId, LocalKind, MirFunction, MirFunctionId, MirGlobalVar,
+    MirGlobalVarId, MirProgram, MirStatement, Mutability, Operand, Place, PlaceElem, Rvalue,
+    StructFieldLayout, StructLayout, Terminator,
 };
 
 /// Base `DefId` of synthesized closure env structs. Real program defs stay
@@ -109,6 +111,7 @@ pub fn lower_program<'ctx>(
 
     lowering.build_init_globals();
     lowering.register_drop_functions();
+    lowering.register_enum_drop_functions();
     lowering.register_reachable_fat_layouts();
     lowering.register_fat_drop_functions();
 
@@ -151,6 +154,10 @@ pub struct MirLowering<'ctx> {
     /// Cache of synthesized per-fat-type drop functions (env teardown + `free`),
     /// keyed by the fat `TypeId`.
     fat_drop_cache: HashMap<TypeId, MirFunctionId>,
+
+    /// Cache of synthesized per-enum drop functions (tag switch + current
+    /// payload teardown), keyed by the concrete enum `TypeId`.
+    enum_drop_cache: HashMap<TypeId, MirFunctionId>,
 
     /// Cache of synthesized per-fat-type frees-only functions (env `free`
     /// without capture teardown), keyed by the fat `TypeId`. Used after a
@@ -365,6 +372,7 @@ impl<'ctx> MirLowering<'ctx> {
             fat_adapter_cache: HashMap::new(),
             fat_pointer_adapter_cache: HashMap::new(),
             fat_drop_cache: HashMap::new(),
+            enum_drop_cache: HashMap::new(),
             fat_free_cache: HashMap::new(),
             env_drop_cache: HashMap::new(),
             env_drop_noop: None,
@@ -746,6 +754,359 @@ impl<'ctx> MirLowering<'ctx> {
             }
             self.program.drop_functions.insert(ty, mono_id);
         }
+    }
+
+    /// Registers the drop function of every enum showing up among the lowered
+    /// locals and layouts. Enums with an explicit `Drop` impl reuse the user's
+    /// monomorphized method (like structs); the rest get a synthesized
+    /// tag-switch teardown when a payload transitively needs one.
+    fn register_enum_drop_functions(&mut self) {
+        let mut candidate_types: Vec<TypeId> = self
+            .program
+            .functions
+            .values()
+            .flat_map(|func| func.locals.iter().map(|local| local.ty))
+            .filter(|&ty| matches!(self.typecheck.interner.get(ty), Type::Enum { .. }))
+            .collect::<HashSet<TypeId>>()
+            .into_iter()
+            .collect();
+
+        // Enum-typed struct fields and enum payloads never become locals of
+        // their own; pull every enum out of the registered layouts too.
+        let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
+        for layout_ty in struct_keys {
+            let fields: Vec<StructFieldLayout> =
+                self.program.struct_layouts[&layout_ty].fields.clone();
+            for field in fields {
+                if matches!(self.typecheck.interner.get(field.ty), Type::Enum { .. }) {
+                    candidate_types.push(field.ty);
+                }
+            }
+        }
+        let enum_keys: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
+        for layout_ty in enum_keys {
+            let variants = self.program.enum_layouts[&layout_ty].variants.clone();
+            for variant in variants {
+                if let Some(payload) = variant.payload
+                    && matches!(self.typecheck.interner.get(payload), Type::Enum { .. })
+                {
+                    candidate_types.push(payload);
+                }
+            }
+        }
+
+        let mut seen: HashSet<TypeId> = HashSet::new();
+        for ty in candidate_types {
+            if !seen.insert(ty) {
+                continue;
+            }
+            self.ensure_enum_drop_registered(ty);
+        }
+    }
+
+    /// Registers the drop function for one concrete enum type: the user's
+    /// `Drop` impl when present, otherwise a synthesized teardown when a
+    /// payload needs one. Nested enums reached while emitting a payload
+    /// teardown register on demand through the same entry point.
+    fn ensure_enum_drop_registered(&mut self, ty: TypeId) {
+        if self.program.drop_functions.contains_key(&ty) {
+            return;
+        }
+        let Type::Enum {
+            def_id,
+            generic_args,
+        } = self.typecheck.interner.get(ty).clone()
+        else {
+            return;
+        };
+
+        let explicit_drop = self
+            .typecheck
+            .enum_info
+            .get(&def_id)
+            .is_some_and(|info| info.capabalities.has_explicit_drop);
+        if explicit_drop {
+            let Some(drop_iface) = self.find_interface_def("Drop") else {
+                return;
+            };
+            let Some(methods) = self.resolution.impls.get(&(def_id, drop_iface)) else {
+                return;
+            };
+            let Some(drop_method) = methods.iter().find(|def| {
+                let name = &self.resolution.defs[*def].name;
+                self.rodeo.borrow().resolve(name) == "drop"
+            }) else {
+                return;
+            };
+
+            let mono_id = self.monomorphize_fn(*drop_method, generic_args, Some(def_id), &[]);
+            if let Some(func) = self.program.functions.get_mut(&mono_id) {
+                func.is_drop_impl = true;
+            }
+            self.program.drop_functions.insert(ty, mono_id);
+            return;
+        }
+
+        if !self.mir_type_needs_drop(ty, &HashMap::default()) {
+            return;
+        }
+        let id = self.enum_drop_function(ty);
+        self.program.drop_functions.insert(ty, id);
+    }
+
+    /// Returns (synthesizing on first use) the drop function of an enum type:
+    /// it reads the tag and tears down the current payload.
+    fn enum_drop_function(&mut self, enum_ty: TypeId) -> MirFunctionId {
+        if let Some(&id) = self.enum_drop_cache.get(&enum_ty) {
+            return id;
+        }
+        let id = self.synthesize_enum_drop_function(enum_ty);
+        self.enum_drop_cache.insert(enum_ty, id);
+        id
+    }
+
+    /// Builds the drop function of an enum: the value is passed by value, the
+    /// tag selects the active variant, and the current payload is torn down
+    /// field by field (structs without `Drop`) or as a whole.
+    fn synthesize_enum_drop_function(&mut self, enum_ty: TypeId) -> MirFunctionId {
+        let Type::Enum {
+            def_id: enum_def,
+            generic_args,
+        } = self.typecheck.interner.get(enum_ty).clone()
+        else {
+            panic!("enum drop of a non-enum type");
+        };
+        self.register_enum_layout(enum_ty, enum_def);
+
+        let id = self.mono_cache.fresh_id();
+        self.set_function_name(id, format!("$enumdrop#{}", id.0));
+
+        let void_ty = self.void_ty();
+        let mut func = MirFunction {
+            source_def: enum_def,
+            mono_args: Vec::new(),
+            locals: Vec::new(),
+            blocks: Vec::new(),
+            params: Vec::new(),
+            entry_block: BlockId(0),
+            ret_ty: void_ty,
+            is_drop_impl: true,
+        };
+        func.new_block(); // block 0 (entry)
+        let bb_ret = func.new_block();
+
+        let self_param = func.new_local(LocalDecl {
+            ty: enum_ty,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Param,
+            name: None,
+            source: None,
+        });
+        func.params.push(self_param);
+
+        let tag_temp = func.new_local(LocalDecl {
+            ty: self
+                .typecheck
+                .interner
+                .intern(Type::Builtin(zeen_ast::types::BuiltinType::u8)),
+            mutability: Mutability::Mut,
+            kind: LocalKind::Temporary,
+            name: None,
+            source: None,
+        });
+        func.blocks[0].statements.push(MirStatement::Assign {
+            place: Place::from_local(tag_temp),
+            rvalue: Rvalue::Discriminant(Place::from_local(self_param)),
+            source: None,
+        });
+
+        let layout = self
+            .program
+            .enum_layouts
+            .get(&enum_ty)
+            .cloned()
+            .expect("enum layout registered");
+        let bindings = self.bindings_from(enum_def, &generic_args);
+
+        let mut targets = Vec::new();
+        for (index, variant) in layout.variants.iter().enumerate() {
+            let Some(payload_ty) = variant.payload else {
+                continue;
+            };
+            if !self.mir_type_needs_drop(payload_ty, &bindings) {
+                continue;
+            }
+            let variant_block = func.new_block();
+            targets.push((index as u128, variant_block));
+            let payload_place = Place::from_local(self_param).enum_payload(variant.def_id);
+            self.emit_payload_drops(
+                &mut func,
+                payload_place,
+                payload_ty,
+                &bindings,
+                variant_block,
+            );
+            func.blocks[variant_block.0 as usize].terminator = Terminator::Goto(bb_ret);
+        }
+
+        func.blocks[0].terminator = Terminator::SwitchInt {
+            discriminant: Operand::Move(Place::from_local(tag_temp), None),
+            targets,
+            otherwise: bb_ret,
+        };
+        func.blocks[bb_ret.0 as usize].terminator =
+            Terminator::Return(Operand::Constant(ConstValue::Void, None));
+
+        self.program.functions.insert(id, func);
+        id
+    }
+
+    /// Emits the teardown of a payload `place` into `block`: values with
+    /// their own drop function die as a whole, other structs expand
+    /// recursively field by field. Only called for types that need a drop.
+    fn emit_payload_drops(
+        &mut self,
+        func: &mut MirFunction,
+        place: Place,
+        ty: TypeId,
+        bindings: &HashMap<DefId, TypeId>,
+        block: BlockId,
+    ) {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let explicit = self
+                    .typecheck
+                    .struct_info
+                    .get(&def_id)
+                    .is_some_and(|info| info.capabalities.has_explicit_drop);
+                if explicit {
+                    func.blocks[block.0 as usize]
+                        .statements
+                        .push(MirStatement::Drop(place));
+                    return;
+                }
+                let nested = self.bind_struct_generics(&def_id, &generic_args, bindings);
+                let fields = self
+                    .typecheck
+                    .struct_info
+                    .get(&def_id)
+                    .map(|info| info.fields.clone())
+                    .unwrap_or_default();
+                for field in fields {
+                    if !self.mir_type_needs_drop(field.field_ty, &nested) {
+                        continue;
+                    }
+                    self.emit_payload_drops(
+                        func,
+                        place.clone().field(field.field_def),
+                        field.field_ty,
+                        &nested,
+                        block,
+                    );
+                }
+            }
+            Type::GenericParam(def) => {
+                if let Some(&bound) = bindings.get(&def) {
+                    self.emit_payload_drops(func, place, bound, bindings, block);
+                }
+            }
+            Type::Enum { .. } => {
+                self.ensure_enum_drop_registered(ty);
+                func.blocks[block.0 as usize]
+                    .statements
+                    .push(MirStatement::Drop(place));
+            }
+            Type::FatFn { .. } | Type::Array { .. } | Type::Slice { .. } => {
+                func.blocks[block.0 as usize]
+                    .statements
+                    .push(MirStatement::Drop(place));
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether a value of type `ty` must be dropped: enums with an explicit
+    /// `Drop` or a payload that transitively needs one, structs and arrays as
+    /// in flow's `type_needs_drop`, fat closures always.
+    fn mir_type_needs_drop(&mut self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> bool {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                if self
+                    .typecheck
+                    .struct_info
+                    .get(&def_id)
+                    .is_some_and(|info| info.capabalities.has_explicit_drop)
+                {
+                    return true;
+                }
+                let nested = self.bind_struct_generics(&def_id, &generic_args, bindings);
+                let fields: Vec<TypeId> = self
+                    .typecheck
+                    .struct_info
+                    .get(&def_id)
+                    .map(|info| info.fields.iter().map(|f| f.field_ty).collect())
+                    .unwrap_or_default();
+                fields.iter().any(|&f| self.mir_type_needs_drop(f, &nested))
+            }
+            Type::Enum { def_id, .. } => {
+                if self
+                    .typecheck
+                    .enum_info
+                    .get(&def_id)
+                    .is_some_and(|info| info.capabalities.has_explicit_drop)
+                {
+                    return true;
+                }
+                self.register_enum_layout(ty, def_id);
+                let payloads: Vec<TypeId> = self
+                    .program
+                    .enum_layouts
+                    .get(&ty)
+                    .map(|layout| layout.variants.iter().filter_map(|v| v.payload).collect())
+                    .unwrap_or_default();
+                payloads
+                    .iter()
+                    .any(|&p| self.mir_type_needs_drop(p, &HashMap::default()))
+            }
+            Type::Array { element, .. } => self.mir_type_needs_drop(element, bindings),
+            Type::FatFn { .. } => true,
+            Type::GenericParam(def) => bindings
+                .get(&def)
+                .is_some_and(|&bound| bound != ty && self.mir_type_needs_drop(bound, bindings)),
+            _ => false,
+        }
+    }
+
+    /// Extends `bindings` with the generic parameters of `struct_def`,
+    /// resolved to the concrete `generic_args` of this instantiation.
+    fn bind_struct_generics(
+        &self,
+        struct_def: &DefId,
+        generic_args: &[TypeId],
+        bindings: &HashMap<DefId, TypeId>,
+    ) -> HashMap<DefId, TypeId> {
+        let params = self
+            .typecheck
+            .struct_generics
+            .get(struct_def)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut nested = bindings.clone();
+        for (param, arg) in params.iter().zip(generic_args.iter().copied()) {
+            let resolved = match self.typecheck.interner.get(arg) {
+                Type::GenericParam(def) => bindings.get(def).copied().unwrap_or(arg),
+                _ => arg,
+            };
+            nested.insert(*param, resolved);
+        }
+        nested
     }
 
     /// Registers the layout of every `FatFn` type showing up among the
@@ -1354,6 +1715,48 @@ impl<'ctx> MirLowering<'ctx> {
         self.typecheck.struct_info.get(&def_id)
     }
 
+    /// The anonymous struct `DefId` behind a `VariantPayload::Struct`, i.e. the
+    /// synthetic `Foo.c` type, so its field machinery matches the payload.
+    fn payload_struct_def(&self, payload_ty: TypeId) -> DefId {
+        match self.typecheck.interner.get(payload_ty).clone() {
+            Type::Struct { def_id, .. } => def_id,
+            other => panic!("payload struct type expected, got: {other:?}"),
+        }
+    }
+
+    /// The runtime tag (variant ordinal) of `variant_def` within `enum_def`.
+    fn enum_variant_tag(&self, enum_def: DefId, variant_def: DefId) -> i64 {
+        self.typecheck
+            .enum_variants
+            .get(&enum_def)
+            .and_then(|variants| variants.iter().position(|&v| v == variant_def))
+            .unwrap_or(0) as i64
+    }
+
+    fn enum_info(&self, enum_def: DefId) -> Option<&zeen_types::EnumTypeInfo> {
+        self.typecheck.enum_info.get(&enum_def)
+    }
+
+    /// Variant info of the enum variant whose name (or field access) resolved
+    /// through `field_resolutions[expr_id]`.
+    fn enum_variant_by_resolution(
+        &self,
+        enum_def: DefId,
+        variant_def: DefId,
+    ) -> Option<&zeen_types::EnumVariantInfo> {
+        self.enum_info(enum_def)
+            .and_then(|info| info.variants.iter().find(|v| v.def_id == variant_def))
+    }
+
+    /// Whether the enum carries at least one payload-bearing variant: such
+    /// enums always lower to a tagged `{ tag, union }` aggregate, while
+    /// empty-only enums can stay a bare tag constant.
+    fn enum_has_payloads(&self, enum_def: DefId) -> bool {
+        self.enum_info(enum_def)
+            .map(|info| info.variants.iter().any(|v| v.payload.is_some()))
+            .unwrap_or(false)
+    }
+
     fn field_resolution(&self, expr_id: HirId) -> Option<DefId> {
         self.typecheck.field_resolutions.get(&expr_id).copied()
     }
@@ -1379,7 +1782,6 @@ impl<'ctx> MirLowering<'ctx> {
             Type::Builtin(_)
             | Type::IntLiteral
             | Type::FloatLiteral
-            | Type::Enum { .. }
             | Type::Pointer { .. }
             | Type::ManyPointer { .. }
             | Type::Fn { .. }
@@ -1387,14 +1789,13 @@ impl<'ctx> MirLowering<'ctx> {
             | Type::Never
             | Type::Error => true,
 
-            // `Fn` closure values (all-Copy captures or none) are Copy: the
-            // inline environment is duplicated with the value. `FnOnce` owns
-            // a non-Copy capture, so it is move-only.
+            // `Fn` with all-Copy captures is Copy; owning a non-Copy
+            // capture makes `FnOnce` move-only.
             Type::FatFn { .. } => self.typecheck.is_copy(ty),
 
-            Type::Struct { .. } => self.typecheck.is_copy(ty),
-
-            Type::Array { .. } => self.typecheck.is_copy(ty),
+            Type::Struct { .. } | Type::Enum { .. } | Type::Array { .. } => {
+                self.typecheck.is_copy(ty)
+            }
 
             Type::Slice { .. } => true,
 
@@ -1500,6 +1901,72 @@ impl<'ctx> MirLowering<'ctx> {
         );
     }
 
+    /// Registers the monomorphized layout of an enum: its payload types are
+    /// substituted with the concrete generic arguments, exactly like structs.
+    fn register_enum_layout(&mut self, ty: TypeId, enum_def: DefId) {
+        if self.program.enum_layouts.contains_key(&ty) {
+            return;
+        }
+
+        let generic_args = match self.typecheck.interner.get(ty).clone() {
+            Type::Enum { generic_args, .. } => generic_args,
+            _ => return,
+        };
+
+        let enum_generics = self
+            .typecheck
+            .enum_generics
+            .get(&enum_def)
+            .cloned()
+            .unwrap_or_default();
+        let bindings: HashMap<DefId, TypeId> = enum_generics
+            .iter()
+            .copied()
+            .zip(generic_args.iter().copied())
+            .collect();
+
+        let Some(info) = self.typecheck.enum_info.get(&enum_def).cloned() else {
+            return;
+        };
+
+        let variants: Vec<EnumVariantLayout> = info
+            .variants
+            .iter()
+            .map(|variant| {
+                let payload = variant.payload.as_ref().map(|payload| match payload {
+                    VariantPayload::Single(ty) => zeen_types::substitute_generics(
+                        &mut self.typecheck.interner,
+                        *ty,
+                        &bindings,
+                    ),
+                    VariantPayload::Struct(payload_ty) => {
+                        let payload_def = self.payload_struct_def(*payload_ty);
+                        let concrete = self.typecheck.interner.intern(Type::Struct {
+                            def_id: payload_def,
+                            generic_args: generic_args.clone(),
+                        });
+                        self.register_struct_layout(concrete, payload_def);
+                        concrete
+                    }
+                });
+                EnumVariantLayout {
+                    def_id: variant.def_id,
+                    name: variant.name,
+                    payload,
+                }
+            })
+            .collect();
+
+        self.program.enum_layouts.insert(
+            ty,
+            EnumLayout {
+                def_id: enum_def,
+                generic_args,
+                variants,
+            },
+        );
+    }
+
     /// Registers a monomorphized `Slice[T]` as a synthetic struct layout so the
     /// MIR printer can show it and indexing/len projections have a home. The
     /// reserved `DefId`s stand in for the (never-user-visible) `ptr`/`len`
@@ -1574,12 +2041,301 @@ impl<'ctx> MirLowering<'ctx> {
         );
     }
 
-    /// Builds a fat closure value of type `fat_ty` and returns it as a moved
-    /// operand. A capturing closure groups its captures into a heap-allocated
-    /// env struct and points `$env` at it, while `$fn` holds the closure
-    /// body (env-first ABI). A zero-capture closure or plain function stored
-    /// into a fat slot gets `$ptr` pointing at an env-first adapter and a
-    /// `null` `$env`.
+    /// Lowers `Foo.b(arg)` for an enum variant with a `Single` payload: the
+    /// value is a tagged aggregate with the payload as its single operand.
+    fn lower_enum_single_construct(
+        &mut self,
+        fb: &mut FnBuilder,
+        enum_def: DefId,
+        variant_def: DefId,
+        args: &[Rc<HirExpr>],
+        block: BlockId,
+        expr: &HirExpr,
+    ) -> (BlockId, Operand) {
+        let ty = self.expr_type(fb, expr);
+        self.register_enum_layout(ty, enum_def);
+
+        let variant = self
+            .enum_variant_by_resolution(enum_def, variant_def)
+            .expect("variant must resolve");
+
+        let payload_ty = match variant.payload.as_ref() {
+            Some(VariantPayload::Single(ty)) => *ty,
+            other => panic!("enum single construct expects a Single payload: {other:?}"),
+        };
+
+        let (block, arg_operand) = self.lower_expr_to_operand(fb, &args[0], block);
+        debug_assert_eq!(args.len(), 1, "typechecker enforces a single argument");
+        let _ = payload_ty;
+
+        let temp = fb.new_temp(ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Enum {
+                        enum_def,
+                        variant_def,
+                    },
+                    operands: vec![arg_operand],
+                },
+                source: Some(expr.source.clone()),
+            },
+        );
+
+        (
+            block,
+            self.place_to_operand(Place::from_local(temp), ty, Some(expr.source.clone())),
+        )
+    }
+
+    /// Lowers `Enum.variant { ... }` (anonymous-struct payload): the anon
+    /// struct is built with the normal struct machinery, then wrapped as the
+    /// single operand of the enum aggregate.
+    fn lower_enum_struct_construct(
+        &mut self,
+        fb: &mut FnBuilder,
+        enum_def: DefId,
+        variant_name: Option<Spur>,
+        fields: &[HirFieldInit],
+        block: BlockId,
+        source: &Source,
+    ) -> (BlockId, Operand) {
+        let info = self
+            .enum_info(enum_def)
+            .expect("enum info must exist")
+            .clone();
+
+        let Some(variant_name) = variant_name else {
+            unreachable!("typechecker ensures variant name on struct construct");
+        };
+
+        let variant = info
+            .variants
+            .iter()
+            .find(|v| v.name == variant_name)
+            .expect("variant must exist");
+
+        let VariantPayload::Struct(payload_ty) = variant
+            .payload
+            .as_ref()
+            .expect("enum struct construct expects a Struct payload")
+        else {
+            unreachable!("enum struct construct expects a Struct payload");
+        };
+
+        let payload_def = self.payload_struct_def(*payload_ty);
+
+        self.register_struct_layout(*payload_ty, payload_def);
+
+        let payload_info = self
+            .struct_info(payload_def)
+            .expect("payload struct info must exist")
+            .clone();
+
+        let mut block = block;
+        let mut ordered_operands = Vec::with_capacity(payload_info.fields.len());
+
+        for field_info in &payload_info.fields {
+            let matching = fields
+                .iter()
+                .find(|f| f.name == field_info.name)
+                .expect("typechecker should have caught missing field");
+
+            let (bl, operand) = self.lower_expr_to_operand(fb, &matching.value, block);
+            block = bl;
+            ordered_operands.push(operand);
+        }
+
+        let payload_temp = fb.new_temp(*payload_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(payload_temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Struct(payload_def),
+                    operands: ordered_operands,
+                },
+                source: Some(source.clone()),
+            },
+        );
+
+        let enum_ty = self.typecheck.interner.intern(Type::Enum {
+            def_id: enum_def,
+            generic_args: Vec::new(),
+        });
+        self.register_enum_layout(enum_ty, enum_def);
+
+        let temp = fb.new_temp(enum_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Enum {
+                        enum_def,
+                        variant_def: variant.def_id,
+                    },
+                    operands: vec![self.place_to_operand(
+                        Place::from_local(payload_temp),
+                        *payload_ty,
+                        Some(source.clone()),
+                    )],
+                },
+                source: Some(source.clone()),
+            },
+        );
+
+        (
+            block,
+            self.place_to_operand(Place::from_local(temp), enum_ty, Some(source.clone())),
+        )
+    }
+
+    /// Registers a struct layout under its own `ty`, looking up the struct's
+    /// declaration-order fields. `register_enum_layout` forwards the payload
+    /// struct type here.
+    fn register_struct_layout_type(&mut self, struct_def: DefId, ty: TypeId) {
+        self.register_struct_layout(ty, struct_def);
+    }
+
+    /// Generic-param -> concrete-arg bindings of an enum instantiation.
+    fn bindings_from(&self, enum_def: DefId, generic_args: &[TypeId]) -> HashMap<DefId, TypeId> {
+        self.typecheck
+            .enum_generics
+            .get(&enum_def)
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .zip(generic_args.iter().copied())
+            .collect()
+    }
+
+    /// Lowers a payload extraction read `e.variant`: projects the union member
+    /// and, in Debug, first checks the tag against the variant's ordinal,
+    /// panicking on mismatch. Payloads are validated `Copy` by the typechecker.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_enum_payload_read(
+        &mut self,
+        fb: &mut FnBuilder,
+        object: &HirExpr,
+        enum_def: DefId,
+        enum_generic_args: &[TypeId],
+        variant_def: Option<DefId>,
+        block: BlockId,
+        source: &Source,
+    ) -> (BlockId, Operand) {
+        let enum_ty = self.typecheck.interner.intern(Type::Enum {
+            def_id: enum_def,
+            generic_args: enum_generic_args.to_vec(),
+        });
+        self.register_enum_layout(enum_ty, enum_def);
+
+        let Some(variant_def) = variant_def else {
+            unreachable!("typechecker resolved the variant");
+        };
+        let tag = self.enum_variant_tag(enum_def, variant_def);
+        let payload = self
+            .enum_variant_by_resolution(enum_def, variant_def)
+            .and_then(|v| v.payload.clone())
+            .expect("variant must resolve");
+
+        let payload_ty = match &payload {
+            VariantPayload::Single(ty) => {
+                let bindings = self.bindings_from(enum_def, enum_generic_args);
+                zeen_types::substitute_generics(&mut self.typecheck.interner, *ty, &bindings)
+            }
+            VariantPayload::Struct(payload_ty) => {
+                match self.typecheck.interner.get(*payload_ty).clone() {
+                    Type::Struct { def_id, .. } => self.typecheck.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: enum_generic_args.to_vec(),
+                    }),
+                    other => panic!("payload struct type expected: {other:?}"),
+                }
+            }
+        };
+
+        let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
+
+        let obj_ty = self.expr_type(fb, object);
+        let obj_place = if matches!(self.typecheck.interner.get(obj_ty), Type::Pointer { .. }) {
+            obj_place.deref()
+        } else {
+            obj_place
+        };
+
+        let mut block = block;
+        if matches!(self.mode, CompilationMode::Debug) {
+            let ok_block = fb.new_block();
+            let panic_block = fb.new_block();
+
+            let tag_temp = fb.new_temp(
+                self.typecheck
+                    .interner
+                    .intern(Type::Builtin(zeen_ast::types::BuiltinType::u8)),
+            );
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(tag_temp),
+                    rvalue: Rvalue::Discriminant(obj_place.clone()),
+                    source: Some(source.clone()),
+                },
+            );
+
+            fb.set_terminator(
+                block,
+                Terminator::SwitchInt {
+                    discriminant: Operand::Move(Place::from_local(tag_temp), None),
+                    targets: vec![(tag as u128, ok_block)],
+                    otherwise: panic_block,
+                },
+            );
+
+            let void_ty = self.typecheck.interner.intern(Type::Void);
+            let dest = fb.new_temp(void_ty);
+            let panic_next = fb.new_block();
+
+            let header_block = self.emit_panic_header_segment(fb, panic_block, Some(source));
+
+            let usize_ty = self
+                .typecheck
+                .interner
+                .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+
+            fb.set_terminator(
+                header_block,
+                Terminator::MacroCall {
+                    kind: HirMacroKind::Panic,
+                    format_chunks: Some(vec![
+                        FormatChunk::Literal("enum tag mismatch: requested tag `".into()),
+                        FormatChunk::Arg(FormatSpec::Display),
+                        FormatChunk::Literal("` but found `".into()),
+                        FormatChunk::Arg(FormatSpec::Display),
+                        FormatChunk::Literal("`".into()),
+                    ]),
+                    args: vec![
+                        Operand::Constant(ConstValue::Int(tag as i128), None),
+                        Operand::Move(Place::from_local(tag_temp), None),
+                    ],
+                    arg_types: vec![usize_ty, usize_ty],
+                    destination: Place::from_local(dest),
+                    target: None,
+                    source: Some(source.clone()),
+                },
+            );
+            fb.set_terminator(panic_next, Terminator::Unreachable);
+
+            block = ok_block;
+        }
+
+        let payload_place = obj_place.enum_payload(variant_def);
+        let operand = self.place_to_operand(payload_place, payload_ty, Some(source.clone()));
+        (block, operand)
+    }
     #[allow(clippy::too_many_arguments)]
     fn build_fat_envelope(
         &mut self,
@@ -2132,6 +2888,20 @@ impl<'ctx> MirLowering<'ctx> {
         for ty in local_tys {
             self.register_slice_layouts_in_type(ty, &mut visited);
         }
+
+        // Enum payloads (e.g. `Err: []const char`) are only reachable
+        // through the enum layout.
+        let enum_keys: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
+        for layout_ty in enum_keys {
+            let payloads: Vec<TypeId> = self.program.enum_layouts[&layout_ty]
+                .variants
+                .iter()
+                .filter_map(|v| v.payload)
+                .collect();
+            for payload_ty in payloads {
+                self.register_slice_layouts_in_type(payload_ty, &mut visited);
+            }
+        }
     }
 
     fn register_slice_layouts_in_type(&mut self, ty: TypeId, visited: &mut HashSet<TypeId>) {
@@ -2144,6 +2914,17 @@ impl<'ctx> MirLowering<'ctx> {
                 self.register_slice_layouts_in_type(element, visited);
             }
             Type::Array { element, .. } => self.register_slice_layouts_in_type(element, visited),
+            Type::Enum { .. } => {
+                let payloads: Vec<TypeId> = self
+                    .program
+                    .enum_layouts
+                    .get(&ty)
+                    .map(|layout| layout.variants.iter().filter_map(|v| v.payload).collect())
+                    .unwrap_or_default();
+                for payload_ty in payloads {
+                    self.register_slice_layouts_in_type(payload_ty, visited);
+                }
+            }
             Type::Struct { .. } => {
                 let fields: Vec<TypeId> = self
                     .program
@@ -2192,9 +2973,7 @@ impl<'ctx> MirLowering<'ctx> {
                         Some(DefKind::Function)
                     )
                 {
-                    // A static function coerced into a fat slot becomes a
-                    // closure value with an empty env: calls go through
-                    // a shared adapter into the function.
+                    // A static function in a fat slot gets an empty env.
                     if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
                         let mir_f = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
                         return self.build_fat_envelope(fb, block, expr_ty, *def_id, mir_f, expr);
@@ -2212,10 +2991,8 @@ impl<'ctx> MirLowering<'ctx> {
                 });
                 let ty = self.place_type(fb, &place);
 
-                // A basic fn value read from a variable coerces into a fat
-                // slot at runtime: box the pointer into a heap fat
-                // envelope (env = null) and dispatch through the
-                // shared pointer adapter.
+                // A basic fn value in a fat slot is boxed into a heap
+                // envelope with a null env.
                 if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. })
                     && !matches!(self.typecheck.interner.get(ty), Type::FatFn { .. })
                 {
@@ -2329,10 +3106,7 @@ impl<'ctx> MirLowering<'ctx> {
                 if let Some(cmp) = op_res.ordering_cmp {
                     let mut op_res = op_res;
 
-                    // A bounded generic receiver resolves its interface
-                    // method to the concrete implementation here; a
-                    // builtin instantiation has no `Ord` impl and falls
-                    // back to comparing the values directly.
+                    // Builtin instantiations have no `Ord` impl: compare directly.
                     if self
                         .typecheck
                         .interface_method_owners
@@ -2391,9 +3165,7 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let mut op_res = op_res;
 
-                // A bounded generic receiver resolves its interface method to
-                // the concrete implementation here; a builtin or non-struct
-                // receiver has no impl and falls back to the raw operator.
+                // Builtin and non-struct receivers fall back to raw operators.
                 let dispatch = !self
                     .typecheck
                     .interface_method_owners
@@ -2450,18 +3222,14 @@ impl<'ctx> MirLowering<'ctx> {
                     _ => false,
                 };
 
-                // Type of the pointee. Use the pointer's own inner type so a
-                // literal operand is pinned to the concrete pointee (`&123`
-                // in a `*i64` context materializes an `i64` temp, not an `i32`
-                // defaulted one).
+                // Pin literals to the pointer's inner type (`&123` in a
+                // `*i64` context makes an `i64` temp).
                 let inner_ty = match self.typecheck.interner.get(result_ty).clone() {
                     Type::Pointer { inner, .. } => inner,
                     _ => self.expr_type(fb, inner),
                 };
 
-                // `&` needs a place to point at. When the operand is not an
-                // lvalue (e.g. `&123`, `&(a + b)`), materialize it into a temp
-                // local first so we can take its address instead of panicking.
+                // Non-lvalue operands materialize into a temp first.
                 let (block, inner_place) = if self.expr_is_place(inner) {
                     self.lower_expr_to_place(fb, inner, block)
                 } else {
@@ -2500,10 +3268,7 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Unary { expr: inner, op } => {
                 if let Some(mut op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned()
                 {
-                    // A bounded generic receiver resolves its interface method
-                    // to the concrete implementation here; a builtin or
-                    // non-struct receiver has no impl and falls through to the
-                    // raw operator below.
+                    // Builtin and non-struct receivers use the raw operator.
                     let dispatch = !self
                         .typecheck
                         .interface_method_owners
@@ -2556,7 +3321,6 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
-                // Native range slicing on arrays and slices: `arr[a..b]`.
                 if let HirExprKind::Range {
                     start,
                     end,
@@ -2646,8 +3410,7 @@ impl<'ctx> MirLowering<'ctx> {
                     .expect("Option must have an `_is_some` field");
                 drop(rodeo);
 
-                // Builds an `Option[usize]` aggregate from a lowered operand;
-                // `is_some == false` stores a dummy value that is never read.
+                // `None` stores a dummy value that is never read.
                 let mut build_option =
                     |fb: &mut FnBuilder,
                      block: BlockId,
@@ -2754,14 +3517,14 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::FieldAccess { object, field } => {
-                // C-like enum variant access, e.g. `Color.Red`: the whole
-                // expression is just a constant, not a real place.
+                // Enum variant access (`Color.Red`) is a constant, not a place.
                 if let HirExprKind::VarRef(enum_def) = &object.kind
                     && matches!(
                         self.resolution.defs.get(enum_def).map(|info| &info.kind),
                         Some(DefKind::Enum)
                     )
                 {
+                    // Empty-only enums stay a bare tag constant.
                     let variant_def = self.field_resolution(expr.id);
                     let index = self
                         .typecheck
@@ -2769,6 +3532,40 @@ impl<'ctx> MirLowering<'ctx> {
                         .get(enum_def)
                         .and_then(|variants| variants.iter().position(|&v| Some(v) == variant_def))
                         .unwrap_or(0) as i64;
+
+                    if self.enum_has_payloads(*enum_def) {
+                        let ty = self.expr_type(fb, expr);
+                        self.register_enum_layout(ty, *enum_def);
+                        let temp = fb.new_temp(ty);
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::Aggregate {
+                                    kind: AggregateKind::Enum {
+                                        enum_def: *enum_def,
+                                        variant_def: variant_def.expect(
+                                            "typecheck resolves empty variant in a payload enum",
+                                        ),
+                                    },
+                                    operands: vec![],
+                                },
+                                source: Some(expr.source.clone()),
+                            },
+                        );
+                        return (
+                            block,
+                            self.place_to_operand(
+                                Place::from_local(temp),
+                                ty,
+                                Some(expr.source.clone()),
+                            ),
+                        );
+                    }
+
+                    let ty = self.expr_type(fb, expr);
+                    self.register_enum_layout(ty, *enum_def);
+
                     return (
                         block,
                         Operand::Constant(
@@ -2778,10 +3575,39 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
-                // `arr.len` on a fixed array is a compile-time constant: arrays
-                // carry no runtime length field, so lower it to a constant
-                // instead of projecting into storage.
+                // Payload extraction `e.variant`: a union read with a
+                // Debug-only tag check. Pointers deref inside the reader.
                 let obj_ty = self.expr_type(fb, object);
+                let enum_target = match self.typecheck.interner.get(obj_ty).clone() {
+                    Type::Enum {
+                        def_id,
+                        generic_args,
+                    } => Some((def_id, generic_args)),
+                    Type::Pointer { inner, .. } => {
+                        match self.typecheck.interner.get(inner).clone() {
+                            Type::Enum {
+                                def_id,
+                                generic_args,
+                            } => Some((def_id, generic_args)),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some((enum_def, generic_args)) = enum_target {
+                    let variant_def = self.field_resolution(expr.id);
+                    return self.lower_enum_payload_read(
+                        fb,
+                        object,
+                        enum_def,
+                        &generic_args,
+                        variant_def,
+                        block,
+                        &expr.source,
+                    );
+                }
+
+                // `arr.len` on a fixed array is a compile-time constant.
                 if let Type::Array { len: Some(len), .. } =
                     self.typecheck.interner.get(obj_ty).clone()
                     && self.rodeo.borrow().resolve(&field.0) == "len"
@@ -2800,10 +3626,24 @@ impl<'ctx> MirLowering<'ctx> {
                 )
             }
 
-            HirExprKind::StructInit { fields, .. } => {
+            HirExprKind::StructInit {
+                ty: (_, variant_name, _),
+                fields,
+                ..
+            } => {
                 let ty = self.expr_type(fb, expr);
                 let struct_def = match self.typecheck.interner.get(ty).clone() {
                     Type::Struct { def_id, .. } => def_id,
+                    Type::Enum { def_id, .. } => {
+                        return self.lower_enum_struct_construct(
+                            fb,
+                            def_id,
+                            *variant_name,
+                            fields,
+                            block,
+                            &expr.source,
+                        );
+                    }
                     wildcard => panic!("non-struct type in StructInit lowering: {:?}", wildcard),
                 };
 
@@ -2978,6 +3818,26 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Call { callee, args, .. } => {
                 let call_id = expr.id;
 
+                // Enum single-value construction `Foo.b(123)` routes through
+                // `field_resolutions`.
+                if let HirExprKind::FieldAccess { object, .. } = &callee.kind
+                    && let HirExprKind::VarRef(enum_def) = &object.kind
+                    && matches!(
+                        self.resolution.defs.get(enum_def).map(|info| &info.kind),
+                        Some(DefKind::Enum)
+                    )
+                    && let Some(variant_def) = self.field_resolution(call_id)
+                {
+                    return self.lower_enum_single_construct(
+                        fb,
+                        *enum_def,
+                        variant_def,
+                        args,
+                        block,
+                        expr,
+                    );
+                }
+
                 let Some(resolution) = self.call_resolution(call_id) else {
                     let result_ty = self.expr_type(fb, expr);
                     return self.lower_indirect_call(fb, callee, args, block, result_ty);
@@ -2987,9 +3847,8 @@ impl<'ctx> MirLowering<'ctx> {
                 let raw_args = resolution.generic_args.clone();
                 let generic_args = self.substitute_generic_args(fb, &raw_args);
 
-                // A call made on a bounded generic parameter records the
-                // interface method (bodyless) as the callee; resolve it to the
-                // concrete implementation once the receiver is monomorphized.
+                // Calls on bounded generics resolve to the concrete impl
+                // once the receiver is monomorphized.
                 let (fn_def, generic_args) = if self
                     .typecheck
                     .interface_method_owners
@@ -2998,11 +3857,18 @@ impl<'ctx> MirLowering<'ctx> {
                     match &callee.kind {
                         HirExprKind::FieldAccess { object, .. } => {
                             let recv_ty = self.expr_type(fb, object);
-                            if let Type::Struct {
-                                def_id: struct_def,
-                                generic_args: recv_args,
-                            } = self.typecheck.interner.get(recv_ty).clone()
-                            {
+                            let recv_target = match self.typecheck.interner.get(recv_ty).clone() {
+                                Type::Struct {
+                                    def_id: struct_def,
+                                    generic_args: recv_args,
+                                }
+                                | Type::Enum {
+                                    def_id: struct_def,
+                                    generic_args: recv_args,
+                                } => Some((struct_def, recv_args)),
+                                _ => None,
+                            };
+                            if let Some((struct_def, recv_args)) = recv_target {
                                 let iface_def =
                                     self.typecheck.interface_method_owners.get(&fn_def).copied();
                                 let method_name = self
@@ -3052,9 +3918,8 @@ impl<'ctx> MirLowering<'ctx> {
                 };
                 let has_self_param = param_count == args.len() + 1;
 
-                // `Fn`/`FnOnce`-typed parameters are erased in the signature:
-                // this call instantiates the callee with the concrete closure
-                // type of every fat argument, in fat-parameter order.
+                // Erased `Fn`/`FnOnce` params instantiate per concrete
+                // fat argument, in parameter order.
                 let declared_params: Vec<TypeId> = match self.typecheck.interner.get(method_ty) {
                     Type::Fn { params, .. } => params.clone(),
                     _ => Vec::new(),
@@ -3136,7 +4001,6 @@ impl<'ctx> MirLowering<'ctx> {
                     );
 
                     let next_block = fb.new_block();
-                    // fb.set_terminator(next_block, Terminator::Unreachable);
                     (next_block, Operand::Constant(ConstValue::Void, None))
                 } else {
                     (
@@ -3192,6 +4056,42 @@ impl<'ctx> MirLowering<'ctx> {
                                 operand: value_operand,
                                 target: target_ty,
                             },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    (
+                        block,
+                        Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
+                    )
+                }
+
+                HirMacroKind::EnumTag => {
+                    let (block, value_operand) = self.lower_expr_to_operand(fb, &args[0], block);
+
+                    // An empty-variant constant already is its tag.
+                    if matches!(value_operand, Operand::Constant(_, _)) {
+                        return (block, value_operand);
+                    }
+
+                    let value_place = match value_operand {
+                        Operand::Copy(place, _) | Operand::Move(place, _) => place,
+                        Operand::Constant(_, _) => unreachable!(),
+                    };
+                    let arg_ty = self.expr_type(fb, &args[0]);
+                    let value_place =
+                        if matches!(self.typecheck.interner.get(arg_ty), Type::Pointer { .. }) {
+                            value_place.deref()
+                        } else {
+                            value_place
+                        };
+
+                    let result_ty = self.expr_type(fb, expr);
+                    let temp = fb.new_temp(result_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Discriminant(value_place),
                             source: Some(expr.source.clone()),
                         },
                     );
@@ -3328,15 +4228,11 @@ impl<'ctx> MirLowering<'ctx> {
                 let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
 
                 match self.typecheck.interner.get(closure_ty).clone() {
-                    // Zero-capture closure: a plain `fn` pointer.
                     Type::Fn { .. } => (
                         block,
                         Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
                     ),
 
-                    // Fat closure: the value is a `{ fn, env }` envelope whose
-                    // env is the captured values in a heap block; calls
-                    // dispatch through `fn`.
                     Type::FatFn { .. } => {
                         self.build_fat_envelope(fb, block, closure_ty, *def_id, mir_id, expr)
                     }
@@ -3408,17 +4304,48 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::FieldAccess { object, .. } => {
+                // Enum variant construction (`Foo.a`) is a value, not a
+                // place: materialize it into a temp (e.g. a method receiver
+                // on a constant).
+                if let HirExprKind::VarRef(enum_def) = &object.kind
+                    && matches!(
+                        self.resolution.defs.get(enum_def).map(|info| &info.kind),
+                        Some(DefKind::Enum)
+                    )
+                {
+                    let ty = self.expr_type(fb, expr);
+                    let (block, operand) = self.lower_expr_to_operand(fb, expr, block);
+                    let temp = fb.new_temp(ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Use(operand),
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    return (block, Place::from_local(temp));
+                }
+
                 let field_def = *self
                     .typecheck
                     .field_resolutions
                     .get(&expr.id)
-                    .expect("unresolved shit");
+                    .expect("unresolved field");
                 let obj_ty = self.expr_type(fb, object);
                 let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
 
-                // Field access through a pointer auto-derefs (`sf.x` where
-                // `sf: *Foo`): the typechecker allows it, so insert the deref
-                // projection explicitly instead of projecting into the pointer.
+                // Enum payload as an lvalue base (`e.c.inner`).
+                if let Type::Enum { def_id, .. } = self.typecheck.interner.get(obj_ty).clone() {
+                    return (block, obj_place.enum_payload(field_def));
+                }
+                if let Type::Pointer { inner, .. } = self.typecheck.interner.get(obj_ty).clone()
+                    && let Type::Enum { .. } = self.typecheck.interner.get(inner).clone()
+                {
+                    return (block, obj_place.deref().enum_payload(field_def));
+                }
+
+                // Pointer field access inserts an explicit deref.
                 let place = if matches!(self.typecheck.interner.get(obj_ty), Type::Pointer { .. }) {
                     obj_place.deref().field(field_def)
                 } else {
@@ -3429,9 +4356,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::SliceAccess { object, index } => {
-                // A native range slice yields a fresh slice value, never a
-                // place into the object: materialize it into a temp. Struct
-                // `Sliceable` dispatches stay on the method-call path below.
+                // A native range slice materializes into a temp.
                 if let HirExprKind::Range {
                     start,
                     end,
@@ -3453,11 +4378,8 @@ impl<'ctx> MirLowering<'ctx> {
                     return (block, Place::from_local(temp));
                 }
 
-                // An access through a struct's `Index`/`IndexPtr` interface
-                // dispatches to the method instead of indexing native storage.
-                // An `IndexPtr` result (`ref[i] = v` in an assign) is a pointer
-                // into the struct, so the place keeps dereferencing it; an
-                // `Index` result is the value itself.
+                // `Index`/`IndexPtr` access dispatches to the method.
+                // `IndexPtr` results keep dereferencing; `Index` is the value.
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let result_ty = self.expr_type(fb, expr);
                     let is_pointer = self
@@ -3646,6 +4568,7 @@ impl<'ctx> MirLowering<'ctx> {
             ty = match elem {
                 PlaceElem::Field(field_def) => self.struct_field_ty(ty, *field_def),
                 PlaceElem::Index(_) => self.index_elem_ty(ty),
+                PlaceElem::EnumPayload(variant_def) => self.enum_payload_ty(ty, *variant_def),
                 PlaceElem::Deref => match self.typecheck.interner.get(ty).clone() {
                     Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
                     other => panic!("dereferencing a non-pointer type: {other:?}"),
@@ -3655,6 +4578,39 @@ impl<'ctx> MirLowering<'ctx> {
         }
 
         ty
+    }
+
+    /// Resolves the payload type of an enum variant projection, substituting
+    /// the enum's concrete generic arguments.
+    fn enum_payload_ty(&mut self, ty: TypeId, variant_def: DefId) -> TypeId {
+        let Type::Enum {
+            def_id: enum_def,
+            generic_args,
+        } = self.typecheck.interner.get(ty).clone()
+        else {
+            panic!("payload projection into a non-enum type: {:?}", ty);
+        };
+
+        let payload = self
+            .enum_variant_by_resolution(enum_def, variant_def)
+            .and_then(|v| v.payload.clone())
+            .expect("variant must resolve");
+
+        match &payload {
+            VariantPayload::Single(ty) => {
+                let bindings = self.bindings_from(enum_def, &generic_args);
+                zeen_types::substitute_generics(&mut self.typecheck.interner, *ty, &bindings)
+            }
+            VariantPayload::Struct(payload_ty) => {
+                match self.typecheck.interner.get(*payload_ty).clone() {
+                    Type::Struct { def_id, .. } => self.typecheck.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args,
+                    }),
+                    other => panic!("payload struct type expected: {other:?}"),
+                }
+            }
+        }
     }
 
     /// Resolves the type of a struct field (potentially through generic
@@ -6426,6 +7382,26 @@ impl<'ctx> MirLowering<'ctx> {
 }
 
 impl<'ctx> MirLowering<'ctx> {
+    /// Generic parameters of a method owner, whether struct or enum.
+    fn owner_generics(&self, owner: DefId) -> Vec<DefId> {
+        if matches!(
+            self.resolution.defs.get(&owner).map(|i| &i.kind),
+            Some(DefKind::Enum)
+        ) {
+            self.typecheck
+                .enum_generics
+                .get(&owner)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.typecheck
+                .struct_generics
+                .get(&owner)
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
+
     fn monomorphize_fn(
         &mut self,
         def_id: DefId,
@@ -6511,19 +7487,14 @@ impl<'ctx> MirLowering<'ctx> {
                 .resolve(&self.resolution.defs[&struct_def].name)
                 .to_string();
 
-            let struct_generics = self
-                .typecheck
-                .struct_generics
-                .get(&struct_def)
-                .cloned()
-                .unwrap_or_default();
+            let owner_generics = self.owner_generics(struct_def);
 
-            let struct_part = if struct_generics.is_empty() {
+            let struct_part = if owner_generics.is_empty() {
                 struct_name
             } else {
                 let arg_names: Vec<String> = generic_args
                     .iter()
-                    .take(struct_generics.len())
+                    .take(owner_generics.len())
                     .map(|&t| self.display_type_name(t))
                     .collect();
                 format!("{}[{}]", struct_name, arg_names.join(", "))
@@ -6573,22 +7544,17 @@ impl<'ctx> MirLowering<'ctx> {
         let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
         let bindings: HashMap<DefId, TypeId> = if !generic_defs.is_empty() {
             if let Some(owner) = owner_struct {
-                // Generic methods are called with their struct's generics
+                // Generic methods are called with their owner's generics
                 // first, then the method's own (`[T, W]` for
                 // `Option[T].debug[W]`); split and bind both.
-                let struct_generics = self
-                    .typecheck
-                    .struct_generics
-                    .get(&owner)
-                    .cloned()
-                    .unwrap_or_default();
-                let struct_count = struct_generics.len();
+                let owner_generics = self.owner_generics(owner);
+                let owner_count = owner_generics.len();
                 let struct_args: Vec<TypeId> =
-                    generic_args.iter().take(struct_count).copied().collect();
+                    generic_args.iter().take(owner_count).copied().collect();
                 let method_args: Vec<TypeId> =
-                    generic_args.iter().skip(struct_count).copied().collect();
+                    generic_args.iter().skip(owner_count).copied().collect();
 
-                let mut bindings: HashMap<DefId, TypeId> = struct_generics
+                let mut bindings: HashMap<DefId, TypeId> = owner_generics
                     .iter()
                     .copied()
                     .zip(struct_args.iter().copied())
@@ -6596,14 +7562,14 @@ impl<'ctx> MirLowering<'ctx> {
 
                 // An implement block's methods may be written with the block's
                 // own generic parameters (`implement[T] Deref : Holder[T]`):
-                // substitute them through the struct's generic slots.
+                // substitute them through the owner's generic slots.
                 for entries in self.typecheck.impl_registry.values() {
                     for entry in entries {
                         if !entry.methods.contains(&def_id) {
                             continue;
                         }
 
-                        for (arg, &struct_g) in entry.object_args.iter().zip(struct_generics.iter())
+                        for (arg, &struct_g) in entry.object_args.iter().zip(owner_generics.iter())
                         {
                             if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
                                 && let Some(&concrete) = bindings.get(&struct_g)
@@ -6629,13 +7595,8 @@ impl<'ctx> MirLowering<'ctx> {
                     .collect()
             }
         } else if let Some(owner) = owner_struct {
-            let struct_generics = self
-                .typecheck
-                .struct_generics
-                .get(&owner)
-                .cloned()
-                .unwrap_or_default();
-            let mut bindings: HashMap<DefId, TypeId> = struct_generics
+            let owner_generics = self.owner_generics(owner);
+            let mut bindings: HashMap<DefId, TypeId> = owner_generics
                 .iter()
                 .copied()
                 .zip(generic_args.iter().copied())
@@ -6643,14 +7604,14 @@ impl<'ctx> MirLowering<'ctx> {
 
             // An implement block's methods may be written with the block's
             // own generic parameters (`implement[T] Deref : Holder[T]`):
-            // substitute them through the struct's generic slots.
+            // substitute them through the owner's generic slots.
             for entries in self.typecheck.impl_registry.values() {
                 for entry in entries {
                     if !entry.methods.contains(&def_id) {
                         continue;
                     }
 
-                    for (arg, &struct_g) in entry.object_args.iter().zip(struct_generics.iter()) {
+                    for (arg, &struct_g) in entry.object_args.iter().zip(owner_generics.iter()) {
                         if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
                             && let Some(&concrete) = bindings.get(&struct_g)
                         {

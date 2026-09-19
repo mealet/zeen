@@ -4,7 +4,7 @@ use lasso::{Rodeo, Spur};
 use smol_str::SmolStr;
 
 use zeen_ast::{
-    declarations::{Declaration, DeclarationKind, FnParam, GenericType},
+    declarations::{Declaration, DeclarationKind, EnumVariantPayload, FnParam, GenericType},
     expressions::{Expression, ExpressionKind},
     statements::{Statement, StatementKind},
     types::{TypeExpr, TypeKind},
@@ -32,8 +32,8 @@ pub struct HirModule {
 // =========| Public Exports |=========
 
 pub use decl::{
-    HirAlias, HirDecl, HirDeclKind, HirEnum, HirEnumVariant, HirField, HirFn, HirGenericParam,
-    HirImplement, HirInterface, HirParam, HirStruct,
+    HirAlias, HirDecl, HirDeclKind, HirEnum, HirEnumVariant, HirEnumVariantPayload, HirField,
+    HirFn, HirGenericParam, HirImplement, HirInterface, HirParam, HirStruct,
 };
 
 pub use expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind};
@@ -101,16 +101,32 @@ impl<'res> HirLowering<'res> {
             .map(|(id, _)| *id)
     }
 
-    fn path_expr_def_id(&self, expr: &Expression) -> Option<DefId> {
-        let target = match expr.kind {
-            ExpressionKind::FieldAccess { field, .. } => field,
-            _ => expr,
-        };
+    fn struct_init_path_def(&self, expr: &Expression) -> (Option<DefId>, Option<Spur>) {
+        if let ExpressionKind::FieldAccess { object, field } = &expr.kind {
+            let enum_def = match self.resolution.resolution_of_expr(object) {
+                Some(Resolution::Def(id))
+                    if matches!(
+                        self.resolution.defs.get(&id).map(|i| &i.kind),
+                        Some(DefKind::Enum)
+                    ) =>
+                {
+                    Some(id)
+                }
+                _ => None,
+            };
 
-        match self.resolution.resolution_of_expr(target) {
-            Some(Resolution::Def(id)) => Some(id),
-            Some(Resolution::SelfType(id)) => Some(id),
-            _ => None,
+            let variant_name = match field.kind {
+                ExpressionKind::Ident { name, .. } => Some(name),
+                _ => None,
+            };
+
+            return (enum_def, variant_name);
+        }
+
+        match self.resolution.resolution_of_expr(expr) {
+            Some(Resolution::Def(id)) => (Some(id), None),
+            Some(Resolution::SelfType(id)) => (Some(id), None),
+            _ => (None, None),
         }
     }
 
@@ -133,6 +149,7 @@ impl<'res> HirLowering<'res> {
 
             "dbg" => HirMacroKind::Dbg,
             "uninit" => HirMacroKind::Uninit,
+            "enumTag" => HirMacroKind::EnumTag,
 
             _ => HirMacroKind::Unknown,
         }
@@ -294,23 +311,70 @@ impl<'res> HirLowering<'res> {
                 name,
                 variants,
                 is_pub,
+                generics,
+                methods,
             } => {
+                let enum_def = def_id.expect("EnumDecl must have DefId, something went wrong");
+
                 let hir_variants: Vec<HirEnumVariant> = variants
                     .iter()
-                    .map(|variant| HirEnumVariant {
-                        def_id: self
+                    .map(|variant| {
+                        let variant_def = self
                             .resolution
                             .def_of_variant(variant)
-                            .unwrap_or(DefId(u32::MAX)),
-                        name: variant.name,
-                        span: variant.span,
+                            .unwrap_or(DefId(u32::MAX));
+
+                        let payload = variant.payload.map(|payload| match payload {
+                            EnumVariantPayload::Single(ty) => {
+                                HirEnumVariantPayload::Single(Rc::new(self.lower_type(ty)))
+                            }
+
+                            EnumVariantPayload::Anonymous(fields) => {
+                                let payload_def = self
+                                    .resolution
+                                    .def_of_enum_payload_struct(variant_def)
+                                    .unwrap_or(enum_def);
+
+                                let hir_fields: Vec<HirField> = fields
+                                    .iter()
+                                    .map(|field| HirField {
+                                        def_id: self
+                                            .resolution
+                                            .def_of_field(field)
+                                            .unwrap_or(payload_def),
+                                        name: field.name,
+                                        ty: Rc::new(self.lower_type(field.ty)),
+                                        is_pub: true,
+                                    })
+                                    .collect();
+
+                                HirEnumVariantPayload::Anonymous {
+                                    def_id: payload_def,
+                                    fields: hir_fields,
+                                }
+                            }
+                        });
+
+                        HirEnumVariant {
+                            def_id: variant_def,
+                            name: variant.name,
+                            span: variant.span,
+                            payload,
+                        }
                     })
+                    .collect();
+
+                let hir_methods: Vec<Rc<HirDecl>> = methods
+                    .iter()
+                    .filter_map(|method| self.lower_decl_as_method(method, Some(enum_def)))
                     .collect();
 
                 HirDeclKind::Enum(Rc::new(HirEnum {
                     name,
                     is_pub,
+                    generics: self.lower_generics(generics),
                     variants: hir_variants,
+                    methods: hir_methods,
                 }))
             }
 
@@ -590,14 +654,34 @@ impl<'res> HirLowering<'res> {
             },
 
             ExpressionKind::Call { callee, args } => {
-                // Explicit generic args may sit on the callee ident
-                // (`make#[T](...)`) or on the field of a method access
-                // (`Type.make#[T](...)`).
                 let callee_args: Option<&[&zeen_ast::TypeExpr<'_>]> = match callee.kind {
                     ExpressionKind::Ident { generic_args, .. } => generic_args,
-                    ExpressionKind::FieldAccess { field, .. } => match field.kind {
-                        ExpressionKind::Ident { generic_args, .. } => generic_args,
-                        _ => None,
+                    ExpressionKind::FieldAccess { object, field } => match field.kind {
+                        ExpressionKind::Ident {
+                            generic_args: Some(field_args),
+                            ..
+                        } if !field_args.is_empty() => Some(field_args),
+                        // `Type#[T].assoc(...)`: the object names a type whose
+                        // instantiation the call needs.
+                        _ => match object.kind {
+                            ExpressionKind::Ident {
+                                generic_args: Some(object_args),
+                                ..
+                            } if !object_args.is_empty()
+                                && self.resolution.resolution_of_expr(object).is_some_and(
+                                    |r| {
+                                        matches!(r, Resolution::Def(id)
+                                        if matches!(
+                                            self.resolution.defs.get(&id).map(|i| &i.kind),
+                                            Some(DefKind::Struct) | Some(DefKind::Enum)
+                                        ))
+                                    },
+                                ) =>
+                            {
+                                Some(object_args)
+                            }
+                            _ => None,
+                        },
                     },
                     _ => None,
                 };
@@ -669,7 +753,7 @@ impl<'res> HirLowering<'res> {
             },
 
             ExpressionKind::StructInit { ty, fields } => {
-                let ty_def = self.path_expr_def_id(ty);
+                let (ty_def, variant_name) = self.struct_init_path_def(ty);
 
                 let hir_fields: Vec<HirFieldInit> = fields
                     .map(|fields| {
@@ -687,7 +771,7 @@ impl<'res> HirLowering<'res> {
                 let generic_args = self.generic_args_of_expr(ty);
 
                 HirExprKind::StructInit {
-                    ty: (ty_def, ty.span),
+                    ty: (ty_def, variant_name, ty.span),
                     generic_args,
                     fields: hir_fields,
                 }
@@ -1181,7 +1265,45 @@ mod tests {
 
         for variant in &color.variants {
             assert_ne!(variant.def_id, DefId(u32::MAX));
+            assert!(variant.payload.is_none());
         }
+    }
+
+    #[test]
+    fn enum_lowers_with_payload_variants() {
+        let fx = lower_ok("enum Foo { a, b: i32, c: { inner: i32, hello: u32 } }");
+        let foo = fx.enum_decl("Foo");
+
+        assert_eq!(foo.variants.len(), 3);
+        assert!(foo.variants[0].payload.is_none());
+        assert!(matches!(
+            foo.variants[1].payload,
+            Some(HirEnumVariantPayload::Single(_))
+        ));
+
+        match &foo.variants[2].payload {
+            Some(HirEnumVariantPayload::Anonymous { def_id, fields }) => {
+                assert_ne!(*def_id, DefId(u32::MAX));
+                assert_eq!(fields.len(), 2);
+            }
+            other => panic!("expected Anonymous payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn enum_lowers_generics() {
+        let fx = lower_ok("enum Opt[T: Copy] { none, some: T }");
+        let opt = fx.enum_decl("Opt");
+
+        assert_eq!(opt.generics.len(), 1);
+        assert_ne!(opt.generics[0].def_id, DefId(u32::MAX));
+    }
+
+    #[test]
+    fn enum_lowers_methods() {
+        let fx = lower_ok("enum Foo { a, fn tag(self) u8 { return 0; } }");
+        let foo = fx.enum_decl("Foo");
+        assert_eq!(foo.methods.len(), 1);
     }
 
     #[test]

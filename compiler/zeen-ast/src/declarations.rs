@@ -61,8 +61,11 @@ pub enum DeclarationKind<'arena> {
 
     EnumDecl {
         name: (Spur, SourceSpan),
-        variants: &'arena [EnumVariant],
         is_pub: bool,
+
+        generics: Option<&'arena [GenericType<'arena>]>,
+        variants: &'arena [EnumVariant<'arena>],
+        methods: &'arena [&'arena Declaration<'arena>], // FnDecl
     },
 
     ExternVar {
@@ -94,7 +97,6 @@ pub enum DeclarationKind<'arena> {
     Alias(AliasDecl<'arena>),
 
     /// A declaration block guarded by a target condition (`@os[linux] { ... }`).
-    /// Resolved by the preprocessor: only one branch survives.
     ConditionalBlock(&'arena ConditionalBlock<'arena>),
 }
 
@@ -133,8 +135,6 @@ pub struct DirectiveValue<'arena> {
 }
 
 /// A `@name[values] { body }` guard with an optional `else` branch.
-/// `else_block` is either another `ConditionalBlock` or `None` for a bare else.
-/// A `bare_else` block takes its body unconditionally.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConditionalBlock<'arena> {
     pub directive: PreprocessorDirective,
@@ -179,7 +179,16 @@ pub struct StructField<'arena> {
 // Enum
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct EnumVariant {
+pub enum EnumVariantPayload<'arena> {
+    /// `b: i32` - a single typed value.
+    Single(&'arena TypeExpr<'arena>),
+    /// `c: { fields }` - an anonymous struct payload.
+    Anonymous(&'arena [StructField<'arena>]),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnumVariant<'arena> {
     pub name: Spur,
     pub span: SourceSpan,
+    pub payload: Option<EnumVariantPayload<'arena>>,
 }

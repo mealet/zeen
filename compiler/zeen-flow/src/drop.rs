@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use zeen_mir::{BlockId, LocalId, LocalKind, MirFunction, MirStatement, Place};
 use zeen_resolve::DefId;
 use zeen_typecheck::result::TypeCheckResult;
-use zeen_types::{Type, TypeId, TypeInterner};
+use zeen_types::{Type, TypeId, TypeInterner, VariantPayload};
 
 use crate::state::{FunctionState, LocalState, PartialMoveState, ValueState};
 
@@ -36,7 +36,6 @@ fn type_needs_drop_impl(
         Type::Builtin(_)
         | Type::IntLiteral
         | Type::FloatLiteral
-        | Type::Enum { .. }
         | Type::Pointer { .. }
         | Type::ManyPointer { .. }
         | Type::Fn { .. }
@@ -68,13 +67,35 @@ fn type_needs_drop_impl(
 
         Type::Array { element, .. } => type_needs_drop_impl(interner, typecheck, element, bindings),
 
+        Type::Enum {
+            def_id,
+            generic_args,
+        } => {
+            let Some(info) = typecheck.enum_info.get(&def_id) else {
+                return false;
+            };
+
+            if info.capabalities.has_explicit_drop {
+                return true;
+            }
+
+            let nested = bind_enum_generics(interner, typecheck, &def_id, &generic_args, bindings);
+            info.variants.iter().any(|variant| match variant.payload {
+                None => false,
+                Some(VariantPayload::Single(ty)) | Some(VariantPayload::Struct(ty)) => {
+                    type_needs_drop_impl(interner, typecheck, ty, &nested)
+                }
+            })
+        }
+
         // A slice is a view (`{ ptr, len }`) over someone else's storage: it
         // owns nothing, so it never requires a drop.
         Type::Slice { .. } => false,
 
-        Type::GenericParam(def) => bindings
-            .get(&def)
-            .is_some_and(|&bound| type_needs_drop_impl(interner, typecheck, bound, bindings)),
+        Type::GenericParam(def) => bindings.get(&def).is_some_and(|&bound| {
+            // A parameter bound to itself is still unbound: no drop.
+            bound != ty && type_needs_drop_impl(interner, typecheck, bound, bindings)
+        }),
 
         Type::Interface { .. } | Type::InterfaceSelfPlaceholder(_) => false,
     }
@@ -135,6 +156,9 @@ fn expand_live_drops(
         // per-type drop (a heap env goes back through `free`); values of
         // types without a registered drop function are skipped there.
         Type::FatFn { .. } => out.push(place.clone()),
+        // An enum dies as a whole: the synthesized per-type drop function
+        // switches on the runtime tag and tears down the live payload.
+        Type::Enum { .. } => out.push(place.clone()),
         Type::Array { .. } | Type::Slice { .. } => out.push(place.clone()),
         _ => {}
     }
@@ -213,7 +237,29 @@ fn bind_type_generics(
     let Some(params) = typecheck.struct_generics.get(struct_def) else {
         return bindings.clone();
     };
+    bind_params(interner, params, generic_args, bindings)
+}
 
+/// Same as [`bind_type_generics`], but for an enum's generic parameters.
+fn bind_enum_generics(
+    interner: &TypeInterner,
+    typecheck: &TypeCheckResult,
+    enum_def: &DefId,
+    generic_args: &[TypeId],
+    bindings: &HashMap<DefId, TypeId>,
+) -> HashMap<DefId, TypeId> {
+    let Some(params) = typecheck.enum_generics.get(enum_def) else {
+        return bindings.clone();
+    };
+    bind_params(interner, params, generic_args, bindings)
+}
+
+fn bind_params(
+    interner: &TypeInterner,
+    params: &[DefId],
+    generic_args: &[TypeId],
+    bindings: &HashMap<DefId, TypeId>,
+) -> HashMap<DefId, TypeId> {
     let mut nested = bindings.clone();
     for (param, arg) in params.iter().zip(generic_args.iter().copied()) {
         let resolved = match interner.get(arg) {
@@ -327,7 +373,9 @@ mod tests {
 
     use lasso::Rodeo;
     use zeen_typecheck::result::TypeCheckResult;
-    use zeen_types::{Capabilities, StructFieldInfo, StructTypeInfo};
+    use zeen_types::{
+        Capabilities, EnumTypeInfo, EnumVariantInfo, StructFieldInfo, StructTypeInfo,
+    };
 
     const FOO: DefId = DefId(0);
     const PAIR: DefId = DefId(1);
@@ -476,5 +524,174 @@ mod tests {
         });
 
         assert!(type_needs_drop(&interner, &typecheck, outer));
+    }
+
+    const RES: DefId = DefId(30);
+    const OPT: DefId = DefId(31);
+    const NONE_VARIANT: DefId = DefId(32);
+    const OWNED_VARIANT: DefId = DefId(33);
+    const SOME_VARIANT: DefId = DefId(34);
+
+    /// `Resource { none, owned: Foo }` (Foo has `Drop`) needs a drop through
+    /// its payload; `Opt { none, some: i32 }` does not.
+    fn enum_scene() -> (TypeInterner, TypeCheckResult) {
+        let mut interner = TypeInterner::new();
+        let mut rodeo = Rodeo::default();
+
+        let foo = interner.intern(Type::Struct {
+            def_id: FOO,
+            generic_args: vec![],
+        });
+        let i32 = interner.intern(Type::Builtin(zeen_ast::types::BuiltinType::i32));
+
+        let mut typecheck = TypeCheckResult::default();
+        typecheck.struct_info.insert(
+            FOO,
+            StructTypeInfo {
+                def_id: FOO,
+                fields: vec![],
+                capabalities: Capabilities {
+                    is_copy: false,
+                    has_explicit_drop: true,
+                },
+            },
+        );
+        typecheck.enum_info.insert(
+            RES,
+            EnumTypeInfo {
+                def_id: RES,
+                variants: vec![
+                    EnumVariantInfo {
+                        def_id: NONE_VARIANT,
+                        name: rodeo.get_or_intern("none"),
+                        payload: None,
+                    },
+                    EnumVariantInfo {
+                        def_id: OWNED_VARIANT,
+                        name: rodeo.get_or_intern("owned"),
+                        payload: Some(VariantPayload::Single(foo)),
+                    },
+                ],
+                capabalities: Capabilities::MOVE_ONLY,
+            },
+        );
+        typecheck.enum_info.insert(
+            OPT,
+            EnumTypeInfo {
+                def_id: OPT,
+                variants: vec![
+                    EnumVariantInfo {
+                        def_id: NONE_VARIANT,
+                        name: rodeo.get_or_intern("none"),
+                        payload: None,
+                    },
+                    EnumVariantInfo {
+                        def_id: SOME_VARIANT,
+                        name: rodeo.get_or_intern("some"),
+                        payload: Some(VariantPayload::Single(i32)),
+                    },
+                ],
+                capabalities: Capabilities {
+                    is_copy: true,
+                    has_explicit_drop: false,
+                },
+            },
+        );
+
+        (interner, typecheck)
+    }
+
+    #[test]
+    fn enum_with_drop_payload_needs_drop() {
+        let (mut interner, typecheck) = enum_scene();
+        let res = interner.intern(Type::Enum {
+            def_id: RES,
+            generic_args: vec![],
+        });
+
+        assert!(type_needs_drop(&interner, &typecheck, res));
+    }
+
+    #[test]
+    fn enum_with_copy_payload_needs_no_drop() {
+        let (mut interner, typecheck) = enum_scene();
+        let opt = interner.intern(Type::Enum {
+            def_id: OPT,
+            generic_args: vec![],
+        });
+
+        assert!(!type_needs_drop(&interner, &typecheck, opt));
+    }
+
+    #[test]
+    fn enum_with_explicit_drop_needs_drop() {
+        let (mut interner, mut typecheck) = enum_scene();
+        typecheck
+            .enum_info
+            .get_mut(&OPT)
+            .expect("opt enum present")
+            .capabalities
+            .has_explicit_drop = true;
+        let opt = interner.intern(Type::Enum {
+            def_id: OPT,
+            generic_args: vec![],
+        });
+
+        assert!(type_needs_drop(&interner, &typecheck, opt));
+    }
+
+    #[test]
+    fn generic_enum_resolves_payload_param() {
+        const GEN_OPT: DefId = DefId(40);
+        const GEN_T: DefId = DefId(41);
+        const GEN_SOME: DefId = DefId(42);
+
+        let mut interner = TypeInterner::new();
+        let mut rodeo = Rodeo::default();
+
+        let foo = interner.intern(Type::Struct {
+            def_id: FOO,
+            generic_args: vec![],
+        });
+        let i32 = interner.intern(Type::Builtin(zeen_ast::types::BuiltinType::i32));
+        let t = interner.intern(Type::GenericParam(GEN_T));
+
+        let mut typecheck = TypeCheckResult::default();
+        typecheck.struct_info.insert(
+            FOO,
+            StructTypeInfo {
+                def_id: FOO,
+                fields: vec![],
+                capabalities: Capabilities {
+                    is_copy: false,
+                    has_explicit_drop: true,
+                },
+            },
+        );
+        typecheck.enum_info.insert(
+            GEN_OPT,
+            EnumTypeInfo {
+                def_id: GEN_OPT,
+                variants: vec![EnumVariantInfo {
+                    def_id: GEN_SOME,
+                    name: rodeo.get_or_intern("some"),
+                    payload: Some(VariantPayload::Single(t)),
+                }],
+                capabalities: Capabilities::MOVE_ONLY,
+            },
+        );
+        typecheck.enum_generics.insert(GEN_OPT, vec![GEN_T]);
+
+        let with_foo = interner.intern(Type::Enum {
+            def_id: GEN_OPT,
+            generic_args: vec![foo],
+        });
+        let with_i32 = interner.intern(Type::Enum {
+            def_id: GEN_OPT,
+            generic_args: vec![i32],
+        });
+
+        assert!(type_needs_drop(&interner, &typecheck, with_foo));
+        assert!(!type_needs_drop(&interner, &typecheck, with_i32));
     }
 }

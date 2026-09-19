@@ -180,6 +180,10 @@ impl Fixture {
         self.program.struct_layouts.insert(ty, layout);
     }
 
+    pub fn add_enum_layout(&mut self, ty: TypeId, layout: zeen_mir::EnumLayout) {
+        self.program.enum_layouts.insert(ty, layout);
+    }
+
     pub fn fn_builder(&mut self, name: &str, source_def: DefId, ret_ty: TypeId) -> FnBuilder<'_> {
         FnBuilder {
             fixture: self,
@@ -305,6 +309,10 @@ impl<'f> FnBuilder<'f> {
 
     pub fn discard(&mut self, operand: Operand) {
         self.stmt(MirStatement::Discard(operand));
+    }
+
+    pub fn drop_place(&mut self, place: Place) {
+        self.stmt(MirStatement::Drop(place));
     }
 
     pub fn ret(&mut self, operand: Operand) {
@@ -460,6 +468,10 @@ pub fn place(local: LocalId) -> Place {
 
 pub fn copy_of(local: LocalId) -> Operand {
     Operand::Copy(Place::from_local(local), None)
+}
+
+pub fn copy_of_place(place: Place) -> Operand {
+    Operand::Copy(place, None)
 }
 
 pub fn move_of(local: LocalId) -> Operand {

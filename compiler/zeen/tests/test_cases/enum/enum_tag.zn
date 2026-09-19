@@ -1,0 +1,23 @@
+enum Color {
+  red,
+  green,
+  blue,
+}
+
+enum Shape {
+  dot,
+  rect: i32,
+}
+
+fn main() {
+  @println("red: {}", @enumTag(Color.red));
+  @println("green: {}", @enumTag(Color.green));
+  @println("blue: {}", @enumTag(Color.blue));
+
+  let s = Shape.rect(7);
+  @println("rect: {}", @enumTag(s));
+  @println("dot: {}", @enumTag(Shape.dot));
+
+  let back = @as(Color, 2);
+  @println("back: {} {}", back, @enumTag(back));
+}

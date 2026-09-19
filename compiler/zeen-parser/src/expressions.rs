@@ -399,7 +399,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         match &token.kind {
             TokenKind::Literal { kind } => self.parse_literal(*kind),
 
-            // --> keywords
             TokenKind::Keyword(CompilerKeyword::Null) => {
                 // `null` literal is not included in `parse_literal` functions, but it is
                 // written with the same rule: don't move cursor.
@@ -425,7 +424,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 self.parse_ident_or_struct_init()
             }
 
-            // <-- keywords
             TokenKind::Ident => self.parse_ident_or_struct_init(),
             TokenKind::MacroIdent => self.parse_macro_call(),
             TokenKind::PreprocessorVar => self.parse_target_var(),
@@ -694,7 +692,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 match chars.next() {
                     Some((_, next_chr)) => {
                         let escaped = character_escape(next_chr).unwrap_or_else(|| {
-                            // TOKEN_OFFSET + 1 (for dquote) + inner offset
                             let error_offset = span.offset() + 1 + pos;
 
                             self.p.report(ParserError::InvalidCharacterEscape {
@@ -709,7 +706,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                     }
 
                     None => {
-                        // TOKEN_OFFSET + 1 (for dquote) + inner offset
                         let error_offset = span.offset() + 1 + pos;
 
                         self.p.report(ParserError::InvalidCharacterEscape {
@@ -897,7 +893,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
     pub fn parse_grouped(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let _ = self.p.expect(TokenKind::OpenParen, "(")?;
-        // debug_assert!(self.p.at(TokenKind::OpenParen));
 
         let expr = self.parse();
         let _ = self.p.expect(TokenKind::CloseParen, ")")?;
@@ -1140,9 +1135,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     }
 
     /// Parses an expression-level preprocessor guard: `@os[linux] { expr }`
-    /// followed by an optional `else @os[...] { expr }` / `else { expr }`
-    /// chain. During preprocessing the whole expression is replaced by the
-    /// body of the single matching branch.
+    /// followed by an optional `else` chain.
     fn parse_conditional_expr(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let start_token = self.p.current_clone();
         let start_span = start_token.span;

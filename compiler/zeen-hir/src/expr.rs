@@ -63,7 +63,7 @@ pub enum HirExprKind {
     },
 
     StructInit {
-        ty: (Option<DefId>, SourceSpan),
+        ty: (Option<DefId>, Option<Spur>, SourceSpan),
         generic_args: Vec<Rc<HirTypeExpr>>,
         fields: Vec<HirFieldInit>,
     },
@@ -83,10 +83,7 @@ pub enum HirExprKind {
     },
     Type(Rc<HirTypeExpr>),
 
-    /// Anonymous function expression `fn(params) ret { body }`. `def_id` is the
-    /// synthetic closure function's `DefId`, `def` its lowered `HirFn`. The
-    /// closure's captured environment (`resolution.closure_captures[def_id]`)
-    /// is appended as extra parameters at MIR lowering.
+    /// Anonymous function expression `fn(params) ret { body }`.
     Closure {
         def_id: DefId,
         def: Rc<HirFn>,
@@ -124,8 +121,9 @@ pub enum HirMacroKind {
     Unreachable, // @unreachable() -> never
     Todo,        // @todo() -> never
 
-    Dbg,    // @dbg(expr) -> expr
-    Uninit, // @uninit() -> any
+    Dbg,     // @dbg(expr) -> expr
+    Uninit,  // @uninit() -> any
+    EnumTag, // @enumTag(enum value) -> u8
 
     Unknown, // Unknown macro fallback
 }

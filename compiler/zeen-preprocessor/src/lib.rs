@@ -5,7 +5,9 @@ use lasso::{Rodeo, Spur};
 use miette::SourceSpan;
 use smallvec::SmallVec;
 
-use zeen_ast::declarations::{AliasDecl, FnParam, GenericType, StructField};
+use zeen_ast::declarations::{
+    AliasDecl, EnumVariant, EnumVariantPayload, FnParam, GenericType, StructField,
+};
 use zeen_ast::expressions::Literal;
 use zeen_ast::{
     Declaration, DeclarationKind, DirectiveValue, ExprConditionalBlock, Expression, ExpressionKind,
@@ -182,12 +184,16 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
 
             DeclarationKind::EnumDecl {
                 name,
-                variants,
                 is_pub,
+                generics,
+                variants,
+                methods,
             } => DeclarationKind::EnumDecl {
                 name,
-                variants,
                 is_pub,
+                generics: self.resolve_generics(generics),
+                variants: self.resolve_enum_variants(variants),
+                methods: self.resolve_nested_decls(methods),
             },
 
             DeclarationKind::ExternVar { name, ty, is_pub } => DeclarationKind::ExternVar {
@@ -258,6 +264,25 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 name: f.name,
                 ty: self.resolve_type(f.ty),
                 is_pub: f.is_pub,
+            })
+            .collect();
+        self.alloc_slice(&fixed)
+    }
+
+    fn resolve_enum_variants(&mut self, variants: &'a [EnumVariant<'a>]) -> &'a [EnumVariant<'a>] {
+        let fixed: SmallVec<[EnumVariant<'a>; 4]> = variants
+            .iter()
+            .map(|v| EnumVariant {
+                name: v.name,
+                span: v.span,
+                payload: v.payload.map(|payload| match payload {
+                    EnumVariantPayload::Single(ty) => {
+                        EnumVariantPayload::Single(self.resolve_type(ty))
+                    }
+                    EnumVariantPayload::Anonymous(fields) => {
+                        EnumVariantPayload::Anonymous(self.resolve_fields(fields))
+                    }
+                }),
             })
             .collect();
         self.alloc_slice(&fixed)

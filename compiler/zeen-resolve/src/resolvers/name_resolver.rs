@@ -10,7 +10,7 @@ use std::{
 };
 
 use zeen_ast::{
-    declarations::{Declaration, DeclarationKind, GenericType},
+    declarations::{Declaration, DeclarationKind, EnumVariantPayload, GenericType},
     expressions::{Expression, ExpressionKind},
     statements::{Statement, StatementKind},
     types::{TypeExpr, TypeKind},
@@ -380,7 +380,41 @@ impl<'ctx> NameResolver {
                         },
                     );
 
-                    self.table.declare_value(variant.name, variant_id);
+                    if let Some(EnumVariantPayload::Anonymous(fields)) = variant.payload {
+                        let enum_name = self.interner_resolve(&name.0);
+                        let variant_name = self.interner_resolve(&variant.name);
+                        let struct_id = {
+                            let struct_name_spur = self
+                                .interner
+                                .borrow_mut()
+                                .get_or_intern(format!("{enum_name}.{variant_name}"));
+
+                            self.define(DefInfo {
+                                name: struct_name_spur,
+                                kind: DefKind::Struct,
+                                span: decl.source.clone(),
+                                decl: Some(NodeKey::from_decl(decl)),
+                                is_pub: true,
+                            })
+                        };
+
+                        self.result
+                            .enum_payload_struct_defs
+                            .insert(variant_id, struct_id);
+
+                        for field in fields {
+                            self.define_at(
+                                NodeKey::from_field(field),
+                                DefInfo {
+                                    name: field.name,
+                                    kind: DefKind::Field,
+                                    span: decl.source.clone(),
+                                    decl: Some(NodeKey::from_decl(decl)),
+                                    is_pub: true,
+                                },
+                            );
+                        }
+                    }
                 }
             }
 
@@ -505,6 +539,41 @@ impl<'ctx> NameResolver {
                 self.table.pop();
             }
 
+            DeclarationKind::EnumDecl {
+                name,
+                generics,
+                variants,
+                methods,
+                ..
+            } => {
+                let self_def = self
+                    .table
+                    .lookup_type(name.0)
+                    .expect("enum is not registered in name resolver pass 1");
+
+                self.table.push(ScopeKind::Block);
+                self.declare_generics(generics, &decl.source.src);
+
+                for variant in variants {
+                    if let Some(payload) = variant.payload {
+                        match payload {
+                            EnumVariantPayload::Single(ty) => self.resolve_type(ty),
+                            EnumVariantPayload::Anonymous(fields) => {
+                                for field in fields {
+                                    self.resolve_type(field.ty);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for method in methods {
+                    self.resolve_method(method, self_def);
+                }
+
+                self.table.pop();
+            }
+
             DeclarationKind::InterfaceDecl {
                 generics, methods, ..
             } => {
@@ -614,10 +683,6 @@ impl<'ctx> NameResolver {
                 }
 
                 self.table.pop();
-            }
-
-            DeclarationKind::EnumDecl { .. } => {
-                // nothing to resolve (for now at least)
             }
 
             DeclarationKind::Alias(alias) => {

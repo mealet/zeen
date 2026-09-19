@@ -30,34 +30,25 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
         match self.p.current().kind {
             TokenKind::Type(_) => self.parse_builtin(),
 
-            // ptr type: *T
             TokenKind::Star => self.parse_ptr(),
 
-            // array type: [N]T (fixed) or []T (slice)
             TokenKind::OpenBracket => self.parse_array(),
 
-            // fn type: fn(T, ...) T
             TokenKind::Keyword(token::CompilerKeyword::Fn) => self.parse_fn_type(),
 
-            // fat fn type: Fn(T, ...) T / FnOnce(T, ...) T
             TokenKind::Ident if self.current_ident_is("FnOnce") || self.current_ident_is("Fn") => {
                 self.parse_fat_fn_type()
             }
 
-            // self / Self
             TokenKind::Keyword(token::CompilerKeyword::SelfLower) => self.parse_self_type(),
             TokenKind::Keyword(token::CompilerKeyword::SelfUpper) => self.parse_self_alias(),
 
-            // const: const T
             TokenKind::Keyword(token::CompilerKeyword::Const) => self.parse_const_type(),
 
-            // typeof: typeof <expr>
             TokenKind::Keyword(token::CompilerKeyword::TypeOf) => self.parse_typeof(),
 
-            // named
             TokenKind::Ident => self.parse_named(),
 
-            // va args
             TokenKind::DotDotDot => self.parse_va_args_type(),
 
             TokenKind::Eof => {
@@ -507,7 +498,6 @@ mod tests {
 
         make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
 
-        // i8
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -516,7 +506,6 @@ mod tests {
             }
         );
 
-        // i16
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -525,7 +514,6 @@ mod tests {
             }
         );
 
-        // i32
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -534,7 +522,6 @@ mod tests {
             }
         );
 
-        // i64
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -543,7 +530,6 @@ mod tests {
             }
         );
 
-        // isize
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -552,7 +538,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -562,7 +547,6 @@ mod tests {
 
         make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
 
-        // u8
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -571,7 +555,6 @@ mod tests {
             }
         );
 
-        // u16
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -580,7 +563,6 @@ mod tests {
             }
         );
 
-        // u32
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -589,7 +571,6 @@ mod tests {
             }
         );
 
-        // u64
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -598,7 +579,6 @@ mod tests {
             }
         );
 
-        // usize
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -607,7 +587,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -617,7 +596,6 @@ mod tests {
 
         make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
 
-        // f32
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -626,7 +604,6 @@ mod tests {
             }
         );
 
-        // f64
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -635,7 +612,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -645,7 +621,6 @@ mod tests {
 
         make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
 
-        // bool
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -654,7 +629,6 @@ mod tests {
             }
         );
 
-        // char
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -663,7 +637,6 @@ mod tests {
             }
         );
 
-        // void
         assert_eq!(
             type_parser.parse().unwrap(),
             &TypeExpr {
@@ -672,7 +645,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -693,7 +665,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -720,7 +691,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -749,7 +719,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -773,7 +742,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -807,7 +775,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -838,7 +805,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -900,7 +866,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -918,7 +883,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -936,7 +900,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -957,7 +920,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -978,7 +940,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -1008,7 +969,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -1042,7 +1002,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 
@@ -1073,7 +1032,6 @@ mod tests {
             }
         );
 
-        // eof
         assert_eq!(type_parser.parse(), None);
     }
 }

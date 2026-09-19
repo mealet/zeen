@@ -95,18 +95,14 @@ pub fn parse_format_string(input: &str) -> Result<Vec<FormatChunk>, FormatParseE
 
 fn parse_spec(inner: &str, offset: usize) -> Result<FormatSpec, FormatParseError> {
     match inner {
-        // `{}`
         "" => Ok(FormatSpec::Display),
 
-        // `{:?}`
         ":?" => Ok(FormatSpec::Debug),
 
-        // `{hex}`, `{oct}`, `{bin}`
         "hex" => Ok(FormatSpec::Hex),
         "oct" => Ok(FormatSpec::Oct),
         "bin" => Ok(FormatSpec::Bin),
 
-        // `{:.N}`
         s if s.starts_with(":.") => {
             let digits = &s[2..];
 
@@ -135,8 +131,6 @@ pub fn arg_specs(chunks: &[FormatChunk]) -> Vec<FormatSpec> {
         })
         .collect()
 }
-
-// WARNING: Don't blame me, but these tests are written by AI, just to save time, I'm so sorry!
 
 #[cfg(test)]
 mod tests {
