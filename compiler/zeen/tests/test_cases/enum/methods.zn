@@ -1,0 +1,25 @@
+enum Counter {
+  zero,
+  count: i32,
+
+  fn bump(*const self) i32 {
+    1
+  }
+
+  pub fn next(*const self) i32 {
+    self.bump() + @as(i32, @enumTag(self))
+  }
+
+  pub fn value(self) i32 {
+    self.count
+  }
+}
+
+fn main() {
+  let z = Counter.zero;
+  @println("zero next: {}", z.next());
+
+  let c = Counter.count(41);
+  @println("count next: {}", c.next());
+  @println("value: {}", c.value());
+}
