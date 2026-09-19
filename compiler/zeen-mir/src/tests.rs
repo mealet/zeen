@@ -1810,3 +1810,35 @@ fn enum_slice_payload_registers_slice_layout() {
         "a slice enum payload must register its `{{ ptr, len }}` layout"
     );
 }
+
+#[test]
+fn enum_method_call_on_variant_constant_lowres() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b, c, pub fn get_tag(*const self) u8 { @enumTag(self) } } \
+         fn main() { @println(\"{}\", Foo.a.get_tag()); }",
+    );
+
+    let main = mir
+        .program
+        .functions
+        .iter()
+        .find(|(id, _)| {
+            mir.program
+                .function_names
+                .get(id)
+                .is_some_and(|n| n == "main")
+        })
+        .map(|(_, f)| f)
+        .expect("main must exist");
+
+    assert!(
+        main.blocks.iter().any(|b| matches!(
+            b.terminator,
+            crate::Terminator::Call {
+                func: crate::CallTarget::Direct(_),
+                ..
+            }
+        )),
+        "a method call on an enum constant must lower to a direct call"
+    );
+}

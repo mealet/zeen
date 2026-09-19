@@ -4304,6 +4304,29 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::FieldAccess { object, .. } => {
+                // Enum variant construction (`Foo.a`) is a value, not a
+                // place: materialize it into a temp (e.g. a method receiver
+                // on a constant).
+                if let HirExprKind::VarRef(enum_def) = &object.kind
+                    && matches!(
+                        self.resolution.defs.get(enum_def).map(|info| &info.kind),
+                        Some(DefKind::Enum)
+                    )
+                {
+                    let ty = self.expr_type(fb, expr);
+                    let (block, operand) = self.lower_expr_to_operand(fb, expr, block);
+                    let temp = fb.new_temp(ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Use(operand),
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    return (block, Place::from_local(temp));
+                }
+
                 let field_def = *self
                     .typecheck
                     .field_resolutions
