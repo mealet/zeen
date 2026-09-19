@@ -647,13 +647,13 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("cannot extract non-Copy payload from `{name}` (move out of variant)")]
+    #[error("cannot move out of variant of `{name}`: enum implements `Drop`")]
     #[diagnostic(
         severity(Error),
-        code(zeen::typecheck::enum_extract_not_copy),
-        help("implement Copy on the payload type, or read individual Copy fields")
+        code(zeen::typecheck::enum_extract_from_drop),
+        help("dropping the partial value would bypass the implementation's `drop`")
     )]
-    EnumExtractNotCopy {
+    EnumExtractFromDrop {
         name: SmolStr,
 
         #[source_code]

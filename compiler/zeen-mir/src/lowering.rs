@@ -3857,18 +3857,17 @@ impl<'ctx> MirLowering<'ctx> {
                     match &callee.kind {
                         HirExprKind::FieldAccess { object, .. } => {
                             let recv_ty = self.expr_type(fb, object);
-                            let recv_target =
-                                match self.typecheck.interner.get(recv_ty).clone() {
-                                    Type::Struct {
-                                        def_id: struct_def,
-                                        generic_args: recv_args,
-                                    }
-                                    | Type::Enum {
-                                        def_id: struct_def,
-                                        generic_args: recv_args,
-                                    } => Some((struct_def, recv_args)),
-                                    _ => None,
-                                };
+                            let recv_target = match self.typecheck.interner.get(recv_ty).clone() {
+                                Type::Struct {
+                                    def_id: struct_def,
+                                    generic_args: recv_args,
+                                }
+                                | Type::Enum {
+                                    def_id: struct_def,
+                                    generic_args: recv_args,
+                                } => Some((struct_def, recv_args)),
+                                _ => None,
+                            };
                             if let Some((struct_def, recv_args)) = recv_target {
                                 let iface_def =
                                     self.typecheck.interface_method_owners.get(&fn_def).copied();
@@ -4067,8 +4066,7 @@ impl<'ctx> MirLowering<'ctx> {
                 }
 
                 HirMacroKind::EnumTag => {
-                    let (block, value_operand) =
-                        self.lower_expr_to_operand(fb, &args[0], block);
+                    let (block, value_operand) = self.lower_expr_to_operand(fb, &args[0], block);
 
                     // An empty-variant constant already is its tag.
                     if matches!(value_operand, Operand::Constant(_, _)) {

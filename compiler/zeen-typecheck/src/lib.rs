@@ -4870,8 +4870,18 @@ impl<'res> TypeChecker<'res> {
             }
         };
 
-        if !self.type_is_copy(payload_ty) {
-            self.report(TypeError::EnumExtractNotCopy {
+        // Moving a payload out of an enum with an explicit `Drop`
+        // implementation is forbidden: the tag-dispatched drop would run
+        // on a partial value. Any other non-Copy payload moves out like a
+        // struct field move (the whole enum is consumed).
+        if !self.type_is_copy(payload_ty)
+            && self
+                .result
+                .enum_info
+                .get(&enum_def)
+                .is_some_and(|info| info.capabalities.has_explicit_drop)
+        {
+            self.report(TypeError::EnumExtractFromDrop {
                 name: self.display_type(enum_ty).into(),
                 src: source.src(),
                 span: field_span,
@@ -5649,9 +5659,7 @@ impl<'res> TypeChecker<'res> {
                 def_id,
                 generic_args,
             } => match self.def_name(iface_def) {
-                Some(name)
-                    if Self::enum_interface_names().contains(&name.as_str()) =>
-                {
+                Some(name) if Self::enum_interface_names().contains(&name.as_str()) => {
                     !self.enum_has_payloads(def_id)
                 }
                 _ => self
@@ -9478,28 +9486,20 @@ mod tests {
     }
 
     #[test]
-    fn enum_extraction_rejects_empty_and_non_copy() {
+    fn enum_extraction_rejects_empty() {
         let errors = typecheck(
             r#"
-            interface Copy {}
-            interface Drop {}
-            struct NoCopy {
-                x: i32,
-            }
-            implement Drop : NoCopy {}
             enum Foo {
                 a,
-                b: NoCopy,
+                b: i32,
             }
             fn main() {
                 let e0 = Foo.a;
                 let empty = e0.a;
-                let e1 = Foo.b(NoCopy { .x = 1 });
-                let moved = e1.b;
             }
             "#,
         )
-        .expect_err("extraction of empty or non-copy payload must be rejected");
+        .expect_err("extraction from an empty variant must be rejected");
 
         assert!(
             errors
@@ -9507,11 +9507,55 @@ mod tests {
                 .any(|err| matches!(err, TypeError::EnumExtractEmpty { .. })),
             "expected EnumExtractEmpty, got: {errors:?}"
         );
+    }
+
+    #[test]
+    fn enum_extraction_moves_non_copy_payload() {
+        typecheck(
+            r#"
+            struct NoCopy {
+                pub x: i32,
+            }
+            enum Foo {
+                a,
+                b: NoCopy,
+            }
+            fn main() {
+                let e1 = Foo.b(NoCopy { .x = 1 });
+                let moved = e1.b;
+                let _ = moved.x;
+            }
+            "#,
+        )
+        .expect("moving a non-Copy payload out of an owned enum must typecheck");
+    }
+
+    #[test]
+    fn enum_extraction_rejects_explicit_drop() {
+        let errors = typecheck(
+            r#"
+            interface Drop {}
+            struct NoCopy {
+                x: i32,
+            }
+            enum Foo {
+                a,
+                b: NoCopy,
+            }
+            implement Drop : Foo {}
+            fn main() {
+                let e1 = Foo.b(NoCopy { .x = 1 });
+                let moved = e1.b;
+            }
+            "#,
+        )
+        .expect_err("extraction from a Drop enum must be rejected");
+
         assert!(
             errors
                 .iter()
-                .any(|err| matches!(err, TypeError::EnumExtractNotCopy { .. })),
-            "expected EnumExtractNotCopy, got: {errors:?}"
+                .any(|err| matches!(err, TypeError::EnumExtractFromDrop { .. })),
+            "expected EnumExtractFromDrop, got: {errors:?}"
         );
     }
 
