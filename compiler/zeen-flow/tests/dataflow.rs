@@ -1935,3 +1935,40 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn moved_enum_payload_forbids_enum_reuse() {
+    let errors = flow_err(
+        r#"
+struct Handle { pub h: i32 }
+enum E { none, h: Handle }
+fn main() {
+    let e = E.h(Handle { .h = 1 });
+    let v = e.h;
+    let w = e.h;
+}
+"#,
+    );
+    assert!(!errors.is_empty());
+}
+
+#[test]
+fn moved_enum_payload_skips_enum_drop() {
+    let labels = main_stmt_labels(
+        r#"
+struct Handle { pub h: i32 }
+enum E { none, h: Handle }
+fn main() {
+    let e = E.h(Handle { .h = 1 });
+    let v = e.h;
+    let _ = v.h;
+}
+"#,
+    );
+
+    let (drops, _) = drop_and_live_ids(&labels);
+    assert!(
+        drops.is_empty(),
+        "the consumed enum must not drop: {labels:?}"
+    );
+}
