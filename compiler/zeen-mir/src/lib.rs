@@ -40,9 +40,8 @@ pub struct MirProgram {
     pub struct_layouts: HashMap<TypeId, StructLayout>,
     pub enum_layouts: HashMap<TypeId, EnumLayout>,
 
-    /// Maps a concrete struct `TypeId` that implements `Drop` to the
-    /// monomorphized drop function that codegen must call to drop a value of
-    /// that type.
+    /// Maps a concrete `TypeId` with a `Drop` impl to its monomorphized
+    /// drop function.
     pub drop_functions: HashMap<TypeId, MirFunctionId>,
 
     pub extern_fns: Vec<ExternFnDecl>,
@@ -113,8 +112,7 @@ pub struct MirFunction {
     pub entry_block: BlockId,
     pub ret_ty: TypeId,
 
-    /// Whether this function is the generated `drop` implementation of a
-    /// struct, produced by [`lowering::register_drop_functions`]. Its `self`
+    /// Whether this function is a generated `drop` implementation. Its `self`
     /// parameter must not get an automatic scope-exit drop.
     pub is_drop_impl: bool,
 }
@@ -187,15 +185,13 @@ pub enum MirStatement {
     Assign {
         place: Place,
         rvalue: Rvalue,
-        /// Source of the expression that produced this statement, used for
-        /// diagnostics on reads of the operands.
+        /// Source of the produced expression, for diagnostics on reads.
         source: Option<Source>,
     },
     Drop(Place),
 
-    /// Evaluates an operand and throws the value away, e.g. `let _ = expr;`.
-    /// The operand is still consumed (moves are recorded), but no local is
-    /// allocated and nothing is stored.
+    /// Evaluates an operand and throws the value away (`let _ = expr`).
+    /// Moves are still recorded.
     Discard(Operand),
 
     StorageLive(LocalId),
@@ -342,7 +338,7 @@ pub enum Terminator {
         args: Vec<Operand>,
         destination: Place,
         target: Option<BlockId>,
-        /// Source of the call expression, used for diagnostics on arg reads.
+        /// Source of the call expression, for diagnostics on reads.
         source: Option<Source>,
     },
 
@@ -350,12 +346,11 @@ pub enum Terminator {
         kind: HirMacroKind,
         format_chunks: Option<Vec<FormatChunk>>,
         args: Vec<Operand>,
-        /// Types of the macro arguments, needed by codegen to pick the right
-        /// rendering for format args (e.g. enum variant names).
+        /// Types of the macro arguments, for format-arg rendering.
         arg_types: Vec<TypeId>,
         destination: Place,
         target: Option<BlockId>,
-        /// Source of the macro call expression, used for diagnostics on arg reads.
+        /// Source of the macro call expression, for diagnostics on reads.
         source: Option<Source>,
     },
 

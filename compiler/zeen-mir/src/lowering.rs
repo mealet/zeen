@@ -1789,9 +1789,8 @@ impl<'ctx> MirLowering<'ctx> {
             | Type::Never
             | Type::Error => true,
 
-            // `Fn` closure values (all-Copy captures or none) are Copy: the
-            // inline environment is duplicated with the value. `FnOnce` owns
-            // a non-Copy capture, so it is move-only.
+            // `Fn` with all-Copy captures is Copy; owning a non-Copy
+            // capture makes `FnOnce` move-only.
             Type::FatFn { .. } => self.typecheck.is_copy(ty),
 
             Type::Struct { .. } | Type::Enum { .. } | Type::Array { .. } => {
@@ -2940,9 +2939,7 @@ impl<'ctx> MirLowering<'ctx> {
                         Some(DefKind::Function)
                     )
                 {
-                    // A static function coerced into a fat slot becomes a
-                    // closure value with an empty env: calls go through
-                    // a shared adapter into the function.
+                    // A static function in a fat slot gets an empty env.
                     if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
                         let mir_f = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
                         return self.build_fat_envelope(fb, block, expr_ty, *def_id, mir_f, expr);
@@ -2960,10 +2957,8 @@ impl<'ctx> MirLowering<'ctx> {
                 });
                 let ty = self.place_type(fb, &place);
 
-                // A basic fn value read from a variable coerces into a fat
-                // slot at runtime: box the pointer into a heap fat
-                // envelope (env = null) and dispatch through the
-                // shared pointer adapter.
+                // A basic fn value in a fat slot is boxed into a heap
+                // envelope with a null env.
                 if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. })
                     && !matches!(self.typecheck.interner.get(ty), Type::FatFn { .. })
                 {
@@ -3077,10 +3072,7 @@ impl<'ctx> MirLowering<'ctx> {
                 if let Some(cmp) = op_res.ordering_cmp {
                     let mut op_res = op_res;
 
-                    // A bounded generic receiver resolves its interface
-                    // method to the concrete implementation here; a
-                    // builtin instantiation has no `Ord` impl and falls
-                    // back to comparing the values directly.
+                    // Builtin instantiations have no `Ord` impl: compare directly.
                     if self
                         .typecheck
                         .interface_method_owners
@@ -3139,9 +3131,7 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let mut op_res = op_res;
 
-                // A bounded generic receiver resolves its interface method to
-                // the concrete implementation here; a builtin or non-struct
-                // receiver has no impl and falls back to the raw operator.
+                // Builtin and non-struct receivers fall back to raw operators.
                 let dispatch = !self
                     .typecheck
                     .interface_method_owners
@@ -3198,18 +3188,14 @@ impl<'ctx> MirLowering<'ctx> {
                     _ => false,
                 };
 
-                // Type of the pointee. Use the pointer's own inner type so a
-                // literal operand is pinned to the concrete pointee (`&123`
-                // in a `*i64` context materializes an `i64` temp, not an `i32`
-                // defaulted one).
+                // Pin literals to the pointer's inner type (`&123` in a
+                // `*i64` context makes an `i64` temp).
                 let inner_ty = match self.typecheck.interner.get(result_ty).clone() {
                     Type::Pointer { inner, .. } => inner,
                     _ => self.expr_type(fb, inner),
                 };
 
-                // `&` needs a place to point at. When the operand is not an
-                // lvalue (e.g. `&123`, `&(a + b)`), materialize it into a temp
-                // local first so we can take its address instead of panicking.
+                // Non-lvalue operands materialize into a temp first.
                 let (block, inner_place) = if self.expr_is_place(inner) {
                     self.lower_expr_to_place(fb, inner, block)
                 } else {
@@ -3248,10 +3234,7 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Unary { expr: inner, op } => {
                 if let Some(mut op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned()
                 {
-                    // A bounded generic receiver resolves its interface method
-                    // to the concrete implementation here; a builtin or
-                    // non-struct receiver has no impl and falls through to the
-                    // raw operator below.
+                    // Builtin and non-struct receivers use the raw operator.
                     let dispatch = !self
                         .typecheck
                         .interface_method_owners
@@ -3304,7 +3287,6 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
-                // Native range slicing on arrays and slices: `arr[a..b]`.
                 if let HirExprKind::Range {
                     start,
                     end,
@@ -3394,8 +3376,7 @@ impl<'ctx> MirLowering<'ctx> {
                     .expect("Option must have an `_is_some` field");
                 drop(rodeo);
 
-                // Builds an `Option[usize]` aggregate from a lowered operand;
-                // `is_some == false` stores a dummy value that is never read.
+                // `None` stores a dummy value that is never read.
                 let mut build_option =
                     |fb: &mut FnBuilder,
                      block: BlockId,
@@ -3502,17 +3483,14 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::FieldAccess { object, field } => {
-                // C-like enum variant access, e.g. `Color.Red`: the whole
-                // expression is just a constant, not a real place.
+                // Enum variant access (`Color.Red`) is a constant, not a place.
                 if let HirExprKind::VarRef(enum_def) = &object.kind
                     && matches!(
                         self.resolution.defs.get(enum_def).map(|info| &info.kind),
                         Some(DefKind::Enum)
                     )
                 {
-                    // Empty variant construction: an empty-only enum stays a
-                    // bare tag constant; a payload enum builds a tagged
-                    // aggregate for the empty variant too.
+                    // Empty-only enums stay a bare tag constant.
                     let variant_def = self.field_resolution(expr.id);
                     let index = self
                         .typecheck
@@ -3563,15 +3541,20 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
-                // Payload extraction `e.variant` on an enum value: a projected
-                // union read with a Debug-only tag check that panics when the
-                // active variant differs.
+                // Payload extraction `e.variant`: a union read with a
+                // Debug-only tag check. Pointers deref inside the reader.
                 let obj_ty = self.expr_type(fb, object);
-                if let Type::Enum {
-                    def_id: enum_def,
-                    generic_args,
-                } = self.typecheck.interner.get(obj_ty).clone()
-                {
+                let enum_target = match self.typecheck.interner.get(obj_ty).clone() {
+                    Type::Enum { def_id, generic_args } => Some((def_id, generic_args)),
+                    Type::Pointer { inner, .. } => {
+                        match self.typecheck.interner.get(inner).clone() {
+                            Type::Enum { def_id, generic_args } => Some((def_id, generic_args)),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some((enum_def, generic_args)) = enum_target {
                     let variant_def = self.field_resolution(expr.id);
                     return self.lower_enum_payload_read(
                         fb,
@@ -3584,29 +3567,7 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
-                // Same through a pointer (`self.variant` where `self: *Foo`):
-                // the reader derefs explicitly and keeps the tag check.
-                if let Type::Pointer { inner, .. } = self.typecheck.interner.get(obj_ty).clone()
-                    && let Type::Enum {
-                        def_id: enum_def,
-                        generic_args,
-                    } = self.typecheck.interner.get(inner).clone()
-                {
-                    let variant_def = self.field_resolution(expr.id);
-                    return self.lower_enum_payload_read(
-                        fb,
-                        object,
-                        enum_def,
-                        &generic_args,
-                        variant_def,
-                        block,
-                        &expr.source,
-                    );
-                }
-
-                // `arr.len` on a fixed array is a compile-time constant: arrays
-                // carry no runtime length field, so lower it to a constant
-                // instead of projecting into storage.
+                // `arr.len` on a fixed array is a compile-time constant.
                 if let Type::Array { len: Some(len), .. } =
                     self.typecheck.interner.get(obj_ty).clone()
                     && self.rodeo.borrow().resolve(&field.0) == "len"
@@ -3817,10 +3778,8 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Call { callee, args, .. } => {
                 let call_id = expr.id;
 
-                // Enum single-value construction `Foo.b(123)`: the surface
-                // shape is a call whose callee is a field access on the enum,
-                // and the typechecker routed it through `field_resolutions`
-                // (no `call_resolutions` entry).
+                // Enum single-value construction `Foo.b(123)` routes through
+                // `field_resolutions`.
                 if let HirExprKind::FieldAccess { object, .. } = &callee.kind
                     && let HirExprKind::VarRef(enum_def) = &object.kind
                     && matches!(
@@ -3848,9 +3807,8 @@ impl<'ctx> MirLowering<'ctx> {
                 let raw_args = resolution.generic_args.clone();
                 let generic_args = self.substitute_generic_args(fb, &raw_args);
 
-                // A call made on a bounded generic parameter records the
-                // interface method (bodyless) as the callee; resolve it to the
-                // concrete implementation once the receiver is monomorphized.
+                // Calls on bounded generics resolve to the concrete impl
+                // once the receiver is monomorphized.
                 let (fn_def, generic_args) = if self
                     .typecheck
                     .interface_method_owners
@@ -3913,9 +3871,8 @@ impl<'ctx> MirLowering<'ctx> {
                 };
                 let has_self_param = param_count == args.len() + 1;
 
-                // `Fn`/`FnOnce`-typed parameters are erased in the signature:
-                // this call instantiates the callee with the concrete closure
-                // type of every fat argument, in fat-parameter order.
+                // Erased `Fn`/`FnOnce` params instantiate per concrete
+                // fat argument, in parameter order.
                 let declared_params: Vec<TypeId> = match self.typecheck.interner.get(method_ty) {
                     Type::Fn { params, .. } => params.clone(),
                     _ => Vec::new(),
@@ -3997,7 +3954,6 @@ impl<'ctx> MirLowering<'ctx> {
                     );
 
                     let next_block = fb.new_block();
-                    // fb.set_terminator(next_block, Terminator::Unreachable);
                     (next_block, Operand::Constant(ConstValue::Void, None))
                 } else {
                     (
@@ -4217,15 +4173,11 @@ impl<'ctx> MirLowering<'ctx> {
                 let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
 
                 match self.typecheck.interner.get(closure_ty).clone() {
-                    // Zero-capture closure: a plain `fn` pointer.
                     Type::Fn { .. } => (
                         block,
                         Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
                     ),
 
-                    // Fat closure: the value is a `{ fn, env }` envelope whose
-                    // env is the captured values in a heap block; calls
-                    // dispatch through `fn`.
                     Type::FatFn { .. } => {
                         self.build_fat_envelope(fb, block, closure_ty, *def_id, mir_id, expr)
                     }
@@ -4301,13 +4253,11 @@ impl<'ctx> MirLowering<'ctx> {
                     .typecheck
                     .field_resolutions
                     .get(&expr.id)
-                    .expect("unresolved shit");
+                    .expect("unresolved field");
                 let obj_ty = self.expr_type(fb, object);
                 let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
 
-                // Payload extraction used as an lvalue base (`e.c.inner`): the
-                // object is the enum projection, then the sibling field access
-                // projects through the payload struct.
+                // Enum payload as an lvalue base (`e.c.inner`).
                 if let Type::Enum { def_id, .. } = self.typecheck.interner.get(obj_ty).clone() {
                     return (block, obj_place.enum_payload(field_def));
                 }
@@ -4317,9 +4267,7 @@ impl<'ctx> MirLowering<'ctx> {
                     return (block, obj_place.deref().enum_payload(field_def));
                 }
 
-                // Field access through a pointer auto-derefs (`sf.x` where
-                // `sf: *Foo`): the typechecker allows it, so insert the deref
-                // projection explicitly instead of projecting into the pointer.
+                // Pointer field access inserts an explicit deref.
                 let place = if matches!(self.typecheck.interner.get(obj_ty), Type::Pointer { .. }) {
                     obj_place.deref().field(field_def)
                 } else {
@@ -4330,9 +4278,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::SliceAccess { object, index } => {
-                // A native range slice yields a fresh slice value, never a
-                // place into the object: materialize it into a temp. Struct
-                // `Sliceable` dispatches stay on the method-call path below.
+                // A native range slice materializes into a temp.
                 if let HirExprKind::Range {
                     start,
                     end,
@@ -4354,11 +4300,8 @@ impl<'ctx> MirLowering<'ctx> {
                     return (block, Place::from_local(temp));
                 }
 
-                // An access through a struct's `Index`/`IndexPtr` interface
-                // dispatches to the method instead of indexing native storage.
-                // An `IndexPtr` result (`ref[i] = v` in an assign) is a pointer
-                // into the struct, so the place keeps dereferencing it; an
-                // `Index` result is the value itself.
+                // `Index`/`IndexPtr` access dispatches to the method.
+                // `IndexPtr` results keep dereferencing; `Index` is the value.
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let result_ty = self.expr_type(fb, expr);
                     let is_pointer = self
