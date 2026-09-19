@@ -64,19 +64,14 @@ pub enum StatementKind<'arena> {
     TrailingExpr(&'arena Expression<'arena>), // tech node, converts to Expr
 
     /// Nested function declaration (`fn foo() { .. }` inside a function body).
-    /// Only visible from the enclosing function; MIR lowers it as a standalone
-    /// function named `<parent>-><name>`.
+    /// Only visible from the enclosing function.
     FnDecl(&'arena Declaration<'arena>),
 
     /// A statement block guarded by a target condition (`@os[linux] { stmt; }`).
-    /// Resolved by the preprocessor: the whole statement is replaced by the
-    /// statements of the single matching branch.
     ConditionalBlock(&'arena StmtConditionalBlock<'arena>),
 }
 
 /// A `@name[values] { stmts }` guard at statement level with an optional `else`.
-/// `else_block` is either another statement conditional (else-if) or a bare-else
-/// statement holding the fallback statements.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct StmtConditionalBlock<'arena> {
     pub directive: PreprocessorDirective,

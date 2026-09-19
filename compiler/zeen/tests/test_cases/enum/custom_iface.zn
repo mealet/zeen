@@ -1,0 +1,27 @@
+interface Describe {
+  pub fn label() []const char;
+  pub fn kind(*const self) []const char;
+}
+
+enum Shape {
+  dot,
+  rect: i32,
+}
+
+implement Describe : Shape {
+  fn label() []const char {
+    "shape"
+  }
+
+  fn kind(*const self) []const char {
+    "enum"
+  }
+}
+
+fn main() {
+  let s = Shape.rect(5);
+  @println("{} {}", Shape.label(), s.kind());
+
+  let d = Shape.dot;
+  @println("{} {}", Shape.label(), d.kind());
+}

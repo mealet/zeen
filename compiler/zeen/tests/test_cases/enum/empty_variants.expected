@@ -1,0 +1,6 @@
+r: red
+g: Color.green
+r == r: true
+r == g: false
+r != b: true
+g == b: false

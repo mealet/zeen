@@ -635,6 +635,155 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("cannot extract value from empty variant `{variant}` of `{name}`")]
+    #[diagnostic(severity(Error), code(zeen::typecheck::enum_extract_empty))]
+    EnumExtractEmpty {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("cannot move out of variant of `{name}`: enum implements `Drop`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_extract_from_drop),
+        help("dropping the partial value would bypass the implementation's `drop`")
+    )]
+    EnumExtractFromDrop {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("empty variant `{variant}` of `{name}` cannot be constructed with an argument")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_call_on_empty),
+        help("construct empty variants with `{name}.{variant}`")
+    )]
+    EnumCallOnEmpty {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("struct variant `{variant}` of `{name}` requires a struct literal")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_call_on_struct),
+        help("construct struct variants with `{name}.{variant} {{ .field = value }}`")
+    )]
+    EnumCallOnStruct {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("struct literal used to construct non-struct variant `{variant}` of `{name}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_init_on_non_struct),
+        help("construct single-value variants with `{name}.{variant}(value)`")
+    )]
+    EnumInitOnNonStruct {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("`{name}` enum has value-carrying variants and cannot be compared")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_not_comparable),
+        help("only enums with no value-carrying variants support `==`/`!=`")
+    )]
+    EnumNotComparable {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("cannot cast `{name}` enum to a numeric type with `@as`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_as_int_forbidden),
+        help("use `@enumTag(expr)` to read the variant tag")
+    )]
+    EnumAsIntForbidden {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("cannot cast a numeric value to the `{name}` enum with `@as`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_from_int_forbidden),
+        help("construct variants directly: `{name}.variant(value)` or `{name}.variant {{ ... }}`")
+    )]
+    EnumFromIntForbidden {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("variant `{variant}` of `{name}` requires a value")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typecheck::enum_variant_requires_value),
+        help(
+            "construct single-value variants with `{name}.{variant}(value)` and struct variants with `{name}.{variant} {{ .field = value }}`"
+        )
+    )]
+    EnumVariantRequiresValue {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("`@enumTag` expects an enum value, got `{ty}`")]
+    #[diagnostic(severity(Error), code(zeen::typecheck::enum_tag_non_enum))]
+    EnumTagOnNonEnum {
+        ty: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("recursive type `{ty}` is infinite")]
     #[diagnostic(
         severity(Error),
@@ -650,7 +799,6 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]
     ExpectedFormatString {
@@ -704,7 +852,6 @@ pub enum TypeError {
         #[label]
         span: SourceSpan,
     },
-    // <-- Format Errors
     #[error("type `{name}` is used as a value")]
     #[diagnostic(
         severity(Error),

@@ -14,11 +14,8 @@ pub use types::{TypeExpr, TypeKind};
 use miette::{NamedSource, SourceSpan};
 use std::sync::Arc;
 
-// NOTE: Zeen AST relies on external arena allocator (to avoid separated heap pointers like
-// Box/Rc/Arc/...). So expressions/statements/declarations must keep lifetimed references to other
-// members instead of "boxing" them on heap.
-
-// NOTE: `Spur` is a key for `lasso` string interner.
+// The AST lives in an external arena allocator instead of `Box`/`Rc`, so
+// nodes hold lifetimed references to each other.
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Source {

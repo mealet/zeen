@@ -126,9 +126,7 @@ fn main() {
         exit(0);
     }
 
-    // Surface internal panics as a clean ICE message instead of a raw
-    // unwinding crash. Release builds use `panic = "abort"`, so this only
-    // guards debug builds; release panics still abort.
+    // Release builds use `panic = "abort"`, so this only guards debug builds.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile(args)));
     if result.is_err() {
         cli::println_error(
@@ -525,8 +523,6 @@ fn compile(args: cli::Args) {
                 exit(1);
             }
 
-            // Pass `extern link` sources to toolchains able to compile them;
-            // object-only linkers skip them.
             let extra: Vec<std::path::PathBuf> = if linker.accepts_c_sources() {
                 linked_files.clone()
             } else {

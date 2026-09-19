@@ -94,6 +94,7 @@ pub struct CodeGen<'ctx, 'prog> {
     // module-level caches
     functions: HashMap<MirFunctionId, FunctionValue<'ctx>>,
     struct_types: HashMap<TypeId, inkwell::types::StructType<'ctx>>,
+    enum_types: HashMap<TypeId, inkwell::types::StructType<'ctx>>,
     strings: HashMap<String, GlobalValue<'ctx>>,
     str_counter: u32,
     enum_tables: HashMap<DefId, GlobalValue<'ctx>>,
@@ -202,6 +203,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             options,
             functions: HashMap::new(),
             struct_types: HashMap::new(),
+            enum_types: HashMap::new(),
             strings: HashMap::new(),
             str_counter: 0,
             enum_tables: HashMap::new(),
@@ -237,7 +239,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         if self.options.mode == CompilationMode::Debug {
             self.emit_panic_stack_globals();
         }
+        self.register_enum_layouts();
         self.register_struct_layouts();
+        self.fill_enum_layouts();
         self.declare_externs();
         self.emit_stdout_write_runtime();
         self.declare_functions();
@@ -335,6 +339,98 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
         for (ty, fields) in bodies {
             self.struct_types[&ty].set_body(&fields, false);
+        }
+    }
+
+    /// Declares the opaque tagged-union structs for payload enums up front, so
+    /// `map_type` resolves an enum inside a struct field while the struct
+    /// body is still being built.
+    fn register_enum_layouts(&mut self) {
+        let mut by_name: HashMap<String, inkwell::types::StructType<'ctx>> = HashMap::new();
+        for &ty in self.program.enum_layouts.keys() {
+            let has_payload = self.program.enum_layouts[&ty]
+                .variants
+                .iter()
+                .any(|v| v.payload.is_some());
+            if !has_payload {
+                continue;
+            }
+            let name = self.mangle_struct_name(ty);
+            let opaque = if let Some(existing) = by_name.get(&name) {
+                *existing
+            } else {
+                let created = self.context.opaque_struct_type(&name);
+                by_name.insert(name, created);
+                created
+            };
+            self.enum_types.insert(ty, opaque);
+        }
+    }
+
+    /// Sets the body of each payload-enum struct: `{ tag: u8, union }`. The
+    /// union member must cover the largest payload size *and* satisfy the
+    /// strictest payload alignment, or payload accesses through the union
+    /// would be misaligned (UB): a single payload rarely covers both (e.g.
+    /// `[9]u8` next to a `u64`), so the fallback pads the most-aligned
+    /// payload up to the largest size. Runs after all struct bodies so
+    /// payload structs are sized.
+    fn fill_enum_layouts(&mut self) {
+        for &ty in self.program.enum_layouts.keys() {
+            let Some(opaque) = self.enum_types.get(&ty).copied() else {
+                continue;
+            };
+
+            let payloads: Vec<TypeId> = self.program.enum_layouts[&ty]
+                .variants
+                .iter()
+                .filter_map(|v| v.payload)
+                .collect();
+            if payloads.is_empty() {
+                continue;
+            }
+
+            let mut measured: Vec<(u64, u64, TypeId)> = Vec::new();
+            for payload in payloads {
+                let llvm_ty = self.map_basic_type(payload);
+                measured.push((
+                    self.target_data.get_abi_size(&llvm_ty),
+                    u64::from(self.target_data.get_abi_alignment(&llvm_ty)),
+                    payload,
+                ));
+            }
+            let max_size = measured.iter().map(|m| m.0).max().unwrap_or(0);
+            let max_align = measured.iter().map(|m| m.1).max().unwrap_or(1);
+
+            let union_ty: BasicTypeEnum<'ctx> = if max_size == 0 {
+                self.context.i8_type().into()
+            } else if let Some(&(_, _, payload)) = measured
+                .iter()
+                .find(|m| m.0 == max_size && m.1 == max_align)
+            {
+                self.map_basic_type(payload)
+            } else {
+                let (_, _, align_payload) = measured
+                    .iter()
+                    .filter(|m| m.1 == max_align)
+                    .max_by_key(|m| m.0)
+                    .copied()
+                    .expect("max alignment comes from a payload");
+                let pad = max_size
+                    - self
+                        .target_data
+                        .get_abi_size(&self.map_basic_type(align_payload));
+                if pad == 0 {
+                    self.map_basic_type(align_payload)
+                } else {
+                    let pad_ty = self.context.i8_type().array_type(pad as u32);
+                    let fields: [BasicTypeEnum<'ctx>; 2] =
+                        [self.map_basic_type(align_payload), pad_ty.into()];
+                    BasicTypeEnum::StructType(self.context.struct_type(&fields, false))
+                }
+            };
+
+            let tag_ty = self.context.i8_type().into();
+            opaque.set_body(&[tag_ty, union_ty], false);
         }
     }
 
@@ -543,7 +639,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 entry.into()
             }
 
-            Type::Enum { .. } => self.context.i32_type().into(),
+            Type::Enum { .. } => {
+                // Payload enums are tagged `{ u8, union }` structs; empty-only
+                // enums stay a bare `u8` tag scalar.
+                if let Some(entry) = self.enum_types.get(&ty) {
+                    (*entry).into()
+                } else {
+                    self.context.i8_type().into()
+                }
+            }
             // Never reach codegen on a valid program.
             Type::Interface { .. } | Type::InterfaceSelfPlaceholder(_) | Type::GenericParam(_) => {
                 self.context.i32_type().into()
@@ -771,11 +875,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     /// Drops the value stored at `ptr`: either calls the monomorphized `drop`
     /// function of a struct with an explicit `Drop` implementation, calls the
-    /// synthesized env-free of a heap-owning fat closure, or tears down an
+    /// synthesized env-free of a heap-owning fat closure, calls the
+    /// synthesized tag-switch teardown of an enum, or tears down an
     /// aggregate element-by-element (recursively).
     fn emit_drop_ptr(&mut self, ptr: PointerValue<'ctx>, ty: TypeId) {
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } | Type::FatFn { .. } => {
+            Type::Struct { .. } | Type::FatFn { .. } | Type::Enum { .. } => {
                 let drop_id = self.program.drop_functions[&ty];
                 let callee = self.functions[&drop_id];
                 let value = self
@@ -809,7 +914,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     fn place_needs_drop(&self, place: &Place, func: &MirFunction) -> bool {
         let ty = self.place_type(place, func);
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } | Type::FatFn { .. } => {
+            Type::Struct { .. } | Type::FatFn { .. } | Type::Enum { .. } => {
                 self.program.drop_functions.contains_key(&ty)
             }
             Type::Array { element, .. } => self.place_elem_needs_drop(element),
@@ -819,7 +924,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     fn place_elem_needs_drop(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
-            Type::Struct { .. } | Type::FatFn { .. } => {
+            Type::Struct { .. } | Type::FatFn { .. } | Type::Enum { .. } => {
                 self.program.drop_functions.contains_key(&ty)
             }
             Type::Array { element, .. } => self.place_elem_needs_drop(element),
@@ -888,7 +993,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 self.aggregate_value(*kind, operands, expected_ty, func)
             }
 
-            Rvalue::Discriminant(place) => self.load_place(place, func),
+            Rvalue::Discriminant(place) => self.load_enum_tag(place, func),
         }
     }
 
@@ -974,6 +1079,35 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let agg_ty = self.map_basic_type(expected_ty);
         let alloca = self.entry_alloca(agg_ty, "aggregate");
 
+        // An enum aggregate writes the tag into field 0 and the payload into
+        // the union field (index 1); empty variants leave the union untouched.
+        if let AggregateKind::Enum {
+            enum_def,
+            variant_def,
+        } = kind
+        {
+            let tag = self.enum_variant_tag(enum_def, variant_def);
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(agg_ty, alloca, 0, "")
+                .unwrap();
+            let tag_val = self.context.i8_type().const_int(tag, false);
+            self.builder.build_store(tag_ptr, tag_val).unwrap();
+            if let Some(operand) = operands.first() {
+                let payload_ptr = self
+                    .builder
+                    .build_struct_gep(agg_ty, alloca, 1, "")
+                    .unwrap();
+                let value = self.operand_value(
+                    operand,
+                    Some(self.enum_payload_type(expected_ty, variant_def)),
+                    func,
+                );
+                self.builder.build_store(payload_ptr, value).unwrap();
+            }
+            return self.builder.build_load(agg_ty, alloca, "").unwrap();
+        }
+
         for (i, operand) in operands.iter().enumerate() {
             // A string literal stored into an array/slice field must be
             // coerced to the field's value type (bytes for `[N]char`,
@@ -1006,6 +1140,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .build_in_bounds_gep(agg_ty, alloca, &[index_ty.const_zero(), index], "")
                         .unwrap()
                 },
+                AggregateKind::Enum { .. } => unreachable!("enum aggregates return early"),
             };
             self.builder.build_store(elem_ptr, value).unwrap();
         }
@@ -1055,6 +1190,41 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             Operand::Constant(_, _) => self.operand_value(rhs, const_expected(lhs_ty), func),
             _ => self.operand_value(rhs, Some(operand_ty), func),
         };
+
+        // Enums compare by tag. Payload enums are aggregates, so pull the `u8`
+        // tag field out of each side before comparing.
+        if let Type::Enum { .. } = self.typecheck.interner.get(operand_ty) {
+            let b = &self.builder;
+            let l = self.enum_tag_of_value(lhs_v);
+            let r = self.enum_tag_of_value(rhs_v);
+            return match op {
+                BinaryOp::Eq => b
+                    .build_int_compare(IntPredicate::EQ, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Ne => b
+                    .build_int_compare(IntPredicate::NE, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Lt => b
+                    .build_int_compare(IntPredicate::ULT, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Gt => b
+                    .build_int_compare(IntPredicate::UGT, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Le => b
+                    .build_int_compare(IntPredicate::ULE, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Ge => b
+                    .build_int_compare(IntPredicate::UGE, l, r, "")
+                    .unwrap()
+                    .into(),
+                _ => unreachable!("non-comparison binary op on enum operands"),
+            };
+        }
 
         if is_float {
             let l = lhs_v.into_float_value();
@@ -1946,6 +2116,50 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             (Builtin(BuiltinType::char), Builtin(BuiltinType::char)) => value,
 
+            // `@as(int, enum_value)`: the runtime tag (u8), widened to the
+            // destination integer type.
+            (Enum { .. }, Builtin(b)) if builtin_is_integer(b) => {
+                let tag = self.enum_tag_of_value(value);
+                let dst_int = self.map_basic_type(dst).into_int_type();
+                let src_w = tag.get_type().get_bit_width();
+                let dst_w = dst_int.get_bit_width();
+                if src_w < dst_w {
+                    self.builder
+                        .build_int_z_extend(tag, dst_int, "")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_int_truncate(tag, dst_int, "")
+                        .unwrap()
+                        .into()
+                }
+            }
+
+            // `@as(enum, int_value)`: truncate to the `u8` tag and assemble the
+            // tagged aggregate (empty-only enums stay a bare tag).
+            (Builtin(b), Enum { .. }) if builtin_is_integer(b) => {
+                let int = value.into_int_value();
+                let tag = self
+                    .builder
+                    .build_int_truncate(int, self.context.i8_type(), "")
+                    .unwrap();
+                if let Some(enum_struct) = self.enum_types.get(&dst) {
+                    let enum_struct: inkwell::types::StructType<'ctx> = *enum_struct;
+                    let alloca = self.entry_alloca(enum_struct.into(), "enum_cast");
+                    let tag_ptr = self
+                        .builder
+                        .build_struct_gep(enum_struct, alloca, 0, "")
+                        .unwrap();
+                    self.builder.build_store(tag_ptr, tag).unwrap();
+                    let loaded: BasicValueEnum<'ctx> =
+                        self.builder.build_load(enum_struct, alloca, "").unwrap();
+                    loaded
+                } else {
+                    tag.into()
+                }
+            }
+
             (Builtin(a), Builtin(b))
                 if (a == BuiltinType::char && builtin_is_integer(b))
                     || (builtin_is_integer(a) && b == BuiltinType::char) =>
@@ -2313,13 +2527,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
         let (specifier, value): (String, BasicValueEnum<'ctx>) =
             match self.typecheck.interner.get(pointee).clone() {
-                Type::Enum { def_id } => {
+                Type::Enum { def_id, .. } => {
                     let elem_ty = self.map_basic_type(pointee);
-                    let disc = self
-                        .builder
-                        .build_load(elem_ty, ptr, "")
-                        .unwrap()
-                        .into_int_value();
+                    let disc =
+                        self.enum_tag_of_value(self.builder.build_load(elem_ty, ptr, "").unwrap());
                     let name_ptr = self.enum_variant_name_ptr(def_id, disc);
 
                     let specifier = if is_debug {
@@ -3185,14 +3396,24 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         spec: FormatSpec,
         func: &MirFunction,
     ) -> (String, Vec<BasicValueEnum<'ctx>>) {
-        if let Some(Type::Enum { def_id }) =
+        if let Some(Type::Enum { def_id, .. }) =
             arg_ty.map(|ty| self.typecheck.interner.get(ty).clone())
         {
             let disc = match operand {
                 Operand::Constant(ConstValue::Int(n), _) => {
                     self.context.i32_type().const_int(*n as u64, false)
                 }
-                _ => self.operand_value(operand, arg_ty, func).into_int_value(),
+                _ => {
+                    let v = self.operand_value(operand, arg_ty, func);
+                    let tag = self.enum_tag_of_value(v);
+                    let i32_ty = self.context.i32_type();
+                    let src_w = tag.get_type().get_bit_width();
+                    if src_w < 32 {
+                        self.builder.build_int_z_extend(tag, i32_ty, "").unwrap()
+                    } else {
+                        tag
+                    }
+                }
             };
             let name_ptr = self.enum_variant_name_ptr(def_id, disc);
             let specifier = match spec {
@@ -3785,6 +4006,16 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     cur_ty = self.deref_target_type(cur_ty);
                 }
 
+                PlaceElem::EnumPayload(variant_def) => {
+                    let enum_ty = cur_ty;
+                    let enum_struct = self.map_basic_type(enum_ty);
+                    ptr = self
+                        .builder
+                        .build_struct_gep(enum_struct, ptr, 1, "")
+                        .unwrap();
+                    cur_ty = self.enum_payload_type(enum_ty, *variant_def);
+                }
+
                 PlaceElem::Global(_) => unreachable!("global already consumed"),
             }
         }
@@ -3800,6 +4031,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     PlaceElem::Field(field_def) => ty = self.field_index_and_type(ty, *field_def).1,
                     PlaceElem::Index(_) => ty = self.index_element_type(ty),
                     PlaceElem::Deref => ty = self.deref_target_type(ty),
+                    PlaceElem::EnumPayload(variant_def) => {
+                        ty = self.enum_payload_type(ty, *variant_def)
+                    }
                     PlaceElem::Global(_) => unreachable!(),
                 }
             }
@@ -3812,10 +4046,71 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 PlaceElem::Field(field_def) => ty = self.field_index_and_type(ty, *field_def).1,
                 PlaceElem::Index(_) => ty = self.index_element_type(ty),
                 PlaceElem::Deref => ty = self.deref_target_type(ty),
+                PlaceElem::EnumPayload(variant_def) => {
+                    ty = self.enum_payload_type(ty, *variant_def)
+                }
                 PlaceElem::Global(_) => unreachable!(),
             }
         }
         ty
+    }
+
+    /// The concrete payload type of `variant_def` within the enum `enum_ty`
+    /// (from the enum layout registered during lowering).
+    fn enum_payload_type(&self, enum_ty: TypeId, variant_def: DefId) -> TypeId {
+        self.program
+            .enum_layouts
+            .get(&enum_ty)
+            .and_then(|layout| layout.variants.iter().find(|v| v.def_id == variant_def))
+            .and_then(|variant| variant.payload)
+            .unwrap_or(TypeId(u32::MAX))
+    }
+
+    /// Loads the running tag of an enum value: payload enums read the `u8`
+    /// tag field of the aggregate, empty-only enums are already a bare tag.
+    fn load_enum_tag(&self, place: &Place, func: &MirFunction) -> BasicValueEnum<'ctx> {
+        let ptr = self.place_ptr(place, func);
+        let enum_ty = self.place_type(place, func);
+        let is_aggregate = self
+            .program
+            .enum_layouts
+            .get(&enum_ty)
+            .is_some_and(|layout| layout.variants.iter().any(|v| v.payload.is_some()));
+        if is_aggregate {
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(self.map_basic_type(enum_ty), ptr, 0, "")
+                .unwrap();
+            self.builder
+                .build_load(self.context.i8_type(), tag_ptr, "")
+                .unwrap()
+        } else {
+            self.builder
+                .build_load(self.context.i8_type(), ptr, "")
+                .unwrap()
+        }
+    }
+
+    /// The ordinal of `variant_def` within `enum_def` (the runtime tag).
+    fn enum_variant_tag(&self, enum_def: DefId, variant_def: DefId) -> u64 {
+        self.typecheck
+            .enum_variants
+            .get(&enum_def)
+            .and_then(|variants| variants.iter().position(|&v| v == variant_def))
+            .unwrap_or(0) as u64
+    }
+
+    /// The running tag (`i8`) of an enum value: reads the tag field of a
+    /// payload-enum aggregate, or uses the bare-tag scalar directly.
+    fn enum_tag_of_value(&self, value: BasicValueEnum<'ctx>) -> IntValue<'ctx> {
+        match value {
+            BasicValueEnum::StructValue(s) => self
+                .builder
+                .build_extract_value(s, 0, "")
+                .unwrap()
+                .into_int_value(),
+            v => v.into_int_value(),
+        }
     }
 
     fn field_index_and_type(&self, base: TypeId, field_def: DefId) -> (u32, TypeId) {
@@ -3935,6 +4230,21 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 }
             }
             Type::Slice { element, .. } => format!("slice.{}", self.mangle_type_name(*element)),
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => {
+                let base = self.resolve_def_name(*def_id);
+                if generic_args.is_empty() {
+                    format!("enum.{base}")
+                } else {
+                    let args: Vec<String> = generic_args
+                        .iter()
+                        .map(|&arg| self.mangle_type_name(arg))
+                        .collect();
+                    format!("enum.{base}${}", args.join("$"))
+                }
+            }
             _ => format!("struct.{}", ty.0),
         }
     }
@@ -3967,7 +4277,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 )
             }
             Type::Slice { element, .. } => format!("slice.{}", self.mangle_type_name(*element)),
-            Type::Enum { def_id } => self.resolve_def_name(*def_id),
+            Type::Enum { def_id, .. } => self.resolve_def_name(*def_id),
             Type::Fn { .. } => "fn".to_string(),
             Type::IntLiteral => "i32".to_string(),
             Type::FloatLiteral => "f64".to_string(),

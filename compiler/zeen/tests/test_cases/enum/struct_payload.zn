@@ -1,0 +1,23 @@
+enum Widget {
+  empty,
+  point: {
+    x: i32,
+    y: i32,
+  },
+  sized: {
+    w: u32,
+    h: u32,
+    label: u8,
+  },
+}
+
+fn main() {
+  let p = Widget.point { .x = 3, .y = 4 };
+  @println("point: {} {} {}", p.point.x, p.point.y, @enumTag(p));
+
+  let s = Widget.sized { .w = 10, .h = 20, .label = 7 };
+  @println("sized: {} {} {}", s.sized.w, s.sized.label, @enumTag(s));
+
+  let e = Widget.empty;
+  @println("empty: {}", @enumTag(e));
+}

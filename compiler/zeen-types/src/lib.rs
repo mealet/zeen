@@ -10,17 +10,14 @@ pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
 /// Synthetic `DefId`s for the builtin slice's `{ ptr, len }` view and for a
-/// fixed array's compile-time `.len`. They never appear in user declarations
-/// and share no numbering with real `DefId`s (which stay small).
+/// fixed array's compile-time `.len`.
 pub const SLICE_STRUCT_DEF: DefId = DefId(u32::MAX - 3);
 pub const SLICE_PTR_FIELD: DefId = DefId(u32::MAX - 2);
 pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
 pub const ARRAY_LEN_FIELD: DefId = DefId(u32::MAX - 4);
 
 /// Synthetic `DefId`s for the canonical fat closure-value struct
-/// `{ fn, env, drop }` (type `Type::FatFn`), shared by every fat value:
-/// `fn` holds the closure body, `env` the heap-allocated captures (null when
-/// there are none), `drop` tears them down.
+/// `{ fn, env, drop }` (type `Type::FatFn`), shared by every fat value.
 pub const CLOSURE_FAT_DEF: DefId = DefId(u32::MAX - 5);
 pub const CLOSURE_FAT_FN_FIELD: DefId = DefId(u32::MAX - 6);
 pub const CLOSURE_FAT_ENV_FIELD: DefId = DefId(u32::MAX - 7);
@@ -47,6 +44,7 @@ pub enum Type {
 
     Enum {
         def_id: DefId,
+        generic_args: Vec<TypeId>,
     },
 
     Pointer {
@@ -74,9 +72,7 @@ pub enum Type {
         ret: TypeId,
     },
 
-    /// Fat closure value backed by the canonical `{ ptr, env }` struct.
-    /// Both `Fn` and `FnOnce` are move-only; `once` marks `FnOnce`.
-    /// `erased` marks a user-written annotation that needs finalization.
+    /// Fat closure value. Both `Fn` and `FnOnce` are move-only.
     FatFn {
         params: Vec<TypeId>,
         ret: TypeId,
@@ -117,28 +113,50 @@ impl Type {
                 if generic_args.is_empty() {
                     name
                 } else {
-                    let args: Vec<String> = generic_args
-                        .iter()
-                        .map(|&a| {
-                            type_interner.get(a).to_display(
-                                Rc::clone(&interner),
-                                type_interner,
-                                resolution_result,
-                            )
-                        })
-                        .collect();
-
-                    format!("{}[{}]", name, args.join(", "))
+                    format!(
+                        "{}{}",
+                        name,
+                        Type::display_args(
+                            generic_args,
+                            interner,
+                            type_interner,
+                            resolution_result
+                        )
+                    )
                 }
             }
 
-            Type::Interface { def_id } | Type::Enum { def_id } | Type::GenericParam(def_id) => {
-                resolution_result
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => {
+                let name = resolution_result
                     .defs
                     .get(def_id)
                     .map(|info| interner.borrow().resolve(&info.name).to_string())
-                    .unwrap_or("undefined".to_string())
+                    .unwrap_or("undefined".to_string());
+
+                if generic_args.is_empty() {
+                    name
+                } else {
+                    format!(
+                        "{}{}",
+                        name,
+                        Type::display_args(
+                            generic_args,
+                            interner,
+                            type_interner,
+                            resolution_result
+                        )
+                    )
+                }
             }
+
+            Type::Interface { def_id } | Type::GenericParam(def_id) => resolution_result
+                .defs
+                .get(def_id)
+                .map(|info| interner.borrow().resolve(&info.name).to_string())
+                .unwrap_or("undefined".to_string()),
 
             Type::Pointer { inner, is_const } => format!(
                 "*{}{}",
@@ -199,6 +217,26 @@ impl Type {
             Type::Never => "never".into(),
             Type::Error => "error".into(),
         }
+    }
+
+    fn display_args(
+        generic_args: &[TypeId],
+        interner: Rc<RefCell<lasso::Rodeo>>,
+        type_interner: &TypeInterner,
+        resolution_result: &zeen_resolve::ResolutionResult,
+    ) -> String {
+        let args: Vec<String> = generic_args
+            .iter()
+            .map(|&a| {
+                type_interner.get(a).to_display(
+                    Rc::clone(&interner),
+                    type_interner,
+                    resolution_result,
+                )
+            })
+            .collect();
+
+        format!("[{}]", args.join(", "))
     }
 }
 
@@ -302,6 +340,33 @@ pub struct StructFieldInfo {
     pub is_pub: bool,
 }
 
+// Enum
+
+#[derive(Debug, Clone)]
+pub struct EnumTypeInfo {
+    pub def_id: DefId,
+    /// Variants in declaration order; the ordinal is the runtime tag value.
+    pub variants: Vec<EnumVariantInfo>,
+    pub capabalities: Capabilities,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariantInfo {
+    pub def_id: DefId,
+    pub name: Spur,
+    /// The variant payload; `None` for empty variants.
+    pub payload: Option<VariantPayload>,
+}
+
+#[derive(Debug, Clone)]
+pub enum VariantPayload {
+    /// `b: i32` - a single typed value.
+    Single(TypeId),
+    /// `c: { fields }` - an anonymous struct, stored as a synthetic
+    /// `Type::Struct` that reuses the regular struct machinery.
+    Struct(TypeId),
+}
+
 /// Representation of a method's `self` receiver:
 /// - `self` / `const self` - owned value
 /// - `*self` / `*const self` - pointer receiver
@@ -359,8 +424,6 @@ pub enum ReceiverAccess {
     RefMut,
     RefConst,
 }
-
-// Below is maps for interface operators.
 
 pub fn binary_op_interface(
     op: zeen_ast::expressions::BinaryOp,
@@ -463,6 +526,24 @@ pub fn substitute_generics(
                 ty
             } else {
                 interner.intern(Type::Struct {
+                    def_id,
+                    generic_args: new_args,
+                })
+            }
+        }
+
+        Type::Enum {
+            def_id,
+            generic_args,
+        } => {
+            let new_args: Vec<TypeId> = generic_args
+                .iter()
+                .map(|a| substitute_generics(interner, *a, bindings))
+                .collect();
+            if new_args == generic_args {
+                ty
+            } else {
+                interner.intern(Type::Enum {
                     def_id,
                     generic_args: new_args,
                 })
@@ -786,6 +867,25 @@ mod tests {
     }
 
     #[test]
+    fn display_enum_type_with_generic_args() {
+        let mut interner = TypeInterner::new();
+        let mut resolution = ResolutionResult::default();
+        let mut rodeo = Rodeo::default();
+
+        let enum_def = DefId(1);
+        insert_def(&mut resolution, &mut rodeo, enum_def, "Opt", DefKind::Enum);
+
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let ty = interner.intern(Type::Enum {
+            def_id: enum_def,
+            generic_args: vec![i32],
+        });
+
+        let result = interner.display_type(ty, Rc::new(RefCell::new(rodeo)), &resolution);
+        assert_eq!(result, "Opt[i32]");
+    }
+
+    #[test]
     fn display_named_types_by_name() {
         let mut interner = TypeInterner::new();
         let mut resolution = ResolutionResult::default();
@@ -811,7 +911,10 @@ mod tests {
         );
 
         let iface_ty = interner.intern(Type::Interface { def_id: iface });
-        let enum_ty = interner.intern(Type::Enum { def_id: en });
+        let enum_ty = interner.intern(Type::Enum {
+            def_id: en,
+            generic_args: Vec::new(),
+        });
         let generic_ty = interner.intern(Type::GenericParam(generic));
 
         assert_eq!(
@@ -1188,5 +1291,29 @@ mod tests {
         assert!(SelfMode::ValueConst.is_const());
         assert!(!SelfMode::RefMut.is_const());
         assert!(SelfMode::RefConst.is_const());
+    }
+
+    #[test]
+    fn substitute_generics_replaces_enum_args() {
+        let mut interner = TypeInterner::new();
+
+        let t = DefId(40);
+        let i32 = interner.intern(Type::Builtin(BuiltinType::i32));
+        let param = interner.intern(Type::GenericParam(t));
+        let generic_enum = interner.intern(Type::Enum {
+            def_id: DefId(41),
+            generic_args: vec![param],
+        });
+
+        let bindings: HashMap<DefId, TypeId> = [(t, i32)].into_iter().collect();
+        let substituted = substitute_generics(&mut interner, generic_enum, &bindings);
+
+        assert_eq!(
+            interner.get(substituted).clone(),
+            Type::Enum {
+                def_id: DefId(41),
+                generic_args: vec![i32],
+            }
+        );
     }
 }

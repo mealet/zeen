@@ -5,6 +5,7 @@ use lasso::Rodeo;
 use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
 use zeen_parser::Parser;
 
+use crate::MirProgram;
 use crate::lowering::{MirLoweringResult, lower_program};
 
 const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
@@ -1439,7 +1440,405 @@ fn sizeof_of_unused_struct_registers_layout() {
     );
 }
 
+fn enum_aggregates_in(program: &MirProgram) -> usize {
+    program
+        .functions
+        .values()
+        .flat_map(|f| &f.blocks)
+        .flat_map(|block| &block.statements)
+        .filter(|stmt| {
+            matches!(
+                stmt,
+                crate::MirStatement::Assign {
+                    rvalue: crate::Rvalue::Aggregate { kind, .. },
+                    ..
+                } if matches!(kind, crate::AggregateKind::Enum { .. })
+            )
+        })
+        .count()
+}
+
+#[test]
+fn enum_empty_constructs_register_layout() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b } \
+         fn main() { let e = Foo.b; @println(\"{}\", e); }",
+    );
+
+    assert!(
+        mir.program
+            .enum_layouts
+            .values()
+            .any(|l| { l.variants.len() == 2 && l.variants.iter().all(|v| v.payload.is_none()) }),
+        "expected `Foo` layout with two payloadless variants"
+    );
+}
+
+#[test]
+fn enum_single_construct_builds_aggregate() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32 } \
+         fn main() { let e = Foo.b(42); let t = @enumTag(e); @println(\"{}\", t); }",
+    );
+
+    assert!(
+        enum_aggregates_in(&mir.program) > 0,
+        "expected a `Foo.b(42)` aggregate in MIR"
+    );
+}
+
+#[test]
+fn enum_payload_read_extracts_and_tag_checks() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32 } \
+         fn main() { let e = Foo.b(7); let v = e.b; @println(\"{}\", v); }",
+    );
+
+    let has_extraction = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| match stmt {
+                crate::MirStatement::Assign { place, rvalue, .. } => {
+                    let in_place = place
+                        .projection
+                        .iter()
+                        .any(|elem| matches!(elem, crate::PlaceElem::EnumPayload(_)));
+                    let in_rvalue = match rvalue {
+                        crate::Rvalue::Use(
+                            crate::Operand::Copy(p, _) | crate::Operand::Move(p, _),
+                        ) => p
+                            .projection
+                            .iter()
+                            .any(|elem| matches!(elem, crate::PlaceElem::EnumPayload(_))),
+                        _ => false,
+                    };
+                    in_place || in_rvalue
+                }
+                _ => false,
+            })
+        })
+    });
+
+    let tag_checked = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            matches!(
+                block.terminator,
+                crate::Terminator::SwitchInt {
+                    discriminant: _,
+                    targets: _,
+                    otherwise: _
+                }
+            )
+        })
+    });
+
+    assert!(
+        has_extraction,
+        "expected `e.b` to project through `EnumPayload`"
+    );
+    assert!(
+        tag_checked,
+        "expected a tag-check switch before the payload read"
+    );
+}
+
+#[test]
+fn enum_struct_payload_construct() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, c: { inner: i32, hello: u32 } } \
+         fn main() { let e = Foo.c { .inner = 1, .hello = 2 }; @println(\"{}\", e.c.inner); }",
+    );
+
+    assert!(
+        enum_aggregates_in(&mir.program) > 0,
+        "expected a `Foo.c {{ ... }}` aggregate in MIR"
+    );
+}
+
 fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
     let _ = ty;
     true
+}
+
+fn print_mir_ok(src: &str) -> String {
+    let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+    let bump = Bump::default();
+    let content = Arc::new(src.to_string());
+    let filename = Rc::new("test.zn".to_string());
+
+    let mut context = CompilationContext {
+        paths: PathsConfig {
+            project_root: std::path::PathBuf::from("/"),
+            std_root: Some(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std"),
+            ),
+            linked: HashSet::new(),
+        },
+        core_files: vec![
+            ("core.ops", CORE_OPS),
+            ("core.out", CORE_OUT),
+            ("core.iter", CORE_ITER),
+            ("core.option", CORE_OPTION),
+            ("core.slice", CORE_SLICE),
+        ],
+        mode: CompilationMode::Debug,
+        output: CompilationOutput::EmitMIR,
+        target: None,
+        warnings: Vec::new(),
+    };
+
+    let mut tokens = zeen_lexer::tokenize(&content);
+    let mut parser = Parser::new(
+        Rc::clone(&filename),
+        Arc::clone(&content),
+        &mut tokens,
+        &bump,
+        Rc::clone(&rodeo),
+    );
+
+    let program = parser
+        .parse_program()
+        .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())
+        .expect("parse must succeed");
+
+    let (resolved_program, mut resolution_result) = zeen_resolve::resolve(
+        Rc::clone(&filename),
+        Arc::clone(&content),
+        Path::new("/test.zn"),
+        program,
+        &bump,
+        Rc::clone(&rodeo),
+        &mut context,
+    )
+    .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())
+    .expect("resolve must succeed");
+
+    let mut hir_lowering = zeen_hir::HirLowering::new(&resolution_result, Rc::clone(&rodeo));
+    let hir_module = hir_lowering.lower_module(resolved_program);
+
+    let mut typechecker =
+        zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&rodeo));
+    typechecker.check_module(&hir_module);
+
+    let mut typecheck = typechecker
+        .finish()
+        .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())
+        .expect("typecheck must succeed");
+
+    let lowered_mir = lower_program(
+        Rc::clone(&rodeo),
+        &mut typecheck,
+        &resolution_result,
+        &hir_module,
+        CompilationMode::Debug,
+    )
+    .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>())
+    .expect("MIR lowering must succeed");
+
+    crate::printer::print_mir_program(&lowered_mir.program, &typecheck, &resolution_result, &rodeo)
+}
+
+#[test]
+fn printed_mir_renders_enum_constructs() {
+    let printed = print_mir_ok(
+        "enum Shape { dot, rect: i32 } \
+         fn main() { let s = Shape.rect(7); let t = @enumTag(s); let v = s.rect; @println(\"{}\", t); @println(\"{}\", v); }",
+    );
+
+    assert!(printed.contains("Shape {"), "{printed}");
+    assert!(printed.contains("discriminant("), "{printed}");
+    assert!(printed.contains(".@payload("), "{printed}");
+}
+
+#[test]
+fn enum_drop_function_tears_down_drop_payload() {
+    let mir = compile_mir_ok(
+        "struct Handle { pub h: i32, } \
+         implement Drop : Handle { fn drop(self) void {} } \
+         enum Resource { none, owned: Handle, } \
+         fn main() { let r = Resource.owned(Handle { .h = 1 }); let t = @enumTag(r); @println(\"{}\", t); }",
+    );
+
+    let (drop_id, drop_fn) = mir
+        .program
+        .functions
+        .iter()
+        .find(|(id, _)| {
+            mir.program
+                .function_names
+                .get(id)
+                .is_some_and(|n| n.starts_with("$enumdrop"))
+        })
+        .expect("a synthesized enum drop fn must exist");
+
+    assert!(
+        mir.program.drop_functions.values().any(|id| id == drop_id),
+        "the synthesized drop fn must be registered in `drop_functions`"
+    );
+    assert!(drop_fn.is_drop_impl);
+    assert!(
+        drop_fn
+            .blocks
+            .iter()
+            .any(|b| matches!(b.terminator, crate::Terminator::SwitchInt { .. })),
+        "the enum drop fn must switch on the tag"
+    );
+    assert!(
+        drop_fn
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .any(|s| matches!(s, crate::MirStatement::Drop(_))),
+        "the enum drop fn must drop the payload"
+    );
+}
+
+#[test]
+fn copy_payload_enum_gets_no_drop_function() {
+    let mir = compile_mir_ok(
+        "enum Opt { none, some: i32, } \
+         fn main() { let o = Opt.some(1); let t = @enumTag(o); @println(\"{}\", t); }",
+    );
+
+    assert!(
+        mir.program.drop_functions.is_empty(),
+        "a Copy-payload enum must not get a drop fn, got: {:?}",
+        mir.program.drop_functions
+    );
+}
+
+#[test]
+fn enum_drop_function_expands_struct_payload_fields() {
+    let mir = compile_mir_ok(
+        "struct Handle { pub h: i32, } \
+         implement Drop : Handle { fn drop(self) void {} } \
+         enum Msg { empty, data: { h: Handle, n: i32, }, } \
+         fn main() { let m = Msg.data { .h = Handle { .h = 1 }, .n = 2 }; let t = @enumTag(m); @println(\"{}\", t); }",
+    );
+
+    let drop_fn = mir
+        .program
+        .functions
+        .iter()
+        .find(|(id, _)| {
+            mir.program
+                .function_names
+                .get(id)
+                .is_some_and(|n| n.starts_with("$enumdrop"))
+        })
+        .map(|(_, f)| f)
+        .expect("a synthesized enum drop fn must exist");
+
+    assert!(
+        drop_fn
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .any(|s| match s {
+                crate::MirStatement::Drop(place) => {
+                    let has_payload = place
+                        .projection
+                        .iter()
+                        .any(|e| matches!(e, crate::PlaceElem::EnumPayload(_)));
+                    let has_field = place
+                        .projection
+                        .iter()
+                        .any(|e| matches!(e, crate::PlaceElem::Field(_)));
+                    has_payload && has_field
+                }
+                _ => false,
+            }),
+        "the anon-struct payload must drop field by field through the union"
+    );
+}
+
+#[test]
+fn enum_ptr_receiver_extraction_tag_checks_through_deref() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32, pub fn get(*self) i32 { self.b } } \
+         fn main() { let x = Foo.b(3); let v = x.get(); @println(\"{}\", v); }",
+    );
+
+    let get_fn = mir
+        .program
+        .functions
+        .iter()
+        .find(|(id, _)| {
+            mir.program
+                .function_names
+                .get(id)
+                .is_some_and(|n| n.contains("get"))
+        })
+        .map(|(_, f)| f)
+        .expect("the enum method must lower");
+
+    let deref_tag_read = get_fn.blocks.iter().flat_map(|b| &b.statements).any(|s| {
+        matches!(
+            s,
+            crate::MirStatement::Assign {
+                rvalue: crate::Rvalue::Discriminant(place),
+                ..
+            } if place
+                .projection
+                .iter()
+                .any(|e| matches!(e, crate::PlaceElem::Deref))
+        )
+    });
+    let tag_checked = get_fn
+        .blocks
+        .iter()
+        .any(|b| matches!(b.terminator, crate::Terminator::SwitchInt { .. }));
+
+    assert!(deref_tag_read, "the tag check must read through the deref");
+    assert!(
+        tag_checked,
+        "pointer-receiver extraction must keep the Debug tag check"
+    );
+}
+
+#[test]
+fn enum_slice_payload_registers_slice_layout() {
+    let mir = compile_mir_ok(
+        "enum Result[T, E] { ok: T, err: E, } \
+         fn main() { let r: Result[i32, []const char] = Result.ok(1); let t = @enumTag(r); @println(\"{}\", t); }",
+    );
+
+    assert!(
+        mir.program
+            .struct_layouts
+            .values()
+            .any(|l| l.def_id == zeen_types::SLICE_STRUCT_DEF),
+        "a slice enum payload must register its `{{ ptr, len }}` layout"
+    );
+}
+
+#[test]
+fn enum_method_call_on_variant_constant_lowres() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b, c, pub fn get_tag(*const self) u8 { @enumTag(self) } } \
+         fn main() { @println(\"{}\", Foo.a.get_tag()); }",
+    );
+
+    let main = mir
+        .program
+        .functions
+        .iter()
+        .find(|(id, _)| {
+            mir.program
+                .function_names
+                .get(id)
+                .is_some_and(|n| n == "main")
+        })
+        .map(|(_, f)| f)
+        .expect("main must exist");
+
+    assert!(
+        main.blocks.iter().any(|b| matches!(
+            b.terminator,
+            crate::Terminator::Call {
+                func: crate::CallTarget::Direct(_),
+                ..
+            }
+        )),
+        "a method call on an enum constant must lower to a direct call"
+    );
 }

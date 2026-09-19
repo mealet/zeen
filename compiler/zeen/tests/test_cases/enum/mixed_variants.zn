@@ -1,0 +1,18 @@
+enum Value {
+  nothing,
+  number: i64,
+  pair: {
+    first: i32,
+    second: i32,
+  },
+}
+
+fn main() {
+  let n = Value.nothing;
+  let num = Value.number(9007199254740993);
+  let p = Value.pair { .first = 5, .second = 6 };
+
+  @println("nothing: {}", @enumTag(n));
+  @println("number: {} {}", num.number, @enumTag(num));
+  @println("pair: {} {} {}", p.pair.first, p.pair.second, @enumTag(p));
+}

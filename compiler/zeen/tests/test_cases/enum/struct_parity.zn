@@ -1,0 +1,50 @@
+interface Describe {
+  pub fn kind(*const self) []const char;
+}
+
+struct Point {
+  pub x: i32,
+  pub y: i32,
+}
+
+implement Copy : Point {}
+
+implement Describe : Point {
+  fn kind(*const self) []const char {
+    "struct"
+  }
+}
+
+enum Shape {
+  dot,
+  rect: i32,
+}
+
+implement Copy : Shape {}
+
+implement Describe : Shape {
+  fn kind(*const self) []const char {
+    "enum"
+  }
+}
+
+fn show[T: Describe](x: *const T) void {
+  @println("kind: {}", (*x).kind());
+}
+
+fn twice[T: Copy](x: T) void {
+  let a = x;
+  let b = x;
+  let _ = a;
+  let _ = b;
+}
+
+fn main() {
+  let p = Point { .x = 1, .y = 2 };
+  let s = Shape.rect(5);
+  show(&p);
+  show(&s);
+  twice(p);
+  twice(s);
+  @println("parity ok");
+}

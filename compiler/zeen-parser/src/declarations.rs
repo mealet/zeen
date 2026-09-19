@@ -219,7 +219,6 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let mut type_parser = TypeParser::new(self.p);
 
-        // will give Option::None if not at bracket token
         let generics = type_parser.parse_generics_declarations();
 
         let _ = self.p.expect(TokenKind::OpenParen, "(")?;
@@ -383,7 +382,6 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let mut type_parser = TypeParser::new(self.p);
 
-        // will give Option::None if not at bracket token
         let generics = type_parser.parse_generics_declarations();
 
         let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
@@ -477,11 +475,74 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         Some(decl)
     }
 
+    fn parse_field_list(&mut self) -> Option<&'ctx [declarations::StructField<'ctx>]> {
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut fields_buffer: SmallVec<[declarations::StructField; 8]> = SmallVec::new();
+
+        while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+            let _ = self.p.eat(TokenKind::Keyword(CompilerKeyword::Public));
+
+            if self.p.at(TokenKind::Keyword(CompilerKeyword::Fn)) {
+                self.p.report(ParserError::SyntaxError {
+                    label: "methods are not allowed in anonymous struct payloads".into(),
+                    help: Some("consider defining methods on the enum itself".into()),
+                    src: self.p.named_src(),
+                    span: self.p.current().span,
+                });
+
+                return None;
+            }
+
+            let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+            let name_span = name_token.span;
+            let name_slice =
+                self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+            let name = self.p.get_or_intern(name_slice);
+
+            if self.p.at(TokenKind::OpenParen) || self.p.at(TokenKind::OpenBracket) {
+                self.p.report(ParserError::SyntaxError {
+                    label: "function definition without `fn` keyword".into(),
+                    help: Some("consider using syntax: [public] fn IDENT(..) ..".into()),
+                    src: self.p.named_src(),
+                    span: name_span,
+                });
+
+                return None;
+            }
+
+            let _ = self.p.expect(TokenKind::Colon, ":")?;
+
+            let mut type_parser = TypeParser::new(self.p);
+            let ty = type_parser.parse()?;
+
+            fields_buffer.push(declarations::StructField {
+                name,
+                ty,
+                is_pub: true,
+            });
+
+            let _ = self.p.eat(TokenKind::Comma);
+        }
+
+        let _ = self.p.expect(TokenKind::CloseBrace, "{")?;
+
+        Some(self.p.arena.alloc_slice_copy(&fields_buffer))
+    }
+
     fn parse_enum(
         &mut self,
         start_span: miette::SourceSpan,
         is_pub: IsPub,
     ) -> Option<&'ctx Declaration<'ctx>> {
+        #[derive(PartialEq)]
+        enum Mode {
+            Any,
+            Methods,
+            Reported,
+        }
+
         let _enum_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Enum), "enum")?;
@@ -493,11 +554,33 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let name = (self.p.get_or_intern(name_slice), name_span);
 
+        let mut type_parser = TypeParser::new(self.p);
+        let generics = type_parser.parse_generics_declarations();
+
         let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
 
         let mut variants_buffer: SmallVec<[declarations::EnumVariant; 8]> = SmallVec::new();
+        let mut methods_buffer: SmallVec<[&'ctx Declaration<'ctx>; 8]> = SmallVec::new();
+
+        let mut mode = Mode::Any;
 
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+            let start_span = self.p.current().span;
+            let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
+
+            if self.p.at(TokenKind::Keyword(CompilerKeyword::Fn)) {
+                if mode == Mode::Any {
+                    mode = Mode::Methods;
+                }
+
+                let decl = self.parse_fn(start_span, is_pub, IsExtern(false), AllowBare(false))?;
+                methods_buffer.push(decl);
+
+                let _ = self.p.eat(TokenKind::Comma);
+
+                continue;
+            }
+
             let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
             let name_span = name_token.span;
             let name_slice =
@@ -505,13 +588,36 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
             let name = self.p.get_or_intern(name_slice);
 
-            if !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
-                let _ = self.p.expect(TokenKind::Comma, ",")?;
+            if mode == Mode::Methods {
+                mode = Mode::Reported;
+
+                self.p.report(ParserError::SyntaxError {
+                    label: "variants are not allowed after methods".into(),
+                    help: Some("consider defining necessary variants before methods".into()),
+                    src: self.p.named_src(),
+                    span: name_span,
+                });
             }
+
+            let mut payload = None;
+
+            if self.p.eat(TokenKind::Colon) {
+                if self.p.at(TokenKind::OpenBrace) {
+                    let fields = self.parse_field_list()?;
+                    payload = Some(declarations::EnumVariantPayload::Anonymous(fields));
+                } else {
+                    let mut type_parser = TypeParser::new(self.p);
+                    let ty = type_parser.parse()?;
+                    payload = Some(declarations::EnumVariantPayload::Single(ty));
+                }
+            }
+
+            let _ = self.p.eat(TokenKind::Comma);
 
             variants_buffer.push(declarations::EnumVariant {
                 name,
                 span: name_span,
+                payload,
             });
         }
 
@@ -519,12 +625,15 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let _ = self.p.eat(TokenKind::Semicolon);
 
         let variants = self.p.arena.alloc_slice_copy(&variants_buffer);
+        let methods = self.p.arena.alloc_slice_copy(&methods_buffer);
 
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::EnumDecl {
                 name,
-                variants,
                 is_pub: is_pub.0,
+                generics,
+                variants,
+                methods,
             },
             source: (close_brace.merge_span(start_span), self.p.named_src()).into(),
         });
@@ -1317,6 +1426,7 @@ mod tests {
                     name: _,
                     variants: [],
                     is_pub: false,
+                    ..
                 },
                 ..
             }])
@@ -1336,6 +1446,7 @@ mod tests {
                     name: _,
                     variants: [],
                     is_pub: true,
+                    ..
                 },
                 ..
             }])
@@ -1354,15 +1465,123 @@ mod tests {
                 kind: DeclarationKind::EnumDecl {
                     name: _,
                     variants: [
-                        zeen_ast::declarations::EnumVariant { name: _, span: _ },
-                        zeen_ast::declarations::EnumVariant { name: _, span: _ },
-                        zeen_ast::declarations::EnumVariant { name: _, span: _ },
+                        zeen_ast::declarations::EnumVariant {
+                            name: _,
+                            span: _,
+                            payload: None,
+                        },
+                        zeen_ast::declarations::EnumVariant {
+                            name: _,
+                            span: _,
+                            payload: None,
+                        },
+                        zeen_ast::declarations::EnumVariant {
+                            name: _,
+                            span: _,
+                            payload: None,
+                        },
                     ],
                     is_pub: true,
+                    ..
                 },
                 ..
             }])
         );
+    }
+
+    #[test]
+    fn enum_decl_single_payload() {
+        const SRC: &str = "enum Foo { a, b: i32 }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::EnumDecl {
+                    variants: [
+                        zeen_ast::declarations::EnumVariant { payload: None, .. },
+                        zeen_ast::declarations::EnumVariant {
+                            payload: Some(zeen_ast::declarations::EnumVariantPayload::Single(_)),
+                            ..
+                        },
+                    ],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn enum_decl_anonymous_payload() {
+        const SRC: &str = "enum Foo { c: { inner: i32, hello: u32 } }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::EnumDecl {
+                    variants: [zeen_ast::declarations::EnumVariant {
+                        payload: Some(zeen_ast::declarations::EnumVariantPayload::Anonymous([
+                            _,
+                            _
+                        ])),
+                        ..
+                    }],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn enum_decl_generics() {
+        const SRC: &str = "enum Opt[T: Copy] { none, some: T }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::EnumDecl {
+                    generics: Some([_]),
+                    variants: [_, _],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn enum_decl_with_methods() {
+        const SRC: &str = "enum Foo { a, fn tag(self) u8 { return 0; } }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::EnumDecl {
+                    variants: [_],
+                    methods: [_],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn enum_decl_rejects_variant_after_method() {
+        const SRC: &str = "enum Foo { a, fn tag(self) u8 { return 0; }, b }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
     }
 
     #[test]

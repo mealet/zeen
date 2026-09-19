@@ -409,6 +409,10 @@ impl<'a> MirPrinter<'a> {
                     AggregateKind::Struct(def_id) => self.resolve_def_name(*def_id),
                     AggregateKind::Array => "array".to_string(),
                     AggregateKind::Slice => "slice".to_string(),
+                    AggregateKind::Enum {
+                        enum_def,
+                        variant_def: _,
+                    } => self.resolve_def_name(*enum_def),
                 };
                 format!("{} {{ {} }}", kind_str, operand_strs.join(", "))
             }
@@ -483,6 +487,9 @@ impl<'a> MirPrinter<'a> {
                 PlaceElem::Deref => {
                     s = format!("(*{})", s);
                 }
+                PlaceElem::EnumPayload(variant_def) => {
+                    let _ = write!(s, ".@payload({})", self.resolve_def_name(*variant_def));
+                }
                 PlaceElem::Global(_) => unreachable!("global already consumed"),
             }
         }
@@ -516,7 +523,7 @@ impl<'a> MirPrinter<'a> {
             }
 
             Type::Interface { def_id } => self.resolve_def_name(def_id),
-            Type::Enum { def_id } => self.resolve_def_name(def_id),
+            Type::Enum { def_id, .. } => self.resolve_def_name(def_id),
 
             Type::Pointer { inner, is_const } => {
                 let inner_s = self.display_type(inner);

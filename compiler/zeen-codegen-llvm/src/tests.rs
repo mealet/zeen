@@ -10,7 +10,10 @@ use std::rc::Rc;
 use inkwell::context::Context;
 use zeen_ast::expressions::BinaryOp;
 use zeen_driver::CompilationMode;
-use zeen_mir::{CallTarget, ConstValue, Operand, Rvalue, StructFieldLayout, StructLayout};
+use zeen_mir::{
+    AggregateKind, CallTarget, ConstValue, EnumLayout, EnumVariantLayout, Operand, Rvalue,
+    StructFieldLayout, StructLayout,
+};
 use zeen_resolve::DefKind;
 use zeen_typecheck::format_str::{FormatChunk, FormatSpec};
 use zeen_types::Type;
@@ -405,7 +408,10 @@ fn enum_display_and_debug() {
     fx.typecheck
         .enum_variants
         .insert(color_def, vec![red, green, blue]);
-    let color_ty = fx.ty(Type::Enum { def_id: color_def });
+    let color_ty = fx.ty(Type::Enum {
+        def_id: color_def,
+        generic_args: Vec::new(),
+    });
 
     let print_def = fx.def("print", DefKind::Function);
     let void = fx.void();
@@ -441,7 +447,10 @@ fn enum_debug_prints_enum_name() {
     let color_def = fx.def("Color", DefKind::Enum);
     let red = fx.def("Red", DefKind::EnumVariant);
     fx.typecheck.enum_variants.insert(color_def, vec![red]);
-    let color_ty = fx.ty(Type::Enum { def_id: color_def });
+    let color_ty = fx.ty(Type::Enum {
+        def_id: color_def,
+        generic_args: Vec::new(),
+    });
 
     let print_def = fx.def("print", DefKind::Function);
     let void = fx.void();
@@ -465,6 +474,316 @@ fn enum_debug_prints_enum_name() {
 
     assert!(ir.contains("Color.%s"), "{ir}");
     assert!(ir.contains("Red"), "{ir}");
+}
+
+#[test]
+fn payload_enum_builds_tagged_aggregate_and_reads_payload() {
+    let mut fx = Fixture::new();
+    let shape_def = fx.def("Shape", DefKind::Enum);
+    let empty = fx.def("Empty", DefKind::EnumVariant);
+    let single = fx.def("Single", DefKind::EnumVariant);
+    let i32 = fx.i32();
+    let empty_name = fx.intern("Empty");
+    let single_name = fx.intern("Single");
+    fx.typecheck
+        .enum_variants
+        .insert(shape_def, vec![empty, single]);
+
+    let shape_ty = fx.ty(Type::Enum {
+        def_id: shape_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        shape_ty,
+        EnumLayout {
+            def_id: shape_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: empty,
+                    name: empty_name,
+                    payload: None,
+                },
+                EnumVariantLayout {
+                    def_id: single,
+                    name: single_name,
+                    payload: Some(i32),
+                },
+            ],
+        },
+    );
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, i32);
+    let agg = f.temp(shape_ty);
+    let payload = f.temp(i32);
+
+    f.entry("bb0");
+    // Shape.Single(42): tag 1, payload 42.
+    f.assign(
+        place(agg),
+        Rvalue::Aggregate {
+            kind: AggregateKind::Enum {
+                enum_def: shape_def,
+                variant_def: single,
+            },
+            operands: vec![const_int(42)],
+        },
+    );
+    // payload = agg.enum_payload(Single)
+    f.assign(
+        place(payload),
+        Rvalue::Use(copy_of_place(place(agg).enum_payload(single))),
+    );
+    f.ret(copy_of(payload));
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    // Verify the tagged-union struct layout.
+    assert!(ir.contains("%enum.Shape = type { i8, i32 }"), "{ir}");
+    // Tag stored at field 0.
+    assert!(ir.contains("store i8 1"), "{ir}");
+    // Payload stored at field 1.
+    assert!(ir.contains("store i32 42"), "{ir}");
+    // Payload extracted from union member (GEP field index 1 → load).
+    assert!(
+        ir.contains("%enum.Shape, ptr %aggregate, i32 0, i32 1"),
+        "{ir}"
+    );
+    assert!(ir.contains("load i32"), "{ir}");
+}
+
+#[test]
+fn empty_only_enum_tag_reads_bare_scalar() {
+    let mut fx = Fixture::new();
+    let color_def = fx.def("Color", DefKind::Enum);
+    let red = fx.def("Red", DefKind::EnumVariant);
+    let green = fx.def("Green", DefKind::EnumVariant);
+    let red_name = fx.intern("Red");
+    let green_name = fx.intern("Green");
+    fx.typecheck
+        .enum_variants
+        .insert(color_def, vec![red, green]);
+
+    let color_ty = fx.ty(Type::Enum {
+        def_id: color_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        color_ty,
+        EnumLayout {
+            def_id: color_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: red,
+                    name: red_name,
+                    payload: None,
+                },
+                EnumVariantLayout {
+                    def_id: green,
+                    name: green_name,
+                    payload: None,
+                },
+            ],
+        },
+    );
+
+    let u8 = fx.u8();
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, u8);
+    let slot = f.temp(color_ty);
+    let tag = f.temp(u8);
+
+    f.entry("bb0");
+    // tag = discriminant(slot): the bare-tag scalar loads directly, with no
+    // struct GEP (empty-only enums are not aggregates).
+    f.assign(place(tag), Rvalue::Discriminant(place(slot)));
+    f.ret(copy_of(tag));
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("load i8"), "{ir}");
+    assert!(!ir.contains("%enum.Color"), "{ir}");
+}
+
+#[test]
+fn enum_union_slot_pads_most_aligned_payload() {
+    let mut fx = Fixture::new();
+    let packet_def = fx.def("Packet", DefKind::Enum);
+    let raw = fx.def("Raw", DefKind::EnumVariant);
+    let num = fx.def("Num", DefKind::EnumVariant);
+    let u8 = fx.u8();
+    let u64_ty = fx.ty(Type::Builtin(zeen_ast::types::BuiltinType::u64));
+    let raw_ty = fx.array(u8, 9);
+    let raw_name = fx.intern("Raw");
+    let num_name = fx.intern("Num");
+    fx.typecheck
+        .enum_variants
+        .insert(packet_def, vec![raw, num]);
+
+    let packet_ty = fx.ty(Type::Enum {
+        def_id: packet_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        packet_ty,
+        EnumLayout {
+            def_id: packet_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: raw,
+                    name: raw_name,
+                    payload: Some(raw_ty),
+                },
+                EnumVariantLayout {
+                    def_id: num,
+                    name: num_name,
+                    payload: Some(u64_ty),
+                },
+            ],
+        },
+    );
+
+    let u8_tag = fx.u8();
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, u8_tag);
+    let slot = f.temp(packet_ty);
+    let tag = f.temp(u8_tag);
+    f.entry("bb0");
+    // A tag read forces the enum struct body into the IR.
+    f.assign(place(tag), Rvalue::Discriminant(place(slot)));
+    f.ret(copy_of(tag));
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    // `[9 x i8]` is larger but only aligned to 1; the slot pads the
+    // 8-aligned `u64` up to 9 bytes instead of reusing the array.
+    assert!(
+        ir.contains("%enum.Packet = type { i8, { i64, [1 x i8] } }"),
+        "{ir}"
+    );
+}
+
+#[test]
+fn enum_drop_dispatch_calls_registered_drop_fn() {
+    let mut fx = Fixture::new();
+    let res_def = fx.def("Resource", DefKind::Enum);
+    let none = fx.def("None", DefKind::EnumVariant);
+    let owned = fx.def("Owned", DefKind::EnumVariant);
+    let i32 = fx.i32();
+    let none_name = fx.intern("None");
+    let owned_name = fx.intern("Owned");
+    fx.typecheck
+        .enum_variants
+        .insert(res_def, vec![none, owned]);
+
+    let res_ty = fx.ty(Type::Enum {
+        def_id: res_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        res_ty,
+        EnumLayout {
+            def_id: res_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: none,
+                    name: none_name,
+                    payload: None,
+                },
+                EnumVariantLayout {
+                    def_id: owned,
+                    name: owned_name,
+                    payload: Some(i32),
+                },
+            ],
+        },
+    );
+
+    let void = fx.void();
+    let drop_def = fx.def("$enumdrop", DefKind::Function);
+    let mut d = fx.fn_builder("$enumdrop", drop_def, void);
+    d.func_mut().is_drop_impl = true;
+    d.param("self", res_ty);
+    d.entry("bb0");
+    d.ret_void();
+    let drop_id = d.finish();
+    fx.program.drop_functions.insert(res_ty, drop_id);
+
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, void);
+    let slot = f.temp(res_ty);
+    f.entry("bb0");
+    f.drop_place(place(slot));
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(
+        ir.lines()
+            .any(|l| l.contains("call") && l.contains("%enum.Resource")),
+        "{ir}"
+    );
+}
+
+#[test]
+fn enum_without_drop_fn_emits_no_drop_call() {
+    let mut fx = Fixture::new();
+    let opt_def = fx.def("Opt", DefKind::Enum);
+    let none = fx.def("None", DefKind::EnumVariant);
+    let some = fx.def("Some", DefKind::EnumVariant);
+    let i32 = fx.i32();
+    let none_name = fx.intern("None");
+    let some_name = fx.intern("Some");
+    fx.typecheck.enum_variants.insert(opt_def, vec![none, some]);
+
+    let opt_ty = fx.ty(Type::Enum {
+        def_id: opt_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_enum_layout(
+        opt_ty,
+        EnumLayout {
+            def_id: opt_def,
+            generic_args: Vec::new(),
+            variants: vec![
+                EnumVariantLayout {
+                    def_id: none,
+                    name: none_name,
+                    payload: None,
+                },
+                EnumVariantLayout {
+                    def_id: some,
+                    name: some_name,
+                    payload: Some(i32),
+                },
+            ],
+        },
+    );
+
+    let void = fx.void();
+    let main_def = fx.def("main", DefKind::Function);
+    let mut f = fx.fn_builder("main", main_def, void);
+    let slot = f.temp(opt_ty);
+    f.entry("bb0");
+    f.drop_place(place(slot));
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(
+        !ir.lines()
+            .any(|l| l.contains("call") && l.contains("%enum.Opt")),
+        "{ir}"
+    );
 }
 
 #[test]

@@ -1787,3 +1787,188 @@ fn drop_and_live_ids(labels: &[String]) -> (Vec<usize>, Vec<usize>) {
         .collect();
     (drops, lives)
 }
+
+#[test]
+fn drop_payload_enum_gets_scope_drop() {
+    let labels = main_stmt_labels(
+        r#"
+struct Handle { pub h: i32 }
+implement Drop : Handle {
+    fn drop(self) void {}
+}
+enum Resource { none, owned: Handle }
+fn main() {
+    {
+        let r = Resource.owned(Handle { .h = 1 });
+    };
+}
+"#,
+    );
+
+    let (drops, _) = drop_and_live_ids(&labels);
+    assert_eq!(drops.len(), 1, "exactly one drop expected: {labels:?}");
+    let dead = labels
+        .iter()
+        .position(|l| l == &format!("StorageDead(%{})", drops[0]))
+        .expect("StorageDead of `r` must exist");
+    let drop_pos = labels
+        .iter()
+        .position(|l| l == &format!("Drop(%{})", drops[0]))
+        .expect("drop of `r` must exist");
+
+    assert_eq!(drop_pos + 1, dead, "sequence: {labels:?}");
+}
+
+#[test]
+fn copy_payload_enum_gets_no_drop() {
+    let labels = main_stmt_labels(
+        r#"
+enum Opt { none, some: i32 }
+fn main() {
+    let o = Opt.some(1);
+    let t = @enumTag(o);
+    @println("{}", t);
+}
+"#,
+    );
+
+    let (drops, _) = drop_and_live_ids(&labels);
+    assert!(drops.is_empty(), "no drops expected: {labels:?}");
+}
+
+#[test]
+fn moved_enum_drops_at_new_owner_scope_end() {
+    let labels = main_stmt_labels(
+        r#"
+struct Handle { pub h: i32 }
+implement Drop : Handle {
+    fn drop(self) void {}
+}
+enum Resource { none, owned: Handle }
+fn main() {
+    let r = Resource.owned(Handle { .h = 1 });
+    let s = r;
+}
+"#,
+    );
+
+    let (drops, _) = drop_and_live_ids(&labels);
+    assert_eq!(
+        drops.len(),
+        1,
+        "the moved-to binding must drop exactly once: {labels:?}"
+    );
+}
+
+#[test]
+fn enum_scope_drop_is_whole_place() {
+    let mut compiled = compile(
+        r#"
+struct Handle { pub h: i32 }
+implement Drop : Handle {
+    fn drop(self) void {}
+}
+enum Resource { none, owned: Handle }
+fn main() {
+    let r = Resource.owned(Handle { .h = 1 });
+}
+"#,
+    )
+    .expect("compilation must succeed");
+    run_dataflow(
+        &mut compiled.program,
+        &mut compiled.typecheck,
+        &compiled.resolution,
+        Rc::clone(&compiled.rodeo),
+    )
+    .expect("dataflow must pass");
+
+    let main_id = compiled
+        .program
+        .function_names
+        .iter()
+        .find(|(_, name)| name.as_str() == "main")
+        .map(|(id, _)| *id)
+        .expect("`main` must exist");
+    let main_fn = &compiled.program.functions[&main_id];
+
+    let drop_places: Vec<_> = main_fn
+        .blocks
+        .iter()
+        .flat_map(|b| &b.statements)
+        .filter_map(|s| match s {
+            zeen_mir::MirStatement::Drop(place) => Some(place),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        drop_places.len(),
+        1,
+        "expected one enum drop, got: {drop_places:?}"
+    );
+    assert!(
+        drop_places[0].projection.is_empty(),
+        "enum drops are whole-place (tag dispatch happens inside): {drop_places:?}"
+    );
+}
+
+#[test]
+fn generic_enum_value_method_passes() {
+    // Generic method bodies carry unbound params; drop analysis must treat
+    // a parameter bound to itself as unbound instead of recursing forever.
+    flow_ok(
+        r#"
+enum Opt[T] {
+    Some: T,
+    Other: i32,
+    None,
+
+    pub fn answer(self) i32 {
+        42
+    }
+}
+fn main() {
+    let a: Opt[i32] = Opt.Other(41);
+    @println("{}", a.answer());
+}
+"#,
+    );
+}
+
+#[test]
+fn moved_enum_payload_forbids_enum_reuse() {
+    let errors = flow_err(
+        r#"
+struct Handle { pub h: i32 }
+enum E { none, h: Handle }
+fn main() {
+    let e = E.h(Handle { .h = 1 });
+    let v = e.h;
+    let w = e.h;
+}
+"#,
+    );
+    assert!(!errors.is_empty());
+}
+
+#[test]
+fn moved_enum_payload_skips_enum_drop() {
+    let labels = main_stmt_labels(
+        r#"
+struct Handle { pub h: i32 }
+enum E { none, h: Handle }
+fn main() {
+    let e = E.h(Handle { .h = 1 });
+    let v = e.h;
+    let _ = v.h;
+}
+"#,
+    );
+
+    let (drops, _) = drop_and_live_ids(&labels);
+    assert!(
+        drops.is_empty(),
+        "the consumed enum must not drop: {labels:?}"
+    );
+}

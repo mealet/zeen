@@ -1,0 +1,18 @@
+enum Single {
+  count: i32,
+  big: u64,
+  flag: bool,
+}
+
+fn main() {
+  let c = Single.count(41);
+  let b = Single.big(100);
+  let f = Single.flag(true);
+
+  @println("count: {} {}", c.count, @enumTag(c));
+  @println("big: {} {}", b.big, @enumTag(b));
+  @println("flag: {} {}", f.flag, @enumTag(f));
+
+  let c2 = c;
+  @println("copy: {} {}", c.count, c2.count);
+}

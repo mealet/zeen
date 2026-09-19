@@ -103,8 +103,7 @@ impl<'ctx> IncludeResolver<'ctx> {
     }
 
     /// Walks the whole AST for `@format` and closure/fat usage, deciding
-    /// whether `std.string` / `std.fn` must be injected (both are only
-    /// reachable from the filesystem std root, never embedded).
+    /// whether `std.string` / `std.fn` must be injected.
     fn usage_flags(&self, decls: &[&'ctx Declaration<'ctx>]) -> UsageFlags {
         let mut flags = UsageFlags::default();
         for decl in decls {
@@ -458,9 +457,6 @@ impl<'ctx> IncludeResolver<'ctx> {
             );
         }
 
-        // std modules are never embedded; `@format` needs `std.string` and
-        // closure/fat usage needs `std.fn`, so synthesize their `use` decls
-        // for the resolver.
         let usage = self.usage_flags(root_decls);
         if usage.has_format || usage.has_fat {
             let span = SourceSpan::new(0.into(), 0);
@@ -810,7 +806,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                     (NamespaceTag::Type, name.0, name.1, is_pub)
                 }
                 DeclarationKind::EnumDecl { name, is_pub, .. } => {
-                    (NamespaceTag::Value, name.0, name.1, is_pub)
+                    (NamespaceTag::Type, name.0, name.1, is_pub)
                 }
                 DeclarationKind::ExternVar { name, is_pub, .. } => {
                     (NamespaceTag::Value, name.0, name.1, is_pub)

@@ -277,6 +277,75 @@ mod tests {
     }
 
     #[test]
+    fn registers_enum_and_variant_defs() {
+        let fx = resolve_ok("enum Foo { a, b: i32 }");
+
+        let foo = fx.find_def("Foo").expect("enum Foo must be defined");
+        assert!(matches!(foo.kind, DefKind::Enum));
+
+        let a = fx.find_def("a").expect("variant a must be defined");
+        assert!(matches!(a.kind, DefKind::EnumVariant));
+
+        let b = fx.find_def("b").expect("variant b must be defined");
+        assert!(matches!(b.kind, DefKind::EnumVariant));
+    }
+
+    #[test]
+    fn bare_variant_ident_does_not_resolve() {
+        let errs = resolve_full("enum Foo { a, b: i32 } fn f() i32 { return a; }").unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::UnresolvedIdent { name, .. } if name.as_str() == "a")
+        ));
+    }
+
+    #[test]
+    fn anonymous_payload_struct_and_fields_registered() {
+        let fx = resolve_ok("enum Foo { c: { inner: i32, hello: u32 } }");
+
+        let payload_struct = fx
+            .find_def("Foo.c")
+            .expect("anonymous payload struct must be defined");
+        assert!(matches!(payload_struct.kind, DefKind::Struct));
+
+        let inner = fx.find_def("inner").expect("field inner must be defined");
+        assert!(matches!(inner.kind, DefKind::Field));
+
+        let hello = fx.find_def("hello").expect("field hello must be defined");
+        assert!(matches!(hello.kind, DefKind::Field));
+
+        let c = fx.find_def("c").expect("variant c must be defined");
+        assert!(matches!(c.kind, DefKind::EnumVariant));
+
+        let c_def = fx
+            .resolution
+            .defs
+            .iter()
+            .find(|(_, info)| fx.name(info) == "c")
+            .map(|(id, _)| *id)
+            .expect("variant c def id must exist");
+
+        let payload_struct_def = fx
+            .resolution
+            .def_of_enum_payload_struct(c_def)
+            .expect("variant c must map to its payload struct");
+        assert_eq!(fx.name(&fx.resolution.defs[&payload_struct_def]), "Foo.c");
+    }
+
+    #[test]
+    fn enum_used_as_a_type_resolves() {
+        resolve_ok("enum Foo {} struct Bar { f: Foo }");
+    }
+
+    #[test]
+    fn enum_generic_param_registered() {
+        let fx = resolve_ok("enum Opt[T: Copy] { none, some: T }");
+
+        let t = fx.find_def("T").expect("generic T must be defined");
+        assert!(matches!(t.kind, DefKind::GenericParam));
+    }
+
+    #[test]
     fn duplicate_type_definition_is_reported() {
         let errs = resolve_full("struct Foo {} struct Foo {}").unwrap_err();
 

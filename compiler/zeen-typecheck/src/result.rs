@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use zeen_ast::Source;
 use zeen_hir::HirId;
 use zeen_resolve::DefId;
-use zeen_types::{StructTypeInfo, Type, TypeId, TypeInterner};
+use zeen_types::{EnumTypeInfo, StructTypeInfo, Type, TypeId, TypeInterner};
 
 use crate::closure_alloc::ClosureAllocKind;
 use crate::format_str::FormatChunk;
@@ -19,29 +19,24 @@ pub struct TypeCheckResult {
     pub operator_resolutions: HashMap<HirId, OperatorResolution>,
     pub struct_info: HashMap<DefId, StructTypeInfo>,
     pub struct_generics: HashMap<DefId, Vec<DefId>>,
-    /// Interface names -> their `DefId`, so downstream passes (MIR, flow) can
-    /// resolve capabilities like `Copy` per concrete instantiation.
+    pub enum_info: HashMap<DefId, EnumTypeInfo>,
+    pub enum_generics: HashMap<DefId, Vec<DefId>>,
+    /// Interface names -> their `DefId`.
     pub interface_registry: HashMap<String, DefId>,
     pub enum_variants: HashMap<DefId, Vec<DefId>>,
     pub method_owner: HashMap<DefId, DefId>,
     pub const_bindings: HashMap<DefId, bool>,
     pub format_specs: HashMap<HirId, Vec<FormatChunk>>,
-    /// Per-closure-site environment allocation decision (key = the closure's
-    /// synthetic fn `DefId`), see `closure_alloc`.
+    /// Per-closure-site environment allocation decision.
     pub closure_allocs: HashMap<DefId, ClosureAllocKind>,
 
-    /// Return expressions of functions whose declared return is a `Fn`/
-    /// `FnOnce` bound. The concrete closure type of the return is derived
-    /// from these after all bodies have been checked.
+    /// Return expressions of functions declared to return a `Fn`/`FnOnce` bound.
     pub fat_return_candidates: HashMap<DefId, Vec<(HirId, Source)>>,
 
-    /// Variable defs whose initializer is a fat (or fat-bound-typed) value;
-    /// used to resolve the erased bound annotations down to concrete closure
-    /// storage types.
+    /// Variable defs whose initializer is a fat (or fat-bound-typed) value.
     pub fat_let_values: HashMap<DefId, HirId>,
 
-    /// VarRef expressions whose recorded type is a fat value; used by the
-    /// finalization to resolve erased bounds through variables.
+    /// VarRef expressions whose recorded type is a fat value.
     pub fat_value_defs: HashMap<HirId, DefId>,
 
     /// Resolved concrete return type of a function declared to return a
@@ -52,15 +47,11 @@ pub struct TypeCheckResult {
     /// including concrete specializations (`implement Display : Box[i32]`).
     pub impl_registry: HashMap<(DefId, DefId), Vec<ImplEntry>>,
 
-    /// Interface method chosen for a struct-typed format argument (`{}` /
-    /// `{:?}`), keyed by the argument expression. Recorded so MIR dispatches
-    /// to the same implementation the checker picked.
+    /// Interface method chosen for a struct-typed format argument.
     pub format_arg_resolutions: HashMap<HirId, DefId>,
 
     /// Every method declared directly inside an `interface` block, mapped to
-    /// the interface that owns it (`write_str` -> `StrWriter`). Used by MIR to
-    /// dispatch a call made on a bounded generic parameter to the concrete
-    /// implementation once the receiver is monomorphized.
+    /// the interface that owns it.
     pub interface_method_owners: HashMap<DefId, DefId>,
 
     /// The concrete `Iterator::next` method resolved for a for-loop over a
@@ -102,27 +93,53 @@ impl TypeCheckResult {
                 generic_args,
             } => {
                 let Some(copy_iface) = self.interface_registry.get("Copy").copied() else {
-                    return false;
+                    return self
+                        .struct_info
+                        .get(&def_id)
+                        .is_some_and(|info| info.capabalities.is_copy);
                 };
+
                 self.applicable_copy_impl(def_id, copy_iface, &generic_args)
+                    || (!self.impl_registry.contains_key(&(def_id, copy_iface))
+                        && self
+                            .struct_info
+                            .get(&def_id)
+                            .is_some_and(|info| info.capabalities.is_copy))
             }
+
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => {
+                let Some(copy_iface) = self.interface_registry.get("Copy").copied() else {
+                    return self
+                        .enum_info
+                        .get(&def_id)
+                        .is_some_and(|info| info.capabalities.is_copy);
+                };
+
+                self.applicable_copy_impl(def_id, copy_iface, &generic_args)
+                    || (!self.impl_registry.contains_key(&(def_id, copy_iface))
+                        && self
+                            .enum_info
+                            .get(&def_id)
+                            .is_some_and(|info| info.capabalities.is_copy))
+            }
+
             Type::Array { element, .. } => self.is_copy(element),
-            // Both `Fn` and `FnOnce` closure values are move-only: the
-            // inline environment is part of the value and cannot be copied.
             Type::FatFn { .. } => false,
             Type::Slice { .. } => true,
-            // Builtins, pointers, fn pointers, enums, void, never, error.
             _ => true,
         }
     }
 
     fn applicable_copy_impl(
         &self,
-        struct_def: DefId,
+        type_def: DefId,
         copy_iface: DefId,
         generic_args: &[TypeId],
     ) -> bool {
-        let Some(entries) = self.impl_registry.get(&(struct_def, copy_iface)) else {
+        let Some(entries) = self.impl_registry.get(&(type_def, copy_iface)) else {
             return false;
         };
 
@@ -134,10 +151,11 @@ impl TypeCheckResult {
             return true;
         }
 
-        let struct_generics = self
+        let member_generics = self
             .struct_generics
-            .get(&struct_def)
+            .get(&type_def)
             .cloned()
+            .or_else(|| self.enum_generics.get(&type_def).cloned())
             .unwrap_or_default();
 
         // Bounded generic impls require the concrete args to satisfy their
@@ -152,7 +170,7 @@ impl TypeCheckResult {
                 else {
                     return true;
                 };
-                let Some(index) = struct_generics.iter().position(|g| g == struct_slot) else {
+                let Some(index) = member_generics.iter().position(|g| g == struct_slot) else {
                     return true;
                 };
                 let Some(concrete) = generic_args.get(index).copied() else {
@@ -189,6 +207,10 @@ impl TypeCheckResult {
             Type::Struct {
                 def_id,
                 generic_args,
+            }
+            | Type::Enum {
+                def_id,
+                generic_args,
             } => self.applicable_interface(def_id, iface_def, &generic_args),
             _ => false,
         }
@@ -199,11 +221,11 @@ impl TypeCheckResult {
     /// builtins and bounded `Copy` impls are handled consistently.
     fn applicable_interface(
         &self,
-        struct_def: DefId,
+        type_def: DefId,
         iface_def: DefId,
         generic_args: &[TypeId],
     ) -> bool {
-        let Some(entries) = self.impl_registry.get(&(struct_def, iface_def)) else {
+        let Some(entries) = self.impl_registry.get(&(type_def, iface_def)) else {
             return false;
         };
 
@@ -214,10 +236,11 @@ impl TypeCheckResult {
             return true;
         }
 
-        let struct_generics = self
+        let member_generics = self
             .struct_generics
-            .get(&struct_def)
+            .get(&type_def)
             .cloned()
+            .or_else(|| self.enum_generics.get(&type_def).cloned())
             .unwrap_or_default();
 
         for entry in entries
@@ -230,7 +253,7 @@ impl TypeCheckResult {
                 else {
                     return true;
                 };
-                let Some(index) = struct_generics.iter().position(|g| g == struct_slot) else {
+                let Some(index) = member_generics.iter().position(|g| g == struct_slot) else {
                     return true;
                 };
                 let Some(concrete) = generic_args.get(index).copied() else {

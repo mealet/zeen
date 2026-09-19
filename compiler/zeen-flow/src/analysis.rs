@@ -682,6 +682,16 @@ impl<'ctx> DataFlow<'ctx> {
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
         for elem in &place.projection {
             let PlaceElem::Field(field) = elem else {
+                // An `EnumPayload` element switches the running type from the
+                // enum to the payload's struct/enum machinery; continue with
+                // the payload's own structural type.
+                if let PlaceElem::EnumPayload(variant) = elem
+                    && let Some(payload_ty) = self.enum_payload_ty(ty, *variant)
+                {
+                    ty = payload_ty;
+                    bindings.clear();
+                    continue;
+                }
                 return None;
             };
             let Type::Struct {
@@ -739,18 +749,66 @@ impl<'ctx> DataFlow<'ctx> {
             Type::Builtin(_)
             | Type::IntLiteral
             | Type::FloatLiteral
-            | Type::Enum { .. }
             | Type::Pointer { .. }
             | Type::ManyPointer { .. }
             | Type::Fn { .. }
             | Type::Void
             | Type::Never
             | Type::Error => true,
-            Type::Struct { .. } | Type::FatFn { .. } | Type::Array { .. } => {
+            Type::Struct { .. } | Type::Enum { .. } | Type::FatFn { .. } | Type::Array { .. } => {
                 self.typecheck.is_copy(ty)
             }
             Type::Slice { .. } => true,
             _ => false,
+        }
+    }
+
+    /// Resolves the payload type of an enum variant projection, matching
+    /// `lowering::enum_payload_ty`.
+    fn enum_payload_ty(&mut self, ty: TypeId, variant_def: DefId) -> Option<TypeId> {
+        let Type::Enum {
+            def_id: enum_def,
+            generic_args,
+        } = self.typecheck.interner.get(ty).clone()
+        else {
+            return None;
+        };
+
+        let variant = self
+            .typecheck
+            .enum_info
+            .get(&enum_def)
+            .and_then(|info| info.variants.iter().find(|v| v.def_id == variant_def))?;
+
+        match variant.payload.as_ref()? {
+            zeen_types::VariantPayload::Single(inner) => {
+                let bindings: HashMap<DefId, TypeId> = self
+                    .typecheck
+                    .enum_generics
+                    .get(&enum_def)
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .copied()
+                    .zip(generic_args.iter().copied())
+                    .collect();
+                Some(zeen_types::substitute_generics(
+                    &mut self.typecheck.interner,
+                    *inner,
+                    &bindings,
+                ))
+            }
+            zeen_types::VariantPayload::Struct(payload_ty) => {
+                match self.typecheck.interner.get(*payload_ty).clone() {
+                    Type::Struct { def_id, .. } => {
+                        Some(self.typecheck.interner.intern(Type::Struct {
+                            def_id,
+                            generic_args,
+                        }))
+                    }
+                    _ => None,
+                }
+            }
         }
     }
 }
