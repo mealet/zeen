@@ -799,7 +799,6 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    // --> Format Errors
     #[error("expected format string as argument")]
     #[diagnostic(severity(Error), code(zeen::typechecker::expected_format_str))]
     ExpectedFormatString {
@@ -853,7 +852,6 @@ pub enum TypeError {
         #[label]
         span: SourceSpan,
     },
-    // <-- Format Errors
     #[error("type `{name}` is used as a value")]
     #[diagnostic(
         severity(Error),

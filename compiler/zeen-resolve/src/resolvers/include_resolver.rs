@@ -457,7 +457,7 @@ impl<'ctx> IncludeResolver<'ctx> {
             );
         }
 
-let usage = self.usage_flags(root_decls);
+        let usage = self.usage_flags(root_decls);
         if usage.has_format || usage.has_fat {
             let span = SourceSpan::new(0.into(), 0);
             let source = root_decls
