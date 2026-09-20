@@ -151,6 +151,16 @@ fn collect_from_expr(expr: &zeen_hir::expr::HirExpr, map: &mut HashMap<DefId, Rc
             }
         }
 
+        HirExprKind::Switch { object, arms } => {
+            collect_from_expr(object, map);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_from_expr(guard, map);
+                }
+                collect_from_expr(&arm.body, map);
+            }
+        }
+
         HirExprKind::FieldAccess { object, .. } => collect_from_expr(object, map),
 
         HirExprKind::SliceAccess { object, index } => {
@@ -197,7 +207,6 @@ fn collect_from_expr(expr: &zeen_hir::expr::HirExpr, map: &mut HashMap<DefId, Rc
         | HirExprKind::GenericParamRef(_)
         | HirExprKind::SelfValue(_)
         | HirExprKind::Type(_)
-        | HirExprKind::Switch
         | HirExprKind::Error => {}
     }
 }

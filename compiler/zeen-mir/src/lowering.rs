@@ -632,9 +632,17 @@ impl<'ctx> MirLowering<'ctx> {
                     self.collect_global_stmt_deps(body, out);
                 }
             }
+            HirExprKind::Switch { object, arms } => {
+                self.collect_global_expr_deps(object, out);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_global_expr_deps(guard, out);
+                    }
+                    self.collect_global_expr_deps(&arm.body, out);
+                }
+            }
             HirExprKind::Literal(_)
             | HirExprKind::GenericParamRef(_)
-            | HirExprKind::Switch
             | HirExprKind::Type(_)
             | HirExprKind::Error => {}
         }
@@ -4217,7 +4225,7 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, Operand::Constant(ConstValue::NullPtr, None))
             }
 
-            HirExprKind::Switch => unreachable!("not implemented in previous stages"),
+            HirExprKind::Switch { .. } => unreachable!("not implemented in previous stages"),
             HirExprKind::Type(_) => unreachable!(),
 
             HirExprKind::Closure { def_id, .. } => {
