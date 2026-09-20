@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use zeen_ast::{
     Declaration, Expression, Source, Statement, TypeExpr,
     declarations::{EnumVariant, FnParam, GenericType, StructField},
+    expressions::Arm,
 };
 
 /// A raw AST node pointer used as a map key.
@@ -43,6 +44,10 @@ impl NodeKey {
 
     pub fn from_variant(v: &EnumVariant) -> Self {
         NodeKey(v as *const _ as usize)
+    }
+
+    pub fn from_arm<'arena>(arm: &Arm<'arena>) -> Self {
+        NodeKey(arm as *const _ as usize)
     }
 }
 
@@ -145,6 +150,10 @@ impl ResolutionResult {
 
     pub fn def_of_variant(&self, v: &zeen_ast::declarations::EnumVariant) -> Option<DefId> {
         self.binding_sites.get(&NodeKey::from_variant(v)).copied()
+    }
+
+    pub fn def_of_arm<'arena>(&self, arm: &Arm<'arena>) -> Option<DefId> {
+        self.binding_sites.get(&NodeKey::from_arm(arm)).copied()
     }
 
     pub fn def_of_enum_payload_struct(&self, variant: DefId) -> Option<DefId> {

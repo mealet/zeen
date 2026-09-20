@@ -1595,7 +1595,10 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                     .to_owned();
                 let name_id = self.p.get_or_intern(token_slice);
 
-                Some(Pattern::Named(name_id))
+                Some(Pattern::Named {
+                    name: name_id,
+                    span: token.span,
+                })
             }
 
             _ => {
@@ -2429,7 +2432,7 @@ mod tests {
         assert_eq!(arms.len(), 2);
         assert!(matches!(
             arms[0].pattern,
-            expressions::Pattern::Named(name) if name == val
+            expressions::Pattern::Named { name, .. } if name == val
         ));
         assert!(arms[0].guard.is_some());
         assert!(matches!(arms[0].body.kind, ExpressionKind::Ident { .. }));
