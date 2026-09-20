@@ -2,6 +2,10 @@ use std.alloc;
 
 const InitialListCapacity: usize = 4;
 
+/// Run length at or below which sorting stays on insertion sort.
+/// Mirrors Rust `slice::sort` (`MAX_LEN_ALWAYS_INSERTION_SORT`).
+const SortInsertionThreshold: usize = 20;
+
 /// Dynamic heap-allocated array buffer
 pub struct List[T] {
   ptr: [*]T,
@@ -274,6 +278,139 @@ pub struct List[T] {
       let _item = self.pop().unwrap();
     };
   }
+
+  /// Sort list in place (through `Ord`)
+  pub fn sort[T: Ord](*self) {
+    let len = self._len;
+
+    if (len < 2) { return; };
+
+    if (len <= SortInsertionThreshold) {
+      self.__insertion_sort(0, len);
+      return;
+    };
+
+    let buf_len = len / @as(usize, 2) + 1;
+    let buf = @as([*]T, Allocator.alloc(buf_len * @sizeof(T)));
+
+    self.__merge_sort(buf, 0, len);
+    Allocator.dealloc(@as(*void, buf));
+  }
+
+  /// Insertion sort through ordering interface `Ord`
+  fn __insertion_sort[T: Ord](*self, lo: usize, hi: usize) {
+    let i = lo + 1;
+
+    while (i < hi) {
+      let tmp = self.ptr[i];
+      let j = i;
+
+      while (j > lo && self.ptr[j - 1] > tmp) {
+        self.ptr[j] = self.ptr[j - 1];
+        j -= 1;
+      };
+
+      self.ptr[j] = tmp;
+      i += 1;
+    };
+  }
+
+  /// Top-down merge sort of `[lo, hi)` with `buf` scratch storage.
+  fn __merge_sort[T: Ord](*self, buf: [*]T, lo: usize, hi: usize) {
+    let len = hi - lo;
+
+    if (len <= SortInsertionThreshold) {
+      self.__insertion_sort(lo, hi);
+      return;
+    };
+
+    let mid = lo + len / @as(usize, 2);
+
+    self.__merge_sort(buf, lo, mid);
+    self.__merge_sort(buf, mid, hi);
+    self.__merge(buf, lo, mid, hi);
+  }
+
+  /// Merge sorted `[lo, mid)` and `[mid, hi)` back into `[lo, hi)`.
+  fn __merge[T: Ord](*self, buf: [*]T, lo: usize, mid: usize, hi: usize) {
+    let left_len = mid - lo;
+    let right_len = hi - mid;
+
+    if (left_len == 0 || right_len == 0) { return; };
+
+    let l = @as(*T, nullptr);
+    let r = @as(*T, nullptr);
+
+    if (left_len <= right_len) {
+      let i: usize = 0;
+      while (i < left_len) {
+        buf[i] = self.ptr[lo + i];
+        i += 1;
+      };
+
+      let left: usize = 0;
+      let right: usize = mid;
+      let out: usize = lo;
+
+      while (left < left_len && right < hi) {
+        l = @as(*T, buf + left);
+        let take_left = !(self.ptr[right] < *l);
+
+        if (take_left) {
+          self.ptr[out] = *l;
+          left += 1;
+        } else {
+          self.ptr[out] = self.ptr[right];
+          right += 1;
+        };
+
+        out += 1;
+      };
+
+      while (left < left_len) {
+        l = @as(*T, buf + left);
+        self.ptr[out] = *l;
+        left += 1;
+        out += 1;
+      };
+    } else {
+      let i: usize = 0;
+      while (i < right_len) {
+        buf[i] = self.ptr[mid + i];
+        i += 1;
+      };
+
+      let left: usize = mid;
+      let right: usize = right_len;
+      let out: usize = hi;
+
+      while (left > lo && right > 0) {
+        left -= 1;
+        right -= 1;
+
+        r = @as(*T, buf + right);
+        let take_left = *r < self.ptr[left];
+
+        if (take_left) {
+          out -= 1;
+          l = @as(*T, self.ptr + left);
+          self.ptr[out] = *l;
+          right += 1;
+        } else {
+          out -= 1;
+          self.ptr[out] = *r;
+          left += 1;
+        };
+      };
+
+      while (right > 0) {
+        right -= 1;
+        out -= 1;
+        r = @as(*T, buf + right);
+        self.ptr[out] = *r;
+      };
+    };
+  }
 }
 
 // ===| List Interfaces Implementations |===
@@ -288,7 +425,7 @@ implement[T] Drop : List[T] {
   }
 }
 
-implement[T] Clone : List[T] {
+implement[T: Copy] Clone : List[T] {
   fn clone(*const self) Self {
     let out = List#[T].new();
 
@@ -382,7 +519,6 @@ implement[T] Sliceable : List[T] {
 }
 
 /// Borrowing iterator over `List` elements.
-/// Holds a snapshot of the buffer: do not mutate the list while iterating.
 pub struct ListIter[T] {
   ptr: [*]T,
   len: usize,
