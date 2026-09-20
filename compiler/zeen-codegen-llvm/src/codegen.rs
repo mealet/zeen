@@ -1172,6 +1172,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral
             );
 
+        // Equality over an array/slice value compares contents, so a string
+        // literal on either side must be materialized as that aggregate
+        // (bytes or `{ ptr, len }`). Left as a raw global pointer it would
+        // take the pointer path below and compare addresses instead.
+        let aggregate_ty = match self.typecheck.interner.get(operand_ty) {
+            Type::Array { .. } | Type::Slice { .. } => Some(operand_ty),
+            _ => None,
+        };
+
         // Integer constants must never be coerced to a pointer operand type
         // (`ptr + 1` would otherwise map the constant to `*u8` and panic):
         // fall back to the default `i32` width, which the pointer-arithmetic
@@ -1183,10 +1192,16 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             };
 
         let lhs_v = match lhs {
+            Operand::Constant(ConstValue::Str(_), _) if aggregate_ty.is_some() => {
+                self.cast_op(lhs, operand_ty, func)
+            }
             Operand::Constant(_, _) => self.operand_value(lhs, const_expected(rhs_ty), func),
             _ => self.operand_value(lhs, Some(operand_ty), func),
         };
         let rhs_v = match rhs {
+            Operand::Constant(ConstValue::Str(_), _) if aggregate_ty.is_some() => {
+                self.cast_op(rhs, operand_ty, func)
+            }
             Operand::Constant(_, _) => self.operand_value(rhs, const_expected(lhs_ty), func),
             _ => self.operand_value(rhs, Some(operand_ty), func),
         };
@@ -1272,6 +1287,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         // `fn == fn` and string-literal equality, where no operand carries a
         // pointer TypeId to inspect.
         let is_pointer_cmp = matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+            && aggregate_ty.is_none()
             && (matches!(
                 self.typecheck.interner.get(operand_ty),
                 Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Fn { .. }
