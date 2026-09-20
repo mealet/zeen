@@ -26,8 +26,20 @@ pub struct Allocator {
     if (ptr != nullptr)
       G_FREE(ptr);
   }
+
+  pub fn set_allocator(instance: AllocatorInstance) {
+    G_ALLOC = instance.alloc;
+    G_REALLOC = instance.realloc;
+    G_FREE = instance.free;
+  }
 }
 
 let G_ALLOC: fn(usize) *void = malloc;
 let G_REALLOC: fn(*void, usize) *void = realloc;
 let G_FREE: fn(*void) void = free;
+
+pub struct AllocatorInstance {
+  pub alloc: fn(usize) *void,
+  pub realloc: fn(*void, usize) *void,
+  pub free: fn(*void) void
+}
