@@ -2375,6 +2375,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         // Coerce each argument to the callee's declared parameter type: a
         // constant like `123` defaults to `i32`, but the parameter may be
         // `usize`/`i64`, so the value must be widened before the call.
+        // Indirect callees carry their signature in the operand type; use it
+        // when the counts agree (fat `$fn` temporaries are typed with the
+        // env-first signature by MIR). On count mismatch the ABI is rebuilt
+        // from the call site below, so leave the args alone here too.
         let param_types: Vec<TypeId> = match target {
             CallTarget::Direct(id) => self.program.functions[id]
                 .params
@@ -2382,7 +2386,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .map(|&local| self.program.functions[id].local(local).ty)
                 .collect(),
             CallTarget::Extern(idx) => self.program.extern_fns[*idx].param_types.clone(),
-            CallTarget::Indirect(_) => Vec::new(),
+            CallTarget::Indirect(operand) => {
+                match self
+                    .operand_type(operand, func)
+                    .map(|ty| self.typecheck.interner.get(ty).clone())
+                {
+                    Some(Type::Fn { params, .. }) if params.len() == args.len() => params,
+                    _ => Vec::new(),
+                }
+            }
         };
 
         let is_variadic_extern = match target {

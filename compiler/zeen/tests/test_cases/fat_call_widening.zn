@@ -1,0 +1,17 @@
+use std.c.stdlib;
+
+fn myalloc(size: usize) *void {
+  return malloc(size);
+}
+
+fn main() {
+  let f: FnOnce(usize) *void = myalloc;
+  let p = f(16);
+  @println("fat widen ok");
+  free(p);
+
+  let g: FnOnce(usize) *void = malloc;
+  let q = g(32);
+  @println("fat extern ok");
+  free(q);
+}
