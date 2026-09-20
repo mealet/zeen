@@ -4308,6 +4308,7 @@ impl<'ctx> MirLowering<'ctx> {
             let matched_bb = fb.new_block();
 
             let literals = Self::arm_literals(&arm.pattern);
+            let ranges = Self::arm_ranges(&arm.pattern);
             let all_strings = !literals.is_empty()
                 && literals.iter().all(|lit| matches!(lit, Literal::String(_)));
             let enum_tags = enum_def
@@ -4323,7 +4324,7 @@ impl<'ctx> MirLowering<'ctx> {
                         otherwise: next_test,
                     },
                 );
-            } else if literals.is_empty() {
+            } else if literals.is_empty() && ranges.is_empty() {
                 fb.set_terminator(test_bb, Terminator::Goto(matched_bb));
             } else if all_strings && self.switch_string_elem(scrut_ty).is_some() {
                 let mut cur = test_bb;
@@ -4347,6 +4348,23 @@ impl<'ctx> MirLowering<'ctx> {
                 }
             } else {
                 let mut cur = test_bb;
+                for (i, (start, end, inclusive)) in ranges.iter().enumerate() {
+                    let last = i + 1 == ranges.len() && literals.is_empty();
+                    let next_range = if last { next_test } else { fb.new_block() };
+                    self.lower_range_test(
+                        fb,
+                        &scrut_place,
+                        scrut_ty,
+                        *start,
+                        *end,
+                        *inclusive,
+                        cur,
+                        matched_bb,
+                        next_range,
+                        &expr.source,
+                    );
+                    cur = next_range;
+                }
                 for (i, lit) in literals.iter().enumerate() {
                     let last = i + 1 == literals.len();
                     let next_lit = if last { next_test } else { fb.new_block() };
@@ -4475,6 +4493,103 @@ impl<'ctx> MirLowering<'ctx> {
             | HirPattern::Enum { .. }
             | HirPattern::Range { .. }
             | HirPattern::Wildcard => Vec::new(),
+        }
+    }
+
+    fn arm_ranges(pattern: &HirPattern) -> Vec<(Option<Literal>, Option<Literal>, bool)> {
+        match pattern {
+            HirPattern::Range {
+                start,
+                end,
+                inclusive,
+            } => vec![(*start, *end, *inclusive)],
+            HirPattern::Or(patterns) => patterns.iter().flat_map(Self::arm_ranges).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_range_test(
+        &mut self,
+        fb: &mut FnBuilder,
+        scrut_place: &Place,
+        scrut_ty: TypeId,
+        start: Option<Literal>,
+        end: Option<Literal>,
+        inclusive: bool,
+        mut cur: BlockId,
+        matched_bb: BlockId,
+        next_bb: BlockId,
+        source: &Source,
+    ) {
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        if let Some(lo) = start {
+            let check_end = fb.new_block();
+            let ok = fb.new_temp(bool_ty);
+            fb.push_stmt(
+                cur,
+                MirStatement::Assign {
+                    place: Place::from_local(ok),
+                    rvalue: Rvalue::BinaryOp {
+                        op: BinaryOp::Ge,
+                        lhs: Operand::Copy(scrut_place.clone(), None),
+                        rhs: Operand::Constant(
+                            self.lower_literal(&lo, scrut_ty),
+                            Some(source.clone()),
+                        ),
+                    },
+                    source: Some(source.clone()),
+                },
+            );
+            fb.set_terminator(
+                cur,
+                Terminator::SwitchInt {
+                    discriminant: Operand::Move(Place::from_local(ok), None),
+                    targets: vec![(1, check_end)],
+                    otherwise: next_bb,
+                },
+            );
+            cur = check_end;
+        }
+
+        match end {
+            Some(hi) => {
+                let ok = fb.new_temp(bool_ty);
+                fb.push_stmt(
+                    cur,
+                    MirStatement::Assign {
+                        place: Place::from_local(ok),
+                        rvalue: Rvalue::BinaryOp {
+                            op: if inclusive {
+                                BinaryOp::Le
+                            } else {
+                                BinaryOp::Lt
+                            },
+                            lhs: Operand::Copy(scrut_place.clone(), None),
+                            rhs: Operand::Constant(
+                                self.lower_literal(&hi, scrut_ty),
+                                Some(source.clone()),
+                            ),
+                        },
+                        source: Some(source.clone()),
+                    },
+                );
+                fb.set_terminator(
+                    cur,
+                    Terminator::SwitchInt {
+                        discriminant: Operand::Move(Place::from_local(ok), None),
+                        targets: vec![(1, matched_bb)],
+                        otherwise: next_bb,
+                    },
+                );
+            }
+            None => {
+                fb.set_terminator(cur, Terminator::Goto(matched_bb));
+            }
         }
     }
 

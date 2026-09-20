@@ -1711,6 +1711,61 @@ fn switch_enum_payload_binds_through_projection() {
     );
 }
 
+#[test]
+fn switch_range_emits_bound_tests() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 5; let r = switch (a) { 0..10 => 1, _ => 0, }; return r; }",
+    );
+
+    let ops: Vec<String> = mir
+        .program
+        .functions
+        .values()
+        .flat_map(|f| f.blocks.iter())
+        .flat_map(|block| block.statements.iter())
+        .filter_map(|stmt| match stmt {
+            crate::MirStatement::Assign {
+                rvalue: crate::Rvalue::BinaryOp { op, .. },
+                ..
+            } => Some(format!("{op:?}")),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        ops.contains(&"Ge".to_string()),
+        "expected a lower bound test, got {ops:?}"
+    );
+    assert!(
+        ops.contains(&"Lt".to_string()),
+        "expected an exclusive upper bound test, got {ops:?}"
+    );
+}
+
+#[test]
+fn switch_inclusive_range_emits_le_test() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 5; let r = switch (a) { 0..=9 => 1, _ => 0, }; return r; }",
+    );
+
+    let has_le = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    crate::MirStatement::Assign {
+                        rvalue: crate::Rvalue::BinaryOp {
+                            op: zeen_ast::expressions::BinaryOp::Le,
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+        })
+    });
+    assert!(has_le, "expected an inclusive upper bound test");
+}
+
 fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
     let _ = ty;
     true
