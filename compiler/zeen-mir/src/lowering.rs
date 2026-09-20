@@ -8108,7 +8108,10 @@ impl<'ctx> MirLowering<'ctx> {
     fn normalize_return_operand(&mut self, fb: &FnBuilder, operand: Operand) -> Operand {
         match &operand {
             Operand::Copy(place, _) | Operand::Move(place, _) => {
-                let ty = fb.func.local(place.local).ty;
+                let ty = match place.projection.first() {
+                    Some(PlaceElem::Global(id)) => self.program.global_vars[id.0 as usize].ty,
+                    _ => fb.func.local(place.local).ty,
+                };
                 if matches!(self.typecheck.interner.get(ty), Type::Void) {
                     Operand::Constant(ConstValue::Void, None)
                 } else {

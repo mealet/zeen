@@ -1,0 +1,12 @@
+let counter: i32 = 0;
+
+fn next() i32 {
+  counter = counter + 1;
+  return counter;
+}
+
+fn main() {
+  let x = next();
+  @println("x: {}", x);
+  @println("counter: {}", next());
+}
