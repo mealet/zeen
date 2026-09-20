@@ -34,7 +34,7 @@ pub struct List[T] {
   }
 
   /// Allocate new `List` with copying values from slice
-  pub fn from_copy[T: Copy](value: []const T) Self {
+  pub fn from[T: Copy](value: []const T) Self {
     let len = value.len;
     let capacity = align_capacity_up(value.len + 1);
     let ptr = @as([*]T, Allocator.alloc(capacity * @sizeof(T)));
