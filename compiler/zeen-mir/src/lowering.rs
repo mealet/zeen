@@ -148,6 +148,10 @@ pub struct MirLowering<'ctx> {
     /// by (target, fat signature) so each adapter is emitted once.
     fat_adapter_cache: HashMap<(MirFunctionId, TypeId), MirFunctionId>,
 
+    /// Same as above for bodyless extern targets, keyed by
+    /// (extern_fns index, fat signature).
+    fat_extern_adapter_cache: HashMap<(usize, TypeId), MirFunctionId>,
+
     /// Cache of synthesized fn-pointer-box → fat adapter functions, keyed by
     /// the plain `fn` signature type each adapter forwards for.
     fat_pointer_adapter_cache: HashMap<TypeId, MirFunctionId>,
@@ -369,6 +373,7 @@ impl<'ctx> MirLowering<'ctx> {
             hir_fns_by_def,
             fn_stack: Vec::new(),
             fat_adapter_cache: HashMap::new(),
+            fat_extern_adapter_cache: HashMap::new(),
             fat_pointer_adapter_cache: HashMap::new(),
             fat_drop_cache: HashMap::new(),
             enum_drop_cache: HashMap::new(),
@@ -2368,39 +2373,7 @@ impl<'ctx> MirLowering<'ctx> {
         // env and forwards straight into the plain body; env stays null.
         if captures.is_empty() {
             let adapter = self.fat_target_adapter(closure_fn, fat_ty);
-            let fn_ptr_temp = fb.new_temp(fn_ptr_ty);
-            fb.push_stmt(
-                block,
-                MirStatement::Assign {
-                    place: Place::from_local(fn_ptr_temp),
-                    rvalue: Rvalue::Cast {
-                        operand: Operand::Constant(ConstValue::Fn(adapter), None),
-                        target: fn_ptr_ty,
-                    },
-                    source: Some(source_expr.source.clone()),
-                },
-            );
-
-            let temp = fb.new_temp(fat_ty);
-            fb.push_stmt(
-                block,
-                MirStatement::Assign {
-                    place: Place::from_local(temp),
-                    rvalue: Rvalue::Aggregate {
-                        kind: AggregateKind::Struct(CLOSURE_FAT_DEF),
-                        operands: vec![
-                            Operand::Copy(Place::from_local(fn_ptr_temp), None),
-                            Operand::Constant(ConstValue::NullPtr, None),
-                            Operand::Constant(ConstValue::Fn(self.env_drop_noop()), None),
-                        ],
-                    },
-                    source: Some(source_expr.source.clone()),
-                },
-            );
-            return (
-                block,
-                Operand::Move(Place::from_local(temp), Some(source_expr.source.clone())),
-            );
+            return self.fat_envelope_no_env(fb, block, fat_ty, adapter, source_expr);
         }
 
         // Capturing: materialize each capture into the env struct's layout,
@@ -2640,19 +2613,77 @@ impl<'ctx> MirLowering<'ctx> {
     /// Returns (synthesizing on first use) the env-first adapter for a
     /// plain-body function stored into a fat slot: it ignores its env and
     /// forwards into the body with the plain arguments.
+    /// Builds a fat envelope with a null env around an already resolved
+    /// adapter function: `{ $fn: adapter, $env: null, $drop: noop }`.
+    fn fat_envelope_no_env(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        fat_ty: TypeId,
+        adapter: MirFunctionId,
+        source_expr: &HirExpr,
+    ) -> (BlockId, Operand) {
+        let fn_ptr_ty = self.void_ptr_ty();
+        let fn_ptr_temp = fb.new_temp(fn_ptr_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(fn_ptr_temp),
+                rvalue: Rvalue::Cast {
+                    operand: Operand::Constant(ConstValue::Fn(adapter), None),
+                    target: fn_ptr_ty,
+                },
+                source: Some(source_expr.source.clone()),
+            },
+        );
+
+        let temp = fb.new_temp(fat_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Struct(CLOSURE_FAT_DEF),
+                    operands: vec![
+                        Operand::Copy(Place::from_local(fn_ptr_temp), None),
+                        Operand::Constant(ConstValue::NullPtr, None),
+                        Operand::Constant(ConstValue::Fn(self.env_drop_noop()), None),
+                    ],
+                },
+                source: Some(source_expr.source.clone()),
+            },
+        );
+        (
+            block,
+            Operand::Move(Place::from_local(temp), Some(source_expr.source.clone())),
+        )
+    }
+
     fn fat_target_adapter(&mut self, target: MirFunctionId, fat_ty: TypeId) -> MirFunctionId {
         let key = (target, fat_ty);
         if let Some(&id) = self.fat_adapter_cache.get(&key) {
             return id;
         }
-        let id = self.synthesize_fat_target_adapter(target, fat_ty);
+        let id = self.synthesize_fat_target_adapter(CallTarget::Direct(target), fat_ty);
         self.fat_adapter_cache.insert(key, id);
+        id
+    }
+
+    /// Adapter over a bodyless extern: forwards the env-first call to the
+    /// external symbol. The extern itself is never monomorphized.
+    fn fat_extern_adapter(&mut self, extern_idx: usize, fat_ty: TypeId) -> MirFunctionId {
+        let key = (extern_idx, fat_ty);
+        if let Some(&id) = self.fat_extern_adapter_cache.get(&key) {
+            return id;
+        }
+        let id = self.synthesize_fat_target_adapter(CallTarget::Extern(extern_idx), fat_ty);
+        self.fat_extern_adapter_cache.insert(key, id);
         id
     }
 
     fn synthesize_fat_target_adapter(
         &mut self,
-        target: MirFunctionId,
+        target: CallTarget,
         fat_ty: TypeId,
     ) -> MirFunctionId {
         let Type::FatFn { params, ret, .. } = self.typecheck.interner.get(fat_ty).clone() else {
@@ -2705,7 +2736,7 @@ impl<'ctx> MirLowering<'ctx> {
             source: None,
         });
         func.blocks[0].terminator = Terminator::Call {
-            func: CallTarget::Direct(target),
+            func: target,
             args,
             destination: Place::from_local(sink_or_ret),
             target: Some(BlockId(1)),
@@ -2989,6 +3020,22 @@ impl<'ctx> MirLowering<'ctx> {
                         Some(DefKind::Function)
                     )
                 {
+                    let hir_fn = self.hir_fns_by_def[def_id].clone();
+                    // A bodyless extern has no MIR body to point at: reference
+                    // the external symbol instead of monomorphizing, which
+                    // would emit an empty local definition shadowing it.
+                    if hir_fn.is_extern && hir_fn.body.is_none() {
+                        let idx = self.register_extern_fn(*def_id, &hir_fn);
+                        if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
+                            let adapter = self.fat_extern_adapter(idx, expr_ty);
+                            return self.fat_envelope_no_env(fb, block, expr_ty, adapter, expr);
+                        }
+                        return (
+                            block,
+                            Operand::Constant(ConstValue::ExternFn(idx), Some(expr.source.clone())),
+                        );
+                    }
+
                     // A static function in a fat slot gets an empty env.
                     if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
                         let mir_f = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
@@ -8437,7 +8484,8 @@ impl<'ctx> MirLowering<'ctx> {
         // literal) is materialized into a local so codegen can type the
         // indirect call from the place.
         let callee_operand = match &callee_operand {
-            Operand::Constant(ConstValue::Fn(_), _) => {
+            Operand::Constant(ConstValue::Fn(_), _)
+            | Operand::Constant(ConstValue::ExternFn(_), _) => {
                 let temp = fb.new_temp(callee_ty);
                 fb.push_stmt(
                     block,
