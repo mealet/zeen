@@ -435,6 +435,19 @@ pub struct String {
   pub fn to_list(*const self) List[char] {
     List.from(self.ptr[0..self._len])
   }
+
+  /// Allocate new `String` from character list.
+  pub fn from_list(value: *const List[char]) Self {
+    let out = Self.new();
+
+    let i: usize = 0;
+    while (i < (*value).len()) {
+      out.push((*value).get(i).unwrap());
+      i += 1;
+    };
+
+    out
+  }
 }
 
 // ===| String Interfaces Implementations |===

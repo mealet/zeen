@@ -784,8 +784,32 @@ impl<'res> HirLowering<'res> {
                     }
                 };
 
+                let lowered_object = self.lower_expr(object);
+                // `Self.foo` names the enclosing type, like `Type.foo`.
+                let object = match &lowered_object.kind {
+                    HirExprKind::Error => match self.resolution.resolution_of_expr(object) {
+                        Some(zeen_resolve::Resolution::SelfType(id))
+                            if matches!(
+                                self.resolution.defs.get(&id).map(|i| &i.kind),
+                                Some(
+                                    zeen_resolve::DefKind::Struct
+                                        | zeen_resolve::DefKind::Enum
+                                )
+                            ) =>
+                        {
+                            Rc::new(HirExpr {
+                                id: self.fresh_id(),
+                                kind: HirExprKind::VarRef(id),
+                                source: lowered_object.source.clone(),
+                            })
+                        }
+                        _ => Rc::new(lowered_object),
+                    },
+                    _ => Rc::new(lowered_object),
+                };
+
                 HirExprKind::FieldAccess {
-                    object: Rc::new(self.lower_expr(object)),
+                    object,
                     field: (field_name, field_span),
                 }
             }
