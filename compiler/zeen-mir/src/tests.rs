@@ -1652,6 +1652,65 @@ fn switch_string_arm_lowes_byte_loop() {
     );
 }
 
+#[test]
+fn switch_enum_dispatches_on_tag() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32 } fn main() i32 { let e = Foo.a; let r = switch (e) { .a => 1, .b(x) => x, }; return r; }",
+    );
+
+    let tag_switch = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            matches!(
+                block.terminator,
+                crate::Terminator::SwitchInt { ref targets, .. } if targets.len() == 1
+            )
+        })
+    });
+    assert!(tag_switch, "expected a tag dispatch switch");
+
+    let tag_read = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    crate::MirStatement::Assign {
+                        rvalue: crate::Rvalue::Discriminant(_),
+                        ..
+                    }
+                )
+            })
+        })
+    });
+    assert!(tag_read, "expected a discriminant read of the scrutinee");
+}
+
+#[test]
+fn switch_enum_payload_binds_through_projection() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32 } fn main() i32 { let e = Foo.b(41); let r = switch (e) { .a => 0, .b(x) => x, }; return r; }",
+    );
+
+    let projected = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    crate::MirStatement::Assign {
+                        rvalue: crate::Rvalue::Use(
+                            crate::Operand::Copy(p, _) | crate::Operand::Move(p, _)
+                        ),
+                        ..
+                    } if p.projection.iter().any(|elem| matches!(elem, crate::PlaceElem::EnumPayload(_)))
+                )
+            })
+        })
+    });
+    assert!(
+        projected,
+        "expected the payload binding to read through EnumPayload"
+    );
+}
+
 fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
     let _ = ty;
     true

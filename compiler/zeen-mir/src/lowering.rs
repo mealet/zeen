@@ -4270,10 +4270,32 @@ impl<'ctx> MirLowering<'ctx> {
             .interner
             .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
 
+        let enum_def = match self.typecheck.interner.get(scrut_ty).clone() {
+            Type::Enum { def_id, .. } => Some(def_id),
+            _ => None,
+        };
+        if let Some(def_id) = enum_def {
+            self.register_enum_layout(scrut_ty, def_id);
+        }
+        let tag_local = enum_def.map(|_| {
+            let tag = fb.new_temp(
+                self.typecheck
+                    .interner
+                    .intern(Type::Builtin(zeen_ast::types::BuiltinType::u8)),
+            );
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(tag),
+                    rvalue: Rvalue::Discriminant(scrut_place.clone()),
+                    source: Some(expr.source.clone()),
+                },
+            );
+            tag
+        });
+
         let join = fb.new_block();
         let result_local = fb.new_temp(result_ty);
-
-        fb.scope_stack.push(Vec::new());
 
         let mut next_test = fb.new_block();
         fb.set_terminator(block, Terminator::Goto(next_test));
@@ -4286,7 +4308,20 @@ impl<'ctx> MirLowering<'ctx> {
             let literals = Self::arm_literals(&arm.pattern);
             let all_strings = !literals.is_empty()
                 && literals.iter().all(|lit| matches!(lit, Literal::String(_)));
-            if literals.is_empty() {
+            let enum_tags = enum_def
+                .map(|def_id| self.arm_enum_tags(&arm.pattern, def_id))
+                .unwrap_or_default();
+            if !enum_tags.is_empty() {
+                let tag = tag_local.expect("enum switch reads the tag");
+                fb.set_terminator(
+                    test_bb,
+                    Terminator::SwitchInt {
+                        discriminant: Operand::Copy(Place::from_local(tag), None),
+                        targets: enum_tags.into_iter().map(|tag| (tag, matched_bb)).collect(),
+                        otherwise: next_test,
+                    },
+                );
+            } else if literals.is_empty() {
                 fb.set_terminator(test_bb, Terminator::Goto(matched_bb));
             } else if all_strings && self.switch_string_elem(scrut_ty).is_some() {
                 let mut cur = test_bb;
@@ -4342,9 +4377,14 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             let mut body_bb = matched_bb;
-            if let Some((name, def_id, span)) = Self::arm_binding(arm) {
+            let bound_local = if let Some((name, def_id, span)) = Self::arm_binding(arm) {
+                let variant_def = enum_def.and_then(|def| self.arm_enum_variant(&arm.pattern, def));
+                let bind_ty = match variant_def {
+                    Some(variant) => self.enum_payload_ty(scrut_ty, variant),
+                    None => scrut_ty,
+                };
                 let local = fb.new_local(
-                    scrut_ty,
+                    bind_ty,
                     LocalKind::UserVariable,
                     Mutability::Mut,
                     Some(name),
@@ -4352,29 +4392,49 @@ impl<'ctx> MirLowering<'ctx> {
                 );
                 fb.locals_by_def.insert(def_id, local);
                 fb.push_stmt(matched_bb, MirStatement::StorageLive(local));
-                if let Some(scope) = fb.scope_stack.last_mut() {
-                    scope.push(local);
-                }
+                let value = match variant_def {
+                    Some(variant) => {
+                        let payload = scrut_place.clone().enum_payload(variant);
+                        self.place_to_operand(payload, bind_ty, Some(expr.source.clone()))
+                    }
+                    None => self.place_to_operand(
+                        scrut_place.clone(),
+                        scrut_ty,
+                        Some(expr.source.clone()),
+                    ),
+                };
                 fb.push_stmt(
                     matched_bb,
                     MirStatement::Assign {
                         place: Place::from_local(local),
-                        rvalue: Rvalue::Use(Operand::Copy(scrut_place.clone(), None)),
+                        rvalue: Rvalue::Use(value),
                         source: Some(expr.source.clone()),
                     },
                 );
-            }
+                Some(local)
+            } else {
+                None
+            };
 
             if let Some(guard) = &arm.guard {
                 let guard_bb = fb.new_block();
                 let (end, guard_op) = self.lower_expr_to_operand(fb, guard, matched_bb);
                 let guard_local = self.operand_to_local(fb, guard_op, bool_ty, end);
+                let otherwise = match bound_local {
+                    Some(local) => {
+                        let fail_bb = fb.new_block();
+                        fb.push_stmt(fail_bb, MirStatement::StorageDead(local));
+                        fb.set_terminator(fail_bb, Terminator::Goto(next_test));
+                        fail_bb
+                    }
+                    None => next_test,
+                };
                 fb.set_terminator(
                     end,
                     Terminator::SwitchInt {
                         discriminant: Operand::Move(Place::from_local(guard_local), None),
                         targets: vec![(1, guard_bb)],
-                        otherwise: next_test,
+                        otherwise,
                     },
                 );
                 body_bb = guard_bb;
@@ -4392,14 +4452,12 @@ impl<'ctx> MirLowering<'ctx> {
                 );
                 fb.set_terminator(end, Terminator::Goto(join));
             }
+            if let Some(local) = bound_local {
+                fb.push_stmt(end, MirStatement::StorageDead(local));
+            }
         }
 
         fb.set_terminator(next_test, Terminator::Unreachable);
-
-        let locals = fb.scope_stack.pop().unwrap();
-        for local in locals.iter().rev() {
-            fb.push_stmt(join, MirStatement::StorageDead(*local));
-        }
 
         (
             join,
@@ -4412,6 +4470,34 @@ impl<'ctx> MirLowering<'ctx> {
             HirPattern::Literal(lit) => vec![*lit],
             HirPattern::Or(patterns) => patterns.iter().flat_map(Self::arm_literals).collect(),
             HirPattern::Binding(_) | HirPattern::Enum { .. } | HirPattern::Wildcard => Vec::new(),
+        }
+    }
+
+    fn arm_enum_tags(&self, pattern: &HirPattern, enum_def: DefId) -> Vec<u128> {
+        match pattern {
+            HirPattern::Enum { variant, .. } => self
+                .enum_info(enum_def)
+                .and_then(|info| info.variants.iter().find(|v| v.name == *variant))
+                .map(|info| vec![self.enum_variant_tag(enum_def, info.def_id) as u128])
+                .unwrap_or_default(),
+            HirPattern::Or(patterns) => patterns
+                .iter()
+                .flat_map(|inner| self.arm_enum_tags(inner, enum_def))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn arm_enum_variant(&self, pattern: &HirPattern, enum_def: DefId) -> Option<DefId> {
+        match pattern {
+            HirPattern::Enum { variant, .. } => self
+                .enum_info(enum_def)
+                .and_then(|info| info.variants.iter().find(|v| v.name == *variant))
+                .map(|info| info.def_id),
+            HirPattern::Or(patterns) => patterns
+                .iter()
+                .find_map(|inner| self.arm_enum_variant(inner, enum_def)),
+            _ => None,
         }
     }
 
