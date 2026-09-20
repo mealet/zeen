@@ -1519,7 +1519,13 @@ impl<'res> TypeChecker<'res> {
         }
 
         for (g, bounds) in &sig_generic_bounds {
-            generic_bounds.insert(*g, bounds.clone());
+            // A method generic may name a struct generic to add bounds to
+            // it (`from_clone[T: Clone]` inside `struct List[T]`): keep the
+            // struct's own bounds and extend them with the method's.
+            generic_bounds
+                .entry(*g)
+                .or_default()
+                .extend(bounds.iter().copied());
         }
 
         // The implement block's own generics (`implement[T: Display]`) and

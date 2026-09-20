@@ -417,3 +417,27 @@ fn main() {
         "zeen::typechecker::generic_missing_bound",
     );
 }
+
+/// A method generic repeating the struct generic adds a bound to it: the
+/// method only resolves when the struct argument satisfies the bound.
+#[test]
+fn method_bound_addition_rejects_unsatisfied() {
+    compile_fails(
+        "method_bound_addition",
+        r#"
+struct Wrap[T] {
+  inner: T,
+
+  pub fn dup_inner[T: Clone](*const self) T {
+    return self.inner.clone();
+  }
+}
+
+fn main() {
+  let w = Wrap { .inner = 5 };
+  let q = w.dup_inner();
+}
+"#,
+        "zeen::typechecker::generic_bound_not_satisfied",
+    );
+}
