@@ -1389,7 +1389,7 @@ impl<'ctx> NameResolver {
             Pattern::Named { name, span } => Some((*name, *span)),
             Pattern::EnumVariant { binding, .. } => binding.map(|(name, span)| (name, span)),
             Pattern::Or(patterns) => patterns.iter().find_map(Self::arm_binding),
-            Pattern::Literal(_) | Pattern::Wildcard => None,
+            Pattern::Literal(_) | Pattern::Range { .. } | Pattern::Wildcard => None,
         }
     }
 

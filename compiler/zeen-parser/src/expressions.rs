@@ -1469,7 +1469,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     }
 
     fn parse_pattern(&mut self) -> Option<expressions::Pattern<'ctx>> {
-        let pattern = self.parse_single_pattern()?;
+        let pattern = self.parse_range_or_single()?;
 
         if !self.p.eat(TokenKind::Pipe) {
             return Some(pattern);
@@ -1478,7 +1478,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         let mut patterns_buffer: SmallVec<[expressions::Pattern; 4]> = SmallVec::new();
         patterns_buffer.push(pattern);
 
-        while let Some(next) = self.parse_single_pattern() {
+        while let Some(next) = self.parse_range_or_single() {
             patterns_buffer.push(next);
 
             if !self.p.eat(TokenKind::Pipe) {
@@ -1491,17 +1491,104 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         Some(expressions::Pattern::Or(patterns))
     }
 
-    fn parse_single_pattern(&mut self) -> Option<expressions::Pattern<'ctx>> {
+    fn parse_range_or_single(&mut self) -> Option<expressions::Pattern<'ctx>> {
         use expressions::Pattern;
+
+        if matches!(
+            self.p.current().kind,
+            TokenKind::DotDot | TokenKind::DotDotEq
+        ) {
+            let inclusive = self.p.current().kind == TokenKind::DotDotEq;
+            let _ = self.p.advance_not_eof()?;
+
+            let end = self.parse_range_bound()?;
+
+            if self.p.panic_mode {
+                return None;
+            }
+
+            return Some(Pattern::Range {
+                start: None,
+                end: Some(end),
+                inclusive,
+            });
+        }
+
+        let single = self.parse_single_pattern()?;
+
+        if !matches!(
+            self.p.current().kind,
+            TokenKind::DotDot | TokenKind::DotDotEq
+        ) {
+            return Some(single);
+        }
+
+        let Pattern::Literal(start) = single else {
+            let token = self.p.current_clone();
+            self.p.report(ParserError::SyntaxError {
+                label: "only literals can bound a range pattern".into(),
+                help: None,
+                src: self.p.named_src(),
+                span: token.span,
+            });
+
+            return None;
+        };
+
+        let inclusive = self.p.current().kind == TokenKind::DotDotEq;
+        let tok = self.p.current_clone();
+        let _ = self.p.advance_not_eof()?;
+
+        let end = if self.range_bound_follows() {
+            Some(self.parse_range_bound()?)
+        } else {
+            if inclusive {
+                self.report_range_inclusive_without_end(&tok);
+                return None;
+            }
+            None
+        };
+
+        if self.p.panic_mode {
+            return None;
+        }
+
+        Some(Pattern::Range {
+            start: Some(start),
+            end,
+            inclusive,
+        })
+    }
+
+    fn range_bound_follows(&mut self) -> bool {
+        matches!(
+            self.p.current().kind,
+            TokenKind::Literal { .. } | TokenKind::Minus
+        )
+    }
+
+    fn parse_range_bound(&mut self) -> Option<expressions::Literal> {
+        if !self.range_bound_follows() {
+            let token = self.p.current_clone();
+            self.p.report(ParserError::SyntaxError {
+                label: "expected a range bound here".into(),
+                help: None,
+                src: self.p.named_src(),
+                span: token.span,
+            });
+
+            return None;
+        }
+
+        self.parse_pattern_literal()
+    }
+
+    fn parse_pattern_literal(&mut self) -> Option<expressions::Literal> {
+        use expressions::Literal;
 
         let token = self.p.current_clone();
 
         match token.kind {
-            TokenKind::Underscore => {
-                let _ = self.p.advance_not_eof()?;
-                Some(Pattern::Wildcard)
-            }
-
             TokenKind::Literal { kind } => {
                 let Expression {
                     kind: ExpressionKind::Literal(literal),
@@ -1515,9 +1602,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                     return None;
                 }
 
-                let pat = Pattern::Literal(*literal);
-
-                Some(pat)
+                Some(*literal)
             }
 
             TokenKind::Keyword(
@@ -1537,7 +1622,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                     return None;
                 }
 
-                Some(Pattern::Literal(*literal))
+                Some(*literal)
             }
 
             TokenKind::Minus => {
@@ -1568,12 +1653,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 }
 
                 match literal {
-                    expressions::Literal::Int(value) => Some(Pattern::Literal(
-                        expressions::Literal::Int(value.wrapping_neg()),
-                    )),
-                    expressions::Literal::Float(value) => {
-                        Some(Pattern::Literal(expressions::Literal::Float(-value)))
-                    }
+                    Literal::Int(value) => Some(Literal::Int(value.wrapping_neg())),
+                    Literal::Float(value) => Some(Literal::Float(-value)),
                     _ => {
                         self.p.report(ParserError::SyntaxError {
                             label: "only numbers can be negated in switch pattern".into(),
@@ -1585,6 +1666,45 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                         None
                     }
                 }
+            }
+
+            _ => {
+                self.p.report(ParserError::SyntaxError {
+                    label: "expected switch pattern here".into(),
+                    help: None,
+                    src: self.p.named_src(),
+                    span: token.span,
+                });
+
+                None
+            }
+        }
+    }
+
+    fn parse_single_pattern(&mut self) -> Option<expressions::Pattern<'ctx>> {
+        use expressions::Pattern;
+
+        let token = self.p.current_clone();
+
+        match token.kind {
+            TokenKind::Underscore => {
+                let _ = self.p.advance_not_eof()?;
+                Some(Pattern::Wildcard)
+            }
+
+            TokenKind::Literal { .. }
+            | TokenKind::Keyword(
+                zeen_lexer::token::CompilerKeyword::True
+                | zeen_lexer::token::CompilerKeyword::False,
+            )
+            | TokenKind::Minus => {
+                let literal = self.parse_pattern_literal()?;
+
+                if self.p.panic_mode {
+                    return None;
+                }
+
+                Some(Pattern::Literal(literal))
             }
 
             TokenKind::Ident => {
@@ -2517,6 +2637,103 @@ mod tests {
         assert_eq!(rodeo.borrow().resolve(&name), "x");
 
         assert!(matches!(arms[2].pattern, expressions::Pattern::Wildcard));
+    }
+
+    #[test]
+    fn switch_range_patterns() {
+        const SRC: &str = "switch (a) { 0..10 => 1, 0..=9 => 2, ..0 => 3, 10.. => 4, -5..5 => 5, 'a'..='z' => 6, _ => 0, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(arms.len(), 7);
+
+        let expressions::Pattern::Range {
+            start,
+            end,
+            inclusive,
+        } = arms[0].pattern
+        else {
+            panic!("expected range, got {:?}", arms[0].pattern);
+        };
+        assert!(matches!(start, Some(expressions::Literal::Int(0))));
+        assert!(matches!(end, Some(expressions::Literal::Int(10))));
+        assert!(!inclusive);
+
+        assert!(matches!(
+            arms[1].pattern,
+            expressions::Pattern::Range {
+                inclusive: true,
+                ..
+            }
+        ));
+
+        let expressions::Pattern::Range {
+            start,
+            end,
+            inclusive,
+        } = arms[2].pattern
+        else {
+            panic!("expected range, got {:?}", arms[2].pattern);
+        };
+        assert!(start.is_none());
+        assert!(matches!(end, Some(expressions::Literal::Int(0))));
+        assert!(!inclusive);
+
+        let expressions::Pattern::Range { start, end, .. } = arms[3].pattern else {
+            panic!("expected range, got {:?}", arms[3].pattern);
+        };
+        assert!(matches!(start, Some(expressions::Literal::Int(10))));
+        assert!(end.is_none());
+
+        let expressions::Pattern::Range { start, .. } = arms[4].pattern else {
+            panic!("expected range, got {:?}", arms[4].pattern);
+        };
+        assert!(matches!(start, Some(expressions::Literal::Int(-5))));
+
+        let expressions::Pattern::Range {
+            start,
+            end,
+            inclusive,
+        } = arms[5].pattern
+        else {
+            panic!("expected range, got {:?}", arms[5].pattern);
+        };
+        assert!(matches!(start, Some(expressions::Literal::Char('a'))));
+        assert!(matches!(end, Some(expressions::Literal::Char('z'))));
+        assert!(inclusive);
+    }
+
+    #[test]
+    fn switch_range_or_pattern() {
+        const SRC: &str = "switch (a) { 0..5 | 10..15 => 1, _ => 0, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        let expressions::Pattern::Or(patterns) = arms[0].pattern else {
+            panic!("expected Or, got {:?}", arms[0].pattern);
+        };
+        assert_eq!(patterns.len(), 2);
+        assert!(matches!(patterns[0], expressions::Pattern::Range { .. }));
+    }
+
+    #[test]
+    fn switch_range_binding_bound_is_rejected() {
+        const SRC: &str = "switch (a) { val..10 => 1, _ => 0, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        assert!(expr_parser.parse().is_none());
+        assert!(!parser.errors.is_empty());
     }
 
     #[test]
