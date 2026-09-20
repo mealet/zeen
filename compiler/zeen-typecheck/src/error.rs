@@ -868,4 +868,78 @@ pub enum TypeError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("cannot switch over type `{ty}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::switch_unsupported_type),
+        help("switch supports integers, `bool`, `char` and strings")
+    )]
+    SwitchOnUnsupportedType {
+        ty: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("switch pattern `{found}` does not match type `{expected}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::switch_pattern_mismatch))]
+    SwitchPatternMismatch {
+        expected: SmolStr,
+        found: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("float patterns are not supported in switch")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::switch_float_pattern),
+        help("compare floats with `if` and `==` instead")
+    )]
+    SwitchFloatPattern {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("switch is not exhaustive")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::switch_non_exhaustive),
+        help("add a wildcard arm `_ => ...`")
+    )]
+    SwitchNonExhaustive {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("unreachable switch arm")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::switch_unreachable_arm))]
+    SwitchUnreachableArm {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("or-pattern bindings must share one name, found `{found}` after `{expected}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::switch_or_binding_mismatch))]
+    SwitchOrBindingMismatch {
+        expected: SmolStr,
+        found: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
