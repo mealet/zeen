@@ -1206,18 +1206,33 @@ impl<'ctx> NameResolver {
         let Some(generics) = generics else { return };
 
         for generic in generics {
-            let def_id = self.define_at(
-                NodeKey::from_generic(generic),
-                DefInfo {
-                    name: generic.name.0,
-                    kind: DefKind::GenericParam,
-                    span: (generic.name.1, current_src.clone()).into(),
-                    decl: None,
-                    is_pub: false,
-                },
-            );
+            // A generic repeating an enclosing generic parameter name does
+            // not shadow it: it names the same parameter and only adds
+            // bounds for the current scope (e.g. `from_clone[T: Clone]`
+            // inside `struct List[T]`).
+            if let Some(existing) = self.table.lookup_type(generic.name.0)
+                && matches!(
+                    self.result.defs.get(&existing).map(|info| &info.kind),
+                    Some(DefKind::GenericParam)
+                )
+            {
+                self.result
+                    .binding_sites
+                    .insert(NodeKey::from_generic(generic), existing);
+            } else {
+                let def_id = self.define_at(
+                    NodeKey::from_generic(generic),
+                    DefInfo {
+                        name: generic.name.0,
+                        kind: DefKind::GenericParam,
+                        span: (generic.name.1, current_src.clone()).into(),
+                        decl: None,
+                        is_pub: false,
+                    },
+                );
 
-            self.table.declare_type(generic.name.0, def_id);
+                self.table.declare_type(generic.name.0, def_id);
+            }
 
             if let Some(bounds) = generic.interfaces {
                 for bound in bounds {
