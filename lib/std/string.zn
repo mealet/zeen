@@ -2,6 +2,7 @@ use std.c.string;
 use std.c.ctype;
 
 use std.alloc;
+use std.list;
 
 /// String initial capacity size (initialization on first push).
 const InitialStringCapacity: usize = 8;
@@ -428,6 +429,11 @@ pub struct String {
 
     self._len = new_len;
     self.ptr[self._len] = '\0';
+  }
+
+  /// Convert string to character list.
+  pub fn to_list(*const self) List[char] {
+    List.from(self.ptr[0..self._len])
   }
 }
 
