@@ -1,0 +1,23 @@
+enum Foo {
+  a,
+  b: i32,
+  c: { inner: i32, hello: u32 },
+}
+
+fn main() {
+  let e = Foo.b(41);
+
+  switch (e) {
+    .a => @println("empty"),
+    .b(v) => @println("single: {}", v),
+    .c(v) => @println("struct: {} {}", v.inner, v.hello),
+  };
+
+  let s = Foo.c { .inner = 1, .hello = 2 };
+  let r = switch (s) {
+    .a => -1,
+    .b(v) => v,
+    .c(v) => v.inner,
+  };
+  @println("r: {}", r);
+}

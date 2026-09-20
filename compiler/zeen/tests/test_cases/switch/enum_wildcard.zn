@@ -1,0 +1,13 @@
+enum Foo {
+  a,
+  b: i32,
+}
+
+fn main() {
+  let e = Foo.b(41);
+  let r = switch (e) {
+    .b(v) => v,
+    _ => -1,
+  };
+  @println("r: {}", r);
+}
