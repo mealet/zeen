@@ -462,6 +462,16 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
+    /// Pointer to a declared extern function (see `declare_externs`).
+    fn extern_fn_value(&self, idx: usize) -> PointerValue<'ctx> {
+        let decl = &self.program.extern_fns[idx];
+        self.module
+            .get_function(&decl.symbol_name)
+            .expect("extern function must be declared")
+            .as_global_value()
+            .as_pointer_value()
+    }
+
     /// Defines the body of the core-provided `__zeen_stdout_write` runtime
     /// (declared as `extern` in `core.out`): writes `len` bytes from `ptr`
     /// to stdout. Emitted only when the program actually references it.
@@ -1042,6 +1052,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .as_pointer_value()
                 .into(),
 
+            ConstValue::ExternFn(idx) => self.extern_fn_value(*idx).into(),
+
             // A void value is only ever produced as the placeholder result of
             // an expression with no value (e.g. an `if` without an `else`).
             // Valid programs never store it, so a throwaway zero is enough.
@@ -1276,17 +1288,22 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             ) || matches!(
                 lhs,
                 Operand::Constant(
-                    ConstValue::NullPtr | ConstValue::Str(_) | ConstValue::Fn(_),
+                    ConstValue::NullPtr
+                        | ConstValue::Str(_)
+                        | ConstValue::Fn(_)
+                        | ConstValue::ExternFn(_),
                     _
                 )
             ) || matches!(
                 rhs,
                 Operand::Constant(
-                    ConstValue::NullPtr | ConstValue::Str(_) | ConstValue::Fn(_),
+                    ConstValue::NullPtr
+                        | ConstValue::Str(_)
+                        | ConstValue::Fn(_)
+                        | ConstValue::ExternFn(_),
                     _
                 )
             ));
-
         if is_pointer_cmp {
             let int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
             let l = match lhs_v {
@@ -1892,7 +1909,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         inner: TypeId(0),
                         is_const: false,
                     },
-                    ConstValue::Fn(_) => Type::Pointer {
+                    ConstValue::Fn(_) | ConstValue::ExternFn(_) => Type::Pointer {
                         inner: TypeId(0),
                         is_const: false,
                     },
@@ -2980,7 +2997,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     ConstValue::Char(_) => "%c".to_string(),
                     ConstValue::Bool(_) => unreachable!("handled above"),
                     ConstValue::NullPtr => "%s".to_string(),
-                    ConstValue::Fn(_) => "%s".to_string(),
+                    ConstValue::Fn(_) | ConstValue::ExternFn(_) => "%s".to_string(),
                     ConstValue::Void => unreachable!("cannot @dbg a void constant"),
                     ConstValue::Int(_) => "%d".to_string(),
                 };

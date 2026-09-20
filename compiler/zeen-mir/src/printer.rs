@@ -446,6 +446,14 @@ impl<'a> MirPrinter<'a> {
                 .get(id)
                 .cloned()
                 .unwrap_or_else(|| format!("fn#{}", id.0)),
+            ConstValue::ExternFn(idx) => format!(
+                "extern \"{}\"",
+                self.program
+                    .extern_fns
+                    .get(*idx)
+                    .map(|f| f.symbol_name.as_str())
+                    .unwrap_or("?")
+            ),
         }
     }
 
