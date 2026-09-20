@@ -411,6 +411,164 @@ pub struct List[T] {
       };
     };
   }
+
+  /// Sort list with comparator (stable).
+  pub fn sort_by(*self, compare: fn(*const T, *const T) Ordering) {
+    let len = self._len;
+
+    if (len < 2) { return; };
+
+    if (len <= SortInsertionThreshold) {
+      self.__insertion_sort_by(0, len, compare);
+      return;
+    };
+
+    let buf_len = len / @as(usize, 2) + 1;
+    let buf = @as([*]T, Allocator.alloc(buf_len * @sizeof(T)));
+
+    self.__merge_sort_by(buf, 0, len, compare);
+    Allocator.dealloc(@as(*void, buf));
+  }
+
+  /// Insertion sort with comparator.
+  fn __insertion_sort_by(*self, lo: usize, hi: usize, compare: fn(*const T, *const T) Ordering) {
+    let i = lo + 1;
+
+    while (i < hi) {
+      let tmp = self.ptr[i];
+      let j = i;
+
+      while (j > lo && compare(&self.ptr[j - 1], &tmp) == Ordering.Greater) {
+        self.ptr[j] = self.ptr[j - 1];
+        j -= 1;
+      };
+
+      self.ptr[j] = tmp;
+      i += 1;
+    };
+  }
+
+  /// Merge sort with comparator.
+  fn __merge_sort_by(*self, buf: [*]T, lo: usize, hi: usize, compare: fn(*const T, *const T) Ordering) {
+    let len = hi - lo;
+
+    if (len <= SortInsertionThreshold) {
+      self.__insertion_sort_by(lo, hi, compare);
+      return;
+    };
+
+    let mid = lo + len / @as(usize, 2);
+
+    self.__merge_sort_by(buf, lo, mid, compare);
+    self.__merge_sort_by(buf, mid, hi, compare);
+    self.__merge_by(buf, lo, mid, hi, compare);
+  }
+
+  /// Merge with comparator (stable).
+  fn __merge_by(*self, buf: [*]T, lo: usize, mid: usize, hi: usize, compare: fn(*const T, *const T) Ordering) {
+    let left_len = mid - lo;
+    let right_len = hi - mid;
+
+    if (left_len == 0 || right_len == 0) { return; };
+
+    let l = @as(*T, nullptr);
+    let r = @as(*T, nullptr);
+
+    if (left_len <= right_len) {
+      let i: usize = 0;
+      while (i < left_len) {
+        buf[i] = self.ptr[lo + i];
+        i += 1;
+      };
+
+      let left: usize = 0;
+      let right: usize = mid;
+      let out: usize = lo;
+
+      while (left < left_len && right < hi) {
+        l = @as(*T, buf + left);
+        r = @as(*T, self.ptr + right);
+        let take_left = !(compare(r, l) == Ordering.Less);
+
+        if (take_left) {
+          l = @as(*T, buf + left);
+          self.ptr[out] = *l;
+          left += 1;
+        } else {
+          r = @as(*T, self.ptr + right);
+          self.ptr[out] = *r;
+          right += 1;
+        };
+
+        out += 1;
+      };
+
+      while (left < left_len) {
+        l = @as(*T, buf + left);
+        self.ptr[out] = *l;
+        left += 1;
+        out += 1;
+      };
+    } else {
+      let i: usize = 0;
+      while (i < right_len) {
+        buf[i] = self.ptr[mid + i];
+        i += 1;
+      };
+
+      let left: usize = mid;
+      let right: usize = right_len;
+      let out: usize = hi;
+
+      while (left > lo && right > 0) {
+        left -= 1;
+        right -= 1;
+
+        l = @as(*T, self.ptr + left);
+        r = @as(*T, buf + right);
+        let take_left = compare(r, l) == Ordering.Less;
+
+        if (take_left) {
+          out -= 1;
+          l = @as(*T, self.ptr + left);
+          self.ptr[out] = *l;
+          right += 1;
+        } else {
+          out -= 1;
+          r = @as(*T, buf + right);
+          self.ptr[out] = *r;
+          left += 1;
+        };
+      };
+
+      while (right > 0) {
+        right -= 1;
+        out -= 1;
+        r = @as(*T, buf + right);
+        self.ptr[out] = *r;
+      };
+    };
+  }
+
+  /// Binary search on sorted list.
+  pub fn binary_search[T: Ord](*const self, value: *const T) Option[usize] {
+    let lo: usize = 0;
+    let hi: usize = self._len;
+
+    while (lo < hi) {
+      let mid = lo + (hi - lo) / @as(usize, 2);
+
+      if (self.ptr[mid] < *value) {
+        lo = mid + 1;
+      } else if (self.ptr[mid] > *value) {
+        hi = mid;
+      } else {
+        return Option.Some(mid);
+      };
+    };
+
+    return Option#[usize].None();
+  }
 }
 
 // ===| List Interfaces Implementations |===
