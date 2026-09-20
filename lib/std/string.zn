@@ -207,6 +207,7 @@ pub struct String {
       right += 1;
     };
 
+    self._len -= 1;
     *left = '\0';
 
     Option.Some(output)
