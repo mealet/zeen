@@ -942,4 +942,36 @@ pub enum TypeError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("variant `{variant}` of `{name}` requires a binding")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::switch_payload_required),
+        help("match it as `.{variant}(binding)`")
+    )]
+    SwitchPayloadRequired {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("variant `{variant}` of `{name}` has no payload")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::switch_binding_unexpected),
+        help("match it as `.{variant}` without a binding")
+    )]
+    SwitchBindingUnexpected {
+        name: SmolStr,
+        variant: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }

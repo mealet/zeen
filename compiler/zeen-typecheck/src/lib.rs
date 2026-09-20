@@ -26,7 +26,10 @@ use zeen_driver::{CompilationContext, CompilationOutput};
 use zeen_hir::{
     HirId, HirModule,
     decl::{HirDecl, HirDeclKind, HirEnumVariantPayload, HirFn},
-    expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind, HirPattern, HirSwitchArm},
+    expr::{
+        HirExpr, HirExprKind, HirFieldInit, HirMacroKind, HirPattern, HirPatternBinding,
+        HirSwitchArm,
+    },
     stmt::{HirStmt, HirStmtKind},
     types::{HirTypeExpr, HirTypeKind},
 };
@@ -142,6 +145,7 @@ enum SwitchScrutinee {
     Bool,
     Char,
     Str,
+    Enum(DefId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -3808,6 +3812,7 @@ impl<'res> TypeChecker<'res> {
         let mut acc: Option<(TypeId, &HirExpr)> = None;
         let mut covered_all = false;
         let mut seen: HashSet<SwitchValue> = HashSet::new();
+        let mut seen_variants: HashSet<DefId> = HashSet::new();
 
         for arm in arms {
             if covered_all {
@@ -3829,6 +3834,22 @@ impl<'res> TypeChecker<'res> {
             if kind.is_some() && arm.guard.is_none() && !covered_all {
                 if Self::pattern_covers_all(&arm.pattern) {
                     covered_all = true;
+                } else if let Some(SwitchScrutinee::Enum(enum_def)) = kind {
+                    let mut duplicate = false;
+                    for def in self.covered_enum_variants(&arm.pattern, enum_def) {
+                        if !seen_variants.insert(def) {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if duplicate {
+                        self.report(TypeError::SwitchUnreachableArm {
+                            src: arm.body.source.src(),
+                            span: arm.body.source.span,
+                        });
+                    } else if self.enum_variants_covered(enum_def, &seen_variants) {
+                        covered_all = true;
+                    }
                 } else {
                     for value in arm_values {
                         if !seen.insert(value) {
@@ -3891,6 +3912,7 @@ impl<'res> TypeChecker<'res> {
             {
                 SwitchScrutinee::Str
             }
+            Type::Enum { def_id, .. } => SwitchScrutinee::Enum(def_id),
             Type::Error => return None,
             _ => {
                 self.report(TypeError::SwitchOnUnsupportedType {
@@ -3926,37 +3948,57 @@ impl<'res> TypeChecker<'res> {
                     self.result.def_types.insert(binding.def_id, scrut_ty);
                 }
             }
-            HirPattern::Enum { binding, .. } => {
-                if kind.is_some() {
+            HirPattern::Enum {
+                variant,
+                variant_span,
+                binding,
+            } => {
+                if let Some(SwitchScrutinee::Enum(enum_def)) = kind {
+                    self.check_enum_pattern(
+                        *variant,
+                        *variant_span,
+                        binding.as_ref(),
+                        scrut_ty,
+                        enum_def,
+                        &body.source,
+                    );
+                } else if kind.is_some() {
                     self.report(TypeError::SwitchPatternMismatch {
                         expected: self.display_type(scrut_ty).into(),
                         found: "enum variant".into(),
                         src: body.source.src(),
                         span: body.source.span,
                     });
-                }
-                if let Some(binding) = binding {
-                    self.result.def_types.insert(binding.def_id, scrut_ty);
+                    if let Some(binding) = binding {
+                        self.result.def_types.insert(binding.def_id, scrut_ty);
+                    }
                 }
             }
             HirPattern::Wildcard => {}
             HirPattern::Or(patterns) => {
                 let mut first_name: Option<(Spur, SourceSpan)> = None;
                 for inner in patterns {
-                    if let HirPattern::Binding(binding) = inner {
+                    let inner_binding = match inner {
+                        HirPattern::Binding(binding) => Some((binding.name, binding.span)),
+                        HirPattern::Enum {
+                            binding: Some(binding),
+                            ..
+                        } => Some((binding.name, binding.span)),
+                        _ => None,
+                    };
+                    if let Some((name, span)) = inner_binding {
                         match first_name {
-                            None => first_name = Some((binding.name, binding.span)),
-                            Some((first, _)) if binding.name == first => {}
+                            None => first_name = Some((name, span)),
+                            Some((first, _)) if name == first => {}
                             Some((first, _)) => {
                                 let expected: SmolStr =
                                     self.interner.borrow().resolve(&first).into();
-                                let found: SmolStr =
-                                    self.interner.borrow().resolve(&binding.name).into();
+                                let found: SmolStr = self.interner.borrow().resolve(&name).into();
                                 self.report(TypeError::SwitchOrBindingMismatch {
                                     expected,
                                     found,
                                     src: body.source.src(),
-                                    span: binding.span,
+                                    span,
                                 });
                             }
                         }
@@ -3965,6 +4007,117 @@ impl<'res> TypeChecker<'res> {
                 }
             }
         }
+    }
+
+    fn check_enum_pattern(
+        &mut self,
+        variant: Spur,
+        variant_span: SourceSpan,
+        binding: Option<&HirPatternBinding>,
+        scrut_ty: TypeId,
+        enum_def: DefId,
+        source: &Source,
+    ) {
+        let Type::Enum { generic_args, .. } = self.result.interner.get(scrut_ty).clone() else {
+            return;
+        };
+        let Some(enum_info) = self.result.enum_info.get(&enum_def).cloned() else {
+            return;
+        };
+
+        let Some(info) = enum_info.variants.iter().find(|v| v.name == variant) else {
+            let found: SmolStr = self.interner.borrow().resolve(&variant).into();
+            self.report(TypeError::UnknownEnumVariant {
+                name: self.display_type(scrut_ty).into(),
+                variant: found,
+                src: source.src(),
+                span: variant_span,
+            });
+            return;
+        };
+
+        let display_name = self.display_type(scrut_ty);
+        let variant_name: SmolStr = self.interner.borrow().resolve(&info.name).into();
+
+        let Some(payload) = info.payload.as_ref() else {
+            if let Some(binding) = binding {
+                self.report(TypeError::SwitchBindingUnexpected {
+                    name: display_name.into(),
+                    variant: variant_name,
+                    src: source.src(),
+                    span: binding.span,
+                });
+                self.result.def_types.insert(binding.def_id, scrut_ty);
+            }
+            return;
+        };
+
+        let Some(binding) = binding else {
+            self.report(TypeError::SwitchPayloadRequired {
+                name: display_name.into(),
+                variant: variant_name,
+                src: source.src(),
+                span: variant_span,
+            });
+            return;
+        };
+
+        let member_generics = self.type_member_generics(enum_def);
+        let bindings: HashMap<DefId, TypeId> = member_generics
+            .iter()
+            .copied()
+            .zip(generic_args.iter().copied())
+            .collect();
+
+        let payload_ty = match payload {
+            VariantPayload::Single(ty) => self.substitute_generics(*ty, &bindings),
+            VariantPayload::Struct(payload_ty) => {
+                match self.result.interner.get(*payload_ty).clone() {
+                    Type::Struct { def_id, .. } => self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: generic_args.to_vec(),
+                    }),
+                    _ => return,
+                }
+            }
+        };
+
+        if !self.type_is_copy(payload_ty) && enum_info.capabalities.has_explicit_drop {
+            self.report(TypeError::EnumExtractFromDrop {
+                name: display_name.into(),
+                src: source.src(),
+                span: binding.span,
+            });
+            return;
+        }
+
+        self.result.def_types.insert(binding.def_id, payload_ty);
+    }
+
+    fn covered_enum_variants(&self, pattern: &HirPattern, enum_def: DefId) -> Vec<DefId> {
+        let Some(enum_info) = self.result.enum_info.get(&enum_def) else {
+            return Vec::new();
+        };
+        match pattern {
+            HirPattern::Enum { variant, .. } => enum_info
+                .variants
+                .iter()
+                .find(|v| v.name == *variant)
+                .map(|v| vec![v.def_id])
+                .unwrap_or_default(),
+            HirPattern::Or(patterns) => patterns
+                .iter()
+                .flat_map(|inner| self.covered_enum_variants(inner, enum_def))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn enum_variants_covered(&self, enum_def: DefId, seen: &HashSet<DefId>) -> bool {
+        self.result
+            .enum_info
+            .get(&enum_def)
+            .is_some_and(|info| info.variants.iter().all(|v| seen.contains(&v.def_id)))
     }
 
     fn switch_pattern_value(
@@ -10278,6 +10431,263 @@ mod tests {
                 .iter()
                 .any(|err| matches!(err, TypeError::Mismatch { .. })),
             "expected Mismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_enum_empty_and_payload() {
+        typecheck(
+            r#"
+            enum Foo { a, b: i32 }
+            fn main() i32 {
+                let e = Foo.a;
+                let r = switch (e) {
+                    .a => 1,
+                    .b(x) => x,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect("enum switch with full coverage must typecheck");
+    }
+
+    #[test]
+    fn switch_enum_struct_payload_field() {
+        typecheck(
+            r#"
+            enum Foo { c: { inner: i32, hello: u32 } }
+            fn main() i32 {
+                let e = Foo.c { .inner = 1, .hello = 2 };
+                let r = switch (e) {
+                    .c(v) => v.inner,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect("struct payload binding must expose its fields");
+    }
+
+    #[test]
+    fn switch_enum_generic_payload() {
+        typecheck(
+            r#"
+            enum Opt[T] { none, some: T }
+            fn main() i32 {
+                let o: Opt[i32] = Opt.some(41);
+                let r = switch (o) {
+                    .none => 0,
+                    .some(v) => v,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect("generic payload binding must substitute the scrutinee args");
+    }
+
+    #[test]
+    fn switch_enum_missing_binding_is_reported() {
+        let errors = typecheck(
+            r#"
+            enum Foo { a, b: i32 }
+            fn main() i32 {
+                let e = Foo.a;
+                let r = switch (e) {
+                    .a => 1,
+                    .b => 2,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("payload variant without binding must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchPayloadRequired { .. })),
+            "expected SwitchPayloadRequired, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_enum_binding_on_empty_is_reported() {
+        let errors = typecheck(
+            r#"
+            enum Foo { a, b: i32 }
+            fn main() i32 {
+                let e = Foo.a;
+                let r = switch (e) {
+                    .a(x) => 1,
+                    .b(y) => y,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("binding on empty variant must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchBindingUnexpected { .. })),
+            "expected SwitchBindingUnexpected, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_enum_unknown_variant_is_reported() {
+        let errors = typecheck(
+            r#"
+            enum Foo { a }
+            fn main() i32 {
+                let e = Foo.a;
+                let r = switch (e) {
+                    .zzz => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("unknown variant must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownEnumVariant { .. })),
+            "expected UnknownEnumVariant, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_enum_non_exhaustive_is_reported() {
+        let errors = typecheck(
+            r#"
+            enum Foo { a, b: i32 }
+            fn main() i32 {
+                let e = Foo.a;
+                let r = switch (e) {
+                    .a => 1,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("partial enum coverage must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchNonExhaustive { .. })),
+            "expected SwitchNonExhaustive, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_enum_duplicate_variant_is_reported() {
+        let errors = typecheck(
+            r#"
+            enum Foo { a, b: i32 }
+            fn main() i32 {
+                let e = Foo.a;
+                let r = switch (e) {
+                    .a => 1,
+                    .a => 2,
+                    .b(x) => x,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("duplicate variant arm must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchUnreachableArm { .. })),
+            "expected SwitchUnreachableArm, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_enum_literal_pattern_is_reported() {
+        let errors = typecheck(
+            r#"
+            enum Foo { a }
+            fn main() i32 {
+                let e = Foo.a;
+                let r = switch (e) {
+                    1 => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("literal pattern on enum must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchPatternMismatch { .. })),
+            "expected SwitchPatternMismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_enum_pattern_on_int_is_reported() {
+        let errors = typecheck(
+            r#"
+            enum Foo { a }
+            fn main() i32 {
+                let a = 1;
+                let r = switch (a) {
+                    .a => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("enum pattern on int must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchPatternMismatch { .. })),
+            "expected SwitchPatternMismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_enum_move_out_of_drop_is_reported() {
+        let errors = typecheck(
+            r#"
+            interface Drop {}
+            struct NoCopy { x: i32 }
+            implement Drop : NoCopy {}
+            enum Foo { a, b: NoCopy }
+            implement Drop : Foo {}
+            fn main() i32 {
+                let e = Foo.a;
+                let r = switch (e) {
+                    .a => 0,
+                    .b(v) => v.x,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("payload move out of Drop enum must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumExtractFromDrop { .. })),
+            "expected EnumExtractFromDrop, got: {errors:?}"
         );
     }
 
