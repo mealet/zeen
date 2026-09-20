@@ -4286,8 +4286,30 @@ impl<'ctx> MirLowering<'ctx> {
             let matched_bb = fb.new_block();
 
             let literals = Self::arm_literals(&arm.pattern);
+            let all_strings = !literals.is_empty()
+                && literals.iter().all(|lit| matches!(lit, Literal::String(_)));
             if literals.is_empty() {
                 fb.set_terminator(test_bb, Terminator::Goto(matched_bb));
+            } else if all_strings && self.switch_string_elem(scrut_ty).is_some() {
+                let mut cur = test_bb;
+                for (i, lit) in literals.iter().enumerate() {
+                    let Literal::String(pat) = lit else {
+                        unreachable!("string arm holds only string literals")
+                    };
+                    let last = i + 1 == literals.len();
+                    let next_lit = if last { next_test } else { fb.new_block() };
+                    self.lower_str_literal_test(
+                        fb,
+                        &scrut_place,
+                        scrut_ty,
+                        *pat,
+                        cur,
+                        matched_bb,
+                        next_lit,
+                        &expr.source,
+                    );
+                    cur = next_lit;
+                }
             } else {
                 let mut cur = test_bb;
                 for (i, lit) in literals.iter().enumerate() {
@@ -4404,6 +4426,199 @@ impl<'ctx> MirLowering<'ctx> {
             }),
             HirPattern::Literal(_) | HirPattern::Wildcard => None,
         }
+    }
+
+    fn switch_string_elem(&self, ty: TypeId) -> Option<TypeId> {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Array { element, .. } | Type::Slice { element, .. }
+                if matches!(
+                    self.typecheck.interner.get(element),
+                    Type::Builtin(zeen_ast::types::BuiltinType::char)
+                ) =>
+            {
+                Some(element)
+            }
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_str_literal_test(
+        &mut self,
+        fb: &mut FnBuilder,
+        scrut_place: &Place,
+        scrut_ty: TypeId,
+        pat: Spur,
+        test_bb: BlockId,
+        matched_bb: BlockId,
+        next_test: BlockId,
+        source: &Source,
+    ) {
+        let usize_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+        let char_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::char));
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let pat_len = self.rodeo.borrow().resolve(&pat).len() as u64 + 1;
+        let pat_ty = self.typecheck.interner.intern(Type::Array {
+            element: char_ty,
+            len: Some(pat_len),
+        });
+        let pat_temp = fb.new_temp(pat_ty);
+        fb.push_stmt(
+            test_bb,
+            MirStatement::Assign {
+                place: Place::from_local(pat_temp),
+                rvalue: Rvalue::Use(Operand::Constant(
+                    ConstValue::Str(pat),
+                    Some(source.clone()),
+                )),
+                source: Some(source.clone()),
+            },
+        );
+
+        let scrut_len = match self.typecheck.interner.get(scrut_ty).clone() {
+            Type::Array { len: Some(len), .. } => {
+                Operand::Constant(ConstValue::Int(len as i128), None)
+            }
+            Type::Slice { .. } => {
+                let mut len_place = scrut_place.clone();
+                len_place.projection.push(PlaceElem::Field(SLICE_LEN_FIELD));
+                let len_local = fb.new_temp(usize_ty);
+                fb.push_stmt(
+                    test_bb,
+                    MirStatement::Assign {
+                        place: Place::from_local(len_local),
+                        rvalue: Rvalue::Use(Operand::Copy(len_place, None)),
+                        source: Some(source.clone()),
+                    },
+                );
+                Operand::Move(Place::from_local(len_local), None)
+            }
+            _ => unreachable!("string arm over a non-string scrutinee"),
+        };
+
+        let len_ok = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            test_bb,
+            MirStatement::Assign {
+                place: Place::from_local(len_ok),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Eq,
+                    lhs: scrut_len,
+                    rhs: Operand::Constant(ConstValue::Int(pat_len as i128), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        let loop_entry = fb.new_block();
+        fb.set_terminator(
+            test_bb,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(len_ok), None),
+                targets: vec![(1, loop_entry)],
+                otherwise: next_test,
+            },
+        );
+
+        let counter = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            loop_entry,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0), None)),
+                source: Some(source.clone()),
+            },
+        );
+        let header = fb.new_block();
+        fb.set_terminator(loop_entry, Terminator::Goto(header));
+
+        let cont = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            header,
+            MirStatement::Assign {
+                place: Place::from_local(cont),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Lt,
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Constant(ConstValue::Int(pat_len as i128), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        let check_bb = fb.new_block();
+        fb.set_terminator(
+            header,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(cont), None),
+                targets: vec![(1, check_bb)],
+                otherwise: matched_bb,
+            },
+        );
+
+        let scrut_elem = match self.typecheck.interner.get(scrut_ty).clone() {
+            Type::Array { .. } => scrut_place.clone().index(counter),
+            Type::Slice { .. } => {
+                let mut ptr_place = scrut_place.clone();
+                ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
+                ptr_place.index(counter)
+            }
+            _ => unreachable!("string arm over a non-string scrutinee"),
+        };
+        let pat_elem = Place::from_local(pat_temp).index(counter);
+        let eq = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            check_bb,
+            MirStatement::Assign {
+                place: Place::from_local(eq),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Eq,
+                    lhs: self.place_to_operand(scrut_elem, char_ty, Some(source.clone())),
+                    rhs: self.place_to_operand(pat_elem, char_ty, Some(source.clone())),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        let inc_bb = fb.new_block();
+        fb.set_terminator(
+            check_bb,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(eq), None),
+                targets: vec![(1, inc_bb)],
+                otherwise: next_test,
+            },
+        );
+
+        let next = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            inc_bb,
+            MirStatement::Assign {
+                place: Place::from_local(next),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Add,
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Constant(ConstValue::Int(1), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        fb.push_stmt(
+            inc_bb,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(next), None)),
+                source: Some(source.clone()),
+            },
+        );
+        fb.set_terminator(inc_bb, Terminator::Goto(header));
     }
 
     /// Whether `expr` can be lowered to a place by [`Self::lower_expr_to_place`].
