@@ -5905,14 +5905,30 @@ impl<'res> TypeChecker<'res> {
             self.unify_for_inference(param_ty, arg_ty, bindings, source);
 
             let substituted = self.substitute_generics(param_ty, bindings);
-            if !try_coerce(&mut self.result.interner, arg_ty, substituted).is_ok() {
-                self.bind_unresolved_generics(param_ty, bindings);
-                self.report(TypeError::Mismatch {
-                    expected: self.display_type(substituted).into(),
-                    found: self.display_type(arg_ty).into(),
-                    src: arg.source.src(),
-                    span: arg.source.span,
-                });
+            match try_coerce(&mut self.result.interner, arg_ty, substituted) {
+                // Like the concrete path, only string literals coerce to
+                // slices implicitly: any other array needs `arr[..]`.
+                CoerceResult::ArrayToSlice
+                    if !matches!(&arg.kind, HirExprKind::Literal(Literal::String(_))) =>
+                {
+                    self.bind_unresolved_generics(param_ty, bindings);
+                    self.report(TypeError::ImplicitArrayToSlice {
+                        expected: self.display_type(substituted).into(),
+                        found: self.display_type(arg_ty).into(),
+                        src: arg.source.src(),
+                        span: arg.source.span,
+                    });
+                }
+                result if !result.is_ok() => {
+                    self.bind_unresolved_generics(param_ty, bindings);
+                    self.report(TypeError::Mismatch {
+                        expected: self.display_type(substituted).into(),
+                        found: self.display_type(arg_ty).into(),
+                        src: arg.source.src(),
+                        span: arg.source.span,
+                    });
+                }
+                _ => {}
             }
         } else {
             self.check_expr(arg, substituted, false);
@@ -6079,21 +6095,21 @@ impl<'res> TypeChecker<'res> {
         match b {
             i8 | i16 | i32 | i64 | isize => &[
                 "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
-                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Neg",
+                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Neg", "Copy",
             ],
 
             u8 | u16 | u32 | u64 | usize => &[
                 "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
-                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot",
+                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Copy",
             ],
 
             f32 | f64 => &[
-                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Neg",
+                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Neg", "Copy",
             ],
 
-            bool => &["Display", "Debug", "Eq", "Not"],
+            bool => &["Display", "Debug", "Eq", "Not", "Copy"],
 
-            char => &["Display", "Debug", "Eq", "Ord"],
+            char => &["Display", "Debug", "Eq", "Ord", "Copy"],
 
             void => &[],
             never => &[],
@@ -8435,6 +8451,53 @@ mod tests {
         assert!(
             result.is_ok(),
             "string literals inside array literals should coerce to slices: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_array_to_slice_is_rejected() {
+        let errors = typecheck(
+            r#"
+            fn take[T](s: []const T) usize {
+              return s.len;
+            }
+
+            fn main() {
+              @println("{}", take([1, 2, 3]));
+            }
+            "#,
+        )
+        .expect_err("implicit array to slice coercion through a generic must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::ImplicitArrayToSlice { .. })),
+            "expected TypeError::ImplicitArrayToSlice, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtins_satisfy_copy_bound() {
+        let result = typecheck(
+            r#"
+            interface Copy {}
+
+            fn ident[T: Copy](x: T) T {
+              return x;
+            }
+
+            fn main() {
+              let a = ident(41);
+              let b = ident(true);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "builtins must satisfy the `Copy` bound: {:?}",
             result.err()
         );
     }
