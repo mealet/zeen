@@ -30,7 +30,7 @@ pub const SIG_IGN: c_sighandler_t = @as(*void, 1);
 // Opaque sigaction struct. The layout (field order and size) differs between
 // platforms, so we expose only an opaque byte buffer sized to each platform's
 // true struct size (glibc/musl b64: 152, android b64: 32, macOS: 16, FreeBSD:
-// 32). Users who set fields must use the concrete structs in their own code.
+// 32).
 @os[linux] {
   pub struct c_sigaction {
     pub __private: [152]u8,
@@ -53,9 +53,7 @@ pub const SIG_IGN: c_sighandler_t = @as(*void, 1);
   }
 }
 
-// ---------------------------------------------------------------------------
 // Signal numbers - Windows
-// ---------------------------------------------------------------------------
 @os[windows] {
   pub const SIGINT: c_int = 2;
   pub const SIGILL: c_int = 4;
@@ -65,9 +63,7 @@ pub const SIG_IGN: c_sighandler_t = @as(*void, 1);
   pub const SIGTERM: c_int = 15;
 }
 
-// ---------------------------------------------------------------------------
 // Signal numbers - POSIX (Linux)
-// ---------------------------------------------------------------------------
 @os[linux | android] {
   pub const SIGHUP: c_int = 1;
   pub const SIGINT: c_int = 2;
@@ -102,9 +98,7 @@ pub const SIG_IGN: c_sighandler_t = @as(*void, 1);
   pub const SIGSYS: c_int = 31;
 }
 
-// ---------------------------------------------------------------------------
 // Signal numbers - POSIX (BSD)
-// ---------------------------------------------------------------------------
 @os[darwin | freebsd] {
   pub const SIGHUP: c_int = 1;
   pub const SIGINT: c_int = 2;
@@ -139,9 +133,7 @@ pub const SIG_IGN: c_sighandler_t = @as(*void, 1);
   pub const SIGUSR2: c_int = 31;
 }
 
-// ---------------------------------------------------------------------------
 // SA_* flags
-// ---------------------------------------------------------------------------
 @os[linux | android] {
   pub const SA_NOCLDSTOP: c_int = 0x00000001;
   pub const SA_NOCLDWAIT: c_int = 0x00000002;
@@ -160,9 +152,7 @@ pub const SIG_IGN: c_sighandler_t = @as(*void, 1);
   pub const SA_SIGINFO: c_int = 0x0040;
 }
 
-// ---------------------------------------------------------------------------
 // sigprocmask `how` constants
-// ---------------------------------------------------------------------------
 @os[linux | android] {
   pub const SIG_BLOCK: c_int = 0;
   pub const SIG_UNBLOCK: c_int = 1;
@@ -173,9 +163,7 @@ pub const SIG_IGN: c_sighandler_t = @as(*void, 1);
   pub const SIG_SETMASK: c_int = 3;
 }
 
-// ---------------------------------------------------------------------------
 // Signal set manipulation (all POSIX targets).
-// ---------------------------------------------------------------------------
 @os[linux | android | darwin | freebsd] {
   pub extern fn sigemptyset(set: *c_sigset_t) c_int;
   pub extern fn sigfillset(set: *c_sigset_t) c_int;
@@ -194,9 +182,7 @@ pub const SIG_IGN: c_sighandler_t = @as(*void, 1);
   pub extern fn signal(sig: c_int, handler: c_sighandler_t) c_sighandler_t;
 }
 
-// ---------------------------------------------------------------------------
 // Timed/wait-based signal functions (Linux, bionic, FreeBSD; absent macOS).
-// ---------------------------------------------------------------------------
 @os[linux | android | freebsd] {
   pub extern fn sigtimedwait(set: *const c_sigset_t, info: *void, timeout: *const c_Timespec) c_int;
   pub extern fn sigwait(set: *const c_sigset_t, sig: *c_int) c_int;
