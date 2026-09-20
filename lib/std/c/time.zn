@@ -1,8 +1,7 @@
 use std.c.types;
 
 // `time_t`: `long` on POSIX (64-bit on LP64, 32-bit on i686 Linux/glibc),
-// `__int64` on Windows (MSVC/mingw, even 32-bit), `long long` on wasi.  For
-// each supported target this resolves to exactly one width.
+// `__int64` on Windows (MSVC/mingw, even 32-bit), `long long` on wasi.
 @os[windows] {
   pub alias c_time_t = i64;
 } else @family[wasm] {
@@ -55,7 +54,7 @@ pub extern fn clock() c_clock_t;
 pub extern fn difftime(end: c_time_t, start: c_time_t) f64;
 pub extern fn mktime(tm: *c_tm) c_time_t;
 
-// POSIX-only sleep; not present on Windows.
+// POSIX-only sleep
 @os[linux | android | darwin | freebsd] {
   pub extern fn nanosleep(rqtp: *const c_Timespec, rmtp: *c_Timespec) c_int;
 }

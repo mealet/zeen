@@ -3,8 +3,8 @@ use std.c.time;
 use std.c.posix.pthread;
 
 // POSIX scheduling: process-level queries and policy constants. The kernel
-// schedulers are exposed on Linux (glibc, musl and bionic) and FreeBSD only;
-// macOS keeps sched.h mostly internal and libc does not bind it.
+// schedulers are exposed on Linux (glibc, musl and bionic) and FreeBSD onl.
+// MacOS keeps sched.h mostly internal and libc does not bind it.
 //
 // c_sched_param and c_cpu_set_t are shared with the pthread module.
 
@@ -31,7 +31,7 @@ use std.c.posix.pthread;
 }
 
 // Current CPU and affinity masks. cpu_set_t is only bound on glibc (see the
-// pthread module); FreeBSD uses its own opaque cpuset ABI internally.
+// pthread module). FreeBSD uses its own opaque cpuset ABI internally.
 @os[linux] {
   @env[gnu] {
     pub extern fn sched_getaffinity(pid: c_pid_t, cpusetsize: c_size_t, cpuset: *c_cpu_set_t) c_int;

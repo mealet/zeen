@@ -1,23 +1,18 @@
-/// Integer range produced by the `..`/`..=` range operators. An endpoint is
-/// `None` when its bound is omitted, so the value carries the shape of the
-/// literal it was spelled with (`0..5`, `0..`, `..5`, `..`). Inclusive
-/// ranges store the end bound as `end + 1`. `Range` is the argument of the
-/// `Sliceable::slice` interface.
+/// Ranges variations:
+/// * `lo..hi` - `{ start: Some, end: Some }`
+/// * `lo..=hi` - `{ start: Some, end: Some + 1 }`
+/// * `lo..` - `{ start: Some, end: None }`
+/// * `..hi` - `{ start: None, end: Some }`
+/// * `..=hi` - `{ start: None, end: Some + 1 }`
+/// * `..` - `{ start: None, end: None }`
 pub struct Range {
-  /// Inclusive lower bound, `None` for `..end` and `..`.
   pub start: Option[usize],
-
-  /// Exclusive upper bound, `None` for `start..` and `..`.
   pub end: Option[usize],
 
-  /// Returns the lower bound or `None` when the range starts at the
-  /// collection's beginning.
   pub fn first(*const self) Option[usize] {
     self.start
   }
 
-  /// Returns the exclusive upper bound or `None` when the range runs to the
-  /// collection's end.
   pub fn last(*const self) Option[usize] {
     self.end
   }
@@ -39,9 +34,6 @@ implement Iterator : Range {
   }
 }
 
-/// Range slicing (`arr[start..end]`). Fixed arrays, slices and multi
-/// pointers are handled by the compiler; user structs implement this
-/// interface to participate in range indexing.
 pub interface[T] Sliceable {
   pub fn slice(*self, range: Range) []T;
 }

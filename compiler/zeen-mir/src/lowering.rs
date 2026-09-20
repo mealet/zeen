@@ -5,6 +5,7 @@ use std::{
 };
 
 use lasso::{Rodeo, Spur};
+use miette::SourceSpan;
 use smol_str::SmolStr;
 use zeen_ast::{
     Source,
@@ -14,7 +15,7 @@ use zeen_driver::CompilationMode;
 use zeen_hir::{
     HirId, HirMacroKind, HirModule, HirTypeExpr,
     decl::{HirDecl, HirDeclKind, HirFn},
-    expr::{HirExpr, HirExprKind, HirFieldInit},
+    expr::{HirExpr, HirExprKind, HirFieldInit, HirPattern, HirSwitchArm},
     stmt::{HirStmt, HirStmtKind},
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
@@ -634,9 +635,17 @@ impl<'ctx> MirLowering<'ctx> {
                     self.collect_global_stmt_deps(body, out);
                 }
             }
+            HirExprKind::Switch { object, arms } => {
+                self.collect_global_expr_deps(object, out);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_global_expr_deps(guard, out);
+                    }
+                    self.collect_global_expr_deps(&arm.body, out);
+                }
+            }
             HirExprKind::Literal(_)
             | HirExprKind::GenericParamRef(_)
-            | HirExprKind::Switch
             | HirExprKind::Type(_)
             | HirExprKind::Error => {}
         }
@@ -4219,7 +4228,9 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, Operand::Constant(ConstValue::NullPtr, None))
             }
 
-            HirExprKind::Switch => unreachable!("not implemented in previous stages"),
+            HirExprKind::Switch { object, arms } => {
+                self.lower_switch(fb, object, arms, expr, block)
+            }
             HirExprKind::Type(_) => unreachable!(),
 
             HirExprKind::Closure { def_id, .. } => {
@@ -4243,6 +4254,581 @@ impl<'ctx> MirLowering<'ctx> {
 
             HirExprKind::Error => unreachable!(),
         }
+    }
+
+    fn lower_switch(
+        &mut self,
+        fb: &mut FnBuilder,
+        object: &HirExpr,
+        arms: &[HirSwitchArm],
+        expr: &HirExpr,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        let (block, scrut_place) = self.lower_expr_to_place_or_temp(fb, object, block);
+        let scrut_ty = self.expr_type(fb, object);
+        let result_ty = self.expr_type(fb, expr);
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let enum_def = match self.typecheck.interner.get(scrut_ty).clone() {
+            Type::Enum { def_id, .. } => Some(def_id),
+            _ => None,
+        };
+        if let Some(def_id) = enum_def {
+            self.register_enum_layout(scrut_ty, def_id);
+        }
+        let tag_local = enum_def.map(|_| {
+            let tag = fb.new_temp(
+                self.typecheck
+                    .interner
+                    .intern(Type::Builtin(zeen_ast::types::BuiltinType::u8)),
+            );
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(tag),
+                    rvalue: Rvalue::Discriminant(scrut_place.clone()),
+                    source: Some(expr.source.clone()),
+                },
+            );
+            tag
+        });
+
+        let join = fb.new_block();
+        let result_local = fb.new_temp(result_ty);
+
+        let mut next_test = fb.new_block();
+        fb.set_terminator(block, Terminator::Goto(next_test));
+
+        for arm in arms {
+            let test_bb = next_test;
+            next_test = fb.new_block();
+            let matched_bb = fb.new_block();
+
+            let literals = Self::arm_literals(&arm.pattern);
+            let ranges = Self::arm_ranges(&arm.pattern);
+            let all_strings = !literals.is_empty()
+                && literals.iter().all(|lit| matches!(lit, Literal::String(_)));
+            let enum_tags = enum_def
+                .map(|def_id| self.arm_enum_tags(&arm.pattern, def_id))
+                .unwrap_or_default();
+            if !enum_tags.is_empty() {
+                let tag = tag_local.expect("enum switch reads the tag");
+                fb.set_terminator(
+                    test_bb,
+                    Terminator::SwitchInt {
+                        discriminant: Operand::Copy(Place::from_local(tag), None),
+                        targets: enum_tags.into_iter().map(|tag| (tag, matched_bb)).collect(),
+                        otherwise: next_test,
+                    },
+                );
+            } else if literals.is_empty() && ranges.is_empty() {
+                fb.set_terminator(test_bb, Terminator::Goto(matched_bb));
+            } else if all_strings && self.switch_string_elem(scrut_ty).is_some() {
+                let mut cur = test_bb;
+                for (i, lit) in literals.iter().enumerate() {
+                    let Literal::String(pat) = lit else {
+                        unreachable!("string arm holds only string literals")
+                    };
+                    let last = i + 1 == literals.len();
+                    let next_lit = if last { next_test } else { fb.new_block() };
+                    self.lower_str_literal_test(
+                        fb,
+                        &scrut_place,
+                        scrut_ty,
+                        *pat,
+                        cur,
+                        matched_bb,
+                        next_lit,
+                        &expr.source,
+                    );
+                    cur = next_lit;
+                }
+            } else {
+                let mut cur = test_bb;
+                for (i, (start, end, inclusive)) in ranges.iter().enumerate() {
+                    let last = i + 1 == ranges.len() && literals.is_empty();
+                    let next_range = if last { next_test } else { fb.new_block() };
+                    self.lower_range_test(
+                        fb,
+                        &scrut_place,
+                        scrut_ty,
+                        *start,
+                        *end,
+                        *inclusive,
+                        cur,
+                        matched_bb,
+                        next_range,
+                        &expr.source,
+                    );
+                    cur = next_range;
+                }
+                for (i, lit) in literals.iter().enumerate() {
+                    let last = i + 1 == literals.len();
+                    let next_lit = if last { next_test } else { fb.new_block() };
+                    let cmp = fb.new_temp(bool_ty);
+                    fb.push_stmt(
+                        cur,
+                        MirStatement::Assign {
+                            place: Place::from_local(cmp),
+                            rvalue: Rvalue::BinaryOp {
+                                op: BinaryOp::Eq,
+                                lhs: Operand::Copy(scrut_place.clone(), None),
+                                rhs: Operand::Constant(
+                                    self.lower_literal(lit, scrut_ty),
+                                    Some(expr.source.clone()),
+                                ),
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    fb.set_terminator(
+                        cur,
+                        Terminator::SwitchInt {
+                            discriminant: Operand::Move(Place::from_local(cmp), None),
+                            targets: vec![(1, matched_bb)],
+                            otherwise: next_lit,
+                        },
+                    );
+                    cur = next_lit;
+                }
+            }
+
+            let mut body_bb = matched_bb;
+            let bound_local = if let Some((name, def_id, span)) = Self::arm_binding(arm) {
+                let variant_def = enum_def.and_then(|def| self.arm_enum_variant(&arm.pattern, def));
+                let bind_ty = match variant_def {
+                    Some(variant) => self.enum_payload_ty(scrut_ty, variant),
+                    None => scrut_ty,
+                };
+                let local = fb.new_local(
+                    bind_ty,
+                    LocalKind::UserVariable,
+                    Mutability::Mut,
+                    Some(name),
+                    Some((span, expr.source.src()).into()),
+                );
+                fb.locals_by_def.insert(def_id, local);
+                fb.push_stmt(matched_bb, MirStatement::StorageLive(local));
+                let value = match variant_def {
+                    Some(variant) => {
+                        let payload = scrut_place.clone().enum_payload(variant);
+                        self.place_to_operand(payload, bind_ty, Some(expr.source.clone()))
+                    }
+                    None => self.place_to_operand(
+                        scrut_place.clone(),
+                        scrut_ty,
+                        Some(expr.source.clone()),
+                    ),
+                };
+                fb.push_stmt(
+                    matched_bb,
+                    MirStatement::Assign {
+                        place: Place::from_local(local),
+                        rvalue: Rvalue::Use(value),
+                        source: Some(expr.source.clone()),
+                    },
+                );
+                Some(local)
+            } else {
+                None
+            };
+
+            if let Some(guard) = &arm.guard {
+                let guard_bb = fb.new_block();
+                let (end, guard_op) = self.lower_expr_to_operand(fb, guard, matched_bb);
+                let guard_local = self.operand_to_local(fb, guard_op, bool_ty, end);
+                let otherwise = match bound_local {
+                    Some(local) => {
+                        let fail_bb = fb.new_block();
+                        fb.push_stmt(fail_bb, MirStatement::StorageDead(local));
+                        fb.set_terminator(fail_bb, Terminator::Goto(next_test));
+                        fail_bb
+                    }
+                    None => next_test,
+                };
+                fb.set_terminator(
+                    end,
+                    Terminator::SwitchInt {
+                        discriminant: Operand::Move(Place::from_local(guard_local), None),
+                        targets: vec![(1, guard_bb)],
+                        otherwise,
+                    },
+                );
+                body_bb = guard_bb;
+            }
+
+            let (end, operand) = self.lower_expr_to_operand(fb, &arm.body, body_bb);
+            if fb.block_is_open(end) {
+                fb.push_stmt(
+                    end,
+                    MirStatement::Assign {
+                        place: Place::from_local(result_local),
+                        rvalue: Rvalue::Use(operand),
+                        source: Some(expr.source.clone()),
+                    },
+                );
+                fb.set_terminator(end, Terminator::Goto(join));
+            }
+            if let Some(local) = bound_local {
+                fb.push_stmt(end, MirStatement::StorageDead(local));
+            }
+        }
+
+        fb.set_terminator(next_test, Terminator::Unreachable);
+
+        (
+            join,
+            Operand::Move(Place::from_local(result_local), Some(expr.source.clone())),
+        )
+    }
+
+    fn arm_literals(pattern: &HirPattern) -> Vec<Literal> {
+        match pattern {
+            HirPattern::Literal(lit) => vec![*lit],
+            HirPattern::Or(patterns) => patterns.iter().flat_map(Self::arm_literals).collect(),
+            HirPattern::Binding(_)
+            | HirPattern::Enum { .. }
+            | HirPattern::Range { .. }
+            | HirPattern::Wildcard => Vec::new(),
+        }
+    }
+
+    fn arm_ranges(pattern: &HirPattern) -> Vec<(Option<Literal>, Option<Literal>, bool)> {
+        match pattern {
+            HirPattern::Range {
+                start,
+                end,
+                inclusive,
+            } => vec![(*start, *end, *inclusive)],
+            HirPattern::Or(patterns) => patterns.iter().flat_map(Self::arm_ranges).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_range_test(
+        &mut self,
+        fb: &mut FnBuilder,
+        scrut_place: &Place,
+        scrut_ty: TypeId,
+        start: Option<Literal>,
+        end: Option<Literal>,
+        inclusive: bool,
+        mut cur: BlockId,
+        matched_bb: BlockId,
+        next_bb: BlockId,
+        source: &Source,
+    ) {
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        if let Some(lo) = start {
+            let check_end = fb.new_block();
+            let ok = fb.new_temp(bool_ty);
+            fb.push_stmt(
+                cur,
+                MirStatement::Assign {
+                    place: Place::from_local(ok),
+                    rvalue: Rvalue::BinaryOp {
+                        op: BinaryOp::Ge,
+                        lhs: Operand::Copy(scrut_place.clone(), None),
+                        rhs: Operand::Constant(
+                            self.lower_literal(&lo, scrut_ty),
+                            Some(source.clone()),
+                        ),
+                    },
+                    source: Some(source.clone()),
+                },
+            );
+            fb.set_terminator(
+                cur,
+                Terminator::SwitchInt {
+                    discriminant: Operand::Move(Place::from_local(ok), None),
+                    targets: vec![(1, check_end)],
+                    otherwise: next_bb,
+                },
+            );
+            cur = check_end;
+        }
+
+        match end {
+            Some(hi) => {
+                let ok = fb.new_temp(bool_ty);
+                fb.push_stmt(
+                    cur,
+                    MirStatement::Assign {
+                        place: Place::from_local(ok),
+                        rvalue: Rvalue::BinaryOp {
+                            op: if inclusive {
+                                BinaryOp::Le
+                            } else {
+                                BinaryOp::Lt
+                            },
+                            lhs: Operand::Copy(scrut_place.clone(), None),
+                            rhs: Operand::Constant(
+                                self.lower_literal(&hi, scrut_ty),
+                                Some(source.clone()),
+                            ),
+                        },
+                        source: Some(source.clone()),
+                    },
+                );
+                fb.set_terminator(
+                    cur,
+                    Terminator::SwitchInt {
+                        discriminant: Operand::Move(Place::from_local(ok), None),
+                        targets: vec![(1, matched_bb)],
+                        otherwise: next_bb,
+                    },
+                );
+            }
+            None => {
+                fb.set_terminator(cur, Terminator::Goto(matched_bb));
+            }
+        }
+    }
+
+    fn arm_enum_tags(&self, pattern: &HirPattern, enum_def: DefId) -> Vec<u128> {
+        match pattern {
+            HirPattern::Enum { variant, .. } => self
+                .enum_info(enum_def)
+                .and_then(|info| info.variants.iter().find(|v| v.name == *variant))
+                .map(|info| vec![self.enum_variant_tag(enum_def, info.def_id) as u128])
+                .unwrap_or_default(),
+            HirPattern::Or(patterns) => patterns
+                .iter()
+                .flat_map(|inner| self.arm_enum_tags(inner, enum_def))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn arm_enum_variant(&self, pattern: &HirPattern, enum_def: DefId) -> Option<DefId> {
+        match pattern {
+            HirPattern::Enum { variant, .. } => self
+                .enum_info(enum_def)
+                .and_then(|info| info.variants.iter().find(|v| v.name == *variant))
+                .map(|info| info.def_id),
+            HirPattern::Or(patterns) => patterns
+                .iter()
+                .find_map(|inner| self.arm_enum_variant(inner, enum_def)),
+            _ => None,
+        }
+    }
+
+    fn arm_binding(arm: &HirSwitchArm) -> Option<(Spur, DefId, SourceSpan)> {
+        match &arm.pattern {
+            HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span)),
+            HirPattern::Enum { binding, .. } => {
+                binding.as_ref().map(|b| (b.name, b.def_id, b.span))
+            }
+            HirPattern::Or(patterns) => patterns.iter().find_map(|inner| match inner {
+                HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span)),
+                HirPattern::Enum { binding, .. } => {
+                    binding.as_ref().map(|b| (b.name, b.def_id, b.span))
+                }
+                _ => None,
+            }),
+            HirPattern::Literal(_) | HirPattern::Range { .. } | HirPattern::Wildcard => None,
+        }
+    }
+
+    fn switch_string_elem(&self, ty: TypeId) -> Option<TypeId> {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Array { element, .. } | Type::Slice { element, .. }
+                if matches!(
+                    self.typecheck.interner.get(element),
+                    Type::Builtin(zeen_ast::types::BuiltinType::char)
+                ) =>
+            {
+                Some(element)
+            }
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_str_literal_test(
+        &mut self,
+        fb: &mut FnBuilder,
+        scrut_place: &Place,
+        scrut_ty: TypeId,
+        pat: Spur,
+        test_bb: BlockId,
+        matched_bb: BlockId,
+        next_test: BlockId,
+        source: &Source,
+    ) {
+        let usize_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
+        let char_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::char));
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let pat_len = self.rodeo.borrow().resolve(&pat).len() as u64 + 1;
+        let pat_ty = self.typecheck.interner.intern(Type::Array {
+            element: char_ty,
+            len: Some(pat_len),
+        });
+        let pat_temp = fb.new_temp(pat_ty);
+        fb.push_stmt(
+            test_bb,
+            MirStatement::Assign {
+                place: Place::from_local(pat_temp),
+                rvalue: Rvalue::Use(Operand::Constant(
+                    ConstValue::Str(pat),
+                    Some(source.clone()),
+                )),
+                source: Some(source.clone()),
+            },
+        );
+
+        let scrut_len = match self.typecheck.interner.get(scrut_ty).clone() {
+            Type::Array { len: Some(len), .. } => {
+                Operand::Constant(ConstValue::Int(len as i128), None)
+            }
+            Type::Slice { .. } => {
+                let mut len_place = scrut_place.clone();
+                len_place.projection.push(PlaceElem::Field(SLICE_LEN_FIELD));
+                let len_local = fb.new_temp(usize_ty);
+                fb.push_stmt(
+                    test_bb,
+                    MirStatement::Assign {
+                        place: Place::from_local(len_local),
+                        rvalue: Rvalue::Use(Operand::Copy(len_place, None)),
+                        source: Some(source.clone()),
+                    },
+                );
+                Operand::Move(Place::from_local(len_local), None)
+            }
+            _ => unreachable!("string arm over a non-string scrutinee"),
+        };
+
+        let len_ok = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            test_bb,
+            MirStatement::Assign {
+                place: Place::from_local(len_ok),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Eq,
+                    lhs: scrut_len,
+                    rhs: Operand::Constant(ConstValue::Int(pat_len as i128), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        let loop_entry = fb.new_block();
+        fb.set_terminator(
+            test_bb,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(len_ok), None),
+                targets: vec![(1, loop_entry)],
+                otherwise: next_test,
+            },
+        );
+
+        let counter = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            loop_entry,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0), None)),
+                source: Some(source.clone()),
+            },
+        );
+        let header = fb.new_block();
+        fb.set_terminator(loop_entry, Terminator::Goto(header));
+
+        let cont = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            header,
+            MirStatement::Assign {
+                place: Place::from_local(cont),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Lt,
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Constant(ConstValue::Int(pat_len as i128), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        let check_bb = fb.new_block();
+        fb.set_terminator(
+            header,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(cont), None),
+                targets: vec![(1, check_bb)],
+                otherwise: matched_bb,
+            },
+        );
+
+        let scrut_elem = match self.typecheck.interner.get(scrut_ty).clone() {
+            Type::Array { .. } => scrut_place.clone().index(counter),
+            Type::Slice { .. } => {
+                let mut ptr_place = scrut_place.clone();
+                ptr_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
+                ptr_place.index(counter)
+            }
+            _ => unreachable!("string arm over a non-string scrutinee"),
+        };
+        let pat_elem = Place::from_local(pat_temp).index(counter);
+        let eq = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            check_bb,
+            MirStatement::Assign {
+                place: Place::from_local(eq),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Eq,
+                    lhs: self.place_to_operand(scrut_elem, char_ty, Some(source.clone())),
+                    rhs: self.place_to_operand(pat_elem, char_ty, Some(source.clone())),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        let inc_bb = fb.new_block();
+        fb.set_terminator(
+            check_bb,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(eq), None),
+                targets: vec![(1, inc_bb)],
+                otherwise: next_test,
+            },
+        );
+
+        let next = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            inc_bb,
+            MirStatement::Assign {
+                place: Place::from_local(next),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Add,
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Constant(ConstValue::Int(1), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        fb.push_stmt(
+            inc_bb,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(next), None)),
+                source: Some(source.clone()),
+            },
+        );
+        fb.set_terminator(inc_bb, Terminator::Goto(header));
     }
 
     /// Whether `expr` can be lowered to a place by [`Self::lower_expr_to_place`].
@@ -7522,7 +8108,10 @@ impl<'ctx> MirLowering<'ctx> {
     fn normalize_return_operand(&mut self, fb: &FnBuilder, operand: Operand) -> Operand {
         match &operand {
             Operand::Copy(place, _) | Operand::Move(place, _) => {
-                let ty = fb.func.local(place.local).ty;
+                let ty = match place.projection.first() {
+                    Some(PlaceElem::Global(id)) => self.program.global_vars[id.0 as usize].ty,
+                    _ => fb.func.local(place.local).ty,
+                };
                 if matches!(self.typecheck.interner.get(ty), Type::Void) {
                     Operand::Constant(ConstValue::Void, None)
                 } else {

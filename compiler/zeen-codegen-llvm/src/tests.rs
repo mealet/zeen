@@ -1240,6 +1240,41 @@ fn pointer_equality_and_inequality_compare_as_integers() {
 }
 
 #[test]
+fn array_equality_against_string_literal_compares_contents() {
+    let mut fx = Fixture::new();
+    let char_ty = fx.char();
+    let arr4 = fx.array(char_ty, 4);
+    let bool_ty = fx.bool();
+    let i32_ty = fx.i32();
+
+    let main_def = fx.def("main", DefKind::Function);
+    let lit = const_str(&mut fx, "abc");
+    let mut main = fx.fn_builder("main", main_def, i32_ty);
+    let arr = main.local("arr", arr4);
+    let eq = main.temp(bool_ty);
+    let ret = main.temp(i32_ty);
+    main.entry("bb0");
+    main.assign(place(arr), use_const(lit.clone()));
+    main.assign(place(eq), binary(BinaryOp::Eq, copy_of(arr), lit));
+    main.assign(
+        place(ret),
+        Rvalue::Cast {
+            operand: Operand::Copy(place(eq), None),
+            target: i32_ty,
+        },
+    );
+    main.ret(copy_of(ret));
+    main.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(
+        ir.contains("extractvalue"),
+        "array elements must be compared, got:\n{ir}"
+    );
+}
+
+#[test]
 fn array_aggregate_stores_all_elements_correctly() {
     let mut fx = Fixture::new();
     let u8_ty = fx.u8();

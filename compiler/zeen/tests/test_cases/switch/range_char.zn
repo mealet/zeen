@@ -1,0 +1,15 @@
+fn main() {
+  let ch = 'm';
+  let c = switch (ch) {
+    'a'..='z' => 100,
+    'A'..='Z' => 200,
+    _ => 300,
+  };
+  @println("c: {}", c);
+
+  let d = switch ('5') {
+    '0'..'9' => 1,
+    _ => 0,
+  };
+  @println("d: {}", d);
+}

@@ -1980,3 +1980,43 @@ fn main() {
         "the consumed enum must not drop: {labels:?}"
     );
 }
+
+#[test]
+fn switch_payload_move_forbids_later_use() {
+    let errors = flow_err(
+        r#"
+struct Handle { pub h: i32 }
+implement Drop : Handle { fn drop(self) void {} }
+enum E { none, h: Handle }
+fn main() i32 {
+    let e = E.h(Handle { .h = 1 });
+    let r = switch (e) {
+        .none => 0,
+        .h(v) => v.h,
+    };
+    let back = e;
+    return r;
+}
+"#,
+    );
+    assert!(!errors.is_empty());
+}
+
+#[test]
+fn switch_moved_payload_binding_passes() {
+    flow_ok(
+        r#"
+struct Handle { pub h: i32 }
+implement Drop : Handle { fn drop(self) void {} }
+enum E { none, h: Handle }
+fn main() i32 {
+    let e = E.h(Handle { .h = 1 });
+    let r = switch (e) {
+        .none => -1,
+        .h(v) => v.h,
+    };
+    return r;
+}
+"#,
+    );
+}

@@ -1554,6 +1554,218 @@ fn enum_struct_payload_construct() {
     );
 }
 
+#[test]
+fn switch_int_arms_branch_on_equality() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 123; let r = switch (a) { 123 => 444, _ => 0, }; return r; }",
+    );
+
+    let branched = mir.program.functions.values().any(|f| {
+        f.blocks
+            .iter()
+            .any(|block| matches!(block.terminator, crate::Terminator::SwitchInt { .. }))
+    });
+    assert!(branched, "expected switch arms to branch on SwitchInt");
+
+    let compared = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    crate::MirStatement::Assign {
+                        rvalue: crate::Rvalue::BinaryOp {
+                            op: zeen_ast::expressions::BinaryOp::Eq,
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+        })
+    });
+    assert!(compared, "expected literal arms to compare with Eq");
+}
+
+#[test]
+fn switch_binding_gets_a_local() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 1; let r = switch (a) { val => val, }; return r; }",
+    );
+
+    let user_vars = mir
+        .program
+        .functions
+        .values()
+        .flat_map(|f| f.locals.iter())
+        .filter(|local| matches!(local.kind, crate::LocalKind::UserVariable))
+        .count();
+    assert!(
+        user_vars >= 3,
+        "expected locals for `a`, `r` and the `val` binding, got {user_vars}"
+    );
+}
+
+#[test]
+fn switch_or_pattern_tests_every_literal() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 1; let r = switch (a) { 1 | 2 => 10, _ => 0, }; return r; }",
+    );
+
+    let comparisons = mir
+        .program
+        .functions
+        .values()
+        .flat_map(|f| f.blocks.iter())
+        .flat_map(|block| block.statements.iter())
+        .filter(|stmt| {
+            matches!(
+                stmt,
+                crate::MirStatement::Assign {
+                    rvalue: crate::Rvalue::BinaryOp {
+                        op: zeen_ast::expressions::BinaryOp::Eq,
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(comparisons, 2, "each or-pattern literal needs its own test");
+}
+
+#[test]
+fn switch_string_arm_lowes_byte_loop() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let n = \"mealet\"; let r = switch (n) { \"mealet\" => 2, _ => 0, }; return r; }",
+    );
+
+    let switches = mir
+        .program
+        .functions
+        .values()
+        .flat_map(|f| f.blocks.iter())
+        .filter(|block| matches!(block.terminator, crate::Terminator::SwitchInt { .. }))
+        .count();
+    assert!(
+        switches >= 3,
+        "a string arm needs length, loop and byte tests, got {switches}"
+    );
+}
+
+#[test]
+fn switch_enum_dispatches_on_tag() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32 } fn main() i32 { let e = Foo.a; let r = switch (e) { .a => 1, .b(x) => x, }; return r; }",
+    );
+
+    let tag_switch = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            matches!(
+                block.terminator,
+                crate::Terminator::SwitchInt { ref targets, .. } if targets.len() == 1
+            )
+        })
+    });
+    assert!(tag_switch, "expected a tag dispatch switch");
+
+    let tag_read = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    crate::MirStatement::Assign {
+                        rvalue: crate::Rvalue::Discriminant(_),
+                        ..
+                    }
+                )
+            })
+        })
+    });
+    assert!(tag_read, "expected a discriminant read of the scrutinee");
+}
+
+#[test]
+fn switch_enum_payload_binds_through_projection() {
+    let mir = compile_mir_ok(
+        "enum Foo { a, b: i32 } fn main() i32 { let e = Foo.b(41); let r = switch (e) { .a => 0, .b(x) => x, }; return r; }",
+    );
+
+    let projected = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    crate::MirStatement::Assign {
+                        rvalue: crate::Rvalue::Use(
+                            crate::Operand::Copy(p, _) | crate::Operand::Move(p, _)
+                        ),
+                        ..
+                    } if p.projection.iter().any(|elem| matches!(elem, crate::PlaceElem::EnumPayload(_)))
+                )
+            })
+        })
+    });
+    assert!(
+        projected,
+        "expected the payload binding to read through EnumPayload"
+    );
+}
+
+#[test]
+fn switch_range_emits_bound_tests() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 5; let r = switch (a) { 0..10 => 1, _ => 0, }; return r; }",
+    );
+
+    let ops: Vec<String> = mir
+        .program
+        .functions
+        .values()
+        .flat_map(|f| f.blocks.iter())
+        .flat_map(|block| block.statements.iter())
+        .filter_map(|stmt| match stmt {
+            crate::MirStatement::Assign {
+                rvalue: crate::Rvalue::BinaryOp { op, .. },
+                ..
+            } => Some(format!("{op:?}")),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        ops.contains(&"Ge".to_string()),
+        "expected a lower bound test, got {ops:?}"
+    );
+    assert!(
+        ops.contains(&"Lt".to_string()),
+        "expected an exclusive upper bound test, got {ops:?}"
+    );
+}
+
+#[test]
+fn switch_inclusive_range_emits_le_test() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 5; let r = switch (a) { 0..=9 => 1, _ => 0, }; return r; }",
+    );
+
+    let has_le = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    crate::MirStatement::Assign {
+                        rvalue: crate::Rvalue::BinaryOp {
+                            op: zeen_ast::expressions::BinaryOp::Le,
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+        })
+    });
+    assert!(has_le, "expected an inclusive upper bound test");
+}
+
 fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
     let _ = ty;
     true
