@@ -4719,7 +4719,8 @@ impl<'res> TypeChecker<'res> {
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
         for (param_ty, arg) in user_params.iter().zip(args.iter()) {
-            self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+            let param_ty = self.substitute_self(*param_ty, obj_ty);
+            self.infer_or_check_arg(param_ty, arg, &mut bindings, source.clone());
         }
 
         for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
@@ -4745,7 +4746,8 @@ impl<'res> TypeChecker<'res> {
             },
         );
 
-        Some(self.substitute_generics(sig_ret, &bindings))
+        let ret = self.substitute_generics(sig_ret, &bindings);
+        Some(self.substitute_self(ret, obj_ty))
     }
 
     #[allow(clippy::too_many_arguments)]
