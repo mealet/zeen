@@ -1,0 +1,23 @@
+fn main() {
+  let flag = true;
+  let b = switch (flag) {
+    true => 10,
+    false => 20,
+  };
+  @println("bool: {}", b);
+
+  let ch = 'x';
+  let c = switch (ch) {
+    'a' | 'b' | 'x' => 7,
+    _ => 8,
+  };
+  @println("char or: {}", c);
+
+  let n = -5;
+  let m = switch (n) {
+    -5 => 50,
+    -10 | 0 => 60,
+    val => val,
+  };
+  @println("neg or: {}", m);
+}
