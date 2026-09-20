@@ -7,5 +7,11 @@ fn main() i32 {
   @println("{}", foo == foo);
   @println("{}", foo == bar);
   @println("{}", foo != bar);
+
+  let name = "Hello";
+  @println("{}", name == "Hello");
+  @println("{}", name != "Hello");
+  @println("{}", name == "World");
+  @println("{}", "Hello" == name);
   return 0;
 }
