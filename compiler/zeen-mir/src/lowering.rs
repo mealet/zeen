@@ -7237,6 +7237,10 @@ impl<'ctx> MirLowering<'ctx> {
                     ty
                 };
 
+                // Locals of a monomorphized copy store concrete types, like
+                // parameters do: a raw `GenericParam` would reach codegen.
+                let ty = self.substitute_fn_type(fb, ty);
+
                 // `let _ = expr` evaluates `expr` for side effects without
                 // creating storage; user-variable operands are still consumed
                 // via `Discard`.
