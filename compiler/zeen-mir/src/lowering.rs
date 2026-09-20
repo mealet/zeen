@@ -2898,8 +2898,6 @@ impl<'ctx> MirLowering<'ctx> {
             self.register_slice_layouts_in_type(ty, &mut visited);
         }
 
-        // Enum payloads (e.g. `Err: []const char`) are only reachable
-        // through the enum layout.
         let enum_keys: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
         for layout_ty in enum_keys {
             let payloads: Vec<TypeId> = self.program.enum_layouts[&layout_ty]
@@ -2910,6 +2908,17 @@ impl<'ctx> MirLowering<'ctx> {
             for payload_ty in payloads {
                 self.register_slice_layouts_in_type(payload_ty, &mut visited);
             }
+        }
+
+        let global_tys: Vec<TypeId> = self.program.global_vars.iter().map(|g| g.ty).collect();
+        for ty in global_tys {
+            if let Type::Struct { def_id, .. } = self.typecheck.interner.get(ty).clone() {
+                self.register_struct_layout(ty, def_id);
+            }
+            if let Type::Enum { def_id, .. } = self.typecheck.interner.get(ty).clone() {
+                self.register_enum_layout(ty, def_id);
+            }
+            self.register_slice_layouts_in_type(ty, &mut visited);
         }
     }
 

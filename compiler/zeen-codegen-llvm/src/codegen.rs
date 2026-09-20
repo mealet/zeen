@@ -160,36 +160,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
         let builder = context.create_builder();
 
-        let mut global_vars = HashMap::new();
-        for (id, gv) in program.global_vars.iter().enumerate() {
-            let llvm_ty = Self::simple_type(context, typecheck, gv.ty);
-            let global = module.add_global(llvm_ty, None, &gv.symbol_name);
-            if gv.is_extern {
-                global.set_linkage(inkwell::module::Linkage::External);
-            } else {
-                global.set_constant(false);
-                match llvm_ty {
-                    BasicTypeEnum::IntType(t) => {
-                        global.set_initializer(&t.const_zero());
-                    }
-                    BasicTypeEnum::FloatType(t) => {
-                        global.set_initializer(&t.const_zero());
-                    }
-                    BasicTypeEnum::PointerType(t) => {
-                        global.set_initializer(&t.const_null());
-                    }
-                    BasicTypeEnum::ArrayType(t) => {
-                        global.set_initializer(&t.const_zero());
-                    }
-                    BasicTypeEnum::StructType(t) => {
-                        global.set_initializer(&t.const_zero());
-                    }
-                    _ => {}
-                }
-            }
-            global_vars.insert(MirGlobalVarId(id as u32), global);
-        }
-
         Ok(Self {
             context,
             builder,
@@ -208,7 +178,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             str_counter: 0,
             enum_tables: HashMap::new(),
             enum_table_counter: 0,
-            global_vars,
+            global_vars: HashMap::new(),
             locals: HashMap::new(),
             blocks: HashMap::new(),
             current_entry: None,
@@ -242,6 +212,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         self.register_enum_layouts();
         self.register_struct_layouts();
         self.fill_enum_layouts();
+        self.emit_globals();
         self.declare_externs();
         self.emit_stdout_write_runtime();
         self.declare_functions();
@@ -431,6 +402,44 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             let tag_ty = self.context.i8_type().into();
             opaque.set_body(&[tag_ty, union_ty], false);
+        }
+    }
+
+    /// Creates LLVM globals with real lowered types.
+    fn emit_globals(&mut self) {
+        for (id, gv) in self.program.global_vars.iter().enumerate() {
+            let llvm_ty = match self.typecheck.interner.get(gv.ty).clone() {
+                Type::Void | Type::Never | Type::Error => self.context.i32_type().into(),
+                Type::Interface { .. }
+                | Type::InterfaceSelfPlaceholder(_)
+                | Type::GenericParam(_) => self.context.i32_type().into(),
+                _ => self.map_basic_type(gv.ty),
+            };
+            let global = self.module.add_global(llvm_ty, None, &gv.symbol_name);
+            if gv.is_extern {
+                global.set_linkage(inkwell::module::Linkage::External);
+            } else {
+                global.set_constant(false);
+                match llvm_ty {
+                    BasicTypeEnum::IntType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    BasicTypeEnum::FloatType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    BasicTypeEnum::PointerType(t) => {
+                        global.set_initializer(&t.const_null());
+                    }
+                    BasicTypeEnum::ArrayType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    BasicTypeEnum::StructType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    _ => {}
+                }
+            }
+            self.global_vars.insert(MirGlobalVarId(id as u32), global);
         }
     }
 
@@ -706,33 +715,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             AnyTypeEnum::VectorType(t) => t.into(),
             AnyTypeEnum::ScalableVectorType(t) => t.into(),
             AnyTypeEnum::VoidType(_) => panic!("void used as a value type"),
-        }
-    }
-
-    fn simple_type(
-        context: &'ctx Context,
-        typecheck: &TypeCheckResult,
-        ty: TypeId,
-    ) -> BasicTypeEnum<'ctx> {
-        use BuiltinType::*;
-        match typecheck.interner.get(ty).clone() {
-            Type::Builtin(b) => match b {
-                i8 | u8 | char => context.i8_type().into(),
-                i16 | u16 => context.i16_type().into(),
-                i32 | u32 => context.i32_type().into(),
-                i64 | u64 => context.i64_type().into(),
-                isize | usize => context.i64_type().into(),
-                f32 | f64 => context.f64_type().into(),
-                bool => context.bool_type().into(),
-                void => context.i32_type().into(),
-                never => context.i32_type().into(),
-            },
-            Type::IntLiteral => context.i32_type().into(),
-            Type::FloatLiteral => context.f64_type().into(),
-            Type::Pointer { .. } | Type::ManyPointer { .. } => {
-                context.ptr_type(AddressSpace::default()).into()
-            }
-            _ => context.i32_type().into(),
         }
     }
 
