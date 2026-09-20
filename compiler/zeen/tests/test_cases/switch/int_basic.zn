@@ -18,6 +18,12 @@ fn main() {
   };
   @println("big: {}", big);
 
+  let mid = switch (500) {
+    val if (val > 999) => 1050,
+    val => val + 1,
+  };
+  @println("mid: {}", mid);
+
   let neg = switch (a) {
     _ if (a > 3) => -10,
     _ => -1,
