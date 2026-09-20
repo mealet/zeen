@@ -36,7 +36,9 @@ pub use decl::{
     HirFn, HirGenericParam, HirImplement, HirInterface, HirParam, HirStruct,
 };
 
-pub use expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind, HirPattern, HirSwitchArm};
+pub use expr::{
+    HirExpr, HirExprKind, HirFieldInit, HirMacroKind, HirPattern, HirPatternBinding, HirSwitchArm,
+};
 pub use stmt::{HirStmt, HirStmtKind};
 pub use types::{HirTypeExpr, HirTypeKind};
 
@@ -633,10 +635,21 @@ impl<'res> HirLowering<'res> {
     fn lower_pattern(pattern: &zeen_ast::expressions::Pattern, def_id: DefId) -> HirPattern {
         match pattern {
             zeen_ast::expressions::Pattern::Literal(lit) => HirPattern::Literal(*lit),
-            zeen_ast::expressions::Pattern::Named { name, span } => HirPattern::Binding {
-                name: *name,
-                def_id,
-                span: *span,
+            zeen_ast::expressions::Pattern::Named { name, span } => {
+                HirPattern::Binding(HirPatternBinding {
+                    name: *name,
+                    def_id,
+                    span: *span,
+                })
+            }
+            zeen_ast::expressions::Pattern::EnumVariant {
+                variant,
+                variant_span,
+                binding,
+            } => HirPattern::Enum {
+                variant: *variant,
+                variant_span: *variant_span,
+                binding: binding.map(|(name, span)| HirPatternBinding { name, def_id, span }),
             },
             zeen_ast::expressions::Pattern::Wildcard => HirPattern::Wildcard,
             zeen_ast::expressions::Pattern::Or(patterns) => HirPattern::Or(
@@ -1468,17 +1481,17 @@ mod tests {
         ));
         assert!(arms[0].guard.is_none());
 
-        let crate::expr::HirPattern::Binding { name, def_id, .. } = &arms[1].pattern else {
+        let crate::expr::HirPattern::Binding(binding) = &arms[1].pattern else {
             panic!("second arm must bind a value")
         };
-        assert_eq!(fx.name(*name), "val");
-        assert_ne!(*def_id, DefId(u32::MAX));
+        assert_eq!(fx.name(binding.name), "val");
+        assert_ne!(binding.def_id, DefId(u32::MAX));
         assert!(arms[1].guard.is_some());
 
         let HirExprKind::VarRef(body_def) = &arms[1].body.kind else {
             panic!("binding use must lower to VarRef")
         };
-        assert_eq!(*body_def, *def_id);
+        assert_eq!(*body_def, binding.def_id);
 
         assert!(matches!(arms[2].pattern, crate::expr::HirPattern::Wildcard));
     }
@@ -1496,6 +1509,29 @@ mod tests {
             panic!("first arm must be an Or pattern")
         };
         assert_eq!(patterns.len(), 2);
+    }
+
+    #[test]
+    fn switch_enum_pattern_lowers_variant_and_binding() {
+        let fx = lower_ok(
+            "enum Foo { a, b: i32 } fn main() { let e = Foo.a; let r = switch (e) { .b(x) => x, _ => 0, }; }",
+        );
+
+        let value = switch_expr_of(&fx, "main");
+        let HirExprKind::Switch { arms, .. } = &value.kind else {
+            panic!("value must lower to HirExprKind::Switch")
+        };
+
+        let crate::expr::HirPattern::Enum {
+            variant, binding, ..
+        } = &arms[0].pattern
+        else {
+            panic!("first arm must be an enum pattern")
+        };
+        assert_eq!(fx.name(*variant), "b");
+        let binding = binding.as_ref().expect("payload variant needs a binding");
+        assert_eq!(fx.name(binding.name), "x");
+        assert_ne!(binding.def_id, DefId(u32::MAX));
     }
 
     // --> Closures

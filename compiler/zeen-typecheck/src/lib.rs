@@ -3871,9 +3871,9 @@ impl<'res> TypeChecker<'res> {
 
     fn pattern_covers_all(pattern: &HirPattern) -> bool {
         match pattern {
-            HirPattern::Wildcard | HirPattern::Binding { .. } => true,
+            HirPattern::Wildcard | HirPattern::Binding(_) => true,
             HirPattern::Or(patterns) => patterns.iter().any(Self::pattern_covers_all),
-            HirPattern::Literal(_) => false,
+            HirPattern::Literal(_) | HirPattern::Enum { .. } => false,
         }
     }
 
@@ -3921,30 +3921,42 @@ impl<'res> TypeChecker<'res> {
                     values.push(value);
                 }
             }
-            HirPattern::Binding {
-                name: _, def_id, ..
-            } => {
+            HirPattern::Binding(binding) => {
                 if kind.is_some() {
-                    self.result.def_types.insert(*def_id, scrut_ty);
+                    self.result.def_types.insert(binding.def_id, scrut_ty);
+                }
+            }
+            HirPattern::Enum { binding, .. } => {
+                if kind.is_some() {
+                    self.report(TypeError::SwitchPatternMismatch {
+                        expected: self.display_type(scrut_ty).into(),
+                        found: "enum variant".into(),
+                        src: body.source.src(),
+                        span: body.source.span,
+                    });
+                }
+                if let Some(binding) = binding {
+                    self.result.def_types.insert(binding.def_id, scrut_ty);
                 }
             }
             HirPattern::Wildcard => {}
             HirPattern::Or(patterns) => {
                 let mut first_name: Option<(Spur, SourceSpan)> = None;
                 for inner in patterns {
-                    if let HirPattern::Binding { name, span, .. } = inner {
+                    if let HirPattern::Binding(binding) = inner {
                         match first_name {
-                            None => first_name = Some((*name, *span)),
-                            Some((first, _)) if *name == first => {}
+                            None => first_name = Some((binding.name, binding.span)),
+                            Some((first, _)) if binding.name == first => {}
                             Some((first, _)) => {
                                 let expected: SmolStr =
                                     self.interner.borrow().resolve(&first).into();
-                                let found: SmolStr = self.interner.borrow().resolve(name).into();
+                                let found: SmolStr =
+                                    self.interner.borrow().resolve(&binding.name).into();
                                 self.report(TypeError::SwitchOrBindingMismatch {
                                     expected,
                                     found,
                                     src: body.source.src(),
-                                    span: *span,
+                                    span: binding.span,
                                 });
                             }
                         }

@@ -119,13 +119,21 @@ pub struct HirSwitchArm {
 #[derive(Debug, Clone)]
 pub enum HirPattern {
     Literal(zeen_ast::expressions::Literal),
-    Binding {
-        name: Spur,
-        def_id: DefId,
-        span: SourceSpan,
+    Binding(HirPatternBinding),
+    Enum {
+        variant: Spur,
+        variant_span: SourceSpan,
+        binding: Option<HirPatternBinding>,
     },
     Wildcard,
     Or(Vec<HirPattern>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HirPatternBinding {
+    pub name: Spur,
+    pub def_id: DefId,
+    pub span: SourceSpan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

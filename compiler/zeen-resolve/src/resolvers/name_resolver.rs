@@ -1387,6 +1387,7 @@ impl<'ctx> NameResolver {
     fn arm_binding(pattern: &Pattern) -> Option<(Spur, SourceSpan)> {
         match pattern {
             Pattern::Named { name, span } => Some((*name, *span)),
+            Pattern::EnumVariant { binding, .. } => binding.map(|(name, span)| (name, span)),
             Pattern::Or(patterns) => patterns.iter().find_map(Self::arm_binding),
             Pattern::Literal(_) | Pattern::Wildcard => None,
         }

@@ -272,7 +272,15 @@ pub struct Arm<'arena> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Pattern<'arena> {
     Literal(Literal),
-    Named { name: Spur, span: SourceSpan },
+    Named {
+        name: Spur,
+        span: SourceSpan,
+    },
+    EnumVariant {
+        variant: Spur,
+        variant_span: SourceSpan,
+        binding: Option<(Spur, SourceSpan)>,
+    },
     Or(&'arena [Pattern<'arena>]),
     Wildcard,
 }
