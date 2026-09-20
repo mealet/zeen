@@ -3583,7 +3583,45 @@ impl<'res> TypeChecker<'res> {
         struct_ty
     }
 
+    /// Expected types inside an implement block method are viewed through
+    /// the block's generics: signatures use the struct's own slots (`Self`
+    /// is `List[T_struct]`), while method values use the block slots, so a
+    /// struct-flavored expectation would never match. Empty outside
+    /// implement block methods.
+    fn impl_flavored_expected(&mut self, expected: TypeId) -> TypeId {
+        let Some(fn_def) = self.ctx.current_fn_def() else {
+            return expected;
+        };
+        let Some(&struct_def) = self.result.method_owner.get(&fn_def) else {
+            return expected;
+        };
+        let Some(&iface_def) = self.method_owning_interface.get(&fn_def) else {
+            return expected;
+        };
+        let Some(entries) = self.result.impl_registry.get(&(struct_def, iface_def)) else {
+            return expected;
+        };
+        let Some(entry) = entries.iter().find(|e| e.methods.contains(&fn_def)) else {
+            return expected;
+        };
+        let bindings: HashMap<DefId, TypeId> = entry
+            .generic_bindings
+            .iter()
+            .map(|(imp_g, struct_g)| {
+                (
+                    *struct_g,
+                    self.result.interner.intern(Type::GenericParam(*imp_g)),
+                )
+            })
+            .collect();
+        if bindings.is_empty() {
+            return expected;
+        }
+        zeen_types::substitute_generics(&mut self.result.interner, expected, &bindings)
+    }
+
     fn check_expr(&mut self, expr: &HirExpr, expected: TypeId, allow_const_remove: bool) -> TypeId {
+        let expected = self.impl_flavored_expected(expected);
         let actual = match &expr.kind {
             HirExprKind::ArrayInit { elements } if elements.is_empty() => {
                 if let Type::Array { .. } = self.result.interner.get(expected).clone() {
