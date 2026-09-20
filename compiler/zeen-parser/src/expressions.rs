@@ -1471,23 +1471,24 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     fn parse_pattern(&mut self) -> Option<expressions::Pattern<'ctx>> {
         let pattern = self.parse_single_pattern()?;
 
-        if self.p.eat(TokenKind::Pipe) {
-            let mut patterns_buffer: SmallVec<[expressions::Pattern; 4]> = SmallVec::new();
-            patterns_buffer.push(pattern);
-
-            while self.p.eat(TokenKind::Pipe) {
-                let Some(next) = self.parse_single_pattern() else {
-                    break;
-                };
-                patterns_buffer.push(next);
-            }
-
-            let patterns = self.p.arena.alloc_slice_copy(&patterns_buffer);
-
-            return Some(expressions::Pattern::Or(patterns));
+        if !self.p.eat(TokenKind::Pipe) {
+            return Some(pattern);
         }
 
-        Some(pattern)
+        let mut patterns_buffer: SmallVec<[expressions::Pattern; 4]> = SmallVec::new();
+        patterns_buffer.push(pattern);
+
+        while let Some(next) = self.parse_single_pattern() {
+            patterns_buffer.push(next);
+
+            if !self.p.eat(TokenKind::Pipe) {
+                break;
+            }
+        }
+
+        let patterns = self.p.arena.alloc_slice_copy(&patterns_buffer);
+
+        Some(expressions::Pattern::Or(patterns))
     }
 
     fn parse_single_pattern(&mut self) -> Option<expressions::Pattern<'ctx>> {
@@ -1517,6 +1518,73 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 let pat = Pattern::Literal(*literal);
 
                 Some(pat)
+            }
+
+            TokenKind::Keyword(
+                zeen_lexer::token::CompilerKeyword::True
+                | zeen_lexer::token::CompilerKeyword::False,
+            ) => {
+                let Expression {
+                    kind: ExpressionKind::Literal(literal),
+                    span: _,
+                } = self.parse_literal_bool()?
+                else {
+                    unreachable!()
+                };
+                let _ = self.p.advance_not_eof()?;
+
+                if self.p.panic_mode {
+                    return None;
+                }
+
+                Some(Pattern::Literal(*literal))
+            }
+
+            TokenKind::Minus => {
+                let _ = self.p.advance_not_eof()?;
+                let number = self.p.current_clone();
+
+                let TokenKind::Literal { kind } = number.kind else {
+                    self.p.report(ParserError::SyntaxError {
+                        label: "expected a number after `-` in switch pattern".into(),
+                        help: None,
+                        src: self.p.named_src(),
+                        span: number.span,
+                    });
+
+                    return None;
+                };
+
+                let Expression {
+                    kind: ExpressionKind::Literal(literal),
+                    span: _,
+                } = self.parse_literal(kind)?
+                else {
+                    unreachable!()
+                };
+
+                if self.p.panic_mode {
+                    return None;
+                }
+
+                match literal {
+                    expressions::Literal::Int(value) => Some(Pattern::Literal(
+                        expressions::Literal::Int(value.wrapping_neg()),
+                    )),
+                    expressions::Literal::Float(value) => {
+                        Some(Pattern::Literal(expressions::Literal::Float(-value)))
+                    }
+                    _ => {
+                        self.p.report(ParserError::SyntaxError {
+                            label: "only numbers can be negated in switch pattern".into(),
+                            help: None,
+                            src: self.p.named_src(),
+                            span: number.span,
+                        });
+
+                        None
+                    }
+                }
             }
 
             TokenKind::Ident => {
@@ -2297,7 +2365,110 @@ mod tests {
         );
     }
 
-    // TODO: Add tests for switch expression
+    #[test]
+    fn switch_int_literal_and_wildcard() {
+        const SRC: &str = "switch (a) { 123 => 444, _ => 999, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { object, arms } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        assert!(matches!(object.kind, ExpressionKind::Ident { .. }));
+        assert_eq!(arms.len(), 2);
+        assert!(matches!(
+            arms[0].pattern,
+            expressions::Pattern::Literal(expressions::Literal::Int(123))
+        ));
+        assert!(arms[0].guard.is_none());
+        assert!(matches!(arms[1].pattern, expressions::Pattern::Wildcard));
+        assert!(arms[1].guard.is_none());
+    }
+
+    #[test]
+    fn switch_bool_and_negative_patterns() {
+        const SRC: &str = "switch (a) { true => 1, false => 0, -10 => 2, _ => 3, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(arms.len(), 4);
+        assert!(matches!(
+            arms[0].pattern,
+            expressions::Pattern::Literal(expressions::Literal::Bool(true))
+        ));
+        assert!(matches!(
+            arms[1].pattern,
+            expressions::Pattern::Literal(expressions::Literal::Bool(false))
+        ));
+        assert!(matches!(
+            arms[2].pattern,
+            expressions::Pattern::Literal(expressions::Literal::Int(-10))
+        ));
+        assert!(matches!(arms[3].pattern, expressions::Pattern::Wildcard));
+    }
+
+    #[test]
+    fn switch_binding_with_guard() {
+        const SRC: &str = "switch (a) { val if (val) => val, _ => 0, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        let val = rodeo.borrow_mut().get_or_intern("val");
+        assert_eq!(arms.len(), 2);
+        assert!(matches!(
+            arms[0].pattern,
+            expressions::Pattern::Named(name) if name == val
+        ));
+        assert!(arms[0].guard.is_some());
+        assert!(matches!(arms[0].body.kind, ExpressionKind::Ident { .. }));
+    }
+
+    #[test]
+    fn switch_or_pattern_single_pipe() {
+        const SRC: &str = "switch (a) { 1 | 2 | 3 => 1, _ => 0, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        let expressions::Pattern::Or(patterns) = arms[0].pattern else {
+            panic!("expected Or pattern, got {:?}", arms[0].pattern);
+        };
+        assert_eq!(patterns.len(), 3);
+    }
+
+    #[test]
+    fn switch_string_pattern() {
+        const SRC: &str = "switch (a) { \"mealet\" => 1, _ => 0, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        let id = rodeo.borrow_mut().get("mealet").unwrap();
+        assert!(matches!(
+            arms[0].pattern,
+            expressions::Pattern::Literal(expressions::Literal::String(s)) if s == id
+        ));
+    }
 
     #[test]
     fn closure_expr() {
