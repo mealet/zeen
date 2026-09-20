@@ -156,6 +156,18 @@ enum SwitchValue {
     String(Spur),
 }
 
+fn literal_kind_word(lit: &Literal) -> &'static str {
+    match lit {
+        Literal::Int(_) => "integer",
+        Literal::Float(_) => "float",
+        Literal::Char(_) => "char",
+        Literal::ByteChar(_) => "byte char",
+        Literal::Bool(_) => "boolean",
+        Literal::String(_) => "string",
+        Literal::Null => "null",
+    }
+}
+
 impl<'res> TypeChecker<'res> {
     pub fn new(
         resolution: &'res mut ResolutionResult,
@@ -3979,14 +3991,9 @@ impl<'res> TypeChecker<'res> {
                 }
             },
             HirPattern::Wildcard => {}
-            HirPattern::Range { .. } => {
-                if kind.is_some() {
-                    self.report(TypeError::SwitchPatternMismatch {
-                        expected: self.display_type(scrut_ty).into(),
-                        found: "range".into(),
-                        src: body.source.src(),
-                        span: body.source.span,
-                    });
+            HirPattern::Range { start, end, .. } => {
+                if let Some(kind) = kind {
+                    self.check_range_pattern(start, end, kind, scrut_ty, &body.source);
                 }
             }
             HirPattern::Or(patterns) => {
@@ -4138,6 +4145,39 @@ impl<'res> TypeChecker<'res> {
             .is_some_and(|info| info.variants.iter().all(|v| seen.contains(&v.def_id)))
     }
 
+    fn check_range_pattern(
+        &mut self,
+        start: &Option<Literal>,
+        end: &Option<Literal>,
+        kind: SwitchScrutinee,
+        scrut_ty: TypeId,
+        source: &Source,
+    ) {
+        let bound_ok = |kind: SwitchScrutinee, lit: &Literal| {
+            matches!(
+                (kind, lit),
+                (SwitchScrutinee::Int, Literal::Int(_) | Literal::ByteChar(_))
+                    | (SwitchScrutinee::Char, Literal::Char(_))
+            )
+        };
+
+        for bound in start.iter().chain(end.iter()) {
+            if matches!(bound, Literal::Float(_)) {
+                self.report(TypeError::SwitchFloatPattern {
+                    src: source.src(),
+                    span: source.span,
+                });
+            } else if !bound_ok(kind, bound) {
+                self.report(TypeError::SwitchPatternMismatch {
+                    expected: self.display_type(scrut_ty).into(),
+                    found: literal_kind_word(bound).into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+            }
+        }
+    }
+
     fn switch_pattern_value(
         &mut self,
         lit: &Literal,
@@ -4145,19 +4185,10 @@ impl<'res> TypeChecker<'res> {
         scrut_ty: TypeId,
         source: &Source,
     ) -> Option<SwitchValue> {
-        let found = |lit: &Literal| match lit {
-            Literal::Int(_) => "integer",
-            Literal::Float(_) => "float",
-            Literal::Char(_) => "char",
-            Literal::ByteChar(_) => "byte char",
-            Literal::Bool(_) => "boolean",
-            Literal::String(_) => "string",
-            Literal::Null => "null",
-        };
         let mismatch = |checker: &mut Self| {
             checker.report(TypeError::SwitchPatternMismatch {
                 expected: checker.display_type(scrut_ty).into(),
-                found: found(lit).into(),
+                found: literal_kind_word(lit).into(),
                 src: source.src(),
                 span: source.span,
             });
@@ -10765,6 +10796,207 @@ mod tests {
                 .iter()
                 .any(|err| matches!(err, TypeError::SwitchOrBindingMismatch { .. })),
             "expected SwitchOrBindingMismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_range_int_forms() {
+        typecheck(
+            r#"
+            fn main() i32 {
+                let a = 5;
+                let r = switch (a) {
+                    0..10 => 1,
+                    0..=9 => 2,
+                    ..0 => 3,
+                    ..=0 => 4,
+                    10.. => 5,
+                    -5..5 => 6,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect("int range forms must typecheck");
+    }
+
+    #[test]
+    fn switch_range_char() {
+        typecheck(
+            r#"
+            fn main() i32 {
+                let ch = 'm';
+                let r = switch (ch) {
+                    'a'..='z' => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect("char ranges must typecheck");
+    }
+
+    #[test]
+    fn switch_range_or_pattern() {
+        typecheck(
+            r#"
+            fn main() i32 {
+                let a = 12;
+                let r = switch (a) {
+                    0..5 | 10..15 => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect("or of ranges must typecheck");
+    }
+
+    #[test]
+    fn switch_range_does_not_cover() {
+        let errors = typecheck(
+            r#"
+            fn main() i32 {
+                let a = 5;
+                let r = switch (a) {
+                    0..10 => 1,
+                    10..20 => 2,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("ranges alone must not be exhaustive");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchNonExhaustive { .. })),
+            "expected SwitchNonExhaustive, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_range_on_bool_is_reported() {
+        let errors = typecheck(
+            r#"
+            fn main() i32 {
+                let flag = true;
+                let r = switch (flag) {
+                    0..10 => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("range on bool must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchPatternMismatch { .. })),
+            "expected SwitchPatternMismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_range_on_string_is_reported() {
+        let errors = typecheck(
+            r#"
+            fn main() i32 {
+                let name = "mealet";
+                let r = switch (name) {
+                    0..10 => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("range on string must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchPatternMismatch { .. })),
+            "expected SwitchPatternMismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_range_on_enum_is_reported() {
+        let errors = typecheck(
+            r#"
+            enum Foo { a, b: i32 }
+            fn main() i32 {
+                let e = Foo.a;
+                let r = switch (e) {
+                    0..10 => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("range on enum must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchPatternMismatch { .. })),
+            "expected SwitchPatternMismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_range_float_bound_is_reported() {
+        let errors = typecheck(
+            r#"
+            fn main() i32 {
+                let a = 5;
+                let r = switch (a) {
+                    0..1.5 => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("float range bound must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchFloatPattern { .. })),
+            "expected SwitchFloatPattern, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_range_char_bound_on_int_is_reported() {
+        let errors = typecheck(
+            r#"
+            fn main() i32 {
+                let a = 5;
+                let r = switch (a) {
+                    'a'..'z' => 1,
+                    _ => 0,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("char bounds on int must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::SwitchPatternMismatch { .. })),
+            "expected SwitchPatternMismatch, got: {errors:?}"
         );
     }
 }
