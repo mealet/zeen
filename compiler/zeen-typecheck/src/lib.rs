@@ -2284,7 +2284,7 @@ impl<'res> TypeChecker<'res> {
                 self.check_block(stmts, trailing, None, &expr.source)
             }
 
-            HirExprKind::Switch => unreachable!(),
+            HirExprKind::Switch { .. } => unreachable!(),
 
             HirExprKind::Closure { def_id, def } => self.check_closure(*def_id, def, &expr.source),
 

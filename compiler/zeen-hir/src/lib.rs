@@ -36,7 +36,7 @@ pub use decl::{
     HirFn, HirGenericParam, HirImplement, HirInterface, HirParam, HirStruct,
 };
 
-pub use expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind};
+pub use expr::{HirExpr, HirExprKind, HirFieldInit, HirMacroKind, HirPattern, HirSwitchArm};
 pub use stmt::{HirStmt, HirStmtKind};
 pub use types::{HirTypeExpr, HirTypeKind};
 
@@ -620,6 +620,34 @@ impl<'res> HirLowering<'res> {
 
     // > Expressions
 
+    fn lower_switch_arm<'ctx>(&mut self, arm: &zeen_ast::expressions::Arm<'ctx>) -> HirSwitchArm {
+        let def_id = self.resolution.def_of_arm(arm).unwrap_or(DefId(u32::MAX));
+
+        HirSwitchArm {
+            pattern: Self::lower_pattern(&arm.pattern, def_id),
+            guard: arm.guard.map(|guard| Rc::new(self.lower_expr(guard))),
+            body: Rc::new(self.lower_expr(arm.body)),
+        }
+    }
+
+    fn lower_pattern(pattern: &zeen_ast::expressions::Pattern, def_id: DefId) -> HirPattern {
+        match pattern {
+            zeen_ast::expressions::Pattern::Literal(lit) => HirPattern::Literal(*lit),
+            zeen_ast::expressions::Pattern::Named { name, span } => HirPattern::Binding {
+                name: *name,
+                def_id,
+                span: *span,
+            },
+            zeen_ast::expressions::Pattern::Wildcard => HirPattern::Wildcard,
+            zeen_ast::expressions::Pattern::Or(patterns) => HirPattern::Or(
+                patterns
+                    .iter()
+                    .map(|inner| Self::lower_pattern(inner, def_id))
+                    .collect(),
+            ),
+        }
+    }
+
     fn lower_expr<'ctx>(&mut self, expr: &'ctx Expression<'ctx>) -> HirExpr {
         let kind = match expr.kind {
             ExpressionKind::Literal(lit) => HirExprKind::Literal(lit),
@@ -717,7 +745,10 @@ impl<'res> HirLowering<'res> {
                 else_block: else_block.map(|b| Rc::new(self.lower_stmt(b))),
             },
 
-            ExpressionKind::Switch { .. } => HirExprKind::Switch,
+            ExpressionKind::Switch { object, arms } => HirExprKind::Switch {
+                object: Rc::new(self.lower_expr(object)),
+                arms: arms.iter().map(|arm| self.lower_switch_arm(arm)).collect(),
+            },
 
             ExpressionKind::FieldAccess { object, field } => {
                 let (field_name, field_span) = match field.kind {
@@ -1390,6 +1421,81 @@ mod tests {
             rhs.kind,
             HirExprKind::Literal(zeen_ast::expressions::Literal::Int(2))
         ));
+    }
+
+    // --> Switch
+
+    fn switch_expr_of(fx: &Fixture, fn_name: &str) -> Rc<crate::expr::HirExpr> {
+        let f = fx.fn_decl(fn_name);
+        let body = f.body.as_ref().expect("body must be lowered");
+        let HirStmtKind::Expr(expr) = &body.kind else {
+            panic!("function body must be an expression block")
+        };
+        let HirExprKind::Block { stmts, .. } = &expr.kind else {
+            panic!("function body must be a block expression")
+        };
+
+        stmts
+            .iter()
+            .find_map(|stmt| match &stmt.kind {
+                HirStmtKind::Let {
+                    value: Some(value), ..
+                } => matches!(value.kind, HirExprKind::Switch { .. }).then(|| value.clone()),
+                _ => None,
+            })
+            .expect("block must contain a switch let binding")
+    }
+
+    #[test]
+    fn switch_lowers_object_arms_and_binding() {
+        let fx =
+            lower_ok("fn main() { let r = switch (1) { 1 => 2, val if (val) => val, _ => 0, }; }");
+
+        let value = switch_expr_of(&fx, "main");
+        let HirExprKind::Switch { object, arms } = &value.kind else {
+            panic!("value must lower to HirExprKind::Switch")
+        };
+
+        assert!(matches!(
+            object.kind,
+            HirExprKind::Literal(zeen_ast::expressions::Literal::Int(1))
+        ));
+        assert_eq!(arms.len(), 3);
+
+        assert!(matches!(
+            arms[0].pattern,
+            crate::expr::HirPattern::Literal(_)
+        ));
+        assert!(arms[0].guard.is_none());
+
+        let crate::expr::HirPattern::Binding { name, def_id, .. } = &arms[1].pattern else {
+            panic!("second arm must bind a value")
+        };
+        assert_eq!(fx.name(*name), "val");
+        assert_ne!(*def_id, DefId(u32::MAX));
+        assert!(arms[1].guard.is_some());
+
+        let HirExprKind::VarRef(body_def) = &arms[1].body.kind else {
+            panic!("binding use must lower to VarRef")
+        };
+        assert_eq!(*body_def, *def_id);
+
+        assert!(matches!(arms[2].pattern, crate::expr::HirPattern::Wildcard));
+    }
+
+    #[test]
+    fn switch_or_pattern_lowers_all_branches() {
+        let fx = lower_ok("fn main() { let r = switch (1) { 1 | 2 => 10, _ => 0, }; }");
+
+        let value = switch_expr_of(&fx, "main");
+        let HirExprKind::Switch { arms, .. } = &value.kind else {
+            panic!("value must lower to HirExprKind::Switch")
+        };
+
+        let crate::expr::HirPattern::Or(patterns) = &arms[0].pattern else {
+            panic!("first arm must be an Or pattern")
+        };
+        assert_eq!(patterns.len(), 2);
     }
 
     // --> Closures
