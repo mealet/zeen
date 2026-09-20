@@ -1601,6 +1601,35 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 })
             }
 
+            TokenKind::Dot => {
+                let _ = self.p.advance_not_eof()?;
+
+                let variant_token = self.p.expect(TokenKind::Ident, "variant name")?;
+                let variant_slice = self.p.src[variant_token.span.offset()
+                    ..variant_token.span.offset() + variant_token.span.len()]
+                    .to_owned();
+                let variant_id = self.p.get_or_intern(variant_slice);
+
+                let binding = if self.p.eat(TokenKind::OpenParen) {
+                    let binding_token = self.p.expect(TokenKind::Ident, "binding name")?;
+                    let binding_slice = self.p.src[binding_token.span.offset()
+                        ..binding_token.span.offset() + binding_token.span.len()]
+                        .to_owned();
+                    let binding_id = self.p.get_or_intern(binding_slice);
+                    let _ = self.p.expect(TokenKind::CloseParen, ")")?;
+
+                    Some((binding_id, binding_token.span))
+                } else {
+                    None
+                };
+
+                Some(Pattern::EnumVariant {
+                    variant: variant_id,
+                    variant_span: variant_token.span,
+                    binding,
+                })
+            }
+
             _ => {
                 self.p.report(ParserError::SyntaxError {
                     label: "expected switch pattern here".into(),
@@ -2453,6 +2482,41 @@ mod tests {
             panic!("expected Or pattern, got {:?}", arms[0].pattern);
         };
         assert_eq!(patterns.len(), 3);
+    }
+
+    #[test]
+    fn switch_enum_patterns() {
+        const SRC: &str = "switch (a) { .A => 1, .B(x) => x, _ => 0, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(arms.len(), 3);
+
+        let expressions::Pattern::EnumVariant {
+            variant, binding, ..
+        } = arms[0].pattern
+        else {
+            panic!("expected enum pattern, got {:?}", arms[0].pattern);
+        };
+        assert_eq!(rodeo.borrow().resolve(&variant), "A");
+        assert!(binding.is_none());
+
+        let expressions::Pattern::EnumVariant {
+            variant, binding, ..
+        } = arms[1].pattern
+        else {
+            panic!("expected enum pattern, got {:?}", arms[1].pattern);
+        };
+        assert_eq!(rodeo.borrow().resolve(&variant), "B");
+        let (name, _) = binding.expect("payload variant needs a binding");
+        assert_eq!(rodeo.borrow().resolve(&name), "x");
+
+        assert!(matches!(arms[2].pattern, expressions::Pattern::Wildcard));
     }
 
     #[test]

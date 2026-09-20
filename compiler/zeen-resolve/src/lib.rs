@@ -466,6 +466,16 @@ mod tests {
         assert!(matches!(val.kind, DefKind::Variable { .. }));
     }
 
+    #[test]
+    fn switch_enum_binding_is_scoped_to_arm() {
+        let fx = resolve_ok(
+            "enum Foo { a, b: i32 } fn main() i32 { let e = Foo.a; let r = switch (e) { .b(x) => x, _ => 0, }; return r; }",
+        );
+
+        let x = fx.find_def("x").expect("enum binding must be defined");
+        assert!(matches!(x.kind, DefKind::Variable { .. }));
+    }
+
     // --> Closures
 
     impl Fixture {

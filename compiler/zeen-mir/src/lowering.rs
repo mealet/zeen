@@ -4411,15 +4411,21 @@ impl<'ctx> MirLowering<'ctx> {
         match pattern {
             HirPattern::Literal(lit) => vec![*lit],
             HirPattern::Or(patterns) => patterns.iter().flat_map(Self::arm_literals).collect(),
-            HirPattern::Binding { .. } | HirPattern::Wildcard => Vec::new(),
+            HirPattern::Binding(_) | HirPattern::Enum { .. } | HirPattern::Wildcard => Vec::new(),
         }
     }
 
     fn arm_binding(arm: &HirSwitchArm) -> Option<(Spur, DefId, SourceSpan)> {
         match &arm.pattern {
-            HirPattern::Binding { name, def_id, span } => Some((*name, *def_id, *span)),
+            HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span)),
+            HirPattern::Enum { binding, .. } => {
+                binding.as_ref().map(|b| (b.name, b.def_id, b.span))
+            }
             HirPattern::Or(patterns) => patterns.iter().find_map(|inner| match inner {
-                HirPattern::Binding { name, def_id, span } => Some((*name, *def_id, *span)),
+                HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span)),
+                HirPattern::Enum { binding, .. } => {
+                    binding.as_ref().map(|b| (b.name, b.def_id, b.span))
+                }
                 _ => None,
             }),
             HirPattern::Literal(_) | HirPattern::Wildcard => None,
