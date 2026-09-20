@@ -110,7 +110,6 @@ pub struct String {
     self._len == 0
   }
 
-
   fn __capacity_extend(*self) {
     if (self._capacity - 1 < self._len) {
       self._capacity = next_capacity(self._len + 1);
