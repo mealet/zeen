@@ -1,0 +1,22 @@
+// Standard library versioning is separated from compiler. It's form looks like:
+
+//  v1.2.3                           
+//     │                             
+//     ▼                             
+// ┌─┐┌─┐┌─┐                         
+// │1││2││3│                         
+// └┬┘└┬┘└┬┘                         
+//  └──┼──┼► Compiler's major version
+//     │  │                          
+//     └──┼► Compiler's minor version
+//        │                          
+//        └► Library's revision      
+
+// Numbers 1 and 2 are compiler's compatability line, they show user
+// which compiler's version is this library related to.
+
+pub const STD_VERSION: []const char = "0.1.1";
+
+pub const STD_VERSION_MAJOR: u8 = 0;
+pub const STD_VERSION_MINOR: u8 = 1;
+pub const STD_VERSION_REVISION: u8 = 1;
