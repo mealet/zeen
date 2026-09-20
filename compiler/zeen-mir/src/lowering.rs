@@ -4469,7 +4469,10 @@ impl<'ctx> MirLowering<'ctx> {
         match pattern {
             HirPattern::Literal(lit) => vec![*lit],
             HirPattern::Or(patterns) => patterns.iter().flat_map(Self::arm_literals).collect(),
-            HirPattern::Binding(_) | HirPattern::Enum { .. } | HirPattern::Wildcard => Vec::new(),
+            HirPattern::Binding(_)
+            | HirPattern::Enum { .. }
+            | HirPattern::Range { .. }
+            | HirPattern::Wildcard => Vec::new(),
         }
     }
 
@@ -4514,7 +4517,7 @@ impl<'ctx> MirLowering<'ctx> {
                 }
                 _ => None,
             }),
-            HirPattern::Literal(_) | HirPattern::Wildcard => None,
+            HirPattern::Literal(_) | HirPattern::Range { .. } | HirPattern::Wildcard => None,
         }
     }
 

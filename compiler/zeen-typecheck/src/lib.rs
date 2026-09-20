@@ -3894,7 +3894,7 @@ impl<'res> TypeChecker<'res> {
         match pattern {
             HirPattern::Wildcard | HirPattern::Binding(_) => true,
             HirPattern::Or(patterns) => patterns.iter().any(Self::pattern_covers_all),
-            HirPattern::Literal(_) | HirPattern::Enum { .. } => false,
+            HirPattern::Literal(_) | HirPattern::Enum { .. } | HirPattern::Range { .. } => false,
         }
     }
 
@@ -3979,6 +3979,16 @@ impl<'res> TypeChecker<'res> {
                 }
             },
             HirPattern::Wildcard => {}
+            HirPattern::Range { .. } => {
+                if kind.is_some() {
+                    self.report(TypeError::SwitchPatternMismatch {
+                        expected: self.display_type(scrut_ty).into(),
+                        found: "range".into(),
+                        src: body.source.src(),
+                        span: body.source.span,
+                    });
+                }
+            }
             HirPattern::Or(patterns) => {
                 let mut first_name: Option<(Spur, SourceSpan)> = None;
                 for inner in patterns {

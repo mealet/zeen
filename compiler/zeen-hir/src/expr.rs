@@ -125,6 +125,11 @@ pub enum HirPattern {
         variant_span: SourceSpan,
         binding: Option<HirPatternBinding>,
     },
+    Range {
+        start: Option<zeen_ast::expressions::Literal>,
+        end: Option<zeen_ast::expressions::Literal>,
+        inclusive: bool,
+    },
     Wildcard,
     Or(Vec<HirPattern>),
 }

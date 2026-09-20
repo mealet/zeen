@@ -651,6 +651,15 @@ impl<'res> HirLowering<'res> {
                 variant_span: *variant_span,
                 binding: binding.map(|(name, span)| HirPatternBinding { name, def_id, span }),
             },
+            zeen_ast::expressions::Pattern::Range {
+                start,
+                end,
+                inclusive,
+            } => HirPattern::Range {
+                start: *start,
+                end: *end,
+                inclusive: *inclusive,
+            },
             zeen_ast::expressions::Pattern::Wildcard => HirPattern::Wildcard,
             zeen_ast::expressions::Pattern::Or(patterns) => HirPattern::Or(
                 patterns
@@ -1532,6 +1541,40 @@ mod tests {
         let binding = binding.as_ref().expect("payload variant needs a binding");
         assert_eq!(fx.name(binding.name), "x");
         assert_ne!(binding.def_id, DefId(u32::MAX));
+    }
+
+    #[test]
+    fn switch_range_pattern_lowers_bounds() {
+        let fx = lower_ok("fn main() { let r = switch (1) { 0..10 => 1, ..0 => 2, _ => 0, }; }");
+
+        let value = switch_expr_of(&fx, "main");
+        let HirExprKind::Switch { arms, .. } = &value.kind else {
+            panic!("value must lower to HirExprKind::Switch")
+        };
+
+        let crate::expr::HirPattern::Range {
+            start,
+            end,
+            inclusive,
+        } = &arms[0].pattern
+        else {
+            panic!("first arm must be a range")
+        };
+        assert!(matches!(
+            start,
+            Some(zeen_ast::expressions::Literal::Int(0))
+        ));
+        assert!(matches!(end, Some(zeen_ast::expressions::Literal::Int(10))));
+        assert!(!inclusive);
+
+        assert!(matches!(
+            arms[1].pattern,
+            crate::expr::HirPattern::Range {
+                start: None,
+                inclusive: false,
+                ..
+            }
+        ));
     }
 
     // --> Closures

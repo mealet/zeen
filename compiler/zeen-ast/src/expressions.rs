@@ -281,6 +281,11 @@ pub enum Pattern<'arena> {
         variant_span: SourceSpan,
         binding: Option<(Spur, SourceSpan)>,
     },
+    Range {
+        start: Option<Literal>,
+        end: Option<Literal>,
+        inclusive: bool,
+    },
     Or(&'arena [Pattern<'arena>]),
     Wildcard,
 }
