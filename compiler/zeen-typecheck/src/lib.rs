@@ -3944,16 +3944,14 @@ impl<'res> TypeChecker<'res> {
                 }
             }
             HirPattern::Binding(binding) => {
-                if kind.is_some() {
-                    self.result.def_types.insert(binding.def_id, scrut_ty);
-                }
+                self.result.def_types.insert(binding.def_id, scrut_ty);
             }
             HirPattern::Enum {
                 variant,
                 variant_span,
                 binding,
-            } => {
-                if let Some(SwitchScrutinee::Enum(enum_def)) = kind {
+            } => match kind {
+                Some(SwitchScrutinee::Enum(enum_def)) => {
                     self.check_enum_pattern(
                         *variant,
                         *variant_span,
@@ -3962,7 +3960,8 @@ impl<'res> TypeChecker<'res> {
                         enum_def,
                         &body.source,
                     );
-                } else if kind.is_some() {
+                }
+                Some(_) => {
                     self.report(TypeError::SwitchPatternMismatch {
                         expected: self.display_type(scrut_ty).into(),
                         found: "enum variant".into(),
@@ -3973,7 +3972,12 @@ impl<'res> TypeChecker<'res> {
                         self.result.def_types.insert(binding.def_id, scrut_ty);
                     }
                 }
-            }
+                None => {
+                    if let Some(binding) = binding {
+                        self.result.def_types.insert(binding.def_id, scrut_ty);
+                    }
+                }
+            },
             HirPattern::Wildcard => {}
             HirPattern::Or(patterns) => {
                 let mut first_name: Option<(Spur, SourceSpan)> = None;
@@ -4033,6 +4037,9 @@ impl<'res> TypeChecker<'res> {
                 src: source.src(),
                 span: variant_span,
             });
+            if let Some(binding) = binding {
+                self.result.def_types.insert(binding.def_id, scrut_ty);
+            }
             return;
         };
 
@@ -4083,6 +4090,7 @@ impl<'res> TypeChecker<'res> {
         };
 
         if !self.type_is_copy(payload_ty) && enum_info.capabalities.has_explicit_drop {
+            self.result.def_types.insert(binding.def_id, payload_ty);
             self.report(TypeError::EnumExtractFromDrop {
                 name: display_name.into(),
                 src: source.src(),
@@ -10688,6 +10696,41 @@ mod tests {
                 .iter()
                 .any(|err| matches!(err, TypeError::EnumExtractFromDrop { .. })),
             "expected EnumExtractFromDrop, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_no_dangling_bindings_after_scrutinee_error() {
+        let errors = typecheck(
+            r#"
+            enum Foo {
+              a,
+              b: i32,
+              c: { inner: i32, hello: u32 },
+            }
+            fn main() {
+              let a = Foo.b;
+              switch (a) {
+                .a => @println("Its A!"),
+                .b(inner) => @println("Its B: {}", inner),
+                .c(inner) => @println("Its C: {} {}", inner.inner, inner.hello),
+              };
+            }
+            "#,
+        )
+        .expect_err("payload construction without value must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::EnumVariantRequiresValue { .. })),
+            "expected EnumVariantRequiresValue, got: {errors:?}"
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|err| matches!(err, TypeError::DanglingDefId { .. })),
+            "no dangling def ids allowed, got: {errors:?}"
         );
     }
 
