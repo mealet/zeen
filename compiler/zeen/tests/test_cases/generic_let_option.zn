@@ -1,0 +1,9 @@
+fn wrap_some[T](v: T) Option[T] {
+  let o = v;
+  Option.Some(o)
+}
+
+fn main() i32 {
+  @println("{}", wrap_some(41).unwrap() + 1);
+  return 0;
+}
