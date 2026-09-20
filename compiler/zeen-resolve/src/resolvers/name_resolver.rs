@@ -11,7 +11,7 @@ use std::{
 
 use zeen_ast::{
     declarations::{Declaration, DeclarationKind, EnumVariantPayload, GenericType},
-    expressions::{Expression, ExpressionKind},
+    expressions::{Expression, ExpressionKind, Pattern},
     statements::{Statement, StatementKind},
     types::{TypeExpr, TypeKind},
 };
@@ -772,7 +772,15 @@ impl<'ctx> NameResolver {
                 }
             }
 
-            ExpressionKind::Switch { object, .. } => self.collect_global_deps(object, out),
+            ExpressionKind::Switch { object, arms } => {
+                self.collect_global_deps(object, out);
+                for arm in arms.iter().copied() {
+                    if let Some(guard) = arm.guard {
+                        self.collect_global_deps(guard, out);
+                    }
+                    self.collect_global_deps(arm.body, out);
+                }
+            }
 
             ExpressionKind::FieldAccess { object, .. } => self.collect_global_deps(object, out),
 
@@ -1375,6 +1383,15 @@ impl<'ctx> NameResolver {
 
     // --> Expressions
 
+    // First `Named` binding in the pattern, if any.
+    fn arm_binding(pattern: &Pattern) -> Option<(Spur, SourceSpan)> {
+        match pattern {
+            Pattern::Named { name, span } => Some((*name, *span)),
+            Pattern::Or(patterns) => patterns.iter().find_map(Self::arm_binding),
+            Pattern::Literal(_) | Pattern::Wildcard => None,
+        }
+    }
+
     fn resolve_expr(&mut self, expr: &'ctx Expression<'ctx>) {
         match expr.kind {
             ExpressionKind::Literal(_) => {}
@@ -1434,12 +1451,33 @@ impl<'ctx> NameResolver {
                 }
             }
 
-            ExpressionKind::Switch { object, .. } => {
-                self.report(ResolveError::DisabledFeature {
-                    reason: "not supported yet".into(),
-                    src: self.named_src(),
-                    span: object.span,
-                });
+            ExpressionKind::Switch { object, arms } => {
+                self.resolve_expr(object);
+
+                for arm in arms.iter().copied() {
+                    self.table.push(ScopeKind::Block);
+
+                    if let Some((name, span)) = Self::arm_binding(&arm.pattern) {
+                        let def_id = self.define(DefInfo {
+                            name,
+                            kind: DefKind::Variable { is_const: false },
+                            span: (span, self.named_src()).into(),
+                            decl: None,
+                            is_pub: false,
+                        });
+                        self.result
+                            .binding_sites
+                            .insert(NodeKey::from_arm(arm), def_id);
+                        self.table.declare_value(name, def_id);
+                    }
+
+                    if let Some(guard) = arm.guard {
+                        self.resolve_expr(guard);
+                    }
+                    self.resolve_expr(arm.body);
+
+                    self.table.pop();
+                }
             }
 
             ExpressionKind::FieldAccess { object, field } => {

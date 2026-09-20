@@ -423,6 +423,49 @@ mod tests {
         resolve_ok("let a: i32 = 0; let b: i32 = a; let c: i32 = b;");
     }
 
+    #[test]
+    fn switch_arm_binding_is_scoped_to_arm() {
+        let fx = resolve_ok(
+            "fn main() i32 { let r = switch (1) { val if (val) => val, _ => 0, }; return r; }",
+        );
+
+        let val = fx.find_def("val").expect("arm binding must be defined");
+        assert!(matches!(val.kind, DefKind::Variable { .. }));
+    }
+
+    #[test]
+    fn switch_arm_binding_does_not_leak_out() {
+        let errs = resolve_full(
+            "fn main() i32 { let r = switch (1) { val => val, _ => 0, }; return val; }",
+        )
+        .unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::UnresolvedIdent { name, .. } if name.as_str() == "val")
+        ));
+    }
+
+    #[test]
+    fn switch_arm_binding_does_not_leak_into_sibling_arm() {
+        let errs =
+            resolve_full("fn main() i32 { let r = switch (1) { val => 1, _ => val, }; return r; }")
+                .unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::UnresolvedIdent { name, .. } if name.as_str() == "val")
+        ));
+    }
+
+    #[test]
+    fn switch_or_pattern_binding_resolves() {
+        let fx = resolve_ok(
+            "fn main() i32 { let r = switch (1) { 1 | val => val, _ => 0, }; return r; }",
+        );
+
+        let val = fx.find_def("val").expect("or binding must be defined");
+        assert!(matches!(val.kind, DefKind::Variable { .. }));
+    }
+
     // --> Closures
 
     impl Fixture {
