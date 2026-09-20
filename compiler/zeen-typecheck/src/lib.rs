@@ -10999,4 +10999,45 @@ mod tests {
             "expected SwitchPatternMismatch, got: {errors:?}"
         );
     }
+
+    #[test]
+    fn switch_result_mismatch_is_reported() {
+        let errors = typecheck(
+            r#"
+            fn main() i32 {
+                let a = 1;
+                let r = switch (a) {
+                    1 => 1,
+                    _ => "x",
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect_err("mixed result types must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::Mismatch { .. })),
+            "expected Mismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn switch_or_with_binding() {
+        typecheck(
+            r#"
+            fn main() i32 {
+                let a = 1;
+                let r = switch (a) {
+                    1 | 2 => 10,
+                    3 | val => val,
+                };
+                return r;
+            }
+            "#,
+        )
+        .expect("or with a binding must typecheck");
+    }
 }
