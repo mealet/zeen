@@ -4814,6 +4814,31 @@ impl<'res> TypeChecker<'res> {
                 Some(DefKind::Struct | DefKind::Enum)
             )
         {
+            // Unknown associated functions on structs report directly
+            // instead of falling through to a confusing `void` error.
+            // Enums keep the fallthrough: a missing name may be a variant
+            // and already diagnoses as `UnknownEnumVariant` downstream.
+            if matches!(self.def_kind(*referenced_def), Some(DefKind::Struct))
+                && !self
+                    .struct_methods
+                    .get(referenced_def)
+                    .is_some_and(|methods| methods.contains_key(&field_name))
+            {
+                let interner = self.interner.borrow();
+                let struct_name = interner
+                    .resolve(&self.resolution.defs[referenced_def].name)
+                    .into();
+                let field = interner.resolve(&field_name).into();
+                drop(interner);
+
+                self.report(TypeError::UnknownField {
+                    struct_name,
+                    field,
+                    src: source.src(),
+                    span: field_span,
+                });
+                return Some(self.result.interner.error());
+            }
             return self.check_associated_fn_call(
                 (call_id, object),
                 *referenced_def,
@@ -8037,6 +8062,29 @@ mod tests {
             "#,
         )
         .expect_err("unknown method should produce a diagnostic");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownField { .. })),
+            "expected UnknownField error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_associated_fn_names_struct() {
+        let errors = typecheck(
+            r#"
+            struct Foo {
+              pub fn asd() {}
+            }
+
+            fn main() {
+              let foo = Foo.nope();
+            }
+            "#,
+        )
+        .expect_err("unknown associated function should produce a diagnostic");
 
         assert!(
             errors
