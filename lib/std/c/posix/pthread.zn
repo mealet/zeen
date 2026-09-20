@@ -32,8 +32,7 @@ use std.c.time;
 }
 
 // pthread_once_t: plain int on Linux/bionic, an opaque 16-byte struct on macOS.
-// FreeBSD has pthread_once in the C library but libc does not expose the type;
-// it is left unbound there.
+// FreeBSD has pthread_once in the C library but libc does not expose the type
 @os[linux] {
   pub alias c_pthread_once_t = c_int;
 } else @os[android] {
@@ -58,9 +57,7 @@ use std.c.time;
   pub const CLOCK_MONOTONIC: c_clockid_t = 1;
 }
 
-// sched_param: only sched_priority is used by pthread scheduling funcs. Linux,
-// musl, bionic and macOS keep just that int; FreeBSD pads with the sporadic
-// scheduler fields it may write back on pthread_attr_setschedparam queries.
+// sched_param: only sched_priority is used by pthread scheduling funcs
 @os[linux | android | darwin] {
   pub struct c_sched_param {
     pub sched_priority: c_int,
@@ -80,9 +77,6 @@ use std.c.time;
   }
 }
 
-// Opaque pthread types are expressed as byte buffers sized to the biggest
-// variant of the OS (64-bit Linux ABI, 32-bit i686 glibc is a subset). An
-// 8-byte element keeps stack alignment at least as strong as libc expects.
 @os[linux] {
   pub struct c_pthread_attr_t {
     pub __private: [8]u64,

@@ -2,8 +2,7 @@ use std.c.types;
 use std.c.windows.windef;
 
 @os[windows] {
-  // HANDLE-returning functions, sync I/O. `c_Overlapped` is opaque; pass
-  // nullptr for synchronous reads/writes.
+  // HANDLE-returning functions, sync I/O. `c_Overlapped` is opaque
 
   // Desired access (winnt.h).
   pub const GENERIC_READ: WinDWORD = 0x80000000;

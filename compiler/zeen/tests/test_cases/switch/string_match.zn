@@ -1,0 +1,17 @@
+fn main() {
+  let name = "mealet";
+
+  let r = switch (name) {
+    "hello" => 1,
+    "mealet" => 2,
+    _ => 0,
+  };
+  @println("r: {}", r);
+
+  let s = name[..];
+  let q = switch (s) {
+    "mealet" => 7,
+    _ => 8,
+  };
+  @println("q: {}", q);
+}

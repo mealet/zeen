@@ -1,0 +1,32 @@
+fn main() {
+  let a = 123;
+
+  let cased: i32 = switch (a) {
+    123 => 444,
+    val if (val > 999) => 1050,
+    _ if (true) => 999,
+    _ if (a > 3) => -10,
+    val if (a > 3 && a == val) => -123,
+    _ => -1,
+  };
+
+  @println("cased: {}", cased);
+
+  let big = switch (1050) {
+    val if (val > 999) => 1050,
+    _ => -1,
+  };
+  @println("big: {}", big);
+
+  let mid = switch (500) {
+    val if (val > 999) => 1050,
+    val => val + 1,
+  };
+  @println("mid: {}", mid);
+
+  let neg = switch (a) {
+    _ if (a > 3) => -10,
+    _ => -1,
+  };
+  @println("neg: {}", neg);
+}

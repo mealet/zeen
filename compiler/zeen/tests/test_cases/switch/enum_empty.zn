@@ -1,0 +1,15 @@
+enum Color {
+  red,
+  green,
+  blue,
+}
+
+fn main() {
+  let c = Color.green;
+  let r = switch (c) {
+    .red => 1,
+    .green => 2,
+    .blue => 3,
+  };
+  @println("r: {}", r);
+}

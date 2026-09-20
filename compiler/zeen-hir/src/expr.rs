@@ -50,7 +50,10 @@ pub enum HirExprKind {
         else_block: Option<Rc<HirStmt>>,
     },
 
-    Switch, // not implemented yet
+    Switch {
+        object: Rc<HirExpr>,
+        arms: Vec<HirSwitchArm>,
+    },
 
     FieldAccess {
         object: Rc<HirExpr>,
@@ -104,6 +107,38 @@ pub struct HirFieldInit {
     pub name: Spur,
     pub span: SourceSpan,
     pub value: Rc<HirExpr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirSwitchArm {
+    pub pattern: HirPattern,
+    pub guard: Option<Rc<HirExpr>>,
+    pub body: Rc<HirExpr>,
+}
+
+#[derive(Debug, Clone)]
+pub enum HirPattern {
+    Literal(zeen_ast::expressions::Literal),
+    Binding(HirPatternBinding),
+    Enum {
+        variant: Spur,
+        variant_span: SourceSpan,
+        binding: Option<HirPatternBinding>,
+    },
+    Range {
+        start: Option<zeen_ast::expressions::Literal>,
+        end: Option<zeen_ast::expressions::Literal>,
+        inclusive: bool,
+    },
+    Wildcard,
+    Or(Vec<HirPattern>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HirPatternBinding {
+    pub name: Spur,
+    pub def_id: DefId,
+    pub span: SourceSpan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

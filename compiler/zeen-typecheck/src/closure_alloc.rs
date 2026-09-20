@@ -288,10 +288,19 @@ impl<'a> Analyzer<'a> {
                 }
             }
 
+            HirExprKind::Switch { object, arms } => {
+                self.expr(object, &Fate::Discard);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.expr(guard, &Fate::Discard);
+                    }
+                    self.expr(&arm.body, fate);
+                }
+            }
+
             HirExprKind::Literal(_)
             | HirExprKind::GenericParamRef(_)
             | HirExprKind::SelfValue(_)
-            | HirExprKind::Switch
             | HirExprKind::Type(_)
             | HirExprKind::Error => {}
         }

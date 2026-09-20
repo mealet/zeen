@@ -1,16 +1,14 @@
-/// Writer that appends a utf8 string (`[]const char`) into an output buffer.
-/// Used as the `out` sink by `Display`/`Debug` implementations.
+/// String slice writer interface for the buffers
 pub interface StrWriter {
   pub fn write_str(*self, value: []const char) void;
   pub fn write_str_raw(*self, ptr: [*]const char, len: usize) void;
   pub fn write_str_single(*self, value: char) void;
 }
 
-/// Compiler-provided runtime: writes `len` bytes from `ptr` to stdout.
-/// The body is synthesized by the compiler during code generation.
+/// Compiler provided stdout writer function
 extern fn __zeen_stdout_write(ptr: [*]const char, len: usize) void;
 
-/// Compiler-reserved output stream (stdout of the executable).
+/// Compiler-reserved output stream
 pub struct OutStream {}
 
 implement Copy : OutStream {}
@@ -29,14 +27,12 @@ implement StrWriter : OutStream {
   }
 }
 
-/// Render a structure in format macros (print, println, panic, format).
-/// The writer is generic and passed by pointer, so mutable writers (the
-/// heap `String`) accumulate output across multiple arguments.
+/// Format macros renderer for structure (`{}` specifier)
 pub interface Display {
   pub fn display[T: StrWriter](*const self, out: *T) void;
 }
 
-/// Render a structure in debug macros (dbg, "{:?}" specifier).
+/// Format macros debugger for structure (`{:?}` specifier, `@dbg(expr)` macro)
 pub interface Debug {
   pub fn debug[T: StrWriter](*const self, out: *T) void;
 }

@@ -1,0 +1,12 @@
+fn main() {
+  let a = 123;
+
+  switch (a) {
+    _ => @println("stmt wildcard"),
+  };
+
+  switch (a) {
+    123 => @println("stmt literal"),
+    _ => @println("stmt fallback"),
+  };
+}
