@@ -3438,10 +3438,11 @@ impl<'res> TypeChecker<'res> {
         }
 
         // `Self { .. }` inside its own methods is already bound to the
-        // current instantiation; seed it.
+        // current instantiation; seed it unless the expected type or
+        // explicit arguments already bound the generic above.
         for g in &struct_generics {
             if let Some(bound) = self.ctx.generic_binding(*g) {
-                bindings.insert(*g, bound);
+                bindings.entry(*g).or_insert(bound);
             }
         }
 
@@ -5024,6 +5025,42 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
+        // Implement-block generics carry their own bounds (`implement[T:
+        // Copy]`): the receiver instantiation must satisfy them, or the
+        // bounded method does not apply at all.
+        if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
+            && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
+            && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
+        {
+            for (imp_g, ifaces) in &entry.generic_bounds.clone() {
+                let Some(&concrete_ty) = bindings.get(imp_g) else {
+                    continue;
+                };
+
+                for iface_def in ifaces {
+                    if !self.type_satisfies_interface(concrete_ty, *iface_def) {
+                        let interner = self.interner.borrow();
+
+                        let generic = interner.resolve(&self.resolution.defs[imp_g].name).into();
+                        let bound = interner
+                            .resolve(&self.resolution.defs[iface_def].name)
+                            .into();
+                        let ty = self.display_type(concrete_ty).into();
+
+                        drop(interner);
+
+                        self.report(TypeError::GenericBoundNotSatisfied {
+                            generic,
+                            bound,
+                            ty,
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+                }
+            }
+        }
+
         let mut monomorphized_args: Vec<TypeId> = struct_generic_args;
         monomorphized_args.extend(resolved_generic_args);
 
@@ -5752,6 +5789,42 @@ impl<'res> TypeChecker<'res> {
         }
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
+
+        // Same implement-block bound check as for instance calls: a
+        // bounded static method does not apply when its instantiation
+        // misses a bound.
+        if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
+            && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
+            && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
+        {
+            for (imp_g, ifaces) in &entry.generic_bounds.clone() {
+                let Some(&concrete_ty) = bindings.get(imp_g) else {
+                    continue;
+                };
+
+                for iface_def in ifaces {
+                    if !self.type_satisfies_interface(concrete_ty, *iface_def) {
+                        let interner = self.interner.borrow();
+
+                        let generic = interner.resolve(&self.resolution.defs[imp_g].name).into();
+                        let bound = interner
+                            .resolve(&self.resolution.defs[iface_def].name)
+                            .into();
+                        let ty = self.display_type(concrete_ty).into();
+
+                        drop(interner);
+
+                        self.report(TypeError::GenericBoundNotSatisfied {
+                            generic,
+                            bound,
+                            ty,
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+                }
+            }
+        }
 
         for g in &type_generics {
             if !bindings.contains_key(g) {
