@@ -1554,6 +1554,85 @@ fn enum_struct_payload_construct() {
     );
 }
 
+#[test]
+fn switch_int_arms_branch_on_equality() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 123; let r = switch (a) { 123 => 444, _ => 0, }; return r; }",
+    );
+
+    let branched = mir.program.functions.values().any(|f| {
+        f.blocks
+            .iter()
+            .any(|block| matches!(block.terminator, crate::Terminator::SwitchInt { .. }))
+    });
+    assert!(branched, "expected switch arms to branch on SwitchInt");
+
+    let compared = mir.program.functions.values().any(|f| {
+        f.blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    crate::MirStatement::Assign {
+                        rvalue: crate::Rvalue::BinaryOp {
+                            op: zeen_ast::expressions::BinaryOp::Eq,
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+        })
+    });
+    assert!(compared, "expected literal arms to compare with Eq");
+}
+
+#[test]
+fn switch_binding_gets_a_local() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 1; let r = switch (a) { val => val, }; return r; }",
+    );
+
+    let user_vars = mir
+        .program
+        .functions
+        .values()
+        .flat_map(|f| f.locals.iter())
+        .filter(|local| matches!(local.kind, crate::LocalKind::UserVariable))
+        .count();
+    assert!(
+        user_vars >= 3,
+        "expected locals for `a`, `r` and the `val` binding, got {user_vars}"
+    );
+}
+
+#[test]
+fn switch_or_pattern_tests_every_literal() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = 1; let r = switch (a) { 1 | 2 => 10, _ => 0, }; return r; }",
+    );
+
+    let comparisons = mir
+        .program
+        .functions
+        .values()
+        .flat_map(|f| f.blocks.iter())
+        .flat_map(|block| block.statements.iter())
+        .filter(|stmt| {
+            matches!(
+                stmt,
+                crate::MirStatement::Assign {
+                    rvalue: crate::Rvalue::BinaryOp {
+                        op: zeen_ast::expressions::BinaryOp::Eq,
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(comparisons, 2, "each or-pattern literal needs its own test");
+}
+
 fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
     let _ = ty;
     true

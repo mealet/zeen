@@ -5,6 +5,7 @@ use std::{
 };
 
 use lasso::{Rodeo, Spur};
+use miette::SourceSpan;
 use smol_str::SmolStr;
 use zeen_ast::{
     Source,
@@ -14,7 +15,7 @@ use zeen_driver::CompilationMode;
 use zeen_hir::{
     HirId, HirMacroKind, HirModule, HirTypeExpr,
     decl::{HirDecl, HirDeclKind, HirFn},
-    expr::{HirExpr, HirExprKind, HirFieldInit},
+    expr::{HirExpr, HirExprKind, HirFieldInit, HirPattern, HirSwitchArm},
     stmt::{HirStmt, HirStmtKind},
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
@@ -4225,7 +4226,9 @@ impl<'ctx> MirLowering<'ctx> {
                 (block, Operand::Constant(ConstValue::NullPtr, None))
             }
 
-            HirExprKind::Switch { .. } => unreachable!("not implemented in previous stages"),
+            HirExprKind::Switch { object, arms } => {
+                self.lower_switch(fb, object, arms, expr, block)
+            }
             HirExprKind::Type(_) => unreachable!(),
 
             HirExprKind::Closure { def_id, .. } => {
@@ -4248,6 +4251,156 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::Error => unreachable!(),
+        }
+    }
+
+    fn lower_switch(
+        &mut self,
+        fb: &mut FnBuilder,
+        object: &HirExpr,
+        arms: &[HirSwitchArm],
+        expr: &HirExpr,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        let (block, scrut_place) = self.lower_expr_to_place_or_temp(fb, object, block);
+        let scrut_ty = self.expr_type(fb, object);
+        let result_ty = self.expr_type(fb, expr);
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let join = fb.new_block();
+        let result_local = fb.new_temp(result_ty);
+
+        fb.scope_stack.push(Vec::new());
+
+        let mut next_test = fb.new_block();
+        fb.set_terminator(block, Terminator::Goto(next_test));
+
+        for arm in arms {
+            let test_bb = next_test;
+            next_test = fb.new_block();
+            let matched_bb = fb.new_block();
+
+            let literals = Self::arm_literals(&arm.pattern);
+            if literals.is_empty() {
+                fb.set_terminator(test_bb, Terminator::Goto(matched_bb));
+            } else {
+                let mut cur = test_bb;
+                for (i, lit) in literals.iter().enumerate() {
+                    let last = i + 1 == literals.len();
+                    let next_lit = if last { next_test } else { fb.new_block() };
+                    let cmp = fb.new_temp(bool_ty);
+                    fb.push_stmt(
+                        cur,
+                        MirStatement::Assign {
+                            place: Place::from_local(cmp),
+                            rvalue: Rvalue::BinaryOp {
+                                op: BinaryOp::Eq,
+                                lhs: Operand::Copy(scrut_place.clone(), None),
+                                rhs: Operand::Constant(
+                                    self.lower_literal(lit, scrut_ty),
+                                    Some(expr.source.clone()),
+                                ),
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    fb.set_terminator(
+                        cur,
+                        Terminator::SwitchInt {
+                            discriminant: Operand::Move(Place::from_local(cmp), None),
+                            targets: vec![(1, matched_bb)],
+                            otherwise: next_lit,
+                        },
+                    );
+                    cur = next_lit;
+                }
+            }
+
+            let mut body_bb = matched_bb;
+            if let Some((name, def_id, span)) = Self::arm_binding(arm) {
+                let local = fb.new_local(
+                    scrut_ty,
+                    LocalKind::UserVariable,
+                    Mutability::Mut,
+                    Some(name),
+                    Some((span, expr.source.src()).into()),
+                );
+                fb.locals_by_def.insert(def_id, local);
+                fb.push_stmt(matched_bb, MirStatement::StorageLive(local));
+                if let Some(scope) = fb.scope_stack.last_mut() {
+                    scope.push(local);
+                }
+                fb.push_stmt(
+                    matched_bb,
+                    MirStatement::Assign {
+                        place: Place::from_local(local),
+                        rvalue: Rvalue::Use(Operand::Copy(scrut_place.clone(), None)),
+                        source: Some(expr.source.clone()),
+                    },
+                );
+            }
+
+            if let Some(guard) = &arm.guard {
+                let guard_bb = fb.new_block();
+                let (end, guard_op) = self.lower_expr_to_operand(fb, guard, matched_bb);
+                let guard_local = self.operand_to_local(fb, guard_op, bool_ty, end);
+                fb.set_terminator(
+                    end,
+                    Terminator::SwitchInt {
+                        discriminant: Operand::Move(Place::from_local(guard_local), None),
+                        targets: vec![(1, guard_bb)],
+                        otherwise: next_test,
+                    },
+                );
+                body_bb = guard_bb;
+            }
+
+            let (end, operand) = self.lower_expr_to_operand(fb, &arm.body, body_bb);
+            if fb.block_is_open(end) {
+                fb.push_stmt(
+                    end,
+                    MirStatement::Assign {
+                        place: Place::from_local(result_local),
+                        rvalue: Rvalue::Use(operand),
+                        source: Some(expr.source.clone()),
+                    },
+                );
+                fb.set_terminator(end, Terminator::Goto(join));
+            }
+        }
+
+        fb.set_terminator(next_test, Terminator::Unreachable);
+
+        let locals = fb.scope_stack.pop().unwrap();
+        for local in locals.iter().rev() {
+            fb.push_stmt(join, MirStatement::StorageDead(*local));
+        }
+
+        (
+            join,
+            Operand::Move(Place::from_local(result_local), Some(expr.source.clone())),
+        )
+    }
+
+    fn arm_literals(pattern: &HirPattern) -> Vec<Literal> {
+        match pattern {
+            HirPattern::Literal(lit) => vec![*lit],
+            HirPattern::Or(patterns) => patterns.iter().flat_map(Self::arm_literals).collect(),
+            HirPattern::Binding { .. } | HirPattern::Wildcard => Vec::new(),
+        }
+    }
+
+    fn arm_binding(arm: &HirSwitchArm) -> Option<(Spur, DefId, SourceSpan)> {
+        match &arm.pattern {
+            HirPattern::Binding { name, def_id, span } => Some((*name, *def_id, *span)),
+            HirPattern::Or(patterns) => patterns.iter().find_map(|inner| match inner {
+                HirPattern::Binding { name, def_id, span } => Some((*name, *def_id, *span)),
+                _ => None,
+            }),
+            HirPattern::Literal(_) | HirPattern::Wildcard => None,
         }
     }
 
