@@ -1633,6 +1633,25 @@ fn switch_or_pattern_tests_every_literal() {
     assert_eq!(comparisons, 2, "each or-pattern literal needs its own test");
 }
 
+#[test]
+fn switch_string_arm_lowes_byte_loop() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let n = \"mealet\"; let r = switch (n) { \"mealet\" => 2, _ => 0, }; return r; }",
+    );
+
+    let switches = mir
+        .program
+        .functions
+        .values()
+        .flat_map(|f| f.blocks.iter())
+        .filter(|block| matches!(block.terminator, crate::Terminator::SwitchInt { .. }))
+        .count();
+    assert!(
+        switches >= 3,
+        "a string arm needs length, loop and byte tests, got {switches}"
+    );
+}
+
 fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
     let _ = ty;
     true
