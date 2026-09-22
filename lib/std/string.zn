@@ -343,7 +343,7 @@ pub struct String {
     let end = @as(*char, self.ptr + self._len);
 
     while (cursor != end) {
-      *cursor = @as(char, toupper(@as(i32, *cursor)));
+      *cursor = @as(char, tolower(@as(i32, *cursor)));
       cursor += 1;
     }
   }
