@@ -137,7 +137,7 @@ pub struct List[T] {
   /// Pop last element and return it
   pub fn pop(*self) Option[T] {
     if (self._capacity < 1 || self._len < 1) {
-      return Option#[T].None();
+      return Option.None;
     }
 
     self._len -= 1;
@@ -153,7 +153,7 @@ pub struct List[T] {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[T].None();
+      return Option.None;
     };
 
     if (index == self._len - 1) {
@@ -190,7 +190,7 @@ pub struct List[T] {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[T].None();
+      return Option.None;
     };
 
     Option.Some(self.ptr[index])
@@ -203,7 +203,7 @@ pub struct List[T] {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[*T].None();
+      return Option.None;
     };
 
     Option.Some(&self.ptr[index])
@@ -216,7 +216,7 @@ pub struct List[T] {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[T].None();
+      return Option.None;
     };
 
     let output = Option.Some(self.ptr[index]);
@@ -239,7 +239,7 @@ pub struct List[T] {
       i += 1;
     };
 
-    return Option#[usize].None();
+    return Option.None;
   }
 
   /// Reverse elements order in list
@@ -566,7 +566,7 @@ pub struct List[T] {
       };
     };
 
-    return Option#[usize].None();
+    return Option.None;
   }
 
   /// Insert element at index, shifting right (out of bounds panics).
@@ -618,7 +618,7 @@ pub struct List[T] {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[T].None();
+      return Option.None;
     };
 
     if (index == self._len - 1) {
@@ -661,7 +661,7 @@ pub struct List[T] {
   /// Last element copy (empty is `None`).
   pub fn last[T: Copy](*const self) Option[T] {
     if (self._len < 1) {
-      return Option#[T].None();
+      return Option.None;
     };
 
     return self.get(self._len - 1);
@@ -783,7 +783,7 @@ pub struct ListIter[T] {
 implement[T: Copy] Iterator : ListIter[T] {
   fn next(*self) Option[T] {
     if (self.idx >= self.len) {
-      return Option#[T].None();
+      return Option.None;
     };
 
     let i = self.idx;
@@ -825,7 +825,7 @@ pub struct OwnedListIter[T] {
 implement[T: Copy] Iterator : OwnedListIter[T] {
   fn next(*self) Option[T] {
     if (self.idx >= self.len) {
-      return Option#[T].None();
+      return Option.None;
     };
 
     let i = self.idx;

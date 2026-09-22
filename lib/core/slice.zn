@@ -30,7 +30,7 @@ implement Iterator : Range {
       return Option.Some(start);
     };
 
-    Option.None()
+    Option.None
   }
 }
 

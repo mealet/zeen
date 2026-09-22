@@ -1,0 +1,49 @@
+pub enum Result[T, E] {
+  Ok: T,
+  Err: E,
+
+  pub fn is_ok(*const self) bool {
+    @enumTag(self) == 0
+  }
+
+  pub fn is_err(*const self) bool {
+    @enumTag(self) == 1
+  }
+
+  pub fn unwrap(self) T {
+    switch (self) {
+      .Ok(value) => value,
+      .Err(_error) => @panic("Called `unwrap()` on `Err` result"),
+    }
+  }
+
+  pub fn unwrap_err(self) E {
+    switch (self) {
+      .Ok(_value) => @panic("Called `unwrap_err()` on `Ok` result"),
+      .Err(error) => error,
+    }
+  }
+
+  pub fn unwrap_or(self, default: T) T {
+    switch (self) {
+      .Ok(value) => value,
+      .Err(_error) => default,
+    }
+  }
+
+  pub fn unwrap_or_else(self, f: FnOnce() T) T {
+    switch (self) {
+      .Ok(value) => value,
+      .Err(_error) => f(),
+    }
+  }
+
+  pub fn expect(self, msg: []const char) T {
+    switch (self) {
+      .Ok(value) => value,
+      .Err(_error) => @panic("{}", msg),
+    }
+  }
+}
+
+implement[T: Copy, E: Copy] Copy : Result[T, E] {}

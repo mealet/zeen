@@ -166,7 +166,7 @@ pub struct String {
   /// Remove last character and return it
   pub fn pop(*self) Option[char] {
     if (self._capacity < 1 || self._len < 1) {
-      return Option#[char].None();
+      return Option.None;
     };
 
     self._len -= 1;
@@ -183,7 +183,7 @@ pub struct String {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[char].None();
+      return Option.None;
     };
 
     if (index == self._len - 1) {
@@ -221,7 +221,7 @@ pub struct String {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[char].None();
+      return Option.None;
     };
 
     Option.Some(self.ptr[index])
@@ -234,7 +234,7 @@ pub struct String {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[*char].None();
+      return Option.None;
     };
 
     Option.Some(&self.ptr[index])
@@ -247,7 +247,7 @@ pub struct String {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[char].None();
+      return Option.None;
     };
 
     let output = Option.Some(self.ptr[index]);
@@ -290,7 +290,7 @@ pub struct String {
     let entrance = strchr(self.ptr, value);
 
     if (entrance == nullptr) {
-      return Option#[usize].None();
+      return Option.None;
     };
 
     Option.Some(@as(usize, entrance - self.ptr))
@@ -303,7 +303,7 @@ pub struct String {
     let entrance = strstr(self.ptr, value.ptr);
 
     if (entrance == nullptr) {
-      return Option#[usize].None();
+      return Option.None;
     };
 
     Option.Some(@as(usize, entrance - self.ptr))   
@@ -314,13 +314,13 @@ pub struct String {
   /// * `None` - if not found
   pub fn find_cstr(*const self, value: [*]const char) Option[usize] {
     if (@as(*void, value) == nullptr) {
-      return Option#[usize].None();
+      return Option.None;
     };
 
     let entrance = strstr(self.ptr, value);
 
     if (entrance == nullptr) {
-      return Option#[usize].None();
+      return Option.None;
     };
 
     Option.Some(@as(usize, entrance - self.ptr))   
