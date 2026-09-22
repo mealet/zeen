@@ -5,7 +5,6 @@ use std.c.stdio;
 /// Standard input handle.
 pub struct Stdin {
   /// Read one line, keeping trailing newline.
-  /// Returns `true` on data, `false` on end of input or error.
   pub fn read_line(buf: *String) bool {
     @os[windows] {
       let ok = read_line_fgets(buf);
