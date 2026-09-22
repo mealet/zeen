@@ -566,6 +566,38 @@ implement Sliceable : String {
 
     self.ptr[start..end]
   }
+
+  /// View without leading whitespace.
+  pub fn trim_start(*const self) []const char {
+    let len = self._len;
+    let start: usize = 0;
+
+    while (start < len) {
+      if (isspace(@as(i32, self.ptr[start])) == 0) {
+        break;
+      };
+
+      start += 1;
+    };
+
+    self.ptr[start..len]
+  }
+
+  /// View without trailing whitespace.
+  pub fn trim_end(*const self) []const char {
+    let len = self._len;
+    let end = len;
+
+    while (end > 0) {
+      if (isspace(@as(i32, self.ptr[end - 1])) == 0) {
+        break;
+      };
+
+      end -= 1;
+    };
+
+    self.ptr[0..end]
+  }
 }
 
 implement StrWriter : String {
