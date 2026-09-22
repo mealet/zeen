@@ -1,0 +1,131 @@
+use std.alloc;
+use std.string;
+use std.c.stdio;
+
+/// Standard input handle.
+pub struct Stdin {
+  /// Standard input stream.
+  pub fn new() Self {
+    Self {}
+  }
+
+  /// Read one line, keeping trailing newline (like Rust `read_line`).
+  /// Returns `true` on data, `false` on end of input or error.
+  pub fn read_line(*self, buf: *String) bool {
+    @os[windows] {
+      let ok = read_line_fgets(buf);
+    } else {
+      let ok = read_line_getline(buf);
+    }
+
+    ok
+  }
+
+  /// Read whole input into buffer.
+  pub fn read_to_string(*self, buf: *String) bool {
+    let any = false;
+
+    while (self.read_line(buf)) {
+      any = true;
+    };
+
+    any
+  }
+}
+
+/// Line reader through `getline` (posix).
+@os[linux | android | darwin | freebsd] {
+  fn read_line_getline(buf: *String) bool {
+    let line: *char = @as(*char, nullptr);
+    let cap: usize = 0;
+
+    let n = getline(@as(**char, &line), @as(*usize, &cap), stdin);
+
+    if (n < 0) {
+      return false;
+    };
+
+      (*buf).push_str((@as([*]char, line))[0..@as(usize, n)]);
+      Allocator.dealloc(@as(*void, line));
+
+    true
+  }
+}
+
+/// Line reader through `fgets` chunks (no `getline` here).
+@os[windows] {
+  fn read_line_fgets(buf: *String) bool {
+    let chunk: [256]char = @uninit();
+    let any = false;
+
+    while (true) {
+      let got = fgets(chunk, 256, stdin);
+
+      if (@as(*void, got) == nullptr) {
+        break;
+      };
+
+      any = true;
+
+      let i: usize = 0;
+      while (i < 256) {
+        if (chunk[i] == '\0') {
+          break;
+        };
+
+        (*buf).push(chunk[i]);
+
+        if (chunk[i] == '\n') {
+          return true;
+        };
+
+        i += 1;
+      };
+    };
+
+    any
+  }
+}
+
+/// Standard output handle.
+pub struct Stdout {
+  out: OutStream,
+
+  /// Standard output stream.
+  pub fn new() Self {
+    Self { .out = OutStream {} }
+  }
+
+  /// Write string slice to output.
+  pub fn write(*self, value: []const char) void {
+    self.out.write_str(value);
+  }
+
+  /// Write string to output.
+  pub fn write_string(*self, value: *String) void {
+    self.write((*value).slice(..));
+  }
+
+  /// Flush output buffer.
+  pub fn flush(*self) void {
+    let _ = fflush(stdout);
+  }
+}
+
+/// Standard error handle.
+pub struct Stderr {
+  /// Standard error stream.
+  pub fn new() Self {
+    Self {}
+  }
+
+  /// Write string slice to error output.
+  pub fn write(*self, value: []const char) void {
+    let _ = fwrite(@as([*]const void, value.ptr), 1, value.len, stderr);
+  }
+
+  /// Flush error output.
+  pub fn flush(*self) void {
+    let _ = fflush(stderr);
+  }
+}
