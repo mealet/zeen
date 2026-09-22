@@ -791,10 +791,7 @@ impl<'res> HirLowering<'res> {
                         Some(zeen_resolve::Resolution::SelfType(id))
                             if matches!(
                                 self.resolution.defs.get(&id).map(|i| &i.kind),
-                                Some(
-                                    zeen_resolve::DefKind::Struct
-                                        | zeen_resolve::DefKind::Enum
-                                )
+                                Some(zeen_resolve::DefKind::Struct | zeen_resolve::DefKind::Enum)
                             ) =>
                         {
                             Rc::new(HirExpr {
