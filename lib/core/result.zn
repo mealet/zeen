@@ -44,6 +44,34 @@ pub enum Result[T, E] {
       .Err(_error) => @panic("{}", msg),
     }
   }
+
+  pub fn ok(self) Option[T] {
+    switch (self) {
+      .Ok(value) => Option.Some(value),
+      .Err(_error) => Option#[T].None,
+    }
+  }
+
+  pub fn map[U](self, f: FnOnce(T) U) Result[U, E] {
+    switch (self) {
+      .Ok(value) => Result.Ok(f(value)),
+      .Err(error) => Result.Err(error),
+    }
+  }
+
+  pub fn map_err[F](self, f: FnOnce(E) F) Result[T, F] {
+    switch (self) {
+      .Ok(value) => Result.Ok(value),
+      .Err(error) => Result.Err(f(error)),
+    }
+  }
+
+  pub fn and_then[U](self, f: FnOnce(T) Result[U, E]) Result[U, E] {
+    switch (self) {
+      .Ok(value) => f(value),
+      .Err(error) => Result.Err(error),
+    }
+  }
 }
 
 implement[T: Copy, E: Copy] Copy : Result[T, E] {}
