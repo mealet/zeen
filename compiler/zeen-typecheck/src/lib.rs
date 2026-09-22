@@ -2340,7 +2340,9 @@ impl<'res> TypeChecker<'res> {
                 self.check_block(stmts, trailing, None, &expr.source)
             }
 
-            HirExprKind::Switch { object, arms } => self.check_switch(object, arms, &expr.source),
+            HirExprKind::Switch { object, arms } => {
+                self.check_switch(object, arms, &expr.source, None)
+            }
 
             HirExprKind::Closure { def_id, def } => self.check_closure(*def_id, def, &expr.source),
 
@@ -3678,6 +3680,12 @@ impl<'res> TypeChecker<'res> {
                 return ty;
             }
 
+            HirExprKind::Switch { object, arms } => {
+                let ty = self.check_switch(object, arms, &expr.source, Some(expected));
+                self.result.record_expr_type(expr.id, ty);
+                return ty;
+            }
+
             HirExprKind::StructInit {
                 ty,
                 fields,
@@ -3876,7 +3884,13 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_switch(&mut self, object: &HirExpr, arms: &[HirSwitchArm], source: &Source) -> TypeId {
+    fn check_switch(
+        &mut self,
+        object: &HirExpr,
+        arms: &[HirSwitchArm],
+        source: &Source,
+        expected: Option<TypeId>,
+    ) -> TypeId {
         let scrut_ty = self.synth_expr(object);
         let kind = self.switch_scrutinee_kind(scrut_ty, object);
 
@@ -3900,7 +3914,10 @@ impl<'res> TypeChecker<'res> {
                 let bool_ty = self.result.interner.builtin(BuiltinType::bool);
                 self.check_expr(guard, bool_ty, false);
             }
-            let body_ty = self.synth_expr(&arm.body);
+            let body_ty = match expected {
+                Some(exp) => self.check_expr(&arm.body, exp, false),
+                None => self.synth_expr(&arm.body),
+            };
 
             if kind.is_some() && arm.guard.is_none() && !covered_all {
                 if Self::pattern_covers_all(&arm.pattern) {
@@ -5338,9 +5355,10 @@ impl<'res> TypeChecker<'res> {
         }
 
         // `Self::Variant` inside generic enum methods is already bound.
+        // Expected-type bindings above take precedence.
         for g in &enum_generics {
             if let Some(bound) = self.ctx.generic_binding(*g) {
-                bindings.insert(*g, bound);
+                bindings.entry(*g).or_insert(bound);
             }
         }
 
@@ -6168,6 +6186,13 @@ impl<'res> TypeChecker<'res> {
                 params.iter().any(|p| self.type_contains_generic(*p))
                     || self.type_contains_generic(*ret)
             }
+            Type::FatFn { params, ret, .. } => {
+                params.iter().any(|p| self.type_contains_generic(*p))
+                    || self.type_contains_generic(*ret)
+            }
+            Type::Enum { generic_args, .. } => {
+                generic_args.iter().any(|a| self.type_contains_generic(*a))
+            }
             _ => false,
         }
     }
@@ -6244,6 +6269,23 @@ impl<'res> TypeChecker<'res> {
                 Type::Fn {
                     params: pp,
                     ret: pr,
+                },
+                Type::Fn {
+                    params: ap,
+                    ret: ar,
+                },
+            ) if pp.len() == ap.len() => {
+                for (p, a) in pp.iter().zip(ap.iter()) {
+                    self.unify_for_inference(*p, *a, bindings, source.clone());
+                }
+                self.unify_for_inference(pr, ar, bindings, source);
+            }
+
+            (
+                Type::FatFn {
+                    params: pp,
+                    ret: pr,
+                    ..
                 },
                 Type::Fn {
                     params: ap,
