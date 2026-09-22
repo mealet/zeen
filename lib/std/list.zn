@@ -2,8 +2,7 @@ use std.alloc;
 
 const InitialListCapacity: usize = 4;
 
-/// Run length at or below which sorting stays on insertion sort.
-/// Mirrors Rust `slice::sort` (`MAX_LEN_ALWAYS_INSERTION_SORT`).
+/// Insertion sort threshold (tiny runs).
 const SortInsertionThreshold: usize = 20;
 
 /// Dynamic heap-allocated array buffer
