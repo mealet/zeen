@@ -5330,6 +5330,8 @@ impl<'res> TypeChecker<'res> {
 
         if !enum_generics.is_empty() {
             let value_ty = self.synth_expr(&args[0]);
+            let value_ty = self.default_literal_with_value(&args[0], value_ty);
+            self.result.record_expr_type(args[0].id, value_ty);
             self.unify_for_inference(
                 payload_ty,
                 value_ty,
@@ -6525,7 +6527,9 @@ impl<'res> TypeChecker<'res> {
         let ret = self.substitute_generics(sig_ret, &bindings);
 
         match self.result.interner.get(ret).clone() {
-            Type::Struct { generic_args, .. } if generic_args.len() == 1 => {
+            Type::Struct { generic_args, .. } | Type::Enum { generic_args, .. }
+                if generic_args.len() == 1 =>
+            {
                 Some((generic_args[0], next_def))
             }
             _ => None,
