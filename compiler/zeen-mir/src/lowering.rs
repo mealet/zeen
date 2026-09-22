@@ -402,8 +402,60 @@ impl<'ctx> MirLowering<'ctx> {
             return Err(self.errors);
         }
 
+        self.register_reachable_struct_layouts();
         self.register_reachable_slice_layouts();
         Ok(self.program)
+    }
+
+    /// Registers layouts for struct types reachable through fields of
+    /// registered layouts (e.g. a core struct held by a user struct).
+    /// Runs to a fixpoint; already-present layouts stop the walk.
+    fn register_reachable_struct_layouts(&mut self) {
+        loop {
+            let mut missing: Vec<(TypeId, DefId)> = Vec::new();
+
+            let layout_tys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
+            for layout_ty in layout_tys {
+                let field_tys: Vec<TypeId> = self.program.struct_layouts[&layout_ty]
+                    .fields
+                    .iter()
+                    .map(|f| f.ty)
+                    .collect();
+                for field_ty in field_tys {
+                    self.collect_struct_layout(field_ty, &mut missing);
+                }
+            }
+
+            let enum_tys: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
+            for layout_ty in enum_tys {
+                let payloads: Vec<TypeId> = self.program.enum_layouts[&layout_ty]
+                    .variants
+                    .iter()
+                    .filter_map(|v| v.payload)
+                    .collect();
+                for payload_ty in payloads {
+                    self.collect_struct_layout(payload_ty, &mut missing);
+                }
+            }
+
+            if missing.is_empty() {
+                return;
+            }
+
+            for (ty, def_id) in missing {
+                self.register_struct_layout(ty, def_id);
+            }
+        }
+    }
+
+    /// Queues a struct layout for registration unless present.
+    fn collect_struct_layout(&self, ty: TypeId, missing: &mut Vec<(TypeId, DefId)>) {
+        if let Type::Struct { def_id, .. } = self.typecheck.interner.get(ty).clone()
+            && !self.program.struct_layouts.contains_key(&ty)
+            && !missing.iter().any(|(t, _)| *t == ty)
+        {
+            missing.push((ty, def_id));
+        }
     }
 
     fn register_globals(&mut self) {
