@@ -30,6 +30,64 @@ pub enum Option[T] {
       .Some(value) => value,
     }
   }
+
+  pub fn expect(self, msg: []const char) T {
+    switch (self) {
+      .Some(value) => value,
+      .None => @panic("{}", msg),
+    }
+  }
+
+  pub fn map[U](self, f: FnOnce(T) U) Option[U] {
+    switch (self) {
+      .Some(value) => Option.Some(f(value)),
+      .None => Option.None,
+    }
+  }
+
+  pub fn map_or[U](self, f: FnOnce(T) U, default: U) Option[U] {
+    switch (self) {
+      .Some(value) => Option.Some(f(value)),
+      .None => Option.Some(default),
+    }
+  }
+
+  pub fn inspect(self, f: FnOnce(*T) void) Option[T] {
+    switch (self) {
+      .Some(value) => f(&value),
+      .None => {}
+    };
+
+    self
+  }
+
+  pub fn ok_or[E](self, err: E) Result[T, E] {
+    switch (self) {
+      .Some(value) => Result.Ok(value),
+      .None => Result.Err(err),
+    }
+  }
+
+  pub fn ok_or_else[E](self, err: FnOnce() E) Result[T, E] {
+    switch (self) {
+      .Some(value) => Result.Ok(value),
+      .None => Result.Err(err()),
+    }
+  }
+
+  pub fn and_then[U](self, f: FnOnce(T) Option[U]) Option[U] {
+    switch (self) {
+      .Some(value) => f(value),
+      .None => Option.None,
+    }
+  }
+
+  pub fn filter(self, predicate: FnOnce(*T) bool) Option[T] {
+    switch (self) {
+      .Some(value) => if (predicate(&value)) self else Option.None,
+      .None => Option.None,
+    }
+  }
 }
 
 implement[T: Copy] Copy : Option[T] {}
