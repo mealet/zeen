@@ -25,6 +25,32 @@ pub struct Stdin {
 
     any
   }
+
+  /// Read exactly `n` bytes, appending to buffer.
+  /// Returns `true` when all bytes read, `false` on end or error.
+  pub fn read_exact(buf: *String, n: usize) bool {
+    let chunk: [256]char = @uninit();
+    let need = n;
+
+    while (need > 0) {
+      let take: usize = 256;
+
+      if (need < take) {
+        take = need;
+      };
+
+      let got = fread(@as(*void, &chunk[0]), 1, take, stdin);
+
+      if (got == 0) {
+        return false;
+      };
+
+      (*buf).push_str(chunk[0..got]);
+      need -= got;
+    };
+
+    true
+  }
 }
 
 /// Line reader through `getline` (posix).
