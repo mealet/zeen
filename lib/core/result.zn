@@ -45,6 +45,13 @@ pub enum Result[T, E] {
     }
   }
 
+  pub fn expect_err(self, msg: []const char) E {
+    switch (self) {
+      .Ok(_value) => @panic("{}", msg),
+      .Err(error) => error,
+    }
+  }
+
   pub fn ok(self) Option[T] {
     switch (self) {
       .Ok(value) => Option.Some(value),
@@ -52,10 +59,24 @@ pub enum Result[T, E] {
     }
   }
 
+  pub fn err(self) Option[E] {
+    switch (self) {
+      .Ok(_value) => Option.None,
+      .Err(error) => Option.Some(error),
+    }
+  }
+
   pub fn map[U](self, f: FnOnce(T) U) Result[U, E] {
     switch (self) {
       .Ok(value) => Result.Ok(f(value)),
       .Err(error) => Result.Err(error),
+    }
+  }
+
+  pub fn map_or[U](self, f: FnOnce(T) U, default: U) Result[U, E] {
+    switch (self) {
+      .Ok(value) => Result.Ok(f(value)),
+      .Err(_error) => Result.Ok(default),
     }
   }
 
@@ -71,6 +92,24 @@ pub enum Result[T, E] {
       .Ok(value) => f(value),
       .Err(error) => Result.Err(error),
     }
+  }
+
+  pub fn inspect(self, f: FnOnce(*T) void) Self {
+    switch (self) {
+      .Ok(value) => f(&value),
+      .Err(_error) => {},
+    };
+
+    self
+  }
+
+  pub fn inspect_err(self, f: FnOnce(*E) void) Self {
+    switch (self) {
+      .Ok(_value) => {},
+      .Err(error) => f(&error),
+    };
+
+    self
   }
 }
 
