@@ -1,0 +1,10 @@
+fn main() {
+  let a = Option#[i32].None;
+  @println("a none {}", a.is_none());
+
+  let g = Option.Some(2);
+  @println("or_else {}", g.unwrap_or_else(fn() i32 { return 0; }));
+
+  let h = Option.Some(3);
+  @println("or {}", h.unwrap_or(0));
+}
