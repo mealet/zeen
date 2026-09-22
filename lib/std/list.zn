@@ -569,6 +569,104 @@ pub struct List[T] {
 
     return Option#[usize].None();
   }
+
+  /// Insert element at index, shifting right (out of bounds panics).
+  pub fn insert(*self, index: usize, value: T) {
+    if (index > self._len) {
+      @panic("out of bounds, List len is {} but index is {}", self.len(), index);
+    };
+
+    if (index == self._len) {
+      self.push(value);
+      return;
+    };
+
+    self._len += 1;
+    self.__capacity_extend();
+
+    let w = @as(*T, nullptr);
+    let r = @as(*T, nullptr);
+    let i = self._len - 1;
+
+    while (i > index) {
+      r = @as(*T, self.ptr + i - 1);
+      w = @as(*T, self.ptr + i);
+      *w = *r;
+      i -= 1;
+    };
+
+    self.ptr[index] = value;
+  }
+
+  /// Move all elements from another list, leaving it empty.
+  pub fn append(*self, other: List[T]) {
+    let r = @as(*T, nullptr);
+    let i: usize = 0;
+
+    while (i < other._len) {
+      r = @as(*T, other.ptr + i);
+      self.push(*r);
+      i += 1;
+    };
+
+    other._len = 0;
+  }
+
+  /// Remove element by index, swapping in last (out of bounds is `None`).
+  pub fn swap_remove(*self, index: usize) Option[T] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option#[T].None();
+    };
+
+    if (index == self._len - 1) {
+      return self.pop();
+    };
+
+    let a = @as(*T, self.ptr + index);
+    let b = @as(*T, self.ptr + self._len - 1);
+    let tmp = *a;
+    *a = *b;
+    *b = tmp;
+
+    return self.pop();
+  }
+
+  /// Reserve capacity for `additional` elements more.
+  pub fn reserve(*self, additional: usize) {
+    let need = self._len + additional;
+
+    if (need <= self._capacity) { return; };
+
+    self._capacity = align_capacity_up(need);
+
+    let new_ptr = @as(
+      [*]T,
+      Allocator.realloc(
+        @as(*void, self.ptr),
+        self._capacity * @sizeof(T)
+      )
+    );
+
+    self.ptr = new_ptr;
+  }
+
+  /// First element copy (empty is `None`).
+  pub fn first[T: Copy](*const self) Option[T] {
+    return self.get(0);
+  }
+
+  /// Last element copy (empty is `None`).
+  pub fn last[T: Copy](*const self) Option[T] {
+    if (self._len < 1) {
+      return Option#[T].None();
+    };
+
+    return self.get(self._len - 1);
+  }
 }
 
 // ===| List Interfaces Implementations |===
