@@ -436,6 +436,32 @@ pub struct String {
     List.from(self.ptr[0..self._len])
   }
 
+  /// View without leading and trailing whitespace.
+  pub fn trim(*const self) []const char {
+    let len = self._len;
+    let start: usize = 0;
+
+    while (start < len) {
+      if (isspace(@as(i32, self.ptr[start])) == 0) {
+        break;
+      };
+
+      start += 1;
+    };
+
+    let end = len;
+
+    while (end > start) {
+      if (isspace(@as(i32, self.ptr[end - 1])) == 0) {
+        break;
+      };
+
+      end -= 1;
+    };
+
+    self.ptr[start..end]
+  }
+
   /// Allocate new `String` from character list.
   pub fn from_list(value: *const List[char]) Self {
     let out = Self.new();
