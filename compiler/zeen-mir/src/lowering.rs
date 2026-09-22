@@ -1744,6 +1744,38 @@ impl<'ctx> MirLowering<'ctx> {
         None
     }
 
+    fn find_enum_def(&self, enum_name: &str) -> Option<DefId> {
+        for (def, info) in &self.resolution.defs {
+            if matches!(info.kind, DefKind::Enum)
+                && self.rodeo.borrow().resolve(&info.name) == enum_name
+            {
+                return Some(*def);
+            }
+        }
+        None
+    }
+
+    /// Variant `DefId`s of core `Option` as `(None, Some)`.
+    fn option_variants(&self, option_def: DefId) -> (DefId, DefId) {
+        let info = self
+            .typecheck
+            .enum_info
+            .get(&option_def)
+            .expect("core.option `Option` must lower variants");
+        let rodeo = self.rodeo.borrow();
+        let variant = |name: &str| {
+            info.variants
+                .iter()
+                .find(|v| rodeo.resolve(&v.name) == name)
+                .expect("core.option `Option` must declare None and Some")
+                .def_id
+        };
+        let none = variant("None");
+        let some = variant("Some");
+        drop(rodeo);
+        (none, some)
+    }
+
     fn expr_type(&mut self, fb: &FnBuilder, expr: &HirExpr) -> TypeId {
         // A fat-annotated parameter is erased in the signature but stores a
         // concrete closure type in this monomorphized copy: rewrite reads of
@@ -3500,34 +3532,22 @@ impl<'ctx> MirLowering<'ctx> {
                     .find_struct_def("Range")
                     .expect("core `Range` struct must be present");
                 let option_def = self
-                    .find_struct_def("Option")
+                    .find_enum_def("Option")
                     .expect("core.option `Option` must be present");
                 let usize_ty = self
                     .typecheck
                     .interner
                     .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
-                let option_ty = self.typecheck.interner.intern(Type::Struct {
+                let option_ty = self.typecheck.interner.intern(Type::Enum {
                     def_id: option_def,
                     generic_args: vec![usize_ty],
                 });
                 let ty = self.expr_type(fb, expr);
                 self.register_struct_layout(ty, range_def);
-                self.register_struct_layout(option_ty, option_def);
+                self.register_enum_layout(option_ty, option_def);
 
-                // Field order of `Option`: `value` then `_is_some`.
-                let option_fields = &self.typecheck.struct_info[&option_def].fields;
-                let rodeo = self.rodeo.borrow();
-                let value_index = option_fields
-                    .iter()
-                    .position(|f| rodeo.resolve(&f.name) == "value")
-                    .expect("Option must have a `value` field");
-                let is_some_index = option_fields
-                    .iter()
-                    .position(|f| rodeo.resolve(&f.name) == "_is_some")
-                    .expect("Option must have an `_is_some` field");
-                drop(rodeo);
+                let (none_variant, some_variant) = self.option_variants(option_def);
 
-                // `None` stores a dummy value that is never read.
                 let mut build_option =
                     |fb: &mut FnBuilder,
                      block: BlockId,
@@ -3535,23 +3555,20 @@ impl<'ctx> MirLowering<'ctx> {
                      is_some: bool,
                      source: Option<Source>| {
                         let temp = fb.new_temp(option_ty);
-                        let mut operands = vec![
-                            Operand::Constant(ConstValue::Void, None),
-                            Operand::Constant(ConstValue::Void, None),
-                        ];
-                        operands[value_index] = if is_some {
-                            value
+                        let (variant_def, operands) = if is_some {
+                            (some_variant, vec![value])
                         } else {
-                            Operand::Constant(ConstValue::Int(0), source.clone())
+                            (none_variant, vec![])
                         };
-                        operands[is_some_index] =
-                            Operand::Constant(ConstValue::Bool(is_some), source.clone());
                         fb.push_stmt(
                             block,
                             MirStatement::Assign {
                                 place: Place::from_local(temp),
                                 rvalue: Rvalue::Aggregate {
-                                    kind: AggregateKind::Struct(option_def),
+                                    kind: AggregateKind::Enum {
+                                        enum_def: option_def,
+                                        variant_def,
+                                    },
                                     operands,
                                 },
                                 source,
@@ -7961,33 +7978,18 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         let option_def = self
-            .find_struct_def("Option")
+            .find_enum_def("Option")
             .expect("core.option `Option` must be present");
-        let option_ty = self.typecheck.interner.intern(Type::Struct {
+        let option_ty = self.typecheck.interner.intern(Type::Enum {
             def_id: option_def,
             generic_args: vec![elem_ty],
         });
-        self.register_struct_layout(option_ty, option_def);
+        self.register_enum_layout(option_ty, option_def);
 
-        let option_fields = &self.typecheck.struct_info[&option_def].fields;
-        let rodeo = self.rodeo.borrow();
-        let is_some_field = option_fields
-            .iter()
-            .find(|f| rodeo.resolve(&f.name) == "_is_some")
-            .expect("Option must have an `_is_some` field")
-            .field_def;
-        let value_field = option_fields
-            .iter()
-            .find(|f| rodeo.resolve(&f.name) == "value")
-            .expect("Option must have a `value` field")
-            .field_def;
-        drop(rodeo);
+        let (_none_variant, some_variant) = self.option_variants(option_def);
+        let some_tag = self.enum_variant_tag(option_def, some_variant);
 
         let result_local = fb.new_temp(option_ty);
-        let bool_ty = self
-            .typecheck
-            .interner
-            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
 
         let header = fb.new_block();
         fb.set_terminator(block, Terminator::Goto(header));
@@ -8019,15 +8021,16 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        let is_some_local = fb.new_temp(bool_ty);
+        let tag_local = fb.new_temp(
+            self.typecheck
+                .interner
+                .intern(Type::Builtin(zeen_ast::types::BuiltinType::u8)),
+        );
         fb.push_stmt(
             check_block,
             MirStatement::Assign {
-                place: Place::from_local(is_some_local),
-                rvalue: Rvalue::Use(Operand::Copy(
-                    Place::from_local(result_local).field(is_some_field),
-                    None,
-                )),
+                place: Place::from_local(tag_local),
+                rvalue: Rvalue::Discriminant(Place::from_local(result_local)),
                 source: None,
             },
         );
@@ -8037,8 +8040,8 @@ impl<'ctx> MirLowering<'ctx> {
         fb.set_terminator(
             check_block,
             Terminator::SwitchInt {
-                discriminant: Operand::Move(Place::from_local(is_some_local), None),
-                targets: vec![(1, body_bb)],
+                discriminant: Operand::Move(Place::from_local(tag_local), None),
+                targets: vec![(some_tag as u128, body_bb)],
                 otherwise: exit_bb,
             },
         );
@@ -8053,7 +8056,7 @@ impl<'ctx> MirLowering<'ctx> {
         fb.locals_by_def.insert(*def_id, loop_var);
 
         let value_operand = self.place_to_operand(
-            Place::from_local(result_local).field(value_field),
+            Place::from_local(result_local).enum_payload(some_variant),
             elem_ty,
             Some(iterator.source.clone()),
         );
