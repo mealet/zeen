@@ -58,6 +58,7 @@ pub enum HirExprKind {
     FieldAccess {
         object: Rc<HirExpr>,
         field: (Spur, SourceSpan),
+        object_generic_args: Vec<Rc<HirTypeExpr>>,
     },
 
     SliceAccess {

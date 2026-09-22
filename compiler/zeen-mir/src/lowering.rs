@@ -3650,7 +3650,7 @@ impl<'ctx> MirLowering<'ctx> {
                 )
             }
 
-            HirExprKind::FieldAccess { object, field } => {
+            HirExprKind::FieldAccess { object, field, .. } => {
                 // Enum variant access (`Color.Red`) is a constant, not a place.
                 if let HirExprKind::VarRef(enum_def) = &object.kind
                     && matches!(
