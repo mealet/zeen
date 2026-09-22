@@ -784,6 +784,29 @@ impl<'res> HirLowering<'res> {
                     }
                 };
 
+                // `Type#[T].member`: the object names a type whose
+                // instantiation the access needs (mirrors Call lowering).
+                let object_generic_args = match object.kind {
+                    ExpressionKind::Ident {
+                        generic_args: Some(object_args),
+                        ..
+                    } if !object_args.is_empty()
+                        && self.resolution.resolution_of_expr(object).is_some_and(|r| {
+                            matches!(r, Resolution::Def(id)
+                            if matches!(
+                                self.resolution.defs.get(&id).map(|i| &i.kind),
+                                Some(DefKind::Struct) | Some(DefKind::Enum)
+                            ))
+                        }) =>
+                    {
+                        object_args
+                            .iter()
+                            .map(|t| Rc::new(self.lower_type(t)))
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                };
+
                 let lowered_object = self.lower_expr(object);
                 // `Self.foo` names the enclosing type, like `Type.foo`.
                 let object = match &lowered_object.kind {
@@ -808,6 +831,7 @@ impl<'res> HirLowering<'res> {
                 HirExprKind::FieldAccess {
                     object,
                     field: (field_name, field_span),
+                    object_generic_args,
                 }
             }
 

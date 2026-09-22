@@ -2262,9 +2262,11 @@ impl<'res> TypeChecker<'res> {
                 self.check_macro_call(expr.id, *kind, args, expr.source.clone())
             }
 
-            HirExprKind::FieldAccess { object, field } => {
-                self.check_field_access(expr.id, object, field, None)
-            }
+            HirExprKind::FieldAccess {
+                object,
+                field,
+                object_generic_args,
+            } => self.check_field_access(expr.id, object, field, object_generic_args, None),
 
             HirExprKind::StructInit {
                 ty,
@@ -3203,6 +3205,7 @@ impl<'res> TypeChecker<'res> {
         id: HirId,
         object: &HirExpr,
         field: &(Spur, SourceSpan),
+        object_generic_args: &[Rc<HirTypeExpr>],
         expected: Option<TypeId>,
     ) -> TypeId {
         let (field_name, field_span) = *field;
@@ -3216,6 +3219,7 @@ impl<'res> TypeChecker<'res> {
                 field_name,
                 field_span,
                 &object.source,
+                object_generic_args,
                 expected,
             );
         }
@@ -3710,8 +3714,18 @@ impl<'res> TypeChecker<'res> {
                 ty
             }
 
-            HirExprKind::FieldAccess { object, field } => {
-                let ty = self.check_field_access(expr.id, object, field, Some(expected));
+            HirExprKind::FieldAccess {
+                object,
+                field,
+                object_generic_args,
+            } => {
+                let ty = self.check_field_access(
+                    expr.id,
+                    object,
+                    field,
+                    object_generic_args,
+                    Some(expected),
+                );
                 self.result.record_expr_type(expr.id, ty);
                 ty
             }
@@ -4509,7 +4523,7 @@ impl<'res> TypeChecker<'res> {
         source: Source,
         expected: Option<TypeId>,
     ) -> TypeId {
-        if let HirExprKind::FieldAccess { object, field } = &callee.kind {
+        if let HirExprKind::FieldAccess { object, field, .. } = &callee.kind {
             if let HirExprKind::VarRef(enum_def) = &object.kind
                 && matches!(self.def_kind(*enum_def), Some(DefKind::Enum))
                 && self.enum_variants.get(enum_def).is_some_and(|defs| {
@@ -5100,6 +5114,7 @@ impl<'res> TypeChecker<'res> {
         Some(self.substitute_generics(sig_ret, &bindings))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_enum_variant_access(
         &mut self,
         id: HirId,
@@ -5107,6 +5122,7 @@ impl<'res> TypeChecker<'res> {
         field_name: Spur,
         field_span: SourceSpan,
         source: &Source,
+        object_generic_args: &[Rc<HirTypeExpr>],
         expected: Option<TypeId>,
     ) -> TypeId {
         let Some(variant_defs) = self.enum_variants.get(&enum_def) else {
@@ -5132,6 +5148,23 @@ impl<'res> TypeChecker<'res> {
             && expected_def == enum_def
         {
             generic_args = expected_args;
+        }
+        if !object_generic_args.is_empty() {
+            if object_generic_args.len() != enum_generics.len() {
+                self.report(TypeError::GenericArgCountMismatch {
+                    name: self.def_name(enum_def).unwrap_or_default().into(),
+                    expected: enum_generics.len(),
+                    found: object_generic_args.len(),
+                    src: source.src(),
+                    span: field_span,
+                });
+            }
+
+            generic_args = object_generic_args
+                .iter()
+                .zip(enum_generics.iter())
+                .map(|(explicit, _)| self.lower_hir_type(explicit))
+                .collect();
         }
         if generic_args.is_empty() && !enum_generics.is_empty() {
             for g in &enum_generics {
