@@ -301,7 +301,7 @@ fn for_loop_over_iterator_struct_monomorphizes_next() {
         "struct Counter { n: i32 } \
          implement Iterator : Counter { fn next(*self) Option[i32] { \
             if (self.n < 5) { self.n = self.n + 1; return Option.Some(self.n); }; \
-            Option.None() \
+            Option.None \
          } } \
          fn main() { let counter = Counter { .n = 0 }; \
             for (i : counter) { @println(\"{}\", i); } }",
@@ -322,7 +322,7 @@ fn for_loop_over_generic_iterator_struct_monomorphizes_next() {
          implement[T] Iterator : Repeat[T] { fn next(*self) Option[T] { \
             if (self.remaining > 0) { self.remaining = self.remaining - 1; \
                 return Option.Some(self.value); }; \
-            Option.None() \
+            Option.None \
          } } \
          fn main() { let rep = Repeat { .value = 7, .remaining = 3 }; \
             for (i : rep) { @println(\"{}\", i); } }",

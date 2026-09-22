@@ -17,7 +17,7 @@ implement[T] Iterator : Repeat[T] {
       return Option.Some(self.value);
     };
 
-    Option.None()
+    Option.None
   }
 }
 
