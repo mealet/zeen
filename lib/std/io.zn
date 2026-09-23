@@ -1,6 +1,93 @@
 use std.alloc;
 use std.string;
 use std.c.stdio;
+use std.c.string;
+use std.c.errno;
+
+/// IO error kind, mirroring Rust `std::io::ErrorKind`.
+pub enum IoErrorKind {
+  NotFound,
+  PermissionDenied,
+  AlreadyExists,
+  InvalidInput,
+  InvalidData,
+  UnexpectedEof,
+  WriteZero,
+  Interrupted,
+  WouldBlock,
+  TimedOut,
+  BrokenPipe,
+  IsADirectory,
+  NotADirectory,
+  Unsupported,
+  OutOfMemory,
+  Uncategorized,
+}
+
+/// IO error with a kind and a human readable message.
+pub struct IoError {
+  _kind: IoErrorKind,
+  _message: String,
+
+  pub fn new(kind: IoErrorKind, message: []const char) Self {
+    Self {
+      ._kind = kind,
+      ._message = String.from(message),
+    }
+  }
+
+  pub fn kind(*const self) IoErrorKind {
+    self._kind
+  }
+
+  pub fn message(self) String {
+    self._message
+  }
+
+  pub fn from_errno(code: c_int) Self {
+    let kind = IoErrorKind.Uncategorized;
+
+    if (code == ENOENT) {
+      kind = IoErrorKind.NotFound;
+    } else if (code == EACCES || code == EPERM) {
+      kind = IoErrorKind.PermissionDenied;
+    } else if (code == EEXIST) {
+      kind = IoErrorKind.AlreadyExists;
+    } else if (code == EINVAL) {
+      kind = IoErrorKind.InvalidInput;
+    } else if (code == EPIPE) {
+      kind = IoErrorKind.BrokenPipe;
+    } else if (code == EINTR) {
+      kind = IoErrorKind.Interrupted;
+    } else if (code == EAGAIN) {
+      kind = IoErrorKind.WouldBlock;
+    } else if (code == ENOMEM) {
+      kind = IoErrorKind.OutOfMemory;
+    } else if (code == EISDIR) {
+      kind = IoErrorKind.IsADirectory;
+    } else if (code == ENOTDIR) {
+      kind = IoErrorKind.NotADirectory;
+    } else if (code == ENOSYS) {
+      kind = IoErrorKind.Unsupported;
+    } else if (code == EILSEQ) {
+      kind = IoErrorKind.InvalidData;
+    };
+
+    Self {
+      ._kind = kind,
+      ._message = String.from_cstr(@as([*]char, strerror(code))),
+    }
+  }
+
+  pub fn last_os_error() Self {
+    @os[windows] {
+      return Self.new(IoErrorKind.Unsupported, "os error codes are not supported on windows");
+    } else {
+      let slot = __errno_location();
+      return Self.from_errno(*slot);
+    }
+  }
+}
 
 /// Standard input handle.
 pub struct Stdin {
