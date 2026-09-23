@@ -1,0 +1,71 @@
+use std.c.types;
+use std.c.windows.windef;
+
+@os[windows] {
+  // SOCKET is pointer sized; all bits set means invalid.
+  pub alias WinSOCKET = usize;
+  pub const INVALID_SOCKET: WinSOCKET = ~@as(WinSOCKET, 0);
+  pub const SOCKET_ERROR: c_int = -1;
+
+  pub const SD_RECEIVE: c_int = 0;
+  pub const SD_SEND: c_int = 1;
+  pub const SD_BOTH: c_int = 2;
+
+  pub const SOL_SOCKET_WIN: c_int = 65535;
+  pub const SO_REUSEADDR_WIN: c_int = 4;
+
+  // Generic address holder: family (u16) plus 14 bytes, like POSIX.
+  pub struct c_SockAddrWin {
+    pub family: c_ushort,
+    pub data: [14]c_char,
+  }
+
+  // sockaddr_in: family (u16), big endian port, big endian address.
+  pub struct c_SockAddrInWin {
+    pub family: c_ushort,
+    pub port: c_ushort,
+    pub addr: u32,
+    pub zero: [8]u8,
+  }
+
+  pub extern fn WSAStartup(version: c_ushort, data: *void) c_int;
+  pub extern fn WSACleanup() c_int;
+  pub extern fn WSAGetLastError() c_int;
+  pub extern fn closesocket(s: WinSOCKET) c_int;
+
+  pub extern fn socket(domain: c_int, ty: c_int, protocol: c_int) WinSOCKET;
+  pub extern fn bind(s: WinSOCKET, addr: *const c_SockAddrWin, len: c_int) c_int;
+  pub extern fn connect(s: WinSOCKET, addr: *const c_SockAddrWin, len: c_int) c_int;
+  pub extern fn listen(s: WinSOCKET, backlog: c_int) c_int;
+  pub extern fn accept(s: WinSOCKET, addr: *c_SockAddrWin, len: *c_int) WinSOCKET;
+  pub extern fn getsockname(s: WinSOCKET, addr: *c_SockAddrWin, len: *c_int) c_int;
+  pub extern fn getpeername(s: WinSOCKET, addr: *c_SockAddrWin, len: *c_int) c_int;
+  pub extern fn send(s: WinSOCKET, buf: [*]const c_char, len: c_int, flags: c_int) c_int;
+  pub extern fn recv(s: WinSOCKET, buf: [*]c_char, len: c_int, flags: c_int) c_int;
+  pub extern fn sendto(
+    s: WinSOCKET,
+    buf: [*]const c_char,
+    len: c_int,
+    flags: c_int,
+    addr: *const c_SockAddrWin,
+    addrlen: c_int,
+  ) c_int;
+  pub extern fn recvfrom(
+    s: WinSOCKET,
+    buf: [*]c_char,
+    len: c_int,
+    flags: c_int,
+    addr: *c_SockAddrWin,
+    addrlen: *c_int,
+  ) c_int;
+  pub extern fn shutdown(s: WinSOCKET, how: c_int) c_int;
+  pub extern fn setsockopt(
+    s: WinSOCKET,
+    level: c_int,
+    name: c_int,
+    value: *const void,
+    len: c_int,
+  ) c_int;
+  pub extern fn inet_pton(af: c_int, src: [*]const c_char, dst: *void) c_int;
+  pub extern fn inet_ntop(af: c_int, src: *const void, dst: [*]c_char, size: c_int) [*]const c_char;
+}

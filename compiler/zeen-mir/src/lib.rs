@@ -277,6 +277,11 @@ pub enum ConstValue {
     Void,
     /// A function value: pointer to the monomorphized function.
     Fn(MirFunctionId),
+    /// Address of a declared extern function without a body.
+    /// Index into `MirProgram.extern_fns`. Bodyless externs never get
+    /// monomorphized: emitting a body would define the symbol locally and
+    /// interpose the real one at link time.
+    ExternFn(usize),
 }
 
 #[derive(Debug, Clone)]

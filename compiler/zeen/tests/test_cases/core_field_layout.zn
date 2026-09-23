@@ -1,0 +1,8 @@
+struct W {
+  out: OutStream,
+}
+
+fn main() i32 {
+  @println("ok");
+  return 0;
+}

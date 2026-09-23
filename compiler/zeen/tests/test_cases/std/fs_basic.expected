@@ -1,0 +1,20 @@
+create_dir
+exists: true
+write: 16
+len: 16 empty: false file: true dir: false
+read_to_string: 16
+read again: [hello fs
+second
+]
+read_exact: 5
+part_len: 5
+entries: 1
+files: 1 seen_hello: true
+opts write: 6
+sync
+rename
+remove_file
+remove_dir
+exists after: false
+missing is_err: true
+missing kind: NotFound

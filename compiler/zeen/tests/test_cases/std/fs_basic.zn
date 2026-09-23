@@ -1,0 +1,68 @@
+use std.fs;
+use std.io;
+use std.string;
+
+fn main() {
+  let base: []const char = "/tmp/zeen_fs_basic";
+  let file: []const char = "/tmp/zeen_fs_basic/hello.txt";
+  let moved: []const char = "/tmp/zeen_fs_basic/moved.txt";
+
+  let _ = Fs.remove_file(moved);
+  let _ = Fs.remove_file(file);
+  let _ = Fs.remove_dir(base);
+
+  @println("create_dir");
+  Fs.create_dir(base).unwrap();
+  @println("exists: {}", Fs.exists(base));
+  @println("write: {}", Fs.write(file, "hello fs\nsecond\n").unwrap());
+
+  let m = Fs.metadata(file).unwrap();
+  @println("len: {} empty: {} file: {} dir: {}", m.len(), m.is_empty(), m.is_file(), m.is_dir());
+  @println("read_to_string: {}", Fs.read_to_string(file).unwrap().len());
+  @println("read again: [{}]", Fs.read_to_string(file).unwrap().slice(..));
+
+  let part = String.new();
+  let reader = File.open(file).unwrap();
+  @println("read_exact: {}", reader.read_exact(&part, 5).unwrap());
+  @println("part_len: {}", part.len());
+
+  let entries = Fs.read_dir(base).unwrap();
+  @println("entries: {}", entries.len());
+
+  let listed = Fs.read_dir(base).unwrap();
+  let rest = listed;
+  let files: i32 = 0;
+  let seen_hello = false;
+  while (true) {
+    let next = rest.pop();
+    if (next.is_none()) {
+      break;
+    };
+    let e = next.unwrap();
+    if (e.is_file()) {
+      files += 1;
+    };
+    let name = e.into_name();
+    if (name == String.from("hello.txt")) {
+      seen_hello = true;
+    };
+  };
+  @println("files: {} seen_hello: {}", files, seen_hello);
+
+  let writer = OpenOptions.new().write(true).create(true).truncate(true).open(moved).unwrap();
+  @println("opts write: {}", writer.write_all("moved\n").unwrap());
+  @println("sync");
+  writer.sync_all().unwrap();
+
+  @println("rename");
+  Fs.rename(moved, file).unwrap();
+  @println("remove_file");
+  Fs.remove_file(file).unwrap();
+  @println("remove_dir");
+  Fs.remove_dir(base).unwrap();
+  @println("exists after: {}", Fs.exists(file));
+
+  let missing = File.open("/tmp/zeen_fs_basic_nope/x");
+  @println("missing is_err: {}", missing.is_err());
+  @println("missing kind: {}", missing.unwrap_err().kind());
+}

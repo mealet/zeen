@@ -15,7 +15,7 @@ implement Iterator : Words {
       return Option.Some(String.from("two"));
     };
 
-    Option.None()
+    Option.None
   }
 }
 

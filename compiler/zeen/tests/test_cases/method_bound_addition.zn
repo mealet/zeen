@@ -1,0 +1,24 @@
+struct Pair {
+  pub x: i32,
+}
+
+implement Clone : Pair {
+  fn clone(*const self) Self {
+    Self { .x = self.x }
+  }
+}
+
+struct Wrap[T] {
+  inner: T,
+
+  pub fn dup_inner[T: Clone](*const self) T {
+    return self.inner.clone();
+  }
+}
+
+fn main() i32 {
+  let w = Wrap { .inner = Pair { .x = 41 } };
+  let p = w.dup_inner();
+  @println("{}", p.x + 1);
+  return 0;
+}

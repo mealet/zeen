@@ -1,0 +1,36 @@
+use std.http;
+use std.net;
+use std.io;
+use std.string;
+
+fn main() {
+  let listener = TcpListener.bind(&SocketAddr.loopback(0)).unwrap();
+  let addr = listener.local_addr().unwrap();
+  let client = TcpStream.connect(&addr).unwrap();
+  let server = listener.accept().unwrap();
+
+  client.write_all("POST /submit HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello").unwrap();
+
+  switch (HttpServer.read_request(&server)) {
+    .Ok(req) => {
+      @println("method post: {}", req.method == Method.Post);
+      @println("path: [{}]", req.path.slice(..));
+      switch (req.header("content-length")) {
+        .Some(v) => @println("clen: [{}]", v.slice(..)),
+        .None => @println("no clen"),
+      };
+      switch (req.header("HOST")) {
+        .Some(v) => @println("host: [{}]", v.slice(..)),
+        .None => @println("no host"),
+      };
+      @println("body: [{}]", req.body.slice(..));
+      @println("sent: {}", Response.ok("Hello, World!\n").send(&server).is_ok());
+      server.shutdown().unwrap();
+    },
+    .Err(e) => @println("parse err: {} :: {}", e.kind(), e.message()),
+  };
+
+  let out = String.new();
+  @println("client read: {}", client.read_to_string(&out).unwrap());
+  @println("resp len: {}", out.len());
+}

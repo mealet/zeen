@@ -1,0 +1,17 @@
+struct S {
+  pub v: i32,
+
+  pub fn new() Self {
+    Self { .v = 0 }
+  }
+
+  pub fn make() Self {
+    Self.new()
+  }
+}
+
+fn main() i32 {
+  let s = S.make();
+  @println("{}", s.v);
+  return 0;
+}

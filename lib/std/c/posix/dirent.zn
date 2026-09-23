@@ -63,7 +63,7 @@ pub const DT_SOCK: c_uchar = 12;
   pub extern fn telldir(dirp: *c_DIR) c_long;
 }
 
-@os[linux | android] {
+@os[linux | android | darwin | freebsd] {
   pub extern fn opendir(name: [*]const char) *c_DIR;
   pub extern fn readdir(dirp: *c_DIR) *c_Dirent;
   pub extern fn closedir(dirp: *c_DIR) c_int;

@@ -2,10 +2,10 @@
 members = [
   "zeen", "zeen-ast", "zeen-codegen-llvm", "zeen-driver", "zeen-flow", "zeen-hir", "zeen-lexer", "zeen-linker", "zeen-mir", "zeen-parser", "zeen-preprocessor", "zeen-resolve", "zeen-typecheck", "zeen-types",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 authors = ["mealet <workjason34@gmail.com>"]
 description = "Compiler of Zeen Programming Language"

@@ -661,10 +661,11 @@ fn enum_union_slot_pads_most_aligned_payload() {
 
     let ir = compile(&fx, CompilationMode::Debug);
 
-    // `[9 x i8]` is larger but only aligned to 1; the slot pads the
-    // 8-aligned `u64` up to 9 bytes instead of reusing the array.
+    // `[9 x i8]` is larger but only aligned to 1; the slot is an untyped
+    // blob sized to 9 bytes and aligned to 8, so every payload byte is
+    // real data and survives copies.
     assert!(
-        ir.contains("%enum.Packet = type { i8, { i64, [1 x i8] } }"),
+        ir.contains("%enum.Packet = type { i8, { [1 x i64], [1 x i8] } }"),
         "{ir}"
     );
 }

@@ -1,0 +1,18 @@
+fn divide(a: i32, b: i32) Result[i32, i32] {
+  if (b == 0) {
+    return Result.Err(-1);
+  };
+
+  Result.Ok(a / b)
+}
+
+fn main() {
+  let ok = divide(7, 2);
+  @println("ok: {} {}", ok.is_ok(), ok.unwrap());
+  @println("or: {}", ok.unwrap_or(0));
+
+  let err = divide(7, 0);
+  @println("err: {} {}", err.is_err(), err.unwrap_err());
+  @println("or_else: {}", err.unwrap_or_else(fn() i32 { return 42; }));
+  @println("expect: {}", divide(9, 3).expect("math broke"));
+}

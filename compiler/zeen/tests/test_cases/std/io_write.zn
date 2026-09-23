@@ -1,0 +1,11 @@
+use std.io;
+use std.string;
+
+fn main() {
+  Stdout.write("out\n");
+  let s = String.from("str\n");
+  Stdout.write_string(&s);
+  Stdout.flush();
+  Stderr.write("err\n");
+  Stderr.flush();
+}

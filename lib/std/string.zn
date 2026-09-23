@@ -2,6 +2,7 @@ use std.c.string;
 use std.c.ctype;
 
 use std.alloc;
+use std.list;
 
 /// String initial capacity size (initialization on first push).
 const InitialStringCapacity: usize = 8;
@@ -43,6 +44,7 @@ pub struct String {
     let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
 
     let _ = strncpy(ptr, value.ptr, value.len);
+    ptr[len] = '\0';
 
     Self {
       .ptr = ptr,
@@ -56,12 +58,13 @@ pub struct String {
     if (@as(*void, value) == nullptr) {
       @panic("Null pointer in argument `from_cstr` constructor");
     };
-    
+
     let len = strlen(value);
     let capacity = next_capacity(len + 1);
     let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
 
     let _ = strncpy(ptr, value, len);
+    ptr[len] = '\0';
 
     Self {
       .ptr = ptr,
@@ -110,7 +113,6 @@ pub struct String {
     self._len == 0
   }
 
-
   fn __capacity_extend(*self) {
     if (self._capacity - 1 < self._len) {
       self._capacity = next_capacity(self._len + 1);
@@ -141,11 +143,12 @@ pub struct String {
   /// Push string slice to the String instance
   pub fn push_str(*self, value: []const char) {
     self.initialize_if_new();
+    let start = self._len;
     self._len += value.len;
 
     self.__capacity_extend();
 
-    let _ = strncat(self.ptr, value.ptr, value.len);
+    let _ = memcpy(@as(*void, &self.ptr[start]), @as([*]const void, value.ptr), value.len);
     self.ptr[self._len] = '\0';
   }
 
@@ -155,18 +158,19 @@ pub struct String {
       @panic("Null pointer value in `String.push_string`");
 
     self.initialize_if_new();
+    let start = self._len;
     self._len += value._len;
 
     self.__capacity_extend();
 
-    let _ = strncat(self.ptr, value.ptr, value._len);
+    let _ = memcpy(@as(*void, &self.ptr[start]), @as([*]const void, value.ptr), value._len);
     self.ptr[self._len] = '\0';
   }
 
   /// Remove last character and return it
   pub fn pop(*self) Option[char] {
     if (self._capacity < 1 || self._len < 1) {
-      return Option#[char].None();
+      return Option.None;
     };
 
     self._len -= 1;
@@ -183,7 +187,7 @@ pub struct String {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[char].None();
+      return Option.None;
     };
 
     if (index == self._len - 1) {
@@ -208,6 +212,7 @@ pub struct String {
       right += 1;
     };
 
+    self._len -= 1;
     *left = '\0';
 
     Option.Some(output)
@@ -220,7 +225,7 @@ pub struct String {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[char].None();
+      return Option.None;
     };
 
     Option.Some(self.ptr[index])
@@ -233,7 +238,7 @@ pub struct String {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[*char].None();
+      return Option.None;
     };
 
     Option.Some(&self.ptr[index])
@@ -246,7 +251,7 @@ pub struct String {
       || self._len < 1
       || index >= self._len
     ) {
-      return Option#[char].None();
+      return Option.None;
     };
 
     let output = Option.Some(self.ptr[index]);
@@ -286,10 +291,14 @@ pub struct String {
   /// * `Some(usize)` - if found, returns position
   /// * `None` - if not found
   pub fn find(*const self, value: char) Option[usize] {
+    if (self._len == 0) {
+      return Option.None;
+    };
+
     let entrance = strchr(self.ptr, value);
 
     if (entrance == nullptr) {
-      return Option#[usize].None();
+      return Option.None;
     };
 
     Option.Some(@as(usize, entrance - self.ptr))
@@ -299,10 +308,14 @@ pub struct String {
   /// * `Some(usize)` - if found, returns first character position
   /// * `None` - if not found
   pub fn find_str(*const self, value: []const char) Option[usize] {
+    if (self._len == 0) {
+      return Option.None;
+    };
+
     let entrance = strstr(self.ptr, value.ptr);
 
     if (entrance == nullptr) {
-      return Option#[usize].None();
+      return Option.None;
     };
 
     Option.Some(@as(usize, entrance - self.ptr))   
@@ -312,14 +325,14 @@ pub struct String {
   /// * `Some(usize)` - if found, returns first character position
   /// * `None` - if not found
   pub fn find_cstr(*const self, value: [*]const char) Option[usize] {
-    if (@as(*void, value) == nullptr) {
-      return Option#[usize].None();
+    if (@as(*void, value) == nullptr || self._len == 0) {
+      return Option.None;
     };
 
     let entrance = strstr(self.ptr, value);
 
     if (entrance == nullptr) {
-      return Option#[usize].None();
+      return Option.None;
     };
 
     Option.Some(@as(usize, entrance - self.ptr))   
@@ -342,7 +355,7 @@ pub struct String {
     let end = @as(*char, self.ptr + self._len);
 
     while (cursor != end) {
-      *cursor = @as(char, toupper(@as(i32, *cursor)));
+      *cursor = @as(char, tolower(@as(i32, *cursor)));
       cursor += 1;
     }
   }
@@ -428,6 +441,70 @@ pub struct String {
 
     self._len = new_len;
     self.ptr[self._len] = '\0';
+  }
+
+  /// Convert string to character list.
+  pub fn to_list(*const self) List[char] {
+    List.from(self.ptr[0..self._len])
+  }
+
+  /// View without leading and trailing whitespace.
+  pub fn trim(*const self) []const char {
+    let len = self._len;
+    let start: usize = 0;
+
+    while (start < len) {
+      if (isspace(@as(i32, self.ptr[start])) == 0) {
+        break;
+      };
+
+      start += 1;
+    };
+
+    let end = len;
+
+    while (end > start) {
+      if (isspace(@as(i32, self.ptr[end - 1])) == 0) {
+        break;
+      };
+
+      end -= 1;
+    };
+
+    self.ptr[start..end]
+  }
+
+  /// Allocate new `String` from character list.
+  pub fn from_list(value: *const List[char]) Self {
+    let out = Self.new();
+
+    let i: usize = 0;
+    while (i < (*value).len()) {
+      out.push((*value).get(i).unwrap());
+      i += 1;
+    };
+
+    out
+  }
+
+  /// Split by delimiter, keeping empty parts.
+  pub fn split(*const self, delim: char) List[String] {
+    let out = List#[String].new();
+    let start: usize = 0;
+    let i: usize = 0;
+
+    while (i < self._len) {
+      if (self.ptr[i] == delim) {
+        out.push(String.from(self.ptr[start..i]));
+        start = i + 1;
+      };
+
+      i += 1;
+    };
+
+    out.push(String.from(self.ptr[start..self._len]));
+
+    out
   }
 }
 
@@ -520,6 +597,38 @@ implement Sliceable : String {
     };
 
     self.ptr[start..end]
+  }
+
+  /// View without leading whitespace.
+  pub fn trim_start(*const self) []const char {
+    let len = self._len;
+    let start: usize = 0;
+
+    while (start < len) {
+      if (isspace(@as(i32, self.ptr[start])) == 0) {
+        break;
+      };
+
+      start += 1;
+    };
+
+    self.ptr[start..len]
+  }
+
+  /// View without trailing whitespace.
+  pub fn trim_end(*const self) []const char {
+    let len = self._len;
+    let end = len;
+
+    while (end > 0) {
+      if (isspace(@as(i32, self.ptr[end - 1])) == 0) {
+        break;
+      };
+
+      end -= 1;
+    };
+
+    self.ptr[0..end]
   }
 }
 

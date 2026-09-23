@@ -24,10 +24,10 @@ fn main() i32 {
   let b = @format("user: {:?}", u);
   @println("{}", b);
 
-  let c = @format("{:?}", Option.Some(u.name));
+  let c = @format("{:?}", Option.Some(u.name).unwrap());
   @println("{}", c);
 
-  let d = @format("{:?}", Option.Some(u.id));
+  let d = @format("{:?}", Option.Some(u.id).unwrap());
   @println("{}", d);
 
   return 0;

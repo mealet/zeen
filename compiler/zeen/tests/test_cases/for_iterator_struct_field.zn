@@ -9,7 +9,7 @@ implement Iterator : Counter {
       return Option.Some(self.n);
     };
 
-    Option.None()
+    Option.None
   }
 }
 

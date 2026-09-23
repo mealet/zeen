@@ -12,6 +12,7 @@ const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
 const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
 const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
 const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+const CORE_RESULT: &str = include_str!("../../../lib/core/result.zn");
 const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
 fn compile_mir_mode(
@@ -36,6 +37,7 @@ fn compile_mir_mode(
             ("core.out", CORE_OUT),
             ("core.iter", CORE_ITER),
             ("core.option", CORE_OPTION),
+            ("core.result", CORE_RESULT),
             ("core.slice", CORE_SLICE),
         ],
         mode,
@@ -301,7 +303,7 @@ fn for_loop_over_iterator_struct_monomorphizes_next() {
         "struct Counter { n: i32 } \
          implement Iterator : Counter { fn next(*self) Option[i32] { \
             if (self.n < 5) { self.n = self.n + 1; return Option.Some(self.n); }; \
-            Option.None() \
+            Option.None \
          } } \
          fn main() { let counter = Counter { .n = 0 }; \
             for (i : counter) { @println(\"{}\", i); } }",
@@ -322,7 +324,7 @@ fn for_loop_over_generic_iterator_struct_monomorphizes_next() {
          implement[T] Iterator : Repeat[T] { fn next(*self) Option[T] { \
             if (self.remaining > 0) { self.remaining = self.remaining - 1; \
                 return Option.Some(self.value); }; \
-            Option.None() \
+            Option.None \
          } } \
          fn main() { let rep = Repeat { .value = 7, .remaining = 3 }; \
             for (i : rep) { @println(\"{}\", i); } }",
@@ -730,6 +732,17 @@ fn global_depends_on_another_init_order() {
         a_assign_pos < b_assign_pos,
         "a must be initialized before b"
     );
+}
+
+#[test]
+fn global_initialized_from_another_global() {
+    let mir = compile_mir_ok(
+        "const ZERO: i32 = 0; \
+         const ALIAS: i32 = ZERO; \
+         fn main() {}",
+    );
+
+    assert_eq!(mir.program.global_vars.len(), 2);
 }
 
 // --> Closures
@@ -1790,6 +1803,7 @@ fn print_mir_ok(src: &str) -> String {
             ("core.out", CORE_OUT),
             ("core.iter", CORE_ITER),
             ("core.option", CORE_OPTION),
+            ("core.result", CORE_RESULT),
             ("core.slice", CORE_SLICE),
         ],
         mode: CompilationMode::Debug,
@@ -2010,8 +2024,8 @@ fn enum_ptr_receiver_extraction_tag_checks_through_deref() {
 #[test]
 fn enum_slice_payload_registers_slice_layout() {
     let mir = compile_mir_ok(
-        "enum Result[T, E] { ok: T, err: E, } \
-         fn main() { let r: Result[i32, []const char] = Result.ok(1); let t = @enumTag(r); @println(\"{}\", t); }",
+        "enum Outcome[T, E] { ok: T, err: E, } \
+         fn main() { let r: Outcome[i32, []const char] = Outcome.ok(1); let t = @enumTag(r); @println(\"{}\", t); }",
     );
 
     assert!(

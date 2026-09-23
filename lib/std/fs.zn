@@ -1,0 +1,964 @@
+use std.alloc;
+use std.string;
+use std.list;
+use std.io;
+use std.c.types;
+use std.c.string;
+use std.c.stdio;
+use std.c.errno;
+
+@os[windows] {
+  use std.c.windows.windef;
+  use std.c.windows.winbase;
+  use std.c.windows.fileapi;
+} else {
+  use std.c.posix.fcntl;
+  use std.c.posix.unistd;
+  use std.c.posix.sys.stat;
+  use std.c.posix.dirent;
+}
+
+/// Null terminated copy of a path for C calls.
+fn cpath(path: []const char) String {
+  let s = String.from(path);
+  s.push('\0');
+  s
+}
+
+/// Owned file handle. Closes itself on drop.
+pub struct File {
+  fd: c_int,
+  handle: *void,
+
+  /// Open an existing file for reading.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
+  pub fn open(path: []const char) Result[File, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+      let arg = @as([*]const c_char, c.slice(..).ptr);
+      let handle = CreateFileA(
+        arg,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr,
+      );
+
+      if (handle == INVALID_HANDLE_VALUE) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(File { .fd = -1, .handle = @as(*void, handle) });
+    } else {
+      let c = cpath(path);
+      let fd = open(@as([*]const char, c.slice(..).ptr), O_RDONLY, 0);
+
+      if (fd < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(File { .fd = fd, .handle = nullptr });
+    }
+  }
+
+  /// Create or truncate a file for writing.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
+  pub fn create(path: []const char) Result[File, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+      let arg = @as([*]const c_char, c.slice(..).ptr);
+      let handle = CreateFileA(
+        arg,
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr,
+      );
+
+      if (handle == INVALID_HANDLE_VALUE) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(File { .fd = -1, .handle = @as(*void, handle) });
+    } else {
+      let c = cpath(path);
+      let fd = open(@as([*]const char, c.slice(..).ptr), O_CREAT | O_WRONLY | O_TRUNC, 0o666);
+
+      if (fd < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(File { .fd = fd, .handle = nullptr });
+    }
+  }
+
+  /// Read some bytes, appending them to buffer. `Ok(0)` means end of file.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.Uncategorized
+  pub fn read(*self, buf: *String) Result[usize, IoError] {
+    @os[windows] {
+      let chunk: [256]char = @uninit();
+      let got: WinDWORD = 0;
+      let ok = ReadFile(
+        @as(WinHANDLE, self.handle),
+        @as(*void, &chunk[0]),
+        256,
+        &got,
+        nullptr,
+      );
+
+      if (ok == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      if (got == 0) {
+        return Result.Ok(@as(usize, 0));
+      };
+
+      (*buf).push_str(chunk[0..@as(usize, got)]);
+
+      return Result.Ok(@as(usize, got));
+    } else {
+      let chunk: [256]char = @uninit();
+      let got = read(self.fd, @as(*void, &chunk[0]), 256);
+
+      if (got < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      if (got == 0) {
+        return Result.Ok(@as(usize, 0));
+      };
+
+      (*buf).push_str(chunk[0..@as(usize, got)]);
+
+      return Result.Ok(@as(usize, got));
+    }
+  }
+
+  /// Read exactly `n` bytes, appending them to buffer.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.UnexpectedEof
+  /// * IoErrorKind.Uncategorized
+  pub fn read_exact(*self, buf: *String, n: usize) Result[usize, IoError] {
+    @os[windows] {
+      let total: usize = 0;
+
+      while (total < n) {
+        let chunk: [256]char = @uninit();
+        let want: usize = 256;
+
+        if (n - total < want) {
+          want = n - total;
+        };
+
+        let got: WinDWORD = 0;
+        let ok = ReadFile(
+          @as(WinHANDLE, self.handle),
+          @as(*void, &chunk[0]),
+          @as(WinDWORD, want),
+          &got,
+          nullptr,
+        );
+
+        if (ok == 0) {
+          return Result.Err(IoError.last_os_error());
+        };
+
+        if (got == 0) {
+          return Result.Err(IoError.new(IoErrorKind.UnexpectedEof, "early end of file"));
+        };
+
+        (*buf).push_str(chunk[0..@as(usize, got)]);
+        total += @as(usize, got);
+      };
+
+      return Result.Ok(total);
+    } else {
+      let total: usize = 0;
+
+      while (total < n) {
+        let chunk: [256]char = @uninit();
+        let want: usize = 256;
+
+        if (n - total < want) {
+          want = n - total;
+        };
+
+        let got = read(self.fd, @as(*void, &chunk[0]), want);
+
+        if (got < 0) {
+          return Result.Err(IoError.last_os_error());
+        };
+
+        if (got == 0) {
+          return Result.Err(IoError.new(IoErrorKind.UnexpectedEof, "early end of file"));
+        };
+
+        (*buf).push_str(chunk[0..@as(usize, got)]);
+        total += @as(usize, got);
+      };
+
+      return Result.Ok(total);
+    }
+  }
+
+  /// Read the whole file into buffer.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.Uncategorized
+  pub fn read_to_string(*self, buf: *String) Result[usize, IoError] {
+    let total: usize = 0;
+
+    while (true) {
+      switch (self.read(buf)) {
+        .Ok(got) => if (got == 0) {
+          break;
+        } else {
+          total += got;
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    };
+
+    return Result.Ok(total);
+  }
+
+  /// Write some bytes from the slice.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
+  pub fn write(*self, buf: []const char) Result[usize, IoError] {
+    @os[windows] {
+      let written: WinDWORD = 0;
+      let ok = WriteFile(
+        @as(WinHANDLE, self.handle),
+        @as(*const void, buf.ptr),
+        @as(WinDWORD, buf.len),
+        &written,
+        nullptr,
+      );
+
+      if (ok == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@as(usize, written));
+    } else {
+      let n = write(self.fd, @as([*]const void, buf.ptr), buf.len);
+
+      if (n < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@as(usize, n));
+    }
+  }
+
+  /// Write the whole slice, retrying short writes.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.WriteZero
+  /// * IoErrorKind.Uncategorized
+  pub fn write_all(*self, buf: []const char) Result[usize, IoError] {
+    let total: usize = 0;
+
+    while (total < buf.len) {
+      let rest = buf[total..buf.len];
+
+      switch (self.write(rest)) {
+        .Ok(n) => if (n == 0) {
+          return Result.Err(IoError.new(IoErrorKind.WriteZero, "failed to write whole buffer"));
+        } else {
+          total += n;
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    };
+
+    return Result.Ok(total);
+  }
+
+  /// Flush file contents to disk.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
+  pub fn sync_all(*const self) Result[void, IoError] {
+    @os[windows] {
+      if (FlushFileBuffers(@as(WinHANDLE, self.handle)) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    } else {
+      if (fsync(self.fd) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// Metadata of this file.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Uncategorized
+  pub fn metadata(*const self) Result[Metadata, IoError] {
+    @os[windows] {
+      let high: WinDWORD = 0;
+      let low = GetFileSize(@as(WinHANDLE, self.handle), &high);
+
+      if (low == INVALID_FILE_ATTRIBUTES && GetLastError() != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(Metadata {
+        ._len = (@as(u64, high) << @as(u64, 32)) | @as(u64, low),
+        ._is_dir = false,
+        ._is_file = true,
+        ._is_symlink = false,
+        ._mode = 0,
+      });
+    } else {
+      let st: c_Stat = @uninit();
+
+      if (fstat(self.fd, &st) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(metadata_of(&st));
+    }
+  }
+}
+
+implement Drop : File {
+  fn drop(self) {
+    @os[windows] {
+      let _ = CloseHandle(self.handle);
+    } else {
+      let _ = close(self.fd);
+    }
+  }
+}
+
+/// File open options builder.
+pub struct OpenOptions {
+  _read: bool,
+  _write: bool,
+  _append: bool,
+  _truncate: bool,
+  _create: bool,
+  _create_new: bool,
+  _mode: u32,
+
+  pub fn new() Self {
+    Self {
+      ._read = false,
+      ._write = false,
+      ._append = false,
+      ._truncate = false,
+      ._create = false,
+      ._create_new = false,
+      ._mode = 0o666,
+    }
+  }
+
+  pub fn read(self, value: bool) Self {
+    let opts = self;
+    opts._read = value;
+    opts
+  }
+
+  pub fn write(self, value: bool) Self {
+    let opts = self;
+    opts._write = value;
+    opts
+  }
+
+  pub fn append(self, value: bool) Self {
+    let opts = self;
+    opts._append = value;
+    opts
+  }
+
+  pub fn truncate(self, value: bool) Self {
+    let opts = self;
+    opts._truncate = value;
+    opts
+  }
+
+  pub fn create(self, value: bool) Self {
+    let opts = self;
+    opts._create = value;
+    opts
+  }
+
+  pub fn create_new(self, value: bool) Self {
+    let opts = self;
+    opts._create_new = value;
+    opts
+  }
+
+  pub fn mode(self, value: u32) Self {
+    let opts = self;
+    opts._mode = value;
+    opts
+  }
+
+  /// Open a file with these options.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
+  pub fn open(*const self, path: []const char) Result[File, IoError] {
+    @os[windows] {
+      let access = GENERIC_READ;
+
+      if (self._write) {
+        access = GENERIC_WRITE;
+      };
+
+      if (self._read && self._write) {
+        access = GENERIC_READ | GENERIC_WRITE;
+      };
+
+      let disposition = OPEN_EXISTING;
+
+      if (self._create_new) {
+        disposition = CREATE_NEW;
+      } else if (self._create && self._truncate) {
+        disposition = CREATE_ALWAYS;
+      } else if (self._create) {
+        disposition = OPEN_ALWAYS;
+      } else if (self._truncate) {
+        disposition = TRUNCATE_EXISTING;
+      };
+
+      let c = cpath(path);
+      let handle = CreateFileA(
+        @as([*]const c_char, c.slice(..).ptr),
+        access,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        disposition,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr,
+      );
+
+      if (handle == INVALID_HANDLE_VALUE) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(File { .fd = -1, .handle = @as(*void, handle) });
+    } else {
+      let flags = O_RDONLY;
+
+      if (self._write) {
+        flags = O_WRONLY;
+      };
+
+      if (self._read && self._write) {
+        flags = O_RDWR;
+      };
+
+      if (self._append) {
+        flags = flags | O_APPEND;
+      };
+
+      if (self._truncate) {
+        flags = flags | O_TRUNC;
+      };
+
+      if (self._create) {
+        flags = flags | O_CREAT;
+      };
+
+      if (self._create_new) {
+        flags = flags | O_CREAT | O_EXCL;
+      };
+
+      let c = cpath(path);
+      let fd = open(@as([*]const char, c.slice(..).ptr), flags, @as(c_mode_t, self._mode));
+
+      if (fd < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(File { .fd = fd, .handle = nullptr });
+    }
+  }
+}
+
+/// File metadata snapshot.
+pub struct Metadata {
+  _len: u64,
+  _is_dir: bool,
+  _is_file: bool,
+  _is_symlink: bool,
+  _mode: u32,
+
+  pub fn len(*const self) u64 {
+    self._len
+  }
+
+  pub fn is_empty(*const self) bool {
+    self._len == 0
+  }
+
+  pub fn is_dir(*const self) bool {
+    self._is_dir
+  }
+
+  pub fn is_file(*const self) bool {
+    self._is_file
+  }
+
+  pub fn is_symlink(*const self) bool {
+    self._is_symlink
+  }
+
+  pub fn mode(*const self) u32 {
+    self._mode
+  }
+}
+
+@os[linux | android | darwin | freebsd] {
+  fn metadata_of(st: *const c_Stat) Metadata {
+    let kind = (*st).st_mode & S_IFMT;
+
+    Metadata {
+      ._len = @as(u64, (*st).st_size),
+      ._is_dir = kind == S_IFDIR,
+      ._is_file = kind == S_IFREG,
+      ._is_symlink = kind == S_IFLNK,
+      ._mode = @as(u32, (*st).st_mode),
+    }
+  }
+}
+
+/// One directory entry: name plus full path.
+pub struct DirEntry {
+  _name: String,
+  _path: String,
+  _is_dir: bool,
+  _is_file: bool,
+  _is_symlink: bool,
+
+  pub fn into_name(self) String {
+    self._name
+  }
+
+  pub fn into_path(self) String {
+    self._path
+  }
+
+  pub fn is_dir(*const self) bool {
+    self._is_dir
+  }
+
+  pub fn is_file(*const self) bool {
+    self._is_file
+  }
+
+  pub fn is_symlink(*const self) bool {
+    self._is_symlink
+  }
+}
+
+/// Filesystem helpers on paths.
+/// Static methods on purpose: plain free functions would collide
+/// with user names once imported.
+pub struct Fs {
+
+  /// Metadata of the file at `path`, following symlinks.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
+  pub fn metadata(path: []const char) Result[Metadata, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+      let data: c_FileAttrData = @uninit();
+
+      if (GetFileAttributesExA(@as([*]const c_char, c.slice(..).ptr), 0, &data) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      let dir = (data.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+      return Result.Ok(Metadata {
+        ._len = (@as(u64, data.size_high) << @as(u64, 32)) | @as(u64, data.size_low),
+        ._is_dir = dir,
+        ._is_file = !dir,
+        ._is_symlink = false,
+        ._mode = 0,
+      });
+    } else {
+      let c = cpath(path);
+      let st: c_Stat = @uninit();
+
+      if (stat(@as([*]const char, c.slice(..).ptr), &st) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(metadata_of(&st));
+    }
+  }
+
+  /// Metadata of the link at `path` itself.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Unsupported
+  /// * IoErrorKind.Uncategorized
+  pub fn symlink_metadata(path: []const char) Result[Metadata, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "symlink_metadata needs reparse points"));
+    } else {
+      let c = cpath(path);
+      let st: c_Stat = @uninit();
+
+      if (lstat(@as([*]const char, c.slice(..).ptr), &st) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(metadata_of(&st));
+    }
+  }
+
+  /// `true` when `path` can be stated.
+  pub fn exists(path: []const char) bool {
+    @os[windows] {
+      let c = cpath(path);
+
+      return GetFileAttributesA(@as([*]const c_char, c.slice(..).ptr)) != INVALID_FILE_ATTRIBUTES;
+    } else {
+      let c = cpath(path);
+      let st: c_Stat = @uninit();
+
+      return stat(@as([*]const char, c.slice(..).ptr), &st) == 0;
+    }
+  }
+
+  /// Delete a file.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.Uncategorized
+  pub fn remove_file(path: []const char) Result[void, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+
+      if (DeleteFileA(@as([*]const c_char, c.slice(..).ptr)) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    } else {
+      let c = cpath(path);
+
+      if (unlink(@as([*]const char, c.slice(..).ptr)) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// Delete an empty directory.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
+  pub fn remove_dir(path: []const char) Result[void, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+
+      if (RemoveDirectoryA(@as([*]const c_char, c.slice(..).ptr)) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    } else {
+      let c = cpath(path);
+
+      if (rmdir(@as([*]const char, c.slice(..).ptr)) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// Create a directory with mode `0o755`.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
+  pub fn create_dir(path: []const char) Result[void, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+
+      if (CreateDirectoryA(@as([*]const c_char, c.slice(..).ptr), nullptr) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    } else {
+      let c = cpath(path);
+
+      if (mkdir(@as([*]const char, c.slice(..).ptr), 0o755) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// Move a file or directory to a new path.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.Uncategorized
+  pub fn rename(from: []const char, to: []const char) Result[void, IoError] {
+    @os[windows] {
+      let cfrom = cpath(from);
+      let cto = cpath(to);
+
+      if (MoveFileA(@as([*]const c_char, cfrom.slice(..).ptr), @as([*]const c_char, cto.slice(..).ptr)) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    } else {
+      let cfrom = cpath(from);
+      let cto = cpath(to);
+
+      if (rename(@as([*]const char, cfrom.slice(..).ptr), @as([*]const char, cto.slice(..).ptr)) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// List directory entries, skipping `.` and `..`.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
+  pub fn read_dir(path: []const char) Result[List[DirEntry], IoError] {
+    @os[windows] {
+      let pattern = String.from(path);
+      pattern.push('/');
+      pattern.push('*');
+      let cpattern = cpath(pattern.slice(..));
+
+      let data: c_FindData = @uninit();
+      let dir = FindFirstFileA(@as([*]const c_char, cpattern.slice(..).ptr), &data);
+
+      if (dir == INVALID_HANDLE_VALUE) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      let out = List#[DirEntry].new();
+
+      while (true) {
+        let raw = @as([*]const char, &data.name[0]);
+
+        if (raw[0] == '.') {
+          if (raw[1] == '\0') {
+            if (FindNextFileA(dir, &data) == 0) {
+              break;
+            };
+            continue;
+          };
+
+          if (raw[1] == '.' && raw[2] == '\0') {
+            if (FindNextFileA(dir, &data) == 0) {
+              break;
+            };
+            continue;
+          };
+        };
+
+        let name = String.from_cstr(raw);
+
+        let full = String.from(path);
+        full.push('/');
+        full.push_str(name.slice(..));
+
+        let dir_flag = (data.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+        out.push(DirEntry {
+          ._name = name,
+          ._path = full,
+          ._is_dir = dir_flag,
+          ._is_file = !dir_flag,
+          ._is_symlink = false,
+        });
+
+        if (FindNextFileA(dir, &data) == 0) {
+          break;
+        };
+      };
+
+      let _ = FindClose(dir);
+
+      return Result.Ok(out);
+    } else {
+      let c = cpath(path);
+      let dir = opendir(@as([*]const char, c.slice(..).ptr));
+
+      if (dir == nullptr) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      let out = List#[DirEntry].new();
+
+      while (true) {
+        let e = readdir(dir);
+
+        if (e == nullptr) {
+          break;
+        };
+
+        let raw = @as([*]const char, &(*e).d_name[0]);
+
+        if (raw[0] == '.') {
+          if (raw[1] == '\0') {
+            continue;
+          };
+
+          if (raw[1] == '.' && raw[2] == '\0') {
+            continue;
+          };
+        };
+
+        let name = String.from_cstr(raw);
+
+        let full = String.from(path);
+        full.push('/');
+        full.push_str(name.slice(..));
+
+        let dtype = (*e).d_type;
+
+        out.push(DirEntry {
+          ._name = name,
+          ._path = full,
+          ._is_dir = dtype == DT_DIR,
+          ._is_file = dtype == DT_REG,
+          ._is_symlink = dtype == DT_LNK,
+        });
+      };
+
+      let _ = closedir(dir);
+
+      return Result.Ok(out);
+    }
+  }
+
+  /// Read the whole file at `path` into a new string.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
+  pub fn read_to_string(path: []const char) Result[String, IoError] {
+    switch (File.open(path)) {
+      .Ok(f) => {
+        let buf = String.new();
+        let mut_file = f;
+
+        switch (mut_file.read_to_string(&buf)) {
+          .Ok(_bytes) => Result.Ok(buf),
+          .Err(e) => {
+            return Result.Err(e);
+          }
+        }
+      },
+      .Err(e) => {
+        return Result.Err(e);
+      }
+    }
+  }
+
+  /// Create or truncate the file at `path` and write `contents` into it.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.WriteZero
+  /// * IoErrorKind.Uncategorized
+  pub fn write(path: []const char, contents: []const char) Result[usize, IoError] {
+    switch (File.create(path)) {
+      .Ok(f) => {
+        let mut_file = f;
+
+        switch (mut_file.write_all(contents)) {
+          .Ok(n) => Result.Ok(n),
+          .Err(e) => {
+            return Result.Err(e);
+          }
+        }
+      },
+      .Err(e) => {
+        return Result.Err(e);
+      }
+    }
+  }
+
+}

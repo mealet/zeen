@@ -1,0 +1,810 @@
+use std.string;
+use std.io;
+use std.c.types;
+use std.c.string;
+use std.c.posix.sys.socket;
+
+@os[windows] {
+  use std.c.windows.windef;
+  use std.c.windows.winbase;
+  use std.c.windows.winsock2;
+} else {
+  use std.c.posix.unistd;
+}
+
+fn cstr_of(s: []const char) String {
+  let out = String.from(s);
+  out.push('\0');
+  out
+}
+
+/// IPv4 socket address. The ip holds octets in host order.
+pub struct SocketAddr {
+  _ip: u32,
+  _port: u16,
+
+  pub fn new(ip: u32, port: u16) Self {
+    Self { ._ip = ip, ._port = port }
+  }
+
+  pub fn loopback(port: u16) Self {
+    Self { ._ip = 2130706433, ._port = port }
+  }
+
+  pub fn any(port: u16) Self {
+    Self { ._ip = 0, ._port = port }
+  }
+
+  pub fn ip(*const self) u32 {
+    self._ip
+  }
+
+  pub fn port(*const self) u16 {
+    self._port
+  }
+
+  /// Parse `a.b.c.d:port`.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.InvalidInput
+  pub fn from_str(s: []const char) Result[Self, IoError] {
+    let cut: usize = 0;
+    let i: usize = 0;
+
+    while (i < s.len) {
+      if (s.ptr[i] == ':') {
+        cut = i;
+        break;
+      };
+
+      i += 1;
+    };
+
+    if (cut == 0 || cut + 1 >= s.len) {
+      return Result.Err(IoError.new(IoErrorKind.InvalidInput, "bad socket address"));
+    };
+
+    let c = cstr_of(s[0..cut]);
+    let raw: u32 = 0;
+
+    if (inet_pton_ip(@as([*]const char, c.slice(..).ptr), &raw) != 1) {
+      return Result.Err(IoError.new(IoErrorKind.InvalidInput, "bad ip address"));
+    };
+
+    let port: u32 = 0;
+    let any_digit = false;
+    let j = cut + 1;
+
+    while (j < s.len) {
+      let d = @as(u32, s.ptr[j]);
+
+      if (d < @as(u32, '0') || d > @as(u32, '9')) {
+        return Result.Err(IoError.new(IoErrorKind.InvalidInput, "bad port"));
+      };
+
+      any_digit = true;
+      port = port * 10 + (d - @as(u32, '0'));
+      j += 1;
+    };
+
+    if (!any_digit || port > 65535) {
+      return Result.Err(IoError.new(IoErrorKind.InvalidInput, "bad port"));
+    };
+
+    return Result.Ok(Self { ._ip = ntohl(raw), ._port = @as(u16, port) });
+  }
+}
+
+implement Copy : SocketAddr {}
+
+implement Display : SocketAddr {
+  fn display[W: StrWriter](*const self, out: *W) void {
+    write_u32(out, (self._ip >> 24) & 255);
+    (*out).write_str_single('.');
+    write_u32(out, (self._ip >> 16) & 255);
+    (*out).write_str_single('.');
+    write_u32(out, (self._ip >> 8) & 255);
+    (*out).write_str_single('.');
+    write_u32(out, self._ip & 255);
+    (*out).write_str_single(':');
+    write_u32(out, @as(u32, self._port));
+  }
+}
+
+fn write_u32[W: StrWriter](out: *W, value: u32) void {
+  if (value == 0) {
+    (*out).write_str_single('0');
+    return;
+  };
+
+  let digits: [10]char = @uninit();
+  let count: usize = 0;
+  let rest = value;
+
+  while (rest > 0) {
+    digits[count] = @as(char, @as(u32, 48) + rest % 10);
+    count += 1;
+    rest = rest / 10;
+  };
+
+  while (count > 0) {
+    count -= 1;
+    (*out).write_str_single(digits[count]);
+  };
+}
+
+@os[windows] {
+  fn inet_pton_ip(src: [*]const char, dst: *u32) c_int {
+    inet_pton(AF_INET, @as([*]const c_char, src), @as(*void, dst))
+  }
+} else {
+  fn inet_pton_ip(src: [*]const char, dst: *u32) c_int {
+    inet_pton(AF_INET, src, @as(*void, dst))
+  }
+}
+
+@os[linux | android] {
+  fn fill_v4(addr: *const SocketAddr, sa: *c_SockAddrIn) void {
+    let _ = memset(@as(*void, sa), 0, @as(c_size_t, 16));
+    (*sa).sin_family = @as(c_ushort, AF_INET);
+    (*sa).sin_port = htons((*addr).port());
+    (*sa).sin_addr.s_addr = htonl((*addr).ip());
+  }
+
+  fn read_v4(sa: *const c_SockAddrIn) SocketAddr {
+    SocketAddr.new(ntohl((*sa).sin_addr.s_addr), ntohs((*sa).sin_port))
+  }
+}
+
+@os[darwin | freebsd] {
+  fn fill_v4(addr: *const SocketAddr, sa: *c_SockAddrIn) void {
+    let _ = memset(@as(*void, sa), 0, @as(c_size_t, 16));
+    (*sa).sin_len = @as(u8, 16);
+    (*sa).sin_family = @as(u8, AF_INET);
+    (*sa).sin_port = htons((*addr).port());
+    (*sa).sin_addr.s_addr = htonl((*addr).ip());
+  }
+
+  fn read_v4(sa: *const c_SockAddrIn) SocketAddr {
+    SocketAddr.new(ntohl((*sa).sin_addr.s_addr), ntohs((*sa).sin_port))
+  }
+}
+
+@os[windows] {
+  fn fill_v4(addr: *const SocketAddr, sa: *c_SockAddrInWin) void {
+    let _ = memset(@as(*void, sa), 0, @as(c_size_t, 16));
+    (*sa).family = @as(c_ushort, AF_INET);
+    (*sa).port = htons((*addr).port());
+    (*sa).addr = htonl((*addr).ip());
+  }
+
+  fn read_v4_win(sa: *const c_SockAddrInWin) SocketAddr {
+    SocketAddr.new(ntohl((*sa).addr), ntohs((*sa).port))
+  }
+}
+
+@os[windows] {
+  let wsa_ready: bool = false;
+
+  fn ensure_wsa() Result[void, IoError] {
+    if (wsa_ready) {
+      return Result.Ok(@void());
+    };
+
+    let scratch: [512]u8 = @uninit();
+    let rc = WSAStartup(514, @as(*void, &scratch[0]));
+
+    if (rc != 0) {
+      return Result.Err(win_error(@as(WinDWORD, rc)));
+    };
+
+    wsa_ready = true;
+
+    return Result.Ok(@void());
+  }
+
+  fn new_socket(kind: c_int) Result[usize, IoError] {
+    let s = socket(AF_INET, kind, 0);
+
+    if (s == INVALID_SOCKET) {
+      return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+    };
+
+    let one: c_int = 1;
+    let _ = setsockopt(s, SOL_SOCKET_WIN, SO_REUSEADDR_WIN, @as(*const void, &one), 4);
+
+    return Result.Ok(s);
+  }
+
+  fn socket_close(sock: usize) void {
+    let _ = closesocket(sock);
+  }
+
+  fn socket_local_addr(sock: usize) Result[SocketAddr, IoError] {
+    let sa: c_SockAddrInWin = @uninit();
+    let len: c_int = 16;
+
+    if (getsockname(sock, @as(*c_SockAddrWin, &sa), &len) != 0) {
+      return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+    };
+
+    return Result.Ok(read_v4_win(&sa));
+  }
+
+  fn socket_peer_addr(sock: usize) Result[SocketAddr, IoError] {
+    let sa: c_SockAddrInWin = @uninit();
+    let len: c_int = 16;
+
+    if (getpeername(sock, @as(*c_SockAddrWin, &sa), &len) != 0) {
+      return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+    };
+
+    return Result.Ok(read_v4_win(&sa));
+  }
+} else {
+  fn new_socket(kind: c_int) Result[usize, IoError] {
+    let fd = socket(AF_INET, kind, 0);
+
+    if (fd < 0) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    let one: c_int = 1;
+    let _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, @as(*const void, &one), @as(c_socklen_t, 4));
+
+    return Result.Ok(@as(usize, fd));
+  }
+
+  fn socket_close(sock: usize) void {
+    let _ = close(@as(c_int, sock));
+  }
+
+  fn socket_local_addr(sock: usize) Result[SocketAddr, IoError] {
+    let sa: c_SockAddrIn = @uninit();
+    let len: c_socklen_t = @as(c_socklen_t, 16);
+
+    if (getsockname(@as(c_int, sock), @as(*c_SockAddr, &sa), &len) != 0) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    return Result.Ok(read_v4(&sa));
+  }
+
+  fn socket_peer_addr(sock: usize) Result[SocketAddr, IoError] {
+    let sa: c_SockAddrIn = @uninit();
+    let len: c_socklen_t = @as(c_socklen_t, 16);
+
+    if (getpeername(@as(c_int, sock), @as(*c_SockAddr, &sa), &len) != 0) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    return Result.Ok(read_v4(&sa));
+  }
+}
+
+/// TCP listener bound to an address.
+pub struct TcpListener {
+  sock: usize,
+
+  /// Bind and listen with a 128 backlog.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AddrInUse
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.Uncategorized
+  pub fn bind(addr: *const SocketAddr) Result[Self, IoError] {
+    @os[windows] {
+      switch (ensure_wsa()) {
+        .Ok(_) => {},
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+
+      switch (new_socket(SOCK_STREAM)) {
+        .Ok(sock) => {
+          let sa: c_SockAddrInWin = @uninit();
+          fill_v4(addr, &sa);
+
+          if (bind(sock, @as(*const c_SockAddrWin, &sa), 16) != 0) {
+            let _ = closesocket(sock);
+            return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+          };
+
+          if (listen(sock, 128) != 0) {
+            let _ = closesocket(sock);
+            return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+          };
+
+          return Result.Ok(Self { .sock = sock });
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    } else {
+      switch (new_socket(SOCK_STREAM)) {
+        .Ok(sock) => {
+          let sa: c_SockAddrIn = @uninit();
+          fill_v4(addr, &sa);
+
+          if (bind(@as(c_int, sock), @as(*const c_SockAddr, &sa), @as(c_socklen_t, 16)) != 0) {
+            socket_close(sock);
+            return Result.Err(IoError.last_os_error());
+          };
+
+          if (listen(@as(c_int, sock), 128) != 0) {
+            socket_close(sock);
+            return Result.Err(IoError.last_os_error());
+          };
+
+          return Result.Ok(Self { .sock = sock });
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    }
+  }
+
+  /// Accept one incoming connection.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.OutOfMemory
+  /// * IoErrorKind.Uncategorized
+  pub fn accept(*const self) Result[TcpStream, IoError] {
+    @os[windows] {
+      let sa: c_SockAddrInWin = @uninit();
+      let len: c_int = 16;
+      let peer = accept(self.sock, @as(*c_SockAddrWin, &sa), &len);
+
+      if (peer == INVALID_SOCKET) {
+        return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+      };
+
+      return Result.Ok(TcpStream { .sock = peer });
+    } else {
+      let sa: c_SockAddrIn = @uninit();
+      let len: c_socklen_t = @as(c_socklen_t, 16);
+      let peer = accept(@as(c_int, self.sock), @as(*c_SockAddr, &sa), &len);
+
+      if (peer < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(TcpStream { .sock = @as(usize, peer) });
+    }
+  }
+
+  /// Address this listener is bound to.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Uncategorized
+  pub fn local_addr(*const self) Result[SocketAddr, IoError] {
+    socket_local_addr(self.sock)
+  }
+}
+
+implement Drop : TcpListener {
+  fn drop(self) {
+    socket_close(self.sock);
+  }
+}
+
+/// Connected TCP stream.
+pub struct TcpStream {
+  sock: usize,
+
+  /// Connect to an address.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.ConnectionRefused
+  /// * IoErrorKind.TimedOut
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
+  pub fn connect(addr: *const SocketAddr) Result[Self, IoError] {
+    @os[windows] {
+      switch (ensure_wsa()) {
+        .Ok(_) => {},
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+
+      switch (new_socket(SOCK_STREAM)) {
+        .Ok(sock) => {
+          let sa: c_SockAddrInWin = @uninit();
+          fill_v4(addr, &sa);
+
+          if (connect(sock, @as(*const c_SockAddrWin, &sa), 16) != 0) {
+            let _ = closesocket(sock);
+            return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+          };
+
+          return Result.Ok(Self { .sock = sock });
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    } else {
+      switch (new_socket(SOCK_STREAM)) {
+        .Ok(sock) => {
+          let sa: c_SockAddrIn = @uninit();
+          fill_v4(addr, &sa);
+
+          if (connect(@as(c_int, sock), @as(*const c_SockAddr, &sa), @as(c_socklen_t, 16)) != 0) {
+            socket_close(sock);
+            return Result.Err(IoError.last_os_error());
+          };
+
+          return Result.Ok(Self { .sock = sock });
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    }
+  }
+
+  /// Read some bytes, appending them to buffer. `Ok(0)` means end of stream.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
+  pub fn read(*self, buf: *String) Result[usize, IoError] {
+    @os[windows] {
+      let chunk: [256]char = @uninit();
+      let got = recv(self.sock, @as([*]c_char, &chunk[0]), 256, 0);
+
+      if (got < 0) {
+        return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+      };
+
+      if (got == 0) {
+        return Result.Ok(@as(usize, 0));
+      };
+
+      (*buf).push_str(chunk[0..@as(usize, got)]);
+
+      return Result.Ok(@as(usize, got));
+    } else {
+      let chunk: [256]char = @uninit();
+      let got = recv(@as(c_int, self.sock), @as(*void, &chunk[0]), 256, 0);
+
+      if (got < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      if (got == 0) {
+        return Result.Ok(@as(usize, 0));
+      };
+
+      (*buf).push_str(chunk[0..@as(usize, got)]);
+
+      return Result.Ok(@as(usize, got));
+    }
+  }
+
+  /// Read exactly `n` bytes, appending them to buffer.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.UnexpectedEof
+  /// * IoErrorKind.Uncategorized
+  pub fn read_exact(*self, buf: *String, n: usize) Result[usize, IoError] {
+    let total: usize = 0;
+
+    while (total < n) {
+      switch (self.read(buf)) {
+        .Ok(got) => if (got == 0) {
+          break;
+        } else {
+          total += got;
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    };
+
+    if (total < n) {
+      return Result.Err(IoError.new(IoErrorKind.UnexpectedEof, "early end of stream"));
+    };
+
+    return Result.Ok(total);
+  }
+
+  /// Read until end of stream into buffer.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
+  pub fn read_to_string(*self, buf: *String) Result[usize, IoError] {
+    let total: usize = 0;
+
+    while (true) {
+      switch (self.read(buf)) {
+        .Ok(got) => if (got == 0) {
+          break;
+        } else {
+          total += got;
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    };
+
+    return Result.Ok(total);
+  }
+
+  /// Write some bytes from the slice.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.BrokenPipe
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
+  pub fn write(*self, buf: []const char) Result[usize, IoError] {
+    @os[windows] {
+      let n = send(self.sock, @as([*]const c_char, buf.ptr), @as(c_int, buf.len), 0);
+
+      if (n < 0) {
+        return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+      };
+
+      return Result.Ok(@as(usize, n));
+    } else {
+      let n = send(@as(c_int, self.sock), @as([*]const void, buf.ptr), buf.len, 0);
+
+      if (n < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@as(usize, n));
+    }
+  }
+
+  /// Write the whole slice, retrying short writes.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.BrokenPipe
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.WriteZero
+  /// * IoErrorKind.Uncategorized
+  pub fn write_all(*self, buf: []const char) Result[usize, IoError] {
+    let total: usize = 0;
+
+    while (total < buf.len) {
+      switch (self.write(buf[total..buf.len])) {
+        .Ok(n) => if (n == 0) {
+          return Result.Err(IoError.new(IoErrorKind.WriteZero, "failed to write whole buffer"));
+        } else {
+          total += n;
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    };
+
+    return Result.Ok(total);
+  }
+
+  /// Shut down both directions of the stream.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotConnected
+  /// * IoErrorKind.Uncategorized
+  pub fn shutdown(*const self) Result[void, IoError] {
+    @os[windows] {
+      if (shutdown(self.sock, SD_BOTH) != 0) {
+        return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+      };
+
+      return Result.Ok(@void());
+    } else {
+      if (shutdown(@as(c_int, self.sock), SHUT_RDWR) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// Address this stream is bound to locally.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Uncategorized
+  pub fn local_addr(*const self) Result[SocketAddr, IoError] {
+    socket_local_addr(self.sock)
+  }
+
+  /// Address the other end is bound to.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotConnected
+  /// * IoErrorKind.Uncategorized
+  pub fn peer_addr(*const self) Result[SocketAddr, IoError] {
+    socket_peer_addr(self.sock)
+  }
+}
+
+implement Drop : TcpStream {
+  fn drop(self) {
+    socket_close(self.sock);
+  }
+}
+
+/// UDP socket.
+pub struct UdpSocket {
+  sock: usize,
+
+  /// Bind to an address for sending and receiving datagrams.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AddrInUse
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.Uncategorized
+  pub fn bind(addr: *const SocketAddr) Result[Self, IoError] {
+    @os[windows] {
+      switch (ensure_wsa()) {
+        .Ok(_) => {},
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+
+      switch (new_socket(SOCK_DGRAM)) {
+        .Ok(sock) => {
+          let sa: c_SockAddrInWin = @uninit();
+          fill_v4(addr, &sa);
+
+          if (bind(sock, @as(*const c_SockAddrWin, &sa), 16) != 0) {
+            let _ = closesocket(sock);
+            return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+          };
+
+          return Result.Ok(Self { .sock = sock });
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    } else {
+      switch (new_socket(SOCK_DGRAM)) {
+        .Ok(sock) => {
+          let sa: c_SockAddrIn = @uninit();
+          fill_v4(addr, &sa);
+
+          if (bind(@as(c_int, sock), @as(*const c_SockAddr, &sa), @as(c_socklen_t, 16)) != 0) {
+            socket_close(sock);
+            return Result.Err(IoError.last_os_error());
+          };
+
+          return Result.Ok(Self { .sock = sock });
+        },
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+    }
+  }
+
+  /// Send one datagram.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.InvalidInput
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
+  pub fn send_to(*const self, buf: []const char, addr: *const SocketAddr) Result[usize, IoError] {
+    @os[windows] {
+      let sa: c_SockAddrInWin = @uninit();
+      fill_v4(addr, &sa);
+      let n = sendto(
+        self.sock,
+        @as([*]const c_char, buf.ptr),
+        @as(c_int, buf.len),
+        0,
+        @as(*const c_SockAddrWin, &sa),
+        16,
+      );
+
+      if (n < 0) {
+        return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+      };
+
+      return Result.Ok(@as(usize, n));
+    } else {
+      let sa: c_SockAddrIn = @uninit();
+      fill_v4(addr, &sa);
+      let n = sendto(
+        @as(c_int, self.sock),
+        @as([*]const void, buf.ptr),
+        buf.len,
+        0,
+        @as(*const c_SockAddr, &sa),
+        @as(c_socklen_t, 16),
+      );
+
+      if (n < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@as(usize, n));
+    }
+  }
+
+  /// Receive one datagram, appending it to buffer. Returns the sender.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
+  pub fn recv_from(*self, buf: *String) Result[SocketAddr, IoError] {
+    @os[windows] {
+      let chunk: [2048]char = @uninit();
+      let sa: c_SockAddrInWin = @uninit();
+      let len: c_int = 16;
+      let got = recvfrom(
+        self.sock,
+        @as([*]c_char, &chunk[0]),
+        2048,
+        0,
+        @as(*c_SockAddrWin, &sa),
+        &len,
+      );
+
+      if (got < 0) {
+        return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
+      };
+
+      (*buf).push_str(chunk[0..@as(usize, got)]);
+
+      return Result.Ok(read_v4_win(&sa));
+    } else {
+      let chunk: [2048]char = @uninit();
+      let sa: c_SockAddrIn = @uninit();
+      let len: c_socklen_t = @as(c_socklen_t, 16);
+      let got = recvfrom(
+        @as(c_int, self.sock),
+        @as(*void, &chunk[0]),
+        2048,
+        0,
+        @as(*c_SockAddr, &sa),
+        &len,
+      );
+
+      if (got < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      (*buf).push_str(chunk[0..@as(usize, got)]);
+
+      return Result.Ok(read_v4(&sa));
+    }
+  }
+
+  /// Address this socket is bound to.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.Uncategorized
+  pub fn local_addr(*const self) Result[SocketAddr, IoError] {
+    socket_local_addr(self.sock)
+  }
+}
+
+implement Drop : UdpSocket {
+  fn drop(self) {
+    socket_close(self.sock);
+  }
+}

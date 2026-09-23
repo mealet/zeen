@@ -1,0 +1,301 @@
+use std.alloc;
+use std.string;
+use std.c.stdio;
+use std.c.string;
+use std.c.errno;
+use std.c.windows.windef;
+use std.c.windows.winbase;
+use std.c.windows.fileapi;
+
+/// IO error kind
+pub enum IoErrorKind {
+  NotFound,
+  PermissionDenied,
+  AlreadyExists,
+  InvalidInput,
+  InvalidData,
+  UnexpectedEof,
+  WriteZero,
+  Interrupted,
+  WouldBlock,
+  TimedOut,
+  BrokenPipe,
+  ConnectionRefused,
+  ConnectionReset,
+  ConnectionAborted,
+  NotConnected,
+  AddrInUse,
+  AddrNotAvailable,
+  IsADirectory,
+  NotADirectory,
+  Unsupported,
+  OutOfMemory,
+  Uncategorized,
+}
+
+/// IO error with a kind and a human readable message.
+pub struct IoError {
+  _kind: IoErrorKind,
+  _message: String,
+
+  pub fn new(kind: IoErrorKind, message: []const char) Self {
+    Self {
+      ._kind = kind,
+      ._message = String.from(message),
+    }
+  }
+
+  pub fn kind(*const self) IoErrorKind {
+    self._kind
+  }
+
+  pub fn message(self) String {
+    self._message
+  }
+
+  /// Build an error from an OS error code.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.InvalidInput
+  /// * IoErrorKind.BrokenPipe
+  /// * IoErrorKind.ConnectionRefused
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.NotConnected
+  /// * IoErrorKind.AddrInUse
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.WouldBlock
+  /// * IoErrorKind.TimedOut
+  /// * IoErrorKind.OutOfMemory
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Unsupported
+  /// * IoErrorKind.InvalidData
+  /// * IoErrorKind.Uncategorized
+  pub fn from_errno(code: c_int) Self {
+    let kind = switch (code) {
+      ENOENT => IoErrorKind.NotFound,
+      EACCES => IoErrorKind.PermissionDenied,
+      EPERM => IoErrorKind.PermissionDenied,
+      EEXIST => IoErrorKind.AlreadyExists,
+      EINVAL => IoErrorKind.InvalidInput,
+      EPIPE => IoErrorKind.BrokenPipe,
+      ECONNREFUSED => IoErrorKind.ConnectionRefused,
+      ECONNRESET => IoErrorKind.ConnectionReset,
+      ENOTCONN => IoErrorKind.NotConnected,
+      EADDRINUSE => IoErrorKind.AddrInUse,
+      EADDRNOTAVAIL => IoErrorKind.AddrNotAvailable,
+      ETIMEDOUT => IoErrorKind.TimedOut,
+      EINTR => IoErrorKind.Interrupted,
+      EAGAIN => IoErrorKind.WouldBlock,
+      ENOMEM => IoErrorKind.OutOfMemory,
+      EISDIR => IoErrorKind.IsADirectory,
+      ENOTDIR => IoErrorKind.NotADirectory,
+      ENOSYS => IoErrorKind.Unsupported,
+      EILSEQ => IoErrorKind.InvalidData,
+      _ => IoErrorKind.Uncategorized,
+    };
+
+    Self {
+      ._kind = kind,
+      ._message = String.from_cstr(@as([*]char, strerror(code))),
+    }
+  }
+
+  /// Build an error from the last OS error.
+  ///
+  /// Possible IoError variants:
+  /// * any IoErrorKind the OS reports (see from_errno on posix, win_error on Windows)
+  pub fn last_os_error() Self {
+    @os[windows] {
+      return win_error(GetLastError());
+    } else {
+      let slot = __errno_location();
+      return Self.from_errno(*slot);
+    }
+  }
+}
+
+@os[windows] {
+  /// Build an error from a Windows error code.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.InvalidInput
+  /// * IoErrorKind.BrokenPipe
+  /// * IoErrorKind.ConnectionRefused
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.NotConnected
+  /// * IoErrorKind.AddrInUse
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.TimedOut
+  /// * IoErrorKind.OutOfMemory
+  /// * IoErrorKind.Uncategorized
+  pub fn win_error(code: WinDWORD) IoError {
+    let kind = switch (code) {
+      ERROR_FILE_NOT_FOUND => IoErrorKind.NotFound,
+      ERROR_PATH_NOT_FOUND => IoErrorKind.NotFound,
+      ERROR_ACCESS_DENIED => IoErrorKind.PermissionDenied,
+      ERROR_ALREADY_EXISTS => IoErrorKind.AlreadyExists,
+      ERROR_FILE_EXISTS => IoErrorKind.AlreadyExists,
+      ERROR_INVALID_PARAMETER => IoErrorKind.InvalidInput,
+      ERROR_INVALID_HANDLE => IoErrorKind.InvalidInput,
+      ERROR_BROKEN_PIPE => IoErrorKind.BrokenPipe,
+      ERROR_CONN_REFUSED => IoErrorKind.ConnectionRefused,
+      ERROR_CONN_RESET => IoErrorKind.ConnectionReset,
+      ERROR_NOT_CONNECTED => IoErrorKind.NotConnected,
+      ERROR_ADDR_IN_USE => IoErrorKind.AddrInUse,
+      ERROR_ADDR_NOT_AVAIL => IoErrorKind.AddrNotAvailable,
+      ERROR_TIMED_OUT => IoErrorKind.TimedOut,
+      ERROR_NOT_ENOUGH_MEMORY => IoErrorKind.OutOfMemory,
+      _ => IoErrorKind.Uncategorized,
+    };
+
+    IoError {
+      ._kind = kind,
+      ._message = @format("windows error {}", code),
+    }
+  }
+}
+
+/// Standard input handle.
+pub struct Stdin {
+  /// Read one line, keeping trailing newline.
+  pub fn read_line(buf: *String) bool {
+    @os[windows] {
+      let ok = read_line_fgets(buf);
+    } else {
+      let ok = read_line_getline(buf);
+    }
+
+    ok
+  }
+
+  /// Read whole input into buffer.
+  pub fn read_to_string(buf: *String) bool {
+    let any = false;
+
+    while (Stdin.read_line(buf)) {
+      any = true;
+    };
+
+    any
+  }
+
+  /// Read exactly `n` bytes, appending to buffer.
+  /// Returns `true` when all bytes read, `false` on end or error.
+  pub fn read_exact(buf: *String, n: usize) bool {
+    let chunk: [256]char = @uninit();
+    let need = n;
+
+    while (need > 0) {
+      let take: usize = 256;
+
+      if (need < take) {
+        take = need;
+      };
+
+      let got = fread(@as(*void, &chunk[0]), 1, take, stdin);
+
+      if (got == 0) {
+        return false;
+      };
+
+      (*buf).push_str(chunk[0..got]);
+      need -= got;
+    };
+
+    true
+  }
+}
+
+/// Line reader through `getline` (posix).
+@os[linux | android | darwin | freebsd] {
+  fn read_line_getline(buf: *String) bool {
+    let line: *char = @as(*char, nullptr);
+    let cap: usize = 0;
+
+    let n = getline(@as(**char, &line), @as(*usize, &cap), stdin);
+
+    if (n < 0) {
+      return false;
+    };
+
+    (*buf).push_str((@as([*]char, line))[0..@as(usize, n)]);
+    Allocator.dealloc(@as(*void, line));
+
+    true
+  }
+}
+
+/// Line reader through `fgets` chunks (no `getline` here).
+@os[windows] {
+  fn read_line_fgets(buf: *String) bool {
+    let chunk: [256]char = @uninit();
+    let any = false;
+
+    while (true) {
+      let got = fgets(chunk, 256, stdin);
+
+      if (@as(*void, got) == nullptr) {
+        break;
+      };
+
+      any = true;
+
+      let i: usize = 0;
+      while (i < 256) {
+        if (chunk[i] == '\0') {
+          break;
+        };
+
+        (*buf).push(chunk[i]);
+
+        if (chunk[i] == '\n') {
+          return true;
+        };
+
+        i += 1;
+      };
+    };
+
+    any
+  }
+}
+
+/// Standard output handle.
+pub struct Stdout {
+  /// Write string slice to output.
+  pub fn write(value: []const char) void {
+    let out = OutStream {};
+    out.write_str(value);
+  }
+
+  /// Write string to output.
+  pub fn write_string(value: *String) void {
+    Stdout.write((*value).slice(..));
+  }
+
+  /// Flush output buffer.
+  pub fn flush() void {
+    let _ = fflush(stdout);
+  }
+}
+
+/// Standard error handle.
+pub struct Stderr {
+  /// Write string slice to error output.
+  pub fn write(value: []const char) void {
+    let _ = fwrite(@as([*]const void, value.ptr), 1, value.len, stderr);
+  }
+
+  /// Flush error output.
+  pub fn flush() void {
+    let _ = fflush(stderr);
+  }
+}

@@ -417,3 +417,62 @@ fn main() {
         "zeen::typechecker::generic_missing_bound",
     );
 }
+
+/// A method generic repeating the struct generic adds a bound to it: the
+/// method only resolves when the struct argument satisfies the bound.
+#[test]
+fn method_bound_addition_rejects_unsatisfied() {
+    compile_fails(
+        "method_bound_addition",
+        r#"
+struct Wrap[T] {
+  inner: T,
+
+  pub fn dup_inner[T: Clone](*const self) T {
+    return self.inner.clone();
+  }
+}
+
+fn main() {
+  let w = Wrap { .inner = 5 };
+  let q = w.dup_inner();
+}
+"#,
+        "zeen::typechecker::generic_bound_not_satisfied",
+    );
+}
+
+/// A direct call to a bounded implement-block method checks the block
+/// bounds: a method from `implement[T: Copy]` does not apply to non-`Copy`
+/// instantiations.
+#[test]
+fn bounded_impl_method_rejects_unsatisfied() {
+    compile_fails(
+        "bounded_impl_method",
+        r#"
+struct Wrap[T] {
+  pub inner: T,
+}
+
+struct Foo {
+  pub x: i32,
+}
+
+interface Check {
+  fn check(*const self) bool;
+}
+
+implement[T: Copy] Check : Wrap[T] {
+  fn check(*const self) bool {
+    return true;
+  }
+}
+
+fn main() {
+  let w = Wrap { .inner = Foo { .x = 1 } };
+  @println("{}", w.check());
+}
+"#,
+        "zeen::typechecker::generic_bound_not_satisfied",
+    );
+}

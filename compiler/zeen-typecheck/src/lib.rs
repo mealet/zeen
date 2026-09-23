@@ -1519,7 +1519,13 @@ impl<'res> TypeChecker<'res> {
         }
 
         for (g, bounds) in &sig_generic_bounds {
-            generic_bounds.insert(*g, bounds.clone());
+            // A method generic may name a struct generic to add bounds to
+            // it (`from_clone[T: Clone]` inside `struct List[T]`): keep the
+            // struct's own bounds and extend them with the method's.
+            generic_bounds
+                .entry(*g)
+                .or_default()
+                .extend(bounds.iter().copied());
         }
 
         // The implement block's own generics (`implement[T: Display]`) and
@@ -2256,9 +2262,11 @@ impl<'res> TypeChecker<'res> {
                 self.check_macro_call(expr.id, *kind, args, expr.source.clone())
             }
 
-            HirExprKind::FieldAccess { object, field } => {
-                self.check_field_access(expr.id, object, field, None)
-            }
+            HirExprKind::FieldAccess {
+                object,
+                field,
+                object_generic_args,
+            } => self.check_field_access(expr.id, object, field, object_generic_args, None),
 
             HirExprKind::StructInit {
                 ty,
@@ -2332,7 +2340,9 @@ impl<'res> TypeChecker<'res> {
                 self.check_block(stmts, trailing, None, &expr.source)
             }
 
-            HirExprKind::Switch { object, arms } => self.check_switch(object, arms, &expr.source),
+            HirExprKind::Switch { object, arms } => {
+                self.check_switch(object, arms, &expr.source, None)
+            }
 
             HirExprKind::Closure { def_id, def } => self.check_closure(*def_id, def, &expr.source),
 
@@ -2741,6 +2751,21 @@ impl<'res> TypeChecker<'res> {
                 }
 
                 self.result.interner.never()
+            }
+
+            HirMacroKind::Void => {
+                if !args.is_empty() {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                }
+
+                self.result.interner.void()
             }
 
             HirMacroKind::SizeOf | HirMacroKind::AlignOf => {
@@ -3197,6 +3222,7 @@ impl<'res> TypeChecker<'res> {
         id: HirId,
         object: &HirExpr,
         field: &(Spur, SourceSpan),
+        object_generic_args: &[Rc<HirTypeExpr>],
         expected: Option<TypeId>,
     ) -> TypeId {
         let (field_name, field_span) = *field;
@@ -3210,6 +3236,7 @@ impl<'res> TypeChecker<'res> {
                 field_name,
                 field_span,
                 &object.source,
+                object_generic_args,
                 expected,
             );
         }
@@ -3432,10 +3459,11 @@ impl<'res> TypeChecker<'res> {
         }
 
         // `Self { .. }` inside its own methods is already bound to the
-        // current instantiation; seed it.
+        // current instantiation; seed it unless the expected type or
+        // explicit arguments already bound the generic above.
         for g in &struct_generics {
             if let Some(bound) = self.ctx.generic_binding(*g) {
-                bindings.insert(*g, bound);
+                bindings.entry(*g).or_insert(bound);
             }
         }
 
@@ -3577,7 +3605,45 @@ impl<'res> TypeChecker<'res> {
         struct_ty
     }
 
+    /// Expected types inside an implement block method are viewed through
+    /// the block's generics: signatures use the struct's own slots (`Self`
+    /// is `List[T_struct]`), while method values use the block slots, so a
+    /// struct-flavored expectation would never match. Empty outside
+    /// implement block methods.
+    fn impl_flavored_expected(&mut self, expected: TypeId) -> TypeId {
+        let Some(fn_def) = self.ctx.current_fn_def() else {
+            return expected;
+        };
+        let Some(&struct_def) = self.result.method_owner.get(&fn_def) else {
+            return expected;
+        };
+        let Some(&iface_def) = self.method_owning_interface.get(&fn_def) else {
+            return expected;
+        };
+        let Some(entries) = self.result.impl_registry.get(&(struct_def, iface_def)) else {
+            return expected;
+        };
+        let Some(entry) = entries.iter().find(|e| e.methods.contains(&fn_def)) else {
+            return expected;
+        };
+        let bindings: HashMap<DefId, TypeId> = entry
+            .generic_bindings
+            .iter()
+            .map(|(imp_g, struct_g)| {
+                (
+                    *struct_g,
+                    self.result.interner.intern(Type::GenericParam(*imp_g)),
+                )
+            })
+            .collect();
+        if bindings.is_empty() {
+            return expected;
+        }
+        zeen_types::substitute_generics(&mut self.result.interner, expected, &bindings)
+    }
+
     fn check_expr(&mut self, expr: &HirExpr, expected: TypeId, allow_const_remove: bool) -> TypeId {
+        let expected = self.impl_flavored_expected(expected);
         let actual = match &expr.kind {
             HirExprKind::ArrayInit { elements } if elements.is_empty() => {
                 if let Type::Array { .. } = self.result.interner.get(expected).clone() {
@@ -3629,6 +3695,12 @@ impl<'res> TypeChecker<'res> {
                 return ty;
             }
 
+            HirExprKind::Switch { object, arms } => {
+                let ty = self.check_switch(object, arms, &expr.source, Some(expected));
+                self.result.record_expr_type(expr.id, ty);
+                return ty;
+            }
+
             HirExprKind::StructInit {
                 ty,
                 fields,
@@ -3665,8 +3737,18 @@ impl<'res> TypeChecker<'res> {
                 ty
             }
 
-            HirExprKind::FieldAccess { object, field } => {
-                let ty = self.check_field_access(expr.id, object, field, Some(expected));
+            HirExprKind::FieldAccess {
+                object,
+                field,
+                object_generic_args,
+            } => {
+                let ty = self.check_field_access(
+                    expr.id,
+                    object,
+                    field,
+                    object_generic_args,
+                    Some(expected),
+                );
                 self.result.record_expr_type(expr.id, ty);
                 ty
             }
@@ -3817,7 +3899,13 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn check_switch(&mut self, object: &HirExpr, arms: &[HirSwitchArm], source: &Source) -> TypeId {
+    fn check_switch(
+        &mut self,
+        object: &HirExpr,
+        arms: &[HirSwitchArm],
+        source: &Source,
+        expected: Option<TypeId>,
+    ) -> TypeId {
         let scrut_ty = self.synth_expr(object);
         let kind = self.switch_scrutinee_kind(scrut_ty, object);
 
@@ -3841,7 +3929,10 @@ impl<'res> TypeChecker<'res> {
                 let bool_ty = self.result.interner.builtin(BuiltinType::bool);
                 self.check_expr(guard, bool_ty, false);
             }
-            let body_ty = self.synth_expr(&arm.body);
+            let body_ty = match expected {
+                Some(exp) => self.check_expr(&arm.body, exp, false),
+                None => self.synth_expr(&arm.body),
+            };
 
             if kind.is_some() && arm.guard.is_none() && !covered_all {
                 if Self::pattern_covers_all(&arm.pattern) {
@@ -4464,7 +4555,7 @@ impl<'res> TypeChecker<'res> {
         source: Source,
         expected: Option<TypeId>,
     ) -> TypeId {
-        if let HirExprKind::FieldAccess { object, field } = &callee.kind {
+        if let HirExprKind::FieldAccess { object, field, .. } = &callee.kind {
             if let HirExprKind::VarRef(enum_def) = &object.kind
                 && matches!(self.def_kind(*enum_def), Some(DefKind::Enum))
                 && self.enum_variants.get(enum_def).is_some_and(|defs| {
@@ -4719,7 +4810,8 @@ impl<'res> TypeChecker<'res> {
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
         for (param_ty, arg) in user_params.iter().zip(args.iter()) {
-            self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+            let param_ty = self.substitute_self(*param_ty, obj_ty);
+            self.infer_or_check_arg(param_ty, arg, &mut bindings, source.clone());
         }
 
         for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
@@ -4745,7 +4837,8 @@ impl<'res> TypeChecker<'res> {
             },
         );
 
-        Some(self.substitute_generics(sig_ret, &bindings))
+        let ret = self.substitute_generics(sig_ret, &bindings);
+        Some(self.substitute_self(ret, obj_ty))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4767,6 +4860,31 @@ impl<'res> TypeChecker<'res> {
                 Some(DefKind::Struct | DefKind::Enum)
             )
         {
+            // Unknown associated functions on structs report directly
+            // instead of falling through to a confusing `void` error.
+            // Enums keep the fallthrough: a missing name may be a variant
+            // and already diagnoses as `UnknownEnumVariant` downstream.
+            if matches!(self.def_kind(*referenced_def), Some(DefKind::Struct))
+                && !self
+                    .struct_methods
+                    .get(referenced_def)
+                    .is_some_and(|methods| methods.contains_key(&field_name))
+            {
+                let interner = self.interner.borrow();
+                let struct_name = interner
+                    .resolve(&self.resolution.defs[referenced_def].name)
+                    .into();
+                let field = interner.resolve(&field_name).into();
+                drop(interner);
+
+                self.report(TypeError::UnknownField {
+                    struct_name,
+                    field,
+                    src: source.src(),
+                    span: field_span,
+                });
+                return Some(self.result.interner.error());
+            }
             return self.check_associated_fn_call(
                 (call_id, object),
                 *referenced_def,
@@ -4978,6 +5096,42 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
+        // Implement-block generics carry their own bounds (`implement[T:
+        // Copy]`): the receiver instantiation must satisfy them, or the
+        // bounded method does not apply at all.
+        if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
+            && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
+            && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
+        {
+            for (imp_g, ifaces) in &entry.generic_bounds.clone() {
+                let Some(&concrete_ty) = bindings.get(imp_g) else {
+                    continue;
+                };
+
+                for iface_def in ifaces {
+                    if !self.type_satisfies_interface(concrete_ty, *iface_def) {
+                        let interner = self.interner.borrow();
+
+                        let generic = interner.resolve(&self.resolution.defs[imp_g].name).into();
+                        let bound = interner
+                            .resolve(&self.resolution.defs[iface_def].name)
+                            .into();
+                        let ty = self.display_type(concrete_ty).into();
+
+                        drop(interner);
+
+                        self.report(TypeError::GenericBoundNotSatisfied {
+                            generic,
+                            bound,
+                            ty,
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+                }
+            }
+        }
+
         let mut monomorphized_args: Vec<TypeId> = struct_generic_args;
         monomorphized_args.extend(resolved_generic_args);
 
@@ -4992,6 +5146,7 @@ impl<'res> TypeChecker<'res> {
         Some(self.substitute_generics(sig_ret, &bindings))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_enum_variant_access(
         &mut self,
         id: HirId,
@@ -4999,6 +5154,7 @@ impl<'res> TypeChecker<'res> {
         field_name: Spur,
         field_span: SourceSpan,
         source: &Source,
+        object_generic_args: &[Rc<HirTypeExpr>],
         expected: Option<TypeId>,
     ) -> TypeId {
         let Some(variant_defs) = self.enum_variants.get(&enum_def) else {
@@ -5024,6 +5180,23 @@ impl<'res> TypeChecker<'res> {
             && expected_def == enum_def
         {
             generic_args = expected_args;
+        }
+        if !object_generic_args.is_empty() {
+            if object_generic_args.len() != enum_generics.len() {
+                self.report(TypeError::GenericArgCountMismatch {
+                    name: self.def_name(enum_def).unwrap_or_default().into(),
+                    expected: enum_generics.len(),
+                    found: object_generic_args.len(),
+                    src: source.src(),
+                    span: field_span,
+                });
+            }
+
+            generic_args = object_generic_args
+                .iter()
+                .zip(enum_generics.iter())
+                .map(|(explicit, _)| self.lower_hir_type(explicit))
+                .collect();
         }
         if generic_args.is_empty() && !enum_generics.is_empty() {
             for g in &enum_generics {
@@ -5197,9 +5370,10 @@ impl<'res> TypeChecker<'res> {
         }
 
         // `Self::Variant` inside generic enum methods is already bound.
+        // Expected-type bindings above take precedence.
         for g in &enum_generics {
             if let Some(bound) = self.ctx.generic_binding(*g) {
-                bindings.insert(*g, bound);
+                bindings.entry(*g).or_insert(bound);
             }
         }
 
@@ -5222,6 +5396,8 @@ impl<'res> TypeChecker<'res> {
 
         if !enum_generics.is_empty() {
             let value_ty = self.synth_expr(&args[0]);
+            let value_ty = self.default_literal_with_value(&args[0], value_ty);
+            self.result.record_expr_type(args[0].id, value_ty);
             self.unify_for_inference(
                 payload_ty,
                 value_ty,
@@ -5707,6 +5883,42 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
+        // Same implement-block bound check as for instance calls: a
+        // bounded static method does not apply when its instantiation
+        // misses a bound.
+        if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
+            && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
+            && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
+        {
+            for (imp_g, ifaces) in &entry.generic_bounds.clone() {
+                let Some(&concrete_ty) = bindings.get(imp_g) else {
+                    continue;
+                };
+
+                for iface_def in ifaces {
+                    if !self.type_satisfies_interface(concrete_ty, *iface_def) {
+                        let interner = self.interner.borrow();
+
+                        let generic = interner.resolve(&self.resolution.defs[imp_g].name).into();
+                        let bound = interner
+                            .resolve(&self.resolution.defs[iface_def].name)
+                            .into();
+                        let ty = self.display_type(concrete_ty).into();
+
+                        drop(interner);
+
+                        self.report(TypeError::GenericBoundNotSatisfied {
+                            generic,
+                            bound,
+                            ty,
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+                }
+            }
+        }
+
         for g in &type_generics {
             if !bindings.contains_key(g) {
                 let interner = self.interner.borrow();
@@ -5897,14 +6109,30 @@ impl<'res> TypeChecker<'res> {
             self.unify_for_inference(param_ty, arg_ty, bindings, source);
 
             let substituted = self.substitute_generics(param_ty, bindings);
-            if !try_coerce(&mut self.result.interner, arg_ty, substituted).is_ok() {
-                self.bind_unresolved_generics(param_ty, bindings);
-                self.report(TypeError::Mismatch {
-                    expected: self.display_type(substituted).into(),
-                    found: self.display_type(arg_ty).into(),
-                    src: arg.source.src(),
-                    span: arg.source.span,
-                });
+            match try_coerce(&mut self.result.interner, arg_ty, substituted) {
+                // Like the concrete path, only string literals coerce to
+                // slices implicitly: any other array needs `arr[..]`.
+                CoerceResult::ArrayToSlice
+                    if !matches!(&arg.kind, HirExprKind::Literal(Literal::String(_))) =>
+                {
+                    self.bind_unresolved_generics(param_ty, bindings);
+                    self.report(TypeError::ImplicitArrayToSlice {
+                        expected: self.display_type(substituted).into(),
+                        found: self.display_type(arg_ty).into(),
+                        src: arg.source.src(),
+                        span: arg.source.span,
+                    });
+                }
+                result if !result.is_ok() => {
+                    self.bind_unresolved_generics(param_ty, bindings);
+                    self.report(TypeError::Mismatch {
+                        expected: self.display_type(substituted).into(),
+                        found: self.display_type(arg_ty).into(),
+                        src: arg.source.src(),
+                        span: arg.source.span,
+                    });
+                }
+                _ => {}
             }
         } else {
             self.check_expr(arg, substituted, false);
@@ -5972,6 +6200,13 @@ impl<'res> TypeChecker<'res> {
             Type::Fn { params, ret } => {
                 params.iter().any(|p| self.type_contains_generic(*p))
                     || self.type_contains_generic(*ret)
+            }
+            Type::FatFn { params, ret, .. } => {
+                params.iter().any(|p| self.type_contains_generic(*p))
+                    || self.type_contains_generic(*ret)
+            }
+            Type::Enum { generic_args, .. } => {
+                generic_args.iter().any(|a| self.type_contains_generic(*a))
             }
             _ => false,
         }
@@ -6061,6 +6296,23 @@ impl<'res> TypeChecker<'res> {
                 self.unify_for_inference(pr, ar, bindings, source);
             }
 
+            (
+                Type::FatFn {
+                    params: pp,
+                    ret: pr,
+                    ..
+                },
+                Type::Fn {
+                    params: ap,
+                    ret: ar,
+                },
+            ) if pp.len() == ap.len() => {
+                for (p, a) in pp.iter().zip(ap.iter()) {
+                    self.unify_for_inference(*p, *a, bindings, source.clone());
+                }
+                self.unify_for_inference(pr, ar, bindings, source);
+            }
+
             _ => {}
         }
     }
@@ -6071,21 +6323,21 @@ impl<'res> TypeChecker<'res> {
         match b {
             i8 | i16 | i32 | i64 | isize => &[
                 "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
-                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Neg",
+                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Neg", "Copy",
             ],
 
             u8 | u16 | u32 | u64 | usize => &[
                 "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
-                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot",
+                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Copy",
             ],
 
             f32 | f64 => &[
-                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Neg",
+                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Neg", "Copy",
             ],
 
-            bool => &["Display", "Debug", "Eq", "Not"],
+            bool => &["Display", "Debug", "Eq", "Not", "Copy"],
 
-            char => &["Display", "Debug", "Eq", "Ord"],
+            char => &["Display", "Debug", "Eq", "Ord", "Copy"],
 
             void => &[],
             never => &[],
@@ -6365,7 +6617,9 @@ impl<'res> TypeChecker<'res> {
         let ret = self.substitute_generics(sig_ret, &bindings);
 
         match self.result.interner.get(ret).clone() {
-            Type::Struct { generic_args, .. } if generic_args.len() == 1 => {
+            Type::Struct { generic_args, .. } | Type::Enum { generic_args, .. }
+                if generic_args.len() == 1 =>
+            {
                 Some((generic_args[0], next_def))
             }
             _ => None,
@@ -7635,6 +7889,7 @@ mod tests {
     const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
     const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
     const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+    const CORE_RESULT: &str = include_str!("../../../lib/core/result.zn");
     const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
     fn typecheck(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
@@ -7677,6 +7932,7 @@ mod tests {
                 ("core.out", CORE_OUT),
                 ("core.iter", CORE_ITER),
                 ("core.option", CORE_OPTION),
+                ("core.result", CORE_RESULT),
                 ("core.slice", CORE_SLICE),
             ]
         } else {
@@ -7902,6 +8158,29 @@ mod tests {
             "#,
         )
         .expect_err("unknown method should produce a diagnostic");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownField { .. })),
+            "expected UnknownField error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_associated_fn_names_struct() {
+        let errors = typecheck(
+            r#"
+            struct Foo {
+              pub fn asd() {}
+            }
+
+            fn main() {
+              let foo = Foo.nope();
+            }
+            "#,
+        )
+        .expect_err("unknown associated function should produce a diagnostic");
 
         assert!(
             errors
@@ -8427,6 +8706,53 @@ mod tests {
         assert!(
             result.is_ok(),
             "string literals inside array literals should coerce to slices: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn generic_array_to_slice_is_rejected() {
+        let errors = typecheck(
+            r#"
+            fn take[T](s: []const T) usize {
+              return s.len;
+            }
+
+            fn main() {
+              @println("{}", take([1, 2, 3]));
+            }
+            "#,
+        )
+        .expect_err("implicit array to slice coercion through a generic must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::ImplicitArrayToSlice { .. })),
+            "expected TypeError::ImplicitArrayToSlice, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtins_satisfy_copy_bound() {
+        let result = typecheck(
+            r#"
+            interface Copy {}
+
+            fn ident[T: Copy](x: T) T {
+              return x;
+            }
+
+            fn main() {
+              let a = ident(41);
+              let b = ident(true);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "builtins must satisfy the `Copy` bound: {:?}",
             result.err()
         );
     }
@@ -10292,6 +10618,7 @@ mod tests {
                     1 => 2,
                     _ => 0,
                 };
+                let _ = 2;
             }
             "#,
         )

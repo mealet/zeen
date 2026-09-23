@@ -1,0 +1,12 @@
+extern fn malloc(usize) *void;
+extern fn free(*void);
+
+let ALLOC: fn(usize) *void = malloc;
+
+fn main() i32 {
+  let ptr: *i32 = ALLOC(123);
+  *ptr = 42;
+  @println("{}", *ptr);
+  free(ptr);
+  return 0;
+}

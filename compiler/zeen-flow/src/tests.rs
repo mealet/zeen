@@ -10,6 +10,7 @@ use crate::{error::FlowError, run_dataflow};
 const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
 const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
 const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+const CORE_RESULT: &str = include_str!("../../../lib/core/result.zn");
 const CORE_IO: &str = include_str!("../../../lib/core/io.zn");
 const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
@@ -31,6 +32,7 @@ fn flow_errors(src: &str) -> Vec<FlowError> {
             ("core.ops", CORE_OPS),
             ("core.iter", CORE_ITER),
             ("core.option", CORE_OPTION),
+            ("core.result", CORE_RESULT),
             ("core.io", CORE_IO),
             ("core.slice", CORE_SLICE),
         ],

@@ -160,36 +160,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
         let builder = context.create_builder();
 
-        let mut global_vars = HashMap::new();
-        for (id, gv) in program.global_vars.iter().enumerate() {
-            let llvm_ty = Self::simple_type(context, typecheck, gv.ty);
-            let global = module.add_global(llvm_ty, None, &gv.symbol_name);
-            if gv.is_extern {
-                global.set_linkage(inkwell::module::Linkage::External);
-            } else {
-                global.set_constant(false);
-                match llvm_ty {
-                    BasicTypeEnum::IntType(t) => {
-                        global.set_initializer(&t.const_zero());
-                    }
-                    BasicTypeEnum::FloatType(t) => {
-                        global.set_initializer(&t.const_zero());
-                    }
-                    BasicTypeEnum::PointerType(t) => {
-                        global.set_initializer(&t.const_null());
-                    }
-                    BasicTypeEnum::ArrayType(t) => {
-                        global.set_initializer(&t.const_zero());
-                    }
-                    BasicTypeEnum::StructType(t) => {
-                        global.set_initializer(&t.const_zero());
-                    }
-                    _ => {}
-                }
-            }
-            global_vars.insert(MirGlobalVarId(id as u32), global);
-        }
-
         Ok(Self {
             context,
             builder,
@@ -208,7 +178,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             str_counter: 0,
             enum_tables: HashMap::new(),
             enum_table_counter: 0,
-            global_vars,
+            global_vars: HashMap::new(),
             locals: HashMap::new(),
             blocks: HashMap::new(),
             current_entry: None,
@@ -242,6 +212,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         self.register_enum_layouts();
         self.register_struct_layouts();
         self.fill_enum_layouts();
+        self.emit_globals();
         self.declare_externs();
         self.emit_stdout_write_runtime();
         self.declare_functions();
@@ -370,9 +341,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     /// Sets the body of each payload-enum struct: `{ tag: u8, union }`. The
     /// union member must cover the largest payload size *and* satisfy the
     /// strictest payload alignment, or payload accesses through the union
-    /// would be misaligned (UB): a single payload rarely covers both (e.g.
-    /// `[9]u8` next to a `u64`), so the fallback pads the most-aligned
-    /// payload up to the largest size. Runs after all struct bodies so
+    /// would be misaligned (UB). A lone payload reuses its own type: with
+    /// no smaller payload nothing can overlap its padding. With several
+    /// payloads the union is an untyped blob: reusing the largest payload
+    /// type would leave smaller payloads overlapping its padding, and
+    /// those bytes do not survive copies. Runs after all struct bodies so
     /// payload structs are sized.
     fn fill_enum_layouts(&mut self) {
         for &ty in self.program.enum_layouts.keys() {
@@ -391,6 +364,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             let mut measured: Vec<(u64, u64, TypeId)> = Vec::new();
             for payload in payloads {
+                if matches!(self.typecheck.interner.get(payload), Type::Void) {
+                    measured.push((0, 1, payload));
+                    continue;
+                }
                 let llvm_ty = self.map_basic_type(payload);
                 measured.push((
                     self.target_data.get_abi_size(&llvm_ty),
@@ -403,34 +380,84 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             let union_ty: BasicTypeEnum<'ctx> = if max_size == 0 {
                 self.context.i8_type().into()
-            } else if let Some(&(_, _, payload)) = measured
-                .iter()
-                .find(|m| m.0 == max_size && m.1 == max_align)
-            {
-                self.map_basic_type(payload)
+            } else if measured.len() == 1 {
+                self.map_basic_type(measured[0].2)
             } else {
-                let (_, _, align_payload) = measured
-                    .iter()
-                    .filter(|m| m.1 == max_align)
-                    .max_by_key(|m| m.0)
-                    .copied()
-                    .expect("max alignment comes from a payload");
-                let pad = max_size
-                    - self
-                        .target_data
-                        .get_abi_size(&self.map_basic_type(align_payload));
-                if pad == 0 {
-                    self.map_basic_type(align_payload)
-                } else {
-                    let pad_ty = self.context.i8_type().array_type(pad as u32);
-                    let fields: [BasicTypeEnum<'ctx>; 2] =
-                        [self.map_basic_type(align_payload), pad_ty.into()];
-                    BasicTypeEnum::StructType(self.context.struct_type(&fields, false))
-                }
+                self.opaque_union(max_size, max_align)
             };
 
             let tag_ty = self.context.i8_type().into();
             opaque.set_body(&[tag_ty, union_ty], false);
+        }
+    }
+
+    /// Untyped union slot: every byte is real data, so any payload
+    /// survives copies. Sized to the largest payload, aligned to the
+    /// strictest one.
+    fn opaque_union(&self, max_size: u64, max_align: u64) -> BasicTypeEnum<'ctx> {
+        let i8_ty = self.context.i8_type();
+        if max_align < 2 {
+            return i8_ty.array_type(max_size as u32).into();
+        }
+        let (words, rest) = if max_align >= 8 {
+            (
+                self.context.i64_type().array_type((max_size / 8) as u32),
+                (max_size % 8) as u32,
+            )
+        } else if max_align >= 4 {
+            (
+                self.context.i32_type().array_type((max_size / 4) as u32),
+                (max_size % 4) as u32,
+            )
+        } else {
+            (
+                self.context.i16_type().array_type((max_size / 2) as u32),
+                (max_size % 2) as u32,
+            )
+        };
+        if rest == 0 {
+            return words.into();
+        }
+        let tail = i8_ty.array_type(rest);
+        let fields: [BasicTypeEnum<'ctx>; 2] = [words.into(), tail.into()];
+        BasicTypeEnum::StructType(self.context.struct_type(&fields, false))
+    }
+
+    /// Creates LLVM globals with real lowered types.
+    fn emit_globals(&mut self) {
+        for (id, gv) in self.program.global_vars.iter().enumerate() {
+            let llvm_ty = match self.typecheck.interner.get(gv.ty).clone() {
+                Type::Void | Type::Never | Type::Error => self.context.i32_type().into(),
+                Type::Interface { .. }
+                | Type::InterfaceSelfPlaceholder(_)
+                | Type::GenericParam(_) => self.context.i32_type().into(),
+                _ => self.map_basic_type(gv.ty),
+            };
+            let global = self.module.add_global(llvm_ty, None, &gv.symbol_name);
+            if gv.is_extern {
+                global.set_linkage(inkwell::module::Linkage::External);
+            } else {
+                global.set_constant(false);
+                match llvm_ty {
+                    BasicTypeEnum::IntType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    BasicTypeEnum::FloatType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    BasicTypeEnum::PointerType(t) => {
+                        global.set_initializer(&t.const_null());
+                    }
+                    BasicTypeEnum::ArrayType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    BasicTypeEnum::StructType(t) => {
+                        global.set_initializer(&t.const_zero());
+                    }
+                    _ => {}
+                }
+            }
+            self.global_vars.insert(MirGlobalVarId(id as u32), global);
         }
     }
 
@@ -451,6 +478,16 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 );
             }
         }
+    }
+
+    /// Pointer to a declared extern function (see `declare_externs`).
+    fn extern_fn_value(&self, idx: usize) -> PointerValue<'ctx> {
+        let decl = &self.program.extern_fns[idx];
+        self.module
+            .get_function(&decl.symbol_name)
+            .expect("extern function must be declared")
+            .as_global_value()
+            .as_pointer_value()
     }
 
     /// Defines the body of the core-provided `__zeen_stdout_write` runtime
@@ -706,33 +743,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             AnyTypeEnum::VectorType(t) => t.into(),
             AnyTypeEnum::ScalableVectorType(t) => t.into(),
             AnyTypeEnum::VoidType(_) => panic!("void used as a value type"),
-        }
-    }
-
-    fn simple_type(
-        context: &'ctx Context,
-        typecheck: &TypeCheckResult,
-        ty: TypeId,
-    ) -> BasicTypeEnum<'ctx> {
-        use BuiltinType::*;
-        match typecheck.interner.get(ty).clone() {
-            Type::Builtin(b) => match b {
-                i8 | u8 | char => context.i8_type().into(),
-                i16 | u16 => context.i16_type().into(),
-                i32 | u32 => context.i32_type().into(),
-                i64 | u64 => context.i64_type().into(),
-                isize | usize => context.i64_type().into(),
-                f32 | f64 => context.f64_type().into(),
-                bool => context.bool_type().into(),
-                void => context.i32_type().into(),
-                never => context.i32_type().into(),
-            },
-            Type::IntLiteral => context.i32_type().into(),
-            Type::FloatLiteral => context.f64_type().into(),
-            Type::Pointer { .. } | Type::ManyPointer { .. } => {
-                context.ptr_type(AddressSpace::default()).into()
-            }
-            _ => context.i32_type().into(),
         }
     }
 
@@ -1060,6 +1070,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .as_pointer_value()
                 .into(),
 
+            ConstValue::ExternFn(idx) => self.extern_fn_value(*idx).into(),
+
             // A void value is only ever produced as the placeholder result of
             // an expression with no value (e.g. an `if` without an `else`).
             // Valid programs never store it, so a throwaway zero is enough.
@@ -1094,15 +1106,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             let tag_val = self.context.i8_type().const_int(tag, false);
             self.builder.build_store(tag_ptr, tag_val).unwrap();
             if let Some(operand) = operands.first() {
+                let payload_ty = self.enum_payload_type(expected_ty, variant_def);
+                if matches!(self.typecheck.interner.get(payload_ty), Type::Void) {
+                    return self.builder.build_load(agg_ty, alloca, "").unwrap();
+                }
                 let payload_ptr = self
                     .builder
                     .build_struct_gep(agg_ty, alloca, 1, "")
                     .unwrap();
-                let value = self.operand_value(
-                    operand,
-                    Some(self.enum_payload_type(expected_ty, variant_def)),
-                    func,
-                );
+                let value = self.operand_value(operand, Some(payload_ty), func);
                 self.builder.build_store(payload_ptr, value).unwrap();
             }
             return self.builder.build_load(agg_ty, alloca, "").unwrap();
@@ -1294,17 +1306,22 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             ) || matches!(
                 lhs,
                 Operand::Constant(
-                    ConstValue::NullPtr | ConstValue::Str(_) | ConstValue::Fn(_),
+                    ConstValue::NullPtr
+                        | ConstValue::Str(_)
+                        | ConstValue::Fn(_)
+                        | ConstValue::ExternFn(_),
                     _
                 )
             ) || matches!(
                 rhs,
                 Operand::Constant(
-                    ConstValue::NullPtr | ConstValue::Str(_) | ConstValue::Fn(_),
+                    ConstValue::NullPtr
+                        | ConstValue::Str(_)
+                        | ConstValue::Fn(_)
+                        | ConstValue::ExternFn(_),
                     _
                 )
             ));
-
         if is_pointer_cmp {
             let int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
             let l = match lhs_v {
@@ -1910,7 +1927,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         inner: TypeId(0),
                         is_const: false,
                     },
-                    ConstValue::Fn(_) => Type::Pointer {
+                    ConstValue::Fn(_) | ConstValue::ExternFn(_) => Type::Pointer {
                         inner: TypeId(0),
                         is_const: false,
                     },
@@ -2376,6 +2393,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         // Coerce each argument to the callee's declared parameter type: a
         // constant like `123` defaults to `i32`, but the parameter may be
         // `usize`/`i64`, so the value must be widened before the call.
+        // Indirect callees carry their signature in the operand type; use it
+        // when the counts agree (fat `$fn` temporaries are typed with the
+        // env-first signature by MIR). On count mismatch the ABI is rebuilt
+        // from the call site below, so leave the args alone here too.
         let param_types: Vec<TypeId> = match target {
             CallTarget::Direct(id) => self.program.functions[id]
                 .params
@@ -2383,7 +2404,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .map(|&local| self.program.functions[id].local(local).ty)
                 .collect(),
             CallTarget::Extern(idx) => self.program.extern_fns[*idx].param_types.clone(),
-            CallTarget::Indirect(_) => Vec::new(),
+            CallTarget::Indirect(operand) => {
+                match self
+                    .operand_type(operand, func)
+                    .map(|ty| self.typecheck.interner.get(ty).clone())
+                {
+                    Some(Type::Fn { params, .. }) if params.len() == args.len() => params,
+                    _ => Vec::new(),
+                }
+            }
         };
 
         let is_variadic_extern = match target {
@@ -2998,7 +3027,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     ConstValue::Char(_) => "%c".to_string(),
                     ConstValue::Bool(_) => unreachable!("handled above"),
                     ConstValue::NullPtr => "%s".to_string(),
-                    ConstValue::Fn(_) => "%s".to_string(),
+                    ConstValue::Fn(_) | ConstValue::ExternFn(_) => "%s".to_string(),
                     ConstValue::Void => unreachable!("cannot @dbg a void constant"),
                     ConstValue::Int(_) => "%d".to_string(),
                 };

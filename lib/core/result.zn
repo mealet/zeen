@@ -1,0 +1,116 @@
+pub enum Result[T, E] {
+  Ok: T,
+  Err: E,
+
+  pub fn is_ok(*const self) bool {
+    @enumTag(self) == 0
+  }
+
+  pub fn is_err(*const self) bool {
+    @enumTag(self) == 1
+  }
+
+  pub fn unwrap(self) T {
+    switch (self) {
+      .Ok(value) => value,
+      .Err(_error) => @panic("Called `unwrap()` on `Err` result"),
+    }
+  }
+
+  pub fn unwrap_err(self) E {
+    switch (self) {
+      .Ok(_value) => @panic("Called `unwrap_err()` on `Ok` result"),
+      .Err(error) => error,
+    }
+  }
+
+  pub fn unwrap_or(self, default: T) T {
+    switch (self) {
+      .Ok(value) => value,
+      .Err(_error) => default,
+    }
+  }
+
+  pub fn unwrap_or_else(self, f: FnOnce() T) T {
+    switch (self) {
+      .Ok(value) => value,
+      .Err(_error) => f(),
+    }
+  }
+
+  pub fn expect(self, msg: []const char) T {
+    switch (self) {
+      .Ok(value) => value,
+      .Err(_error) => @panic("{}", msg),
+    }
+  }
+
+  pub fn expect_err(self, msg: []const char) E {
+    switch (self) {
+      .Ok(_value) => @panic("{}", msg),
+      .Err(error) => error,
+    }
+  }
+
+  pub fn ok(self) Option[T] {
+    switch (self) {
+      .Ok(value) => Option.Some(value),
+      .Err(_error) => Option#[T].None,
+    }
+  }
+
+  pub fn err(self) Option[E] {
+    switch (self) {
+      .Ok(_value) => Option.None,
+      .Err(error) => Option.Some(error),
+    }
+  }
+
+  pub fn map[U](self, f: FnOnce(T) U) Result[U, E] {
+    switch (self) {
+      .Ok(value) => Result.Ok(f(value)),
+      .Err(error) => Result.Err(error),
+    }
+  }
+
+  pub fn map_or[U](self, f: FnOnce(T) U, default: U) Result[U, E] {
+    switch (self) {
+      .Ok(value) => Result.Ok(f(value)),
+      .Err(_error) => Result.Ok(default),
+    }
+  }
+
+  pub fn map_err[F](self, f: FnOnce(E) F) Result[T, F] {
+    switch (self) {
+      .Ok(value) => Result.Ok(value),
+      .Err(error) => Result.Err(f(error)),
+    }
+  }
+
+  pub fn and_then[U](self, f: FnOnce(T) Result[U, E]) Result[U, E] {
+    switch (self) {
+      .Ok(value) => f(value),
+      .Err(error) => Result.Err(error),
+    }
+  }
+
+  pub fn inspect(self, f: FnOnce(*T) void) Self {
+    switch (self) {
+      .Ok(value) => f(&value),
+      .Err(_error) => {},
+    };
+
+    self
+  }
+
+  pub fn inspect_err(self, f: FnOnce(*E) void) Self {
+    switch (self) {
+      .Ok(_value) => {},
+      .Err(error) => f(&error),
+    };
+
+    self
+  }
+}
+
+implement[T: Copy, E: Copy] Copy : Result[T, E] {}

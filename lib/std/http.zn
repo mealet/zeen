@@ -1,0 +1,390 @@
+use std.string;
+use std.list;
+use std.io;
+use std.net;
+
+/// HTTP request method.
+pub enum Method {
+  Get,
+  Post,
+  Put,
+  Delete,
+  Patch,
+  Head,
+  Options,
+  Unknown,
+}
+
+/// One `Name: value` header line.
+pub struct Header {
+  pub name: String,
+  pub value: String,
+}
+
+/// Header map. Lookup is case insensitive and clones the value.
+pub struct Headers {
+  inner: List[Header],
+
+  pub fn push(*self, name: String, value: String) {
+    self.inner.push(Header { .name = name, .value = value });
+  }
+
+  pub fn get(*const self, name: []const char) Option[String] {
+    let i: usize = 0;
+
+    while (i < self.inner.len()) {
+      switch (self.inner.get_ptr(i)) {
+        .Some(h) => if (header_name_eq(&(*h).name, name)) {
+          return Option.Some((*h).value.clone());
+        },
+        .None => {},
+      };
+
+      i += 1;
+    };
+
+    return Option.None;
+  }
+}
+
+fn lower_byte(c: char) char {
+  let v = @as(u32, c);
+
+  if (v >= @as(u32, 'A') && v <= @as(u32, 'Z')) {
+    return @as(char, v + 32);
+  };
+
+  return c;
+}
+
+fn header_name_eq(a: *const String, b: []const char) bool {
+  if ((*a).len() != b.len) {
+    return false;
+  };
+
+  let i: usize = 0;
+
+  while (i < b.len) {
+    if (lower_byte((*a).get(i).unwrap()) != lower_byte(b.ptr[i])) {
+      return false;
+    };
+
+    i += 1;
+  };
+
+  return true;
+}
+
+/// Parsed HTTP request.
+pub struct Request {
+  pub method: Method,
+  pub path: String,
+  pub headers: Headers,
+  pub body: String,
+
+  pub fn header(*const self, name: []const char) Option[String] {
+    self.headers.get(name)
+  }
+}
+
+/// HTTP response builder.
+pub struct Response {
+  status: u16,
+  body: String,
+
+  pub fn ok(body: []const char) Self {
+    Self {
+      .status = 200,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn not_found() Self {
+    Self {
+      .status = 404,
+      .body = String.from("Not Found\n"),
+    }
+  }
+
+  pub fn send(*self, stream: *TcpStream) Result[void, IoError] {
+    let head = @format(
+      "HTTP/1.1 {} {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+      self.status,
+      status_text(self.status),
+      self.body.len(),
+    );
+
+    switch ((*stream).write_all(head.slice(..))) {
+      .Ok(_) => {},
+      .Err(e) => {
+        return Result.Err(e);
+      },
+    };
+
+    switch ((*stream).write_all(self.body.slice(..))) {
+      .Ok(_) => {},
+      .Err(e) => {
+        return Result.Err(e);
+      },
+    };
+
+    return Result.Ok(@void());
+  }
+}
+
+fn status_text(status: u16) []const char {
+  switch (status) {
+    200 => "OK",
+    201 => "Created",
+    204 => "No Content",
+    400 => "Bad Request",
+    404 => "Not Found",
+    500 => "Internal Server Error",
+    _ => "Unknown",
+  }
+}
+
+/// Blocking single threaded HTTP server.
+pub struct HttpServer {
+  listener: TcpListener,
+
+  pub fn bind(addr: *const SocketAddr) Result[Self, IoError] {
+    switch (TcpListener.bind(addr)) {
+      .Ok(listener) => Result.Ok(Self { .listener = listener }),
+      .Err(e) => {
+        return Result.Err(e);
+      },
+    };
+  }
+
+  pub fn accept(*const self) Result[TcpStream, IoError] {
+    self.listener.accept()
+  }
+
+  /// Read one request head and an optional body.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.InvalidData
+  /// * IoErrorKind.UnexpectedEof
+  /// * IoErrorKind.Uncategorized
+  pub fn read_request(stream: *TcpStream) Result[Request, IoError] {
+    let head = String.new();
+
+    while (true) {
+      switch ((*stream).read(&head)) {
+        .Ok(got) => if (got == 0) {
+          break;
+        } else {},
+        .Err(e) => {
+          return Result.Err(e);
+        },
+      };
+
+      if (head.contains_str("\r\n\r\n")) {
+        break;
+      };
+
+      if (head.len() > 8192) {
+        return Result.Err(IoError.new(IoErrorKind.InvalidData, "header too large"));
+      };
+    };
+
+    return parse_request(&head, stream);
+  }
+}
+
+fn parse_request(head: *String, stream: *TcpStream) Result[Request, IoError] {
+  let lines = (*head).split('\n');
+
+  if (lines.is_empty()) {
+    return Result.Err(IoError.new(IoErrorKind.InvalidData, "empty request"));
+  };
+
+  let request_line = String.from((*lines.get_ptr(0).unwrap()).trim_end());
+  let parts = request_line.split(' ');
+
+  switch (parts.get_ptr(0)) {
+    .Some(_) => {},
+    .None => {
+      return Result.Err(IoError.new(IoErrorKind.InvalidData, "bad request line"));
+    },
+  };
+
+  switch (parts.get_ptr(1)) {
+    .Some(_) => {},
+    .None => {
+      return Result.Err(IoError.new(IoErrorKind.InvalidData, "bad request line"));
+    },
+  };
+
+  let method = parse_method(parts.get_ptr(0).unwrap());
+  let path = parts.get_ptr(1).unwrap().clone();
+
+  let headers = Headers { .inner = List#[Header].new() };
+  let mut_headers = headers;
+  let i: usize = 1;
+
+  while (i < lines.len()) {
+    switch (lines.get_ptr(i)) {
+      .Some(line) => {
+        let text = (*line).trim_end();
+
+        if (text.len == 0) {
+          break;
+        };
+
+        switch (find_colon(text)) {
+          .Some(at) => {
+            let vs = at + 1;
+            mut_headers.push(String.from(trim_view(text.ptr, at)), String.from(trim_view(text.ptr + vs, text.len - vs)));
+          },
+          .None => {
+            return Result.Err(IoError.new(IoErrorKind.InvalidData, "bad header line"));
+          },
+        };
+      },
+      .None => {},
+    };
+
+    i += 1;
+  };
+
+  let need: usize = 0;
+
+  switch (mut_headers.get("content-length")) {
+    .Some(raw) => {
+      switch (parse_digits(&raw)) {
+        .Some(n) => {
+          need = n;
+        },
+        .None => {
+          return Result.Err(IoError.new(IoErrorKind.InvalidData, "bad content length"));
+        },
+      };
+    },
+    .None => {},
+  };
+
+  let from: usize = 0;
+
+  switch ((*head).find_str("\r\n\r\n")) {
+    .Some(at) => {
+      from = at + 4;
+    },
+    .None => {
+      return Result.Err(IoError.new(IoErrorKind.InvalidData, "bad request"));
+    },
+  };
+  let buffered = (*head).len() - from;
+  let body = String.from((*head).slice(..)[from..(*head).len()]);
+
+  if (buffered < need) {
+    switch ((*stream).read_exact(&body, need - buffered)) {
+      .Ok(_) => {},
+      .Err(e) => {
+        return Result.Err(e);
+      },
+    };
+  };
+
+  return Result.Ok(Request {
+    .method = method,
+    .path = path,
+    .headers = mut_headers,
+    .body = body,
+  });
+}
+
+fn parse_method(token: *String) Method {
+  if ((*token) == String.from("GET")) {
+    return Method.Get;
+  };
+
+  if ((*token) == String.from("POST")) {
+    return Method.Post;
+  };
+
+  if ((*token) == String.from("PUT")) {
+    return Method.Put;
+  };
+
+  if ((*token) == String.from("DELETE")) {
+    return Method.Delete;
+  };
+
+  if ((*token) == String.from("PATCH")) {
+    return Method.Patch;
+  };
+
+  if ((*token) == String.from("HEAD")) {
+    return Method.Head;
+  };
+
+  if ((*token) == String.from("OPTIONS")) {
+    return Method.Options;
+  };
+
+  return Method.Unknown;
+}
+
+fn find_colon(s: []const char) Option[usize] {
+  let i: usize = 0;
+
+  while (i < s.len) {
+    if (s.ptr[i] == ':') {
+      return Option.Some(i);
+    };
+
+    i += 1;
+  };
+
+  return Option.None;
+}
+
+fn trim_view(ptr: [*]const char, len: usize) []const char {
+  let start: usize = 0;
+
+  while (start < len) {
+    if (ptr[start] != ' ' && ptr[start] != '\t') {
+      break;
+    };
+
+    start += 1;
+  };
+
+  let end = len;
+
+  while (end > start) {
+    if (ptr[end - 1] != ' ' && ptr[end - 1] != '\t') {
+      break;
+    };
+
+    end -= 1;
+  };
+
+  ptr[start..end]
+}
+
+fn parse_digits(s: *const String) Option[usize] {
+  if ((*s).len() == 0) {
+    return Option.None;
+  };
+
+  let num: u32 = 0;
+  let i: usize = 0;
+
+  while (i < (*s).len()) {
+    let d = @as(u32, (*s).get(i).unwrap());
+
+    if (d < @as(u32, '0') || d > @as(u32, '9')) {
+      return Option.None;
+    };
+
+    num = num * 10 + (d - @as(u32, '0'));
+    i += 1;
+  };
+
+  return Option.Some(@as(usize, num));
+}
