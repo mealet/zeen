@@ -44,6 +44,7 @@ pub struct String {
     let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
 
     let _ = strncpy(ptr, value.ptr, value.len);
+    ptr[len] = '\0';
 
     Self {
       .ptr = ptr,
@@ -57,12 +58,13 @@ pub struct String {
     if (@as(*void, value) == nullptr) {
       @panic("Null pointer in argument `from_cstr` constructor");
     };
-    
+
     let len = strlen(value);
     let capacity = next_capacity(len + 1);
     let ptr = @as([*]char, Allocator.alloc(@sizeof(char) * capacity));
 
     let _ = strncpy(ptr, value, len);
+    ptr[len] = '\0';
 
     Self {
       .ptr = ptr,
@@ -289,6 +291,10 @@ pub struct String {
   /// * `Some(usize)` - if found, returns position
   /// * `None` - if not found
   pub fn find(*const self, value: char) Option[usize] {
+    if (self._len == 0) {
+      return Option.None;
+    };
+
     let entrance = strchr(self.ptr, value);
 
     if (entrance == nullptr) {
@@ -302,6 +308,10 @@ pub struct String {
   /// * `Some(usize)` - if found, returns first character position
   /// * `None` - if not found
   pub fn find_str(*const self, value: []const char) Option[usize] {
+    if (self._len == 0) {
+      return Option.None;
+    };
+
     let entrance = strstr(self.ptr, value.ptr);
 
     if (entrance == nullptr) {
@@ -315,7 +325,7 @@ pub struct String {
   /// * `Some(usize)` - if found, returns first character position
   /// * `None` - if not found
   pub fn find_cstr(*const self, value: [*]const char) Option[usize] {
-    if (@as(*void, value) == nullptr) {
+    if (@as(*void, value) == nullptr || self._len == 0) {
       return Option.None;
     };
 
@@ -473,6 +483,26 @@ pub struct String {
       out.push((*value).get(i).unwrap());
       i += 1;
     };
+
+    out
+  }
+
+  /// Split by delimiter, keeping empty parts.
+  pub fn split(*const self, delim: char) List[String] {
+    let out = List#[String].new();
+    let start: usize = 0;
+    let i: usize = 0;
+
+    while (i < self._len) {
+      if (self.ptr[i] == delim) {
+        out.push(String.from(self.ptr[start..i]));
+        start = i + 1;
+      };
+
+      i += 1;
+    };
+
+    out.push(String.from(self.ptr[start..self._len]));
 
     out
   }
