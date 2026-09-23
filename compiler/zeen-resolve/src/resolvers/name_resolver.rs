@@ -465,14 +465,12 @@ impl<'ctx> NameResolver {
                         is_pub,
                     },
                 );
-
-                if is_const && let Some(lit) = Self::const_literal(value) {
+                if is_const && let Some(lit) = self.const_literal(value) {
                     self.result.const_values.insert(def_id, lit);
                 }
 
                 self.table.declare_value(name.0, def_id);
             }
-
             DeclarationKind::ExternInclude { .. } => {
                 self.report(ResolveError::DisabledFeature {
                     reason: "not supported yet".into(),
@@ -1284,7 +1282,7 @@ impl<'ctx> NameResolver {
 
                 if is_const
                     && let Some(value) = value
-                    && let Some(lit) = Self::const_literal(value)
+                    && let Some(lit) = self.const_literal(value)
                 {
                     self.result.const_values.insert(def_id, lit);
                 }
@@ -1420,7 +1418,7 @@ impl<'ctx> NameResolver {
         }
     }
 
-    fn const_literal(value: &Expression<'ctx>) -> Option<Literal> {
+    fn const_literal(&self, value: &Expression<'ctx>) -> Option<Literal> {
         match value.kind {
             ExpressionKind::Literal(lit) => Some(lit),
             ExpressionKind::Unary {
@@ -1430,6 +1428,13 @@ impl<'ctx> NameResolver {
                 ExpressionKind::Literal(Literal::Int(n)) => Some(Literal::Int(n.wrapping_neg())),
                 _ => None,
             },
+            ExpressionKind::Ident { name, .. } => {
+                let def = self.table.lookup_value(name)?;
+                if !self.is_const_def(def) {
+                    return None;
+                }
+                self.result.const_values.get(&def).copied()
+            }
             _ => None,
         }
     }
@@ -1439,6 +1444,34 @@ impl<'ctx> NameResolver {
             self.result.defs.get(&def_id).map(|info| &info.kind),
             Some(DefKind::GlobalVar { is_const: true } | DefKind::Variable { is_const: true })
         )
+    }
+
+    fn const_pattern(
+        &mut self,
+        arm_key: NodeKey,
+        index: usize,
+        name: Spur,
+        span: SourceSpan,
+    ) -> bool {
+        let Some(def_id) = self.table.lookup_value(name) else {
+            return false;
+        };
+        if !self.is_const_def(def_id) {
+            return false;
+        }
+        match self.result.const_values.get(&def_id).copied() {
+            Some(lit) => {
+                self.result.arm_const_values.insert((arm_key, index), lit);
+            }
+            None => {
+                self.report(ResolveError::NonLiteralConstPattern {
+                    name: self.interner_resolve(&name),
+                    src: self.named_src(),
+                    span,
+                });
+            }
+        }
+        true
     }
 
     fn resolve_expr(&mut self, expr: &'ctx Expression<'ctx>) {
@@ -1506,25 +1539,30 @@ impl<'ctx> NameResolver {
                 for arm in arms.iter().copied() {
                     self.table.push(ScopeKind::Block);
 
-                    if let Pattern::Named { name, span } = arm.pattern
-                        && let Some(def_id) = self.table.lookup_value(name)
-                        && self.is_const_def(def_id)
-                    {
-                        match self.result.const_values.get(&def_id).copied() {
-                            Some(lit) => {
-                                self.result
-                                    .arm_const_values
-                                    .insert(NodeKey::from_arm(arm), lit);
-                            }
-                            None => {
-                                self.report(ResolveError::NonLiteralConstPattern {
-                                    name: self.interner_resolve(&name),
-                                    src: self.named_src(),
-                                    span,
-                                });
+                    let arm_key = NodeKey::from_arm(arm);
+                    let mut bound: Option<(Spur, SourceSpan)> = None;
+                    match arm.pattern {
+                        Pattern::Named { name, span } => {
+                            if !self.const_pattern(arm_key, 0, name, span) {
+                                bound = Some((name, span));
                             }
                         }
-                    } else if let Some((name, span)) = Self::arm_binding(&arm.pattern) {
+                        Pattern::Or(patterns) => {
+                            for (i, pat) in patterns.iter().enumerate() {
+                                if let Pattern::Named { name, span } = pat
+                                    && !self.const_pattern(arm_key, i, *name, *span)
+                                    && bound.is_none()
+                                {
+                                    bound = Some((*name, *span));
+                                }
+                            }
+                        }
+                        _ => {
+                            bound = Self::arm_binding(&arm.pattern);
+                        }
+                    }
+
+                    if let Some((name, span)) = bound {
                         let def_id = self.define(DefInfo {
                             name,
                             kind: DefKind::Variable { is_const: false },
