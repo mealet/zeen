@@ -12,6 +12,7 @@ const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
 const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
 const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
 const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+const CORE_RESULT: &str = include_str!("../../../lib/core/result.zn");
 const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
 fn compile_mir_mode(
@@ -36,6 +37,7 @@ fn compile_mir_mode(
             ("core.out", CORE_OUT),
             ("core.iter", CORE_ITER),
             ("core.option", CORE_OPTION),
+            ("core.result", CORE_RESULT),
             ("core.slice", CORE_SLICE),
         ],
         mode,
@@ -1790,6 +1792,7 @@ fn print_mir_ok(src: &str) -> String {
             ("core.out", CORE_OUT),
             ("core.iter", CORE_ITER),
             ("core.option", CORE_OPTION),
+            ("core.result", CORE_RESULT),
             ("core.slice", CORE_SLICE),
         ],
         mode: CompilationMode::Debug,
@@ -2010,8 +2013,8 @@ fn enum_ptr_receiver_extraction_tag_checks_through_deref() {
 #[test]
 fn enum_slice_payload_registers_slice_layout() {
     let mir = compile_mir_ok(
-        "enum Result[T, E] { ok: T, err: E, } \
-         fn main() { let r: Result[i32, []const char] = Result.ok(1); let t = @enumTag(r); @println(\"{}\", t); }",
+        "enum Outcome[T, E] { ok: T, err: E, } \
+         fn main() { let r: Outcome[i32, []const char] = Outcome.ok(1); let t = @enumTag(r); @println(\"{}\", t); }",
     );
 
     assert!(
