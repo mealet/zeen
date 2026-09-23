@@ -1,0 +1,17 @@
+create_dir: true
+exists: true
+write_file: 16
+len: 16 empty: false file: true dir: false
+read_to_string: 16
+read_exact: 5
+part_len: 5
+entries: 1
+files: 1 seen_hello: true
+opts write: 6
+sync: true
+rename: true
+remove_file: true
+remove_dir: true
+exists after: false
+missing is_err: true
+missing kind: NotFound

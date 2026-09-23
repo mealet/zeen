@@ -1,0 +1,16 @@
+use std.io;
+
+fn main() {
+  @println("notfound: {}", IoError.from_errno(2).kind());
+  @println("perm: {}", IoError.from_errno(13).kind());
+  @println("exist: {}", IoError.from_errno(17).kind());
+  @println("inval: {}", IoError.from_errno(22).kind());
+  @println("unknown: {}", IoError.from_errno(9999).kind());
+
+  let e = IoError.new(IoErrorKind.TimedOut, "timed out");
+  @println("custom kind: {} msg: {}", e.kind(), e.message());
+
+  if (IoErrorKind.NotFound == IoErrorKind.NotFound) {
+    @println("eq");
+  };
+}
