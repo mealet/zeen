@@ -31,6 +31,7 @@ pub struct File {
   handle: *void,
 
   /// Open an existing file for reading.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -68,6 +69,7 @@ pub struct File {
   }
 
   /// Create or truncate a file for writing.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.PermissionDenied
   /// * IoErrorKind.IsADirectory
@@ -105,6 +107,7 @@ pub struct File {
   }
 
   /// Read some bytes, appending them to buffer. `Ok(0)` means end of file.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.IsADirectory
@@ -152,6 +155,7 @@ pub struct File {
   }
 
   /// Read exactly `n` bytes, appending them to buffer.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.IsADirectory
@@ -222,6 +226,7 @@ pub struct File {
   }
 
   /// Read the whole file into buffer.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.IsADirectory
@@ -247,6 +252,7 @@ pub struct File {
   }
 
   /// Write some bytes from the slice.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.Uncategorized
@@ -278,6 +284,7 @@ pub struct File {
   }
 
   /// Write the whole slice, retrying short writes.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.WriteZero
@@ -304,6 +311,7 @@ pub struct File {
   }
 
   /// Flush file contents to disk.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.Uncategorized
@@ -324,6 +332,7 @@ pub struct File {
   }
 
   /// Metadata of this file.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.Uncategorized
   pub fn metadata(*const self) Result[Metadata, IoError] {
@@ -429,6 +438,7 @@ pub struct OpenOptions {
   }
 
   /// Open a file with these options.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -597,6 +607,7 @@ pub struct DirEntry {
 pub struct Fs {
 
   /// Metadata of the file at `path`, following symlinks.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -633,6 +644,7 @@ pub struct Fs {
   }
 
   /// Metadata of the link at `path` itself.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -669,6 +681,7 @@ pub struct Fs {
   }
 
   /// Delete a file.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -695,6 +708,7 @@ pub struct Fs {
   }
 
   /// Delete an empty directory.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -721,6 +735,7 @@ pub struct Fs {
   }
 
   /// Create a directory with mode `0o755`.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.PermissionDenied
   /// * IoErrorKind.AlreadyExists
@@ -747,6 +762,7 @@ pub struct Fs {
   }
 
   /// Move a file or directory to a new path.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -775,6 +791,7 @@ pub struct Fs {
   }
 
   /// List directory entries, skipping `.` and `..`.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -892,6 +909,7 @@ pub struct Fs {
   }
 
   /// Read the whole file at `path` into a new string.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -918,6 +936,7 @@ pub struct Fs {
   }
 
   /// Create or truncate the file at `path` and write `contents` into it.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.PermissionDenied
   /// * IoErrorKind.IsADirectory
