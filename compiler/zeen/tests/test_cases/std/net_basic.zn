@@ -1,0 +1,39 @@
+use std.net;
+use std.io;
+use std.string;
+
+fn main() {
+  @println("parse: {}", SocketAddr.from_str("127.0.0.1:8080").unwrap());
+  @println("loopback: {}", SocketAddr.loopback(80));
+
+  let bad = SocketAddr.from_str("nope");
+  @println("bad is_err: {}", bad.is_err());
+
+  let listener = TcpListener.bind(&SocketAddr.loopback(0)).unwrap();
+  let addr = listener.local_addr().unwrap();
+  @println("bound: {}", addr.port() != 0);
+
+  let client = TcpStream.connect(&addr).unwrap();
+  let server = listener.accept().unwrap();
+  @println("peer: {}", client.peer_addr().unwrap().port() != 0);
+
+  @println("c2s: {}", client.write_all("ping").unwrap());
+  let incoming = String.new();
+  @println("s got: {}", server.read_exact(&incoming, 4).unwrap());
+  @println("s text: [{}]", incoming.slice(..));
+  @println("s2c: {}", server.write_all("pong").unwrap());
+  let back = String.new();
+  @println("c got: {}", client.read_exact(&back, 4).unwrap());
+  @println("c text: [{}]", back.slice(..));
+  client.shutdown().unwrap();
+  @println("shutdown ok");
+
+  let a = UdpSocket.bind(&SocketAddr.loopback(0)).unwrap();
+  let b = UdpSocket.bind(&SocketAddr.loopback(0)).unwrap();
+  let b_addr = b.local_addr().unwrap();
+  @println("udp sent: {}", a.send_to("udp-hi", &b_addr).unwrap());
+  let ubuf = String.new();
+  let sender = b.recv_from(&ubuf).unwrap();
+  @println("udp got: [{}]", ubuf.slice(..));
+  @println("udp from a: {}", sender.port() == a.local_addr().unwrap().port());
+}
