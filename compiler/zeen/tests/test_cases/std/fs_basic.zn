@@ -11,7 +11,8 @@ fn main() {
   let _ = remove_file(file);
   let _ = remove_dir(base);
 
-  @println("create_dir: {}", create_dir(base).unwrap());
+  @println("create_dir");
+  create_dir(base).unwrap();
   @println("exists: {}", exists(base));
   @println("write_file: {}", write_file(file, "hello fs\nsecond\n").unwrap());
 
@@ -49,11 +50,15 @@ fn main() {
 
   let writer = OpenOptions.new().write(true).create(true).truncate(true).open(moved).unwrap();
   @println("opts write: {}", writer.write_all("moved\n").unwrap());
-  @println("sync: {}", writer.sync_all().unwrap());
+  @println("sync");
+  writer.sync_all().unwrap();
 
-  @println("rename: {}", rename_path(moved, file).unwrap());
-  @println("remove_file: {}", remove_file(file).unwrap());
-  @println("remove_dir: {}", remove_dir(base).unwrap());
+  @println("rename");
+  rename_path(moved, file).unwrap();
+  @println("remove_file");
+  remove_file(file).unwrap();
+  @println("remove_dir");
+  remove_dir(base).unwrap();
   @println("exists after: {}", exists(file));
 
   let missing = File.open("/tmp/zeen_fs_basic_nope/x");
