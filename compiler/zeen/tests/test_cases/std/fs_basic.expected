@@ -1,6 +1,6 @@
 create_dir
 exists: true
-write_file: 16
+write: 16
 len: 16 empty: false file: true dir: false
 read_to_string: 16
 read again: [hello fs
