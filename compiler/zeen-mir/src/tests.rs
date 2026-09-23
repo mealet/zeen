@@ -734,6 +734,17 @@ fn global_depends_on_another_init_order() {
     );
 }
 
+#[test]
+fn global_initialized_from_another_global() {
+    let mir = compile_mir_ok(
+        "const ZERO: i32 = 0; \
+         const ALIAS: i32 = ZERO; \
+         fn main() {}",
+    );
+
+    assert_eq!(mir.program.global_vars.len(), 2);
+}
+
 // --> Closures
 
 use crate::{
