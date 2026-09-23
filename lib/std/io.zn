@@ -53,6 +53,27 @@ pub struct IoError {
     self._message
   }
 
+  /// Build an error from an OS error code.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.InvalidInput
+  /// * IoErrorKind.BrokenPipe
+  /// * IoErrorKind.ConnectionRefused
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.NotConnected
+  /// * IoErrorKind.AddrInUse
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.WouldBlock
+  /// * IoErrorKind.TimedOut
+  /// * IoErrorKind.OutOfMemory
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Unsupported
+  /// * IoErrorKind.InvalidData
+  /// * IoErrorKind.Uncategorized
   pub fn from_errno(code: c_int) Self {
     let kind = switch (code) {
       ENOENT => IoErrorKind.NotFound,
@@ -66,6 +87,7 @@ pub struct IoError {
       ENOTCONN => IoErrorKind.NotConnected,
       EADDRINUSE => IoErrorKind.AddrInUse,
       EADDRNOTAVAIL => IoErrorKind.AddrNotAvailable,
+      ETIMEDOUT => IoErrorKind.TimedOut,
       EINTR => IoErrorKind.Interrupted,
       EAGAIN => IoErrorKind.WouldBlock,
       ENOMEM => IoErrorKind.OutOfMemory,
@@ -82,6 +104,9 @@ pub struct IoError {
     }
   }
 
+  /// Build an error from the last OS error.
+  ///
+  /// * any IoErrorKind the OS reports (see from_errno on posix, win_error on Windows)
   pub fn last_os_error() Self {
     @os[windows] {
       return win_error(GetLastError());
@@ -93,6 +118,21 @@ pub struct IoError {
 }
 
 @os[windows] {
+  /// Build an error from a Windows error code.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.InvalidInput
+  /// * IoErrorKind.BrokenPipe
+  /// * IoErrorKind.ConnectionRefused
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.NotConnected
+  /// * IoErrorKind.AddrInUse
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.TimedOut
+  /// * IoErrorKind.OutOfMemory
+  /// * IoErrorKind.Uncategorized
   pub fn win_error(code: WinDWORD) IoError {
     let kind = switch (code) {
       ERROR_FILE_NOT_FOUND => IoErrorKind.NotFound,
@@ -108,6 +148,7 @@ pub struct IoError {
       ERROR_NOT_CONNECTED => IoErrorKind.NotConnected,
       ERROR_ADDR_IN_USE => IoErrorKind.AddrInUse,
       ERROR_ADDR_NOT_AVAIL => IoErrorKind.AddrNotAvailable,
+      ERROR_TIMED_OUT => IoErrorKind.TimedOut,
       ERROR_NOT_ENOUGH_MEMORY => IoErrorKind.OutOfMemory,
       _ => IoErrorKind.Uncategorized,
     };
