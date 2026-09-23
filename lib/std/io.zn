@@ -54,8 +54,8 @@ pub struct IoError {
   }
 
   /// Build an error from an OS error code.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
   /// * IoErrorKind.AlreadyExists
@@ -106,8 +106,8 @@ pub struct IoError {
   }
 
   /// Build an error from the last OS error.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * any IoErrorKind the OS reports (see from_errno on posix, win_error on Windows)
   pub fn last_os_error() Self {
     @os[windows] {
@@ -121,8 +121,8 @@ pub struct IoError {
 
 @os[windows] {
   /// Build an error from a Windows error code.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
   /// * IoErrorKind.AlreadyExists
