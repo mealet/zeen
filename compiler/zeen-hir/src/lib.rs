@@ -624,6 +624,14 @@ impl<'res> HirLowering<'res> {
     // > Expressions
 
     fn lower_switch_arm<'ctx>(&mut self, arm: &zeen_ast::expressions::Arm<'ctx>) -> HirSwitchArm {
+        let key = NodeKey::from_arm(arm);
+        if let Some(lit) = self.resolution.arm_const_values.get(&key).copied() {
+            return HirSwitchArm {
+                pattern: HirPattern::Literal(lit),
+                guard: arm.guard.map(|guard| Rc::new(self.lower_expr(guard))),
+                body: Rc::new(self.lower_expr(arm.body)),
+            };
+        }
         let def_id = self.resolution.def_of_arm(arm).unwrap_or(DefId(u32::MAX));
 
         HirSwitchArm {

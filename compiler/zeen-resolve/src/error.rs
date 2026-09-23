@@ -183,6 +183,21 @@ pub enum ResolveError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("cannot match against non-literal constant `{name}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::resolver::non_literal_const_pattern),
+        help("match a computed constant through a guard instead: `x if (x == name)`")
+    )]
+    NonLiteralConstPattern {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Error, Diagnostic, Clone)]

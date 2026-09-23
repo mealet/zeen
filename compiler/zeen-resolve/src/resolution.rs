@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use zeen_ast::{
     Declaration, Expression, Source, Statement, TypeExpr,
     declarations::{EnumVariant, FnParam, GenericType, StructField},
-    expressions::Arm,
+    expressions::{Arm, Literal},
 };
 
 /// A raw AST node pointer used as a map key.
@@ -114,6 +114,11 @@ pub struct ResolutionResult {
     pub binding_sites: HashMap<NodeKey, DefId>,
     pub implement_names: HashMap<NodeKey, (Resolution, Resolution)>,
     pub interface_self_placeholders: HashMap<DefId, DefId>,
+    /// Switch arm -> literal of the matched `const`: a bare name that
+    /// resolves to a constant compares instead of binding.
+    pub arm_const_values: HashMap<NodeKey, Literal>,
+    /// `const` definition -> its literal initializer, if any.
+    pub const_values: HashMap<DefId, Literal>,
 
     /// Nested fn `DefId` -> enclosing fn `DefId`.
     pub nested_fn_parents: HashMap<DefId, DefId>,

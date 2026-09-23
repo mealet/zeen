@@ -49,18 +49,19 @@ pub struct IoError {
 
   pub fn from_errno(code: c_int) Self {
     let kind = switch (code) {
-      c if (c == ENOENT) => IoErrorKind.NotFound,
-      c if (c == EACCES || c == EPERM) => IoErrorKind.PermissionDenied,
-      c if (c == EEXIST) => IoErrorKind.AlreadyExists,
-      c if (c == EINVAL) => IoErrorKind.InvalidInput,
-      c if (c == EPIPE) => IoErrorKind.BrokenPipe,
-      c if (c == EINTR) => IoErrorKind.Interrupted,
-      c if (c == EAGAIN) => IoErrorKind.WouldBlock,
-      c if (c == ENOMEM) => IoErrorKind.OutOfMemory,
-      c if (c == EISDIR) => IoErrorKind.IsADirectory,
-      c if (c == ENOTDIR) => IoErrorKind.NotADirectory,
-      c if (c == ENOSYS) => IoErrorKind.Unsupported,
-      c if (c == EILSEQ) => IoErrorKind.InvalidData,
+      ENOENT => IoErrorKind.NotFound,
+      EACCES => IoErrorKind.PermissionDenied,
+      EPERM => IoErrorKind.PermissionDenied,
+      EEXIST => IoErrorKind.AlreadyExists,
+      EINVAL => IoErrorKind.InvalidInput,
+      EPIPE => IoErrorKind.BrokenPipe,
+      EINTR => IoErrorKind.Interrupted,
+      EAGAIN => IoErrorKind.WouldBlock,
+      ENOMEM => IoErrorKind.OutOfMemory,
+      EISDIR => IoErrorKind.IsADirectory,
+      ENOTDIR => IoErrorKind.NotADirectory,
+      ENOSYS => IoErrorKind.Unsupported,
+      EILSEQ => IoErrorKind.InvalidData,
       _ => IoErrorKind.Uncategorized,
     };
 
@@ -83,12 +84,15 @@ pub struct IoError {
 @os[windows] {
   pub fn win_error(code: WinDWORD) IoError {
     let kind = switch (code) {
-      c if (c == ERROR_FILE_NOT_FOUND || c == ERROR_PATH_NOT_FOUND) => IoErrorKind.NotFound,
-      c if (c == ERROR_ACCESS_DENIED) => IoErrorKind.PermissionDenied,
-      c if (c == ERROR_ALREADY_EXISTS || c == ERROR_FILE_EXISTS) => IoErrorKind.AlreadyExists,
-      c if (c == ERROR_INVALID_PARAMETER || c == ERROR_INVALID_HANDLE) => IoErrorKind.InvalidInput,
-      c if (c == ERROR_BROKEN_PIPE) => IoErrorKind.BrokenPipe,
-      c if (c == ERROR_NOT_ENOUGH_MEMORY) => IoErrorKind.OutOfMemory,
+      ERROR_FILE_NOT_FOUND => IoErrorKind.NotFound,
+      ERROR_PATH_NOT_FOUND => IoErrorKind.NotFound,
+      ERROR_ACCESS_DENIED => IoErrorKind.PermissionDenied,
+      ERROR_ALREADY_EXISTS => IoErrorKind.AlreadyExists,
+      ERROR_FILE_EXISTS => IoErrorKind.AlreadyExists,
+      ERROR_INVALID_PARAMETER => IoErrorKind.InvalidInput,
+      ERROR_INVALID_HANDLE => IoErrorKind.InvalidInput,
+      ERROR_BROKEN_PIPE => IoErrorKind.BrokenPipe,
+      ERROR_NOT_ENOUGH_MEMORY => IoErrorKind.OutOfMemory,
       _ => IoErrorKind.Uncategorized,
     };
 
