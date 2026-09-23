@@ -3,8 +3,11 @@ use std.string;
 use std.c.stdio;
 use std.c.string;
 use std.c.errno;
+use std.c.windows.windef;
+use std.c.windows.winbase;
+use std.c.windows.fileapi;
 
-/// IO error kind, mirroring Rust `std::io::ErrorKind`.
+/// IO error kind
 pub enum IoErrorKind {
   NotFound,
   PermissionDenied,
@@ -45,32 +48,20 @@ pub struct IoError {
   }
 
   pub fn from_errno(code: c_int) Self {
-    let kind = IoErrorKind.Uncategorized;
-
-    if (code == ENOENT) {
-      kind = IoErrorKind.NotFound;
-    } else if (code == EACCES || code == EPERM) {
-      kind = IoErrorKind.PermissionDenied;
-    } else if (code == EEXIST) {
-      kind = IoErrorKind.AlreadyExists;
-    } else if (code == EINVAL) {
-      kind = IoErrorKind.InvalidInput;
-    } else if (code == EPIPE) {
-      kind = IoErrorKind.BrokenPipe;
-    } else if (code == EINTR) {
-      kind = IoErrorKind.Interrupted;
-    } else if (code == EAGAIN) {
-      kind = IoErrorKind.WouldBlock;
-    } else if (code == ENOMEM) {
-      kind = IoErrorKind.OutOfMemory;
-    } else if (code == EISDIR) {
-      kind = IoErrorKind.IsADirectory;
-    } else if (code == ENOTDIR) {
-      kind = IoErrorKind.NotADirectory;
-    } else if (code == ENOSYS) {
-      kind = IoErrorKind.Unsupported;
-    } else if (code == EILSEQ) {
-      kind = IoErrorKind.InvalidData;
+    let kind = switch (code) {
+      c if (c == ENOENT) => IoErrorKind.NotFound,
+      c if (c == EACCES || c == EPERM) => IoErrorKind.PermissionDenied,
+      c if (c == EEXIST) => IoErrorKind.AlreadyExists,
+      c if (c == EINVAL) => IoErrorKind.InvalidInput,
+      c if (c == EPIPE) => IoErrorKind.BrokenPipe,
+      c if (c == EINTR) => IoErrorKind.Interrupted,
+      c if (c == EAGAIN) => IoErrorKind.WouldBlock,
+      c if (c == ENOMEM) => IoErrorKind.OutOfMemory,
+      c if (c == EISDIR) => IoErrorKind.IsADirectory,
+      c if (c == ENOTDIR) => IoErrorKind.NotADirectory,
+      c if (c == ENOSYS) => IoErrorKind.Unsupported,
+      c if (c == EILSEQ) => IoErrorKind.InvalidData,
+      _ => IoErrorKind.Uncategorized,
     };
 
     Self {
@@ -81,10 +72,29 @@ pub struct IoError {
 
   pub fn last_os_error() Self {
     @os[windows] {
-      return Self.new(IoErrorKind.Unsupported, "os error codes are not supported on windows");
+      return win_error(GetLastError());
     } else {
       let slot = __errno_location();
       return Self.from_errno(*slot);
+    }
+  }
+}
+
+@os[windows] {
+  pub fn win_error(code: WinDWORD) IoError {
+    let kind = switch (code) {
+      c if (c == ERROR_FILE_NOT_FOUND || c == ERROR_PATH_NOT_FOUND) => IoErrorKind.NotFound,
+      c if (c == ERROR_ACCESS_DENIED) => IoErrorKind.PermissionDenied,
+      c if (c == ERROR_ALREADY_EXISTS || c == ERROR_FILE_EXISTS) => IoErrorKind.AlreadyExists,
+      c if (c == ERROR_INVALID_PARAMETER || c == ERROR_INVALID_HANDLE) => IoErrorKind.InvalidInput,
+      c if (c == ERROR_BROKEN_PIPE) => IoErrorKind.BrokenPipe,
+      c if (c == ERROR_NOT_ENOUGH_MEMORY) => IoErrorKind.OutOfMemory,
+      _ => IoErrorKind.Uncategorized,
+    };
+
+    IoError {
+      ._kind = kind,
+      ._message = @format("windows error {}", code),
     }
   }
 }
