@@ -103,6 +103,11 @@ use std.c.windows.windef;
   pub const ERROR_BROKEN_PIPE: WinDWORD = 109;
   pub const ERROR_ALREADY_EXISTS: WinDWORD = 183;
   pub const ERROR_FILE_EXISTS: WinDWORD = 80;
+  pub const ERROR_CONN_REFUSED: WinDWORD = 10061;
+  pub const ERROR_CONN_RESET: WinDWORD = 10054;
+  pub const ERROR_NOT_CONNECTED: WinDWORD = 10057;
+  pub const ERROR_ADDR_IN_USE: WinDWORD = 10048;
+  pub const ERROR_ADDR_NOT_AVAIL: WinDWORD = 10049;
 
   pub struct c_FileTime {
     pub low: WinDWORD,
