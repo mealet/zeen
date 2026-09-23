@@ -57,6 +57,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::While) => self.parse_while(),
             TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(),
             TokenKind::Keyword(CompilerKeyword::If) => self.parse_if(),
+            TokenKind::Keyword(CompilerKeyword::Switch) => self.parse_switch(),
             TokenKind::OpenBrace => self.parse_block(),
             TokenKind::Keyword(CompilerKeyword::Fn | CompilerKeyword::Public) => {
                 self.parse_fn_decl()
@@ -393,11 +394,13 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         self.finish_expr_stmt(expr)
     }
 
-    /// Completes an expression statement (`if`, bare block, …). Directly
-    /// inside a `{ ... }` block the trailing semicolon is optional, and when
-    /// the block is about to close the statement becomes its trailing value.
-    /// In an if/while/for body position a semicolon belongs to the enclosing
-    /// statement, so it is left untouched.
+    pub fn parse_switch(&mut self) -> Option<&'ctx Statement<'ctx>> {
+        let mut expr_parser = ExprParser::new(self.p);
+        let expr = expr_parser.parse()?;
+
+        self.finish_expr_stmt(expr)
+    }
+
     fn finish_expr_stmt(&mut self, expr: &'ctx Expression<'ctx>) -> Option<&'ctx Statement<'ctx>> {
         if !self.expect_optional_semicolon {
             return Some(self.p.arena.alloc(Statement {
@@ -1346,6 +1349,34 @@ mod tests {
                     decl.kind,
                     zeen_ast::DeclarationKind::FnDecl { is_pub: true, .. }
                 );
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn switch_needs_no_semicolon() {
+        const SRC: &str = "switch (a) { 1 => 2, _ => 0 } let b = 1;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Switch { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Let { .. },
+                ..
             }
         );
 
