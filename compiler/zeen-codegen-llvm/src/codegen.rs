@@ -364,6 +364,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             let mut measured: Vec<(u64, u64, TypeId)> = Vec::new();
             for payload in payloads {
+                if matches!(self.typecheck.interner.get(payload), Type::Void) {
+                    measured.push((0, 1, payload));
+                    continue;
+                }
                 let llvm_ty = self.map_basic_type(payload);
                 measured.push((
                     self.target_data.get_abi_size(&llvm_ty),
@@ -1102,15 +1106,15 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             let tag_val = self.context.i8_type().const_int(tag, false);
             self.builder.build_store(tag_ptr, tag_val).unwrap();
             if let Some(operand) = operands.first() {
+                let payload_ty = self.enum_payload_type(expected_ty, variant_def);
+                if matches!(self.typecheck.interner.get(payload_ty), Type::Void) {
+                    return self.builder.build_load(agg_ty, alloca, "").unwrap();
+                }
                 let payload_ptr = self
                     .builder
                     .build_struct_gep(agg_ty, alloca, 1, "")
                     .unwrap();
-                let value = self.operand_value(
-                    operand,
-                    Some(self.enum_payload_type(expected_ty, variant_def)),
-                    func,
-                );
+                let value = self.operand_value(operand, Some(payload_ty), func);
                 self.builder.build_store(payload_ptr, value).unwrap();
             }
             return self.builder.build_load(agg_ty, alloca, "").unwrap();

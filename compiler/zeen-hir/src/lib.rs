@@ -152,6 +152,7 @@ impl<'res> HirLowering<'res> {
             "dbg" => HirMacroKind::Dbg,
             "uninit" => HirMacroKind::Uninit,
             "enumTag" => HirMacroKind::EnumTag,
+            "void" => HirMacroKind::Void,
 
             _ => HirMacroKind::Unknown,
         }
