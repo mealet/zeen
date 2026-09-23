@@ -552,6 +552,7 @@ impl<'ctx> MirLowering<'ctx> {
             let (block, operand) = self.lower_expr_to_operand(&mut fb, &value, entry);
 
             if let Operand::Copy(place, _) | Operand::Move(place, _) = &operand
+                && place.local != crate::GLOBAL_LOCAL
                 && matches!(
                     self.typecheck.interner.get(fb.func.local(place.local).ty),
                     Type::Void

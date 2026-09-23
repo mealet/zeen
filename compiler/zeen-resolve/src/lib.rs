@@ -660,6 +660,37 @@ mod tests {
     }
 
     #[test]
+    fn const_name_in_or_pattern_compares() {
+        let fx = resolve_ok(
+            "const A: i32 = 1; const B: i32 = 2; fn main() { switch (B) { 0 | A | B => 1, _ => 0, }; }",
+        );
+
+        assert_eq!(fx.resolution.arm_const_values.len(), 2);
+        let mut lits: Vec<i64> = fx
+            .resolution
+            .arm_const_values
+            .values()
+            .map(|lit| match lit {
+                zeen_ast::expressions::Literal::Int(n) => *n,
+                _ => panic!("expected int literal, got {lit:?}"),
+            })
+            .collect();
+        lits.sort_unstable();
+        assert_eq!(lits, vec![1, 2]);
+    }
+
+    #[test]
+    fn const_chain_in_pattern_resolves_to_literal() {
+        let fx = resolve_ok(
+            "const A: i32 = 1; const B: i32 = A; fn main() { switch (B) { B => 1, _ => 0, }; }",
+        );
+
+        assert_eq!(fx.resolution.arm_const_values.len(), 1);
+        let lit = fx.resolution.arm_const_values.values().next().unwrap();
+        assert!(matches!(lit, zeen_ast::expressions::Literal::Int(1)));
+    }
+
+    #[test]
     fn plain_name_in_pattern_still_binds() {
         let fx = resolve_ok("fn main() { switch (1) { x => x, }; }");
 

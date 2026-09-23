@@ -114,9 +114,10 @@ pub struct ResolutionResult {
     pub binding_sites: HashMap<NodeKey, DefId>,
     pub implement_names: HashMap<NodeKey, (Resolution, Resolution)>,
     pub interface_self_placeholders: HashMap<DefId, DefId>,
-    /// Switch arm -> literal of the matched `const`: a bare name that
-    /// resolves to a constant compares instead of binding.
-    pub arm_const_values: HashMap<NodeKey, Literal>,
+    /// Switch arm and alternative index -> literal of the matched `const`:
+    /// a bare name that resolves to a constant compares instead of binding.
+    /// A bare arm pattern uses index 0.
+    pub arm_const_values: HashMap<(NodeKey, usize), Literal>,
     /// `const` definition -> its literal initializer, if any.
     pub const_values: HashMap<DefId, Literal>,
 

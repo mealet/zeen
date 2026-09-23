@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use lasso::{Rodeo, Spur};
 use smol_str::SmolStr;
@@ -625,26 +625,34 @@ impl<'res> HirLowering<'res> {
 
     fn lower_switch_arm<'ctx>(&mut self, arm: &zeen_ast::expressions::Arm<'ctx>) -> HirSwitchArm {
         let key = NodeKey::from_arm(arm);
-        if let Some(lit) = self.resolution.arm_const_values.get(&key).copied() {
-            return HirSwitchArm {
-                pattern: HirPattern::Literal(lit),
-                guard: arm.guard.map(|guard| Rc::new(self.lower_expr(guard))),
-                body: Rc::new(self.lower_expr(arm.body)),
-            };
-        }
         let def_id = self.resolution.def_of_arm(arm).unwrap_or(DefId(u32::MAX));
 
         HirSwitchArm {
-            pattern: Self::lower_pattern(&arm.pattern, def_id),
+            pattern: Self::lower_pattern(
+                &arm.pattern,
+                def_id,
+                key,
+                &self.resolution.arm_const_values,
+                0,
+            ),
             guard: arm.guard.map(|guard| Rc::new(self.lower_expr(guard))),
             body: Rc::new(self.lower_expr(arm.body)),
         }
     }
 
-    fn lower_pattern(pattern: &zeen_ast::expressions::Pattern, def_id: DefId) -> HirPattern {
+    fn lower_pattern(
+        pattern: &zeen_ast::expressions::Pattern,
+        def_id: DefId,
+        key: NodeKey,
+        consts: &HashMap<(NodeKey, usize), zeen_ast::expressions::Literal>,
+        index: usize,
+    ) -> HirPattern {
         match pattern {
             zeen_ast::expressions::Pattern::Literal(lit) => HirPattern::Literal(*lit),
             zeen_ast::expressions::Pattern::Named { name, span } => {
+                if let Some(lit) = consts.get(&(key, index)).copied() {
+                    return HirPattern::Literal(lit);
+                }
                 HirPattern::Binding(HirPatternBinding {
                     name: *name,
                     def_id,
@@ -673,7 +681,8 @@ impl<'res> HirLowering<'res> {
             zeen_ast::expressions::Pattern::Or(patterns) => HirPattern::Or(
                 patterns
                     .iter()
-                    .map(|inner| Self::lower_pattern(inner, def_id))
+                    .enumerate()
+                    .map(|(i, inner)| Self::lower_pattern(inner, def_id, key, consts, i))
                     .collect(),
             ),
         }
