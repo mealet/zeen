@@ -54,6 +54,7 @@ pub struct IoError {
   }
 
   /// Build an error from an OS error code.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
@@ -105,6 +106,7 @@ pub struct IoError {
   }
 
   /// Build an error from the last OS error.
+  /// Possible IoError variants:
   ///
   /// * any IoErrorKind the OS reports (see from_errno on posix, win_error on Windows)
   pub fn last_os_error() Self {
@@ -119,6 +121,7 @@ pub struct IoError {
 
 @os[windows] {
   /// Build an error from a Windows error code.
+  /// Possible IoError variants:
   ///
   /// * IoErrorKind.NotFound
   /// * IoErrorKind.PermissionDenied
