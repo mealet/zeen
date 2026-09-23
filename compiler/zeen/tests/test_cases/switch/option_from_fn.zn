@@ -1,0 +1,21 @@
+fn maybe_double(x: i32) Option[i32] {
+  if (x > 10) {
+    return Option.None;
+  };
+
+  Option.Some(x * 2)
+}
+
+fn main() {
+  let a = maybe_double(21);
+  switch (a) {
+    .None => @println("none"),
+    .Some(v) => @println("some: {}", v),
+  };
+
+  let b = switch (maybe_double(5)) {
+    .None => -1,
+    .Some(v) => v,
+  };
+  @println("b: {}", b);
+}

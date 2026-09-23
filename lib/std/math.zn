@@ -1,0 +1,93 @@
+use std.c.math;
+
+/// Pi circle constant.
+pub const PI: f64 = 3.141592653589793;
+/// Full circle constant (`2 * PI`).
+pub const TAU: f64 = 6.283185307179586;
+/// Euler number.
+pub const E: f64 = 2.718281828459045;
+
+/// Smaller of two values.
+pub fn min[T: Ord](a: T, b: T) T {
+  if (a < b) {
+    return a;
+  };
+
+  b
+}
+
+/// Greater of two values.
+pub fn max[T: Ord](a: T, b: T) T {
+  if (a > b) {
+    return a;
+  };
+
+  b
+}
+
+/// Clamp value into `[lo, hi]`.
+pub fn clamp[T: Ord](value: T, lo: T, hi: T) T {
+  if (value < lo) {
+    return lo;
+  };
+
+  if (value > hi) {
+    return hi;
+  };
+
+  value
+}
+
+/// Linear interpolation between `a` and `b`.
+pub fn lerp(a: f64, b: f64, t: f64) f64 {
+  return a + (b - a) * t;
+}
+
+/// Linear interpolation between `a` and `b` (single precision).
+pub fn lerpf(a: f32, b: f32, t: f32) f32 {
+  return a + (b - a) * t;
+}
+
+/// Greatest common divisor (always non-negative).
+pub fn gcd(a: i64, b: i64) i64 {
+  let x = if (a < 0) { -a } else { a };
+  let y = if (b < 0) { -b } else { b };
+
+  while (y != 0) {
+    let r = x % y;
+    x = y;
+    y = r;
+  };
+
+  x
+}
+
+/// Least common multiple (zero if either side is zero).
+pub fn lcm(a: i64, b: i64) i64 {
+  if (a == 0 || b == 0) {
+    return 0;
+  };
+
+  let d = gcd(a, b);
+  return (a / d) * b;
+}
+
+/// `true` for NaN values.
+pub fn is_nan(value: f64) bool {
+  return isnan(value) != 0;
+}
+
+/// `true` for NaN values (single precision).
+pub fn is_nanf(value: f32) bool {
+  return isnanf(value) != 0;
+}
+
+/// `true` for infinite values.
+pub fn is_inf(value: f64) bool {
+  return isinf(value) != 0;
+}
+
+/// `true` for infinite values (single precision).
+pub fn is_inff(value: f32) bool {
+  return isinff(value) != 0;
+}

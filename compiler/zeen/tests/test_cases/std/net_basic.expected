@@ -1,0 +1,15 @@
+parse: 127.0.0.1:8080
+loopback: 127.0.0.1:80
+bad is_err: true
+bound: true
+peer: true
+c2s: 4
+s got: 4
+s text: [ping]
+s2c: 4
+c got: 4
+c text: [pong]
+shutdown ok
+udp sent: 6
+udp got: [udp-hi]
+udp from a: true

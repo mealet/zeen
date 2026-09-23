@@ -86,4 +86,63 @@ use std.c.windows.windef;
   pub extern fn DeleteFileA(name: [*]const c_char) WinBOOL;
   pub extern fn MoveFileW(existing: [*]const c_wchar_t, new_file: [*]const c_wchar_t) WinBOOL;
   pub extern fn MoveFileA(existing: [*]const c_char, new_file: [*]const c_char) WinBOOL;
+
+  pub extern fn CreateDirectoryA(path: [*]const c_char, attrs: *void) WinBOOL;
+  pub extern fn RemoveDirectoryA(path: [*]const c_char) WinBOOL;
+  pub extern fn GetFileAttributesA(path: [*]const c_char) WinDWORD;
+
+  pub const INVALID_FILE_ATTRIBUTES: WinDWORD = 4294967295;
+  pub const FILE_ATTRIBUTE_DIRECTORY: WinDWORD = 16;
+
+  pub const ERROR_FILE_NOT_FOUND: WinDWORD = 2;
+  pub const ERROR_PATH_NOT_FOUND: WinDWORD = 3;
+  pub const ERROR_ACCESS_DENIED: WinDWORD = 5;
+  pub const ERROR_INVALID_HANDLE: WinDWORD = 6;
+  pub const ERROR_NOT_ENOUGH_MEMORY: WinDWORD = 8;
+  pub const ERROR_INVALID_PARAMETER: WinDWORD = 87;
+  pub const ERROR_BROKEN_PIPE: WinDWORD = 109;
+  pub const ERROR_ALREADY_EXISTS: WinDWORD = 183;
+  pub const ERROR_FILE_EXISTS: WinDWORD = 80;
+  pub const ERROR_CONN_REFUSED: WinDWORD = 10061;
+  pub const ERROR_CONN_RESET: WinDWORD = 10054;
+  pub const ERROR_NOT_CONNECTED: WinDWORD = 10057;
+  pub const ERROR_ADDR_IN_USE: WinDWORD = 10048;
+  pub const ERROR_ADDR_NOT_AVAIL: WinDWORD = 10049;
+  pub const ERROR_TIMED_OUT: WinDWORD = 10060;
+
+  pub struct c_FileTime {
+    pub low: WinDWORD,
+    pub high: WinDWORD,
+  }
+
+  pub struct c_FindData {
+    pub attributes: WinDWORD,
+    pub created: c_FileTime,
+    pub accessed: c_FileTime,
+    pub written: c_FileTime,
+    pub size_high: WinDWORD,
+    pub size_low: WinDWORD,
+    pub reserved0: WinDWORD,
+    pub reserved1: WinDWORD,
+    pub name: [260]c_char,
+    pub alternate: [14]c_char,
+  }
+
+  pub struct c_FileAttrData {
+    pub attributes: WinDWORD,
+    pub created: c_FileTime,
+    pub accessed: c_FileTime,
+    pub written: c_FileTime,
+    pub size_high: WinDWORD,
+    pub size_low: WinDWORD,
+  }
+
+  pub extern fn FindFirstFileA(pattern: [*]const c_char, data: *c_FindData) WinHANDLE;
+  pub extern fn FindNextFileA(handle: WinHANDLE, data: *c_FindData) WinBOOL;
+  pub extern fn FindClose(handle: WinHANDLE) WinBOOL;
+  pub extern fn GetFileAttributesExA(
+    path: [*]const c_char,
+    level: c_int,
+    data: *c_FileAttrData,
+  ) WinBOOL;
 }

@@ -148,6 +148,10 @@ pub struct MirLowering<'ctx> {
     /// by (target, fat signature) so each adapter is emitted once.
     fat_adapter_cache: HashMap<(MirFunctionId, TypeId), MirFunctionId>,
 
+    /// Same as above for bodyless extern targets, keyed by
+    /// (extern_fns index, fat signature).
+    fat_extern_adapter_cache: HashMap<(usize, TypeId), MirFunctionId>,
+
     /// Cache of synthesized fn-pointer-box → fat adapter functions, keyed by
     /// the plain `fn` signature type each adapter forwards for.
     fat_pointer_adapter_cache: HashMap<TypeId, MirFunctionId>,
@@ -371,6 +375,7 @@ impl<'ctx> MirLowering<'ctx> {
             hir_fns_by_def,
             fn_stack: Vec::new(),
             fat_adapter_cache: HashMap::new(),
+            fat_extern_adapter_cache: HashMap::new(),
             fat_pointer_adapter_cache: HashMap::new(),
             fat_drop_cache: HashMap::new(),
             enum_drop_cache: HashMap::new(),
@@ -397,8 +402,60 @@ impl<'ctx> MirLowering<'ctx> {
             return Err(self.errors);
         }
 
+        self.register_reachable_struct_layouts();
         self.register_reachable_slice_layouts();
         Ok(self.program)
+    }
+
+    /// Registers layouts for struct types reachable through fields of
+    /// registered layouts (e.g. a core struct held by a user struct).
+    /// Runs to a fixpoint; already-present layouts stop the walk.
+    fn register_reachable_struct_layouts(&mut self) {
+        loop {
+            let mut missing: Vec<(TypeId, DefId)> = Vec::new();
+
+            let layout_tys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
+            for layout_ty in layout_tys {
+                let field_tys: Vec<TypeId> = self.program.struct_layouts[&layout_ty]
+                    .fields
+                    .iter()
+                    .map(|f| f.ty)
+                    .collect();
+                for field_ty in field_tys {
+                    self.collect_struct_layout(field_ty, &mut missing);
+                }
+            }
+
+            let enum_tys: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
+            for layout_ty in enum_tys {
+                let payloads: Vec<TypeId> = self.program.enum_layouts[&layout_ty]
+                    .variants
+                    .iter()
+                    .filter_map(|v| v.payload)
+                    .collect();
+                for payload_ty in payloads {
+                    self.collect_struct_layout(payload_ty, &mut missing);
+                }
+            }
+
+            if missing.is_empty() {
+                return;
+            }
+
+            for (ty, def_id) in missing {
+                self.register_struct_layout(ty, def_id);
+            }
+        }
+    }
+
+    /// Queues a struct layout for registration unless present.
+    fn collect_struct_layout(&self, ty: TypeId, missing: &mut Vec<(TypeId, DefId)>) {
+        if let Type::Struct { def_id, .. } = self.typecheck.interner.get(ty).clone()
+            && !self.program.struct_layouts.contains_key(&ty)
+            && !missing.iter().any(|(t, _)| *t == ty)
+        {
+            missing.push((ty, def_id));
+        }
     }
 
     fn register_globals(&mut self) {
@@ -495,6 +552,7 @@ impl<'ctx> MirLowering<'ctx> {
             let (block, operand) = self.lower_expr_to_operand(&mut fb, &value, entry);
 
             if let Operand::Copy(place, _) | Operand::Move(place, _) = &operand
+                && place.local != crate::GLOBAL_LOCAL
                 && matches!(
                     self.typecheck.interner.get(fb.func.local(place.local).ty),
                     Type::Void
@@ -1687,6 +1745,38 @@ impl<'ctx> MirLowering<'ctx> {
         None
     }
 
+    fn find_enum_def(&self, enum_name: &str) -> Option<DefId> {
+        for (def, info) in &self.resolution.defs {
+            if matches!(info.kind, DefKind::Enum)
+                && self.rodeo.borrow().resolve(&info.name) == enum_name
+            {
+                return Some(*def);
+            }
+        }
+        None
+    }
+
+    /// Variant `DefId`s of core `Option` as `(None, Some)`.
+    fn option_variants(&self, option_def: DefId) -> (DefId, DefId) {
+        let info = self
+            .typecheck
+            .enum_info
+            .get(&option_def)
+            .expect("core.option `Option` must lower variants");
+        let rodeo = self.rodeo.borrow();
+        let variant = |name: &str| {
+            info.variants
+                .iter()
+                .find(|v| rodeo.resolve(&v.name) == name)
+                .expect("core.option `Option` must declare None and Some")
+                .def_id
+        };
+        let none = variant("None");
+        let some = variant("Some");
+        drop(rodeo);
+        (none, some)
+    }
+
     fn expr_type(&mut self, fb: &FnBuilder, expr: &HirExpr) -> TypeId {
         // A fat-annotated parameter is erased in the signature but stores a
         // concrete closure type in this monomorphized copy: rewrite reads of
@@ -2370,39 +2460,7 @@ impl<'ctx> MirLowering<'ctx> {
         // env and forwards straight into the plain body; env stays null.
         if captures.is_empty() {
             let adapter = self.fat_target_adapter(closure_fn, fat_ty);
-            let fn_ptr_temp = fb.new_temp(fn_ptr_ty);
-            fb.push_stmt(
-                block,
-                MirStatement::Assign {
-                    place: Place::from_local(fn_ptr_temp),
-                    rvalue: Rvalue::Cast {
-                        operand: Operand::Constant(ConstValue::Fn(adapter), None),
-                        target: fn_ptr_ty,
-                    },
-                    source: Some(source_expr.source.clone()),
-                },
-            );
-
-            let temp = fb.new_temp(fat_ty);
-            fb.push_stmt(
-                block,
-                MirStatement::Assign {
-                    place: Place::from_local(temp),
-                    rvalue: Rvalue::Aggregate {
-                        kind: AggregateKind::Struct(CLOSURE_FAT_DEF),
-                        operands: vec![
-                            Operand::Copy(Place::from_local(fn_ptr_temp), None),
-                            Operand::Constant(ConstValue::NullPtr, None),
-                            Operand::Constant(ConstValue::Fn(self.env_drop_noop()), None),
-                        ],
-                    },
-                    source: Some(source_expr.source.clone()),
-                },
-            );
-            return (
-                block,
-                Operand::Move(Place::from_local(temp), Some(source_expr.source.clone())),
-            );
+            return self.fat_envelope_no_env(fb, block, fat_ty, adapter, source_expr);
         }
 
         // Capturing: materialize each capture into the env struct's layout,
@@ -2642,19 +2700,77 @@ impl<'ctx> MirLowering<'ctx> {
     /// Returns (synthesizing on first use) the env-first adapter for a
     /// plain-body function stored into a fat slot: it ignores its env and
     /// forwards into the body with the plain arguments.
+    /// Builds a fat envelope with a null env around an already resolved
+    /// adapter function: `{ $fn: adapter, $env: null, $drop: noop }`.
+    fn fat_envelope_no_env(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        fat_ty: TypeId,
+        adapter: MirFunctionId,
+        source_expr: &HirExpr,
+    ) -> (BlockId, Operand) {
+        let fn_ptr_ty = self.void_ptr_ty();
+        let fn_ptr_temp = fb.new_temp(fn_ptr_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(fn_ptr_temp),
+                rvalue: Rvalue::Cast {
+                    operand: Operand::Constant(ConstValue::Fn(adapter), None),
+                    target: fn_ptr_ty,
+                },
+                source: Some(source_expr.source.clone()),
+            },
+        );
+
+        let temp = fb.new_temp(fat_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(temp),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Struct(CLOSURE_FAT_DEF),
+                    operands: vec![
+                        Operand::Copy(Place::from_local(fn_ptr_temp), None),
+                        Operand::Constant(ConstValue::NullPtr, None),
+                        Operand::Constant(ConstValue::Fn(self.env_drop_noop()), None),
+                    ],
+                },
+                source: Some(source_expr.source.clone()),
+            },
+        );
+        (
+            block,
+            Operand::Move(Place::from_local(temp), Some(source_expr.source.clone())),
+        )
+    }
+
     fn fat_target_adapter(&mut self, target: MirFunctionId, fat_ty: TypeId) -> MirFunctionId {
         let key = (target, fat_ty);
         if let Some(&id) = self.fat_adapter_cache.get(&key) {
             return id;
         }
-        let id = self.synthesize_fat_target_adapter(target, fat_ty);
+        let id = self.synthesize_fat_target_adapter(CallTarget::Direct(target), fat_ty);
         self.fat_adapter_cache.insert(key, id);
+        id
+    }
+
+    /// Adapter over a bodyless extern: forwards the env-first call to the
+    /// external symbol. The extern itself is never monomorphized.
+    fn fat_extern_adapter(&mut self, extern_idx: usize, fat_ty: TypeId) -> MirFunctionId {
+        let key = (extern_idx, fat_ty);
+        if let Some(&id) = self.fat_extern_adapter_cache.get(&key) {
+            return id;
+        }
+        let id = self.synthesize_fat_target_adapter(CallTarget::Extern(extern_idx), fat_ty);
+        self.fat_extern_adapter_cache.insert(key, id);
         id
     }
 
     fn synthesize_fat_target_adapter(
         &mut self,
-        target: MirFunctionId,
+        target: CallTarget,
         fat_ty: TypeId,
     ) -> MirFunctionId {
         let Type::FatFn { params, ret, .. } = self.typecheck.interner.get(fat_ty).clone() else {
@@ -2707,7 +2823,7 @@ impl<'ctx> MirLowering<'ctx> {
             source: None,
         });
         func.blocks[0].terminator = Terminator::Call {
-            func: CallTarget::Direct(target),
+            func: target,
             args,
             destination: Place::from_local(sink_or_ret),
             target: Some(BlockId(1)),
@@ -2898,8 +3014,6 @@ impl<'ctx> MirLowering<'ctx> {
             self.register_slice_layouts_in_type(ty, &mut visited);
         }
 
-        // Enum payloads (e.g. `Err: []const char`) are only reachable
-        // through the enum layout.
         let enum_keys: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
         for layout_ty in enum_keys {
             let payloads: Vec<TypeId> = self.program.enum_layouts[&layout_ty]
@@ -2910,6 +3024,17 @@ impl<'ctx> MirLowering<'ctx> {
             for payload_ty in payloads {
                 self.register_slice_layouts_in_type(payload_ty, &mut visited);
             }
+        }
+
+        let global_tys: Vec<TypeId> = self.program.global_vars.iter().map(|g| g.ty).collect();
+        for ty in global_tys {
+            if let Type::Struct { def_id, .. } = self.typecheck.interner.get(ty).clone() {
+                self.register_struct_layout(ty, def_id);
+            }
+            if let Type::Enum { def_id, .. } = self.typecheck.interner.get(ty).clone() {
+                self.register_enum_layout(ty, def_id);
+            }
+            self.register_slice_layouts_in_type(ty, &mut visited);
         }
     }
 
@@ -2982,6 +3107,22 @@ impl<'ctx> MirLowering<'ctx> {
                         Some(DefKind::Function)
                     )
                 {
+                    let hir_fn = self.hir_fns_by_def[def_id].clone();
+                    // A bodyless extern has no MIR body to point at: reference
+                    // the external symbol instead of monomorphizing, which
+                    // would emit an empty local definition shadowing it.
+                    if hir_fn.is_extern && hir_fn.body.is_none() {
+                        let idx = self.register_extern_fn(*def_id, &hir_fn);
+                        if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
+                            let adapter = self.fat_extern_adapter(idx, expr_ty);
+                            return self.fat_envelope_no_env(fb, block, expr_ty, adapter, expr);
+                        }
+                        return (
+                            block,
+                            Operand::Constant(ConstValue::ExternFn(idx), Some(expr.source.clone())),
+                        );
+                    }
+
                     // A static function in a fat slot gets an empty env.
                     if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
                         let mir_f = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
@@ -3392,34 +3533,22 @@ impl<'ctx> MirLowering<'ctx> {
                     .find_struct_def("Range")
                     .expect("core `Range` struct must be present");
                 let option_def = self
-                    .find_struct_def("Option")
+                    .find_enum_def("Option")
                     .expect("core.option `Option` must be present");
                 let usize_ty = self
                     .typecheck
                     .interner
                     .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
-                let option_ty = self.typecheck.interner.intern(Type::Struct {
+                let option_ty = self.typecheck.interner.intern(Type::Enum {
                     def_id: option_def,
                     generic_args: vec![usize_ty],
                 });
                 let ty = self.expr_type(fb, expr);
                 self.register_struct_layout(ty, range_def);
-                self.register_struct_layout(option_ty, option_def);
+                self.register_enum_layout(option_ty, option_def);
 
-                // Field order of `Option`: `value` then `_is_some`.
-                let option_fields = &self.typecheck.struct_info[&option_def].fields;
-                let rodeo = self.rodeo.borrow();
-                let value_index = option_fields
-                    .iter()
-                    .position(|f| rodeo.resolve(&f.name) == "value")
-                    .expect("Option must have a `value` field");
-                let is_some_index = option_fields
-                    .iter()
-                    .position(|f| rodeo.resolve(&f.name) == "_is_some")
-                    .expect("Option must have an `_is_some` field");
-                drop(rodeo);
+                let (none_variant, some_variant) = self.option_variants(option_def);
 
-                // `None` stores a dummy value that is never read.
                 let mut build_option =
                     |fb: &mut FnBuilder,
                      block: BlockId,
@@ -3427,23 +3556,20 @@ impl<'ctx> MirLowering<'ctx> {
                      is_some: bool,
                      source: Option<Source>| {
                         let temp = fb.new_temp(option_ty);
-                        let mut operands = vec![
-                            Operand::Constant(ConstValue::Void, None),
-                            Operand::Constant(ConstValue::Void, None),
-                        ];
-                        operands[value_index] = if is_some {
-                            value
+                        let (variant_def, operands) = if is_some {
+                            (some_variant, vec![value])
                         } else {
-                            Operand::Constant(ConstValue::Int(0), source.clone())
+                            (none_variant, vec![])
                         };
-                        operands[is_some_index] =
-                            Operand::Constant(ConstValue::Bool(is_some), source.clone());
                         fb.push_stmt(
                             block,
                             MirStatement::Assign {
                                 place: Place::from_local(temp),
                                 rvalue: Rvalue::Aggregate {
-                                    kind: AggregateKind::Struct(option_def),
+                                    kind: AggregateKind::Enum {
+                                        enum_def: option_def,
+                                        variant_def,
+                                    },
                                     operands,
                                 },
                                 source,
@@ -3525,7 +3651,7 @@ impl<'ctx> MirLowering<'ctx> {
                 )
             }
 
-            HirExprKind::FieldAccess { object, field } => {
+            HirExprKind::FieldAccess { object, field, .. } => {
                 // Enum variant access (`Color.Red`) is a constant, not a place.
                 if let HirExprKind::VarRef(enum_def) = &object.kind
                     && matches!(
@@ -4167,7 +4293,9 @@ impl<'ctx> MirLowering<'ctx> {
                     self.lower_diverging_macro(fb, kind.0, block, &expr.source)
                 }
 
-                HirMacroKind::Uninit => (block, Operand::Constant(ConstValue::Void, None)),
+                HirMacroKind::Uninit | HirMacroKind::Void => {
+                    (block, Operand::Constant(ConstValue::Void, None))
+                }
 
                 HirMacroKind::Unknown => panic!("unknown macro reached MIR lowering"),
             },
@@ -4677,10 +4805,10 @@ impl<'ctx> MirLowering<'ctx> {
             .interner
             .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
 
-        let pat_len = self.rodeo.borrow().resolve(&pat).len() as u64 + 1;
+        let pat_len = self.rodeo.borrow().resolve(&pat).len() as u64;
         let pat_ty = self.typecheck.interner.intern(Type::Array {
             element: char_ty,
-            len: Some(pat_len),
+            len: Some(pat_len + 1),
         });
         let pat_temp = fb.new_temp(pat_ty);
         fb.push_stmt(
@@ -4729,11 +4857,94 @@ impl<'ctx> MirLowering<'ctx> {
                 source: Some(source.clone()),
             },
         );
+        let len_plus_one_bb = fb.new_block();
         let loop_entry = fb.new_block();
         fb.set_terminator(
             test_bb,
             Terminator::SwitchInt {
                 discriminant: Operand::Move(Place::from_local(len_ok), None),
+                targets: vec![(1, loop_entry)],
+                otherwise: len_plus_one_bb,
+            },
+        );
+
+        let len_plus_one = fb.new_temp(bool_ty);
+        let scrut_len_2 = match self.typecheck.interner.get(scrut_ty).clone() {
+            Type::Array { len: Some(len), .. } => {
+                Operand::Constant(ConstValue::Int(len as i128), None)
+            }
+            _ => {
+                let mut len_place = scrut_place.clone();
+                len_place.projection.push(PlaceElem::Field(SLICE_LEN_FIELD));
+                let len_local = fb.new_temp(usize_ty);
+                fb.push_stmt(
+                    len_plus_one_bb,
+                    MirStatement::Assign {
+                        place: Place::from_local(len_local),
+                        rvalue: Rvalue::Use(Operand::Copy(len_place, None)),
+                        source: Some(source.clone()),
+                    },
+                );
+                Operand::Move(Place::from_local(len_local), None)
+            }
+        };
+        fb.push_stmt(
+            len_plus_one_bb,
+            MirStatement::Assign {
+                place: Place::from_local(len_plus_one),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Eq,
+                    lhs: scrut_len_2,
+                    rhs: Operand::Constant(ConstValue::Int(pat_len as i128 + 1), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        let nul_check_bb = fb.new_block();
+        fb.set_terminator(
+            len_plus_one_bb,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(len_plus_one), None),
+                targets: vec![(1, nul_check_bb)],
+                otherwise: next_test,
+            },
+        );
+
+        let pat_len_local = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            nul_check_bb,
+            MirStatement::Assign {
+                place: Place::from_local(pat_len_local),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(pat_len as i128), None)),
+                source: Some(source.clone()),
+            },
+        );
+        let mut nul_place = scrut_place.clone();
+        match self.typecheck.interner.get(scrut_ty).clone() {
+            Type::Array { .. } => nul_place.projection.push(PlaceElem::Index(pat_len_local)),
+            Type::Slice { .. } => {
+                nul_place.projection.push(PlaceElem::Field(SLICE_PTR_FIELD));
+                nul_place.projection.push(PlaceElem::Index(pat_len_local));
+            }
+            _ => unreachable!("string arm over a non-string scrutinee"),
+        };
+        let nul_ok = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            nul_check_bb,
+            MirStatement::Assign {
+                place: Place::from_local(nul_ok),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Eq,
+                    lhs: self.place_to_operand(nul_place, char_ty, Some(source.clone())),
+                    rhs: Operand::Constant(ConstValue::Char('\0'), None),
+                },
+                source: Some(source.clone()),
+            },
+        );
+        fb.set_terminator(
+            nul_check_bb,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(nul_ok), None),
                 targets: vec![(1, loop_entry)],
                 otherwise: next_test,
             },
@@ -7183,6 +7394,10 @@ impl<'ctx> MirLowering<'ctx> {
                     ty
                 };
 
+                // Locals of a monomorphized copy store concrete types, like
+                // parameters do: a raw `GenericParam` would reach codegen.
+                let ty = self.substitute_fn_type(fb, ty);
+
                 // `let _ = expr` evaluates `expr` for side effects without
                 // creating storage; user-variable operands are still consumed
                 // via `Discard`.
@@ -7849,33 +8064,18 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         let option_def = self
-            .find_struct_def("Option")
+            .find_enum_def("Option")
             .expect("core.option `Option` must be present");
-        let option_ty = self.typecheck.interner.intern(Type::Struct {
+        let option_ty = self.typecheck.interner.intern(Type::Enum {
             def_id: option_def,
             generic_args: vec![elem_ty],
         });
-        self.register_struct_layout(option_ty, option_def);
+        self.register_enum_layout(option_ty, option_def);
 
-        let option_fields = &self.typecheck.struct_info[&option_def].fields;
-        let rodeo = self.rodeo.borrow();
-        let is_some_field = option_fields
-            .iter()
-            .find(|f| rodeo.resolve(&f.name) == "_is_some")
-            .expect("Option must have an `_is_some` field")
-            .field_def;
-        let value_field = option_fields
-            .iter()
-            .find(|f| rodeo.resolve(&f.name) == "value")
-            .expect("Option must have a `value` field")
-            .field_def;
-        drop(rodeo);
+        let (_none_variant, some_variant) = self.option_variants(option_def);
+        let some_tag = self.enum_variant_tag(option_def, some_variant);
 
         let result_local = fb.new_temp(option_ty);
-        let bool_ty = self
-            .typecheck
-            .interner
-            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
 
         let header = fb.new_block();
         fb.set_terminator(block, Terminator::Goto(header));
@@ -7907,15 +8107,16 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        let is_some_local = fb.new_temp(bool_ty);
+        let tag_local = fb.new_temp(
+            self.typecheck
+                .interner
+                .intern(Type::Builtin(zeen_ast::types::BuiltinType::u8)),
+        );
         fb.push_stmt(
             check_block,
             MirStatement::Assign {
-                place: Place::from_local(is_some_local),
-                rvalue: Rvalue::Use(Operand::Copy(
-                    Place::from_local(result_local).field(is_some_field),
-                    None,
-                )),
+                place: Place::from_local(tag_local),
+                rvalue: Rvalue::Discriminant(Place::from_local(result_local)),
                 source: None,
             },
         );
@@ -7925,8 +8126,8 @@ impl<'ctx> MirLowering<'ctx> {
         fb.set_terminator(
             check_block,
             Terminator::SwitchInt {
-                discriminant: Operand::Move(Place::from_local(is_some_local), None),
-                targets: vec![(1, body_bb)],
+                discriminant: Operand::Move(Place::from_local(tag_local), None),
+                targets: vec![(some_tag as u128, body_bb)],
                 otherwise: exit_bb,
             },
         );
@@ -7941,7 +8142,7 @@ impl<'ctx> MirLowering<'ctx> {
         fb.locals_by_def.insert(*def_id, loop_var);
 
         let value_operand = self.place_to_operand(
-            Place::from_local(result_local).field(value_field),
+            Place::from_local(result_local).enum_payload(some_variant),
             elem_ty,
             Some(iterator.source.clone()),
         );
@@ -8430,7 +8631,8 @@ impl<'ctx> MirLowering<'ctx> {
         // literal) is materialized into a local so codegen can type the
         // indirect call from the place.
         let callee_operand = match &callee_operand {
-            Operand::Constant(ConstValue::Fn(_), _) => {
+            Operand::Constant(ConstValue::Fn(_), _)
+            | Operand::Constant(ConstValue::ExternFn(_), _) => {
                 let temp = fb.new_temp(callee_ty);
                 fb.push_stmt(
                     block,

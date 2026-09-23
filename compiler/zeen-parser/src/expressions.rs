@@ -1731,14 +1731,22 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 let variant_id = self.p.get_or_intern(variant_slice);
 
                 let binding = if self.p.eat(TokenKind::OpenParen) {
-                    let binding_token = self.p.expect(TokenKind::Ident, "binding name")?;
-                    let binding_slice = self.p.src[binding_token.span.offset()
-                        ..binding_token.span.offset() + binding_token.span.len()]
-                        .to_owned();
-                    let binding_id = self.p.get_or_intern(binding_slice);
-                    let _ = self.p.expect(TokenKind::CloseParen, ")")?;
+                    if self.p.current().kind == TokenKind::Underscore {
+                        let discard = self.p.current_clone();
+                        let _ = self.p.advance_not_eof()?;
+                        let _ = self.p.expect(TokenKind::CloseParen, ")")?;
 
-                    Some((binding_id, binding_token.span))
+                        Some((self.p.get_or_intern("_"), discard.span))
+                    } else {
+                        let binding_token = self.p.expect(TokenKind::Ident, "binding name")?;
+                        let binding_slice = self.p.src[binding_token.span.offset()
+                            ..binding_token.span.offset() + binding_token.span.len()]
+                            .to_owned();
+                        let binding_id = self.p.get_or_intern(binding_slice);
+                        let _ = self.p.expect(TokenKind::CloseParen, ")")?;
+
+                        Some((binding_id, binding_token.span))
+                    }
                 } else {
                     None
                 };
@@ -2637,6 +2645,30 @@ mod tests {
         assert_eq!(rodeo.borrow().resolve(&name), "x");
 
         assert!(matches!(arms[2].pattern, expressions::Pattern::Wildcard));
+    }
+
+    #[test]
+    fn switch_enum_discard_binding() {
+        const SRC: &str = "switch (a) { .B(_) => 1, _ => 0, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(arms.len(), 2);
+
+        let expressions::Pattern::EnumVariant {
+            variant, binding, ..
+        } = arms[0].pattern
+        else {
+            panic!("expected enum pattern, got {:?}", arms[0].pattern);
+        };
+        assert_eq!(rodeo.borrow().resolve(&variant), "B");
+        let (name, _) = binding.expect("discard still binds the payload");
+        assert_eq!(rodeo.borrow().resolve(&name), "_");
     }
 
     #[test]

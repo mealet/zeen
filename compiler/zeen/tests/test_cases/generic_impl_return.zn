@@ -1,0 +1,21 @@
+struct Wrap[T] {
+  pub inner: T,
+
+  pub fn make(value: T) Self {
+    Self { .inner = value }
+  }
+}
+
+implement[T] Clone : Wrap[T] {
+  fn clone(*const self) Self {
+    let out = Wrap#[T].make(self.inner);
+    return out;
+  }
+}
+
+fn main() i32 {
+  let w = Wrap { .inner = 41 };
+  let c = w.clone();
+  @println("{}", c.inner + 1);
+  return 0;
+}

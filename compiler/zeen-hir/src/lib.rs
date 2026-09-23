@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use lasso::{Rodeo, Spur};
 use smol_str::SmolStr;
@@ -152,6 +152,7 @@ impl<'res> HirLowering<'res> {
             "dbg" => HirMacroKind::Dbg,
             "uninit" => HirMacroKind::Uninit,
             "enumTag" => HirMacroKind::EnumTag,
+            "void" => HirMacroKind::Void,
 
             _ => HirMacroKind::Unknown,
         }
@@ -623,19 +624,35 @@ impl<'res> HirLowering<'res> {
     // > Expressions
 
     fn lower_switch_arm<'ctx>(&mut self, arm: &zeen_ast::expressions::Arm<'ctx>) -> HirSwitchArm {
+        let key = NodeKey::from_arm(arm);
         let def_id = self.resolution.def_of_arm(arm).unwrap_or(DefId(u32::MAX));
 
         HirSwitchArm {
-            pattern: Self::lower_pattern(&arm.pattern, def_id),
+            pattern: Self::lower_pattern(
+                &arm.pattern,
+                def_id,
+                key,
+                &self.resolution.arm_const_values,
+                0,
+            ),
             guard: arm.guard.map(|guard| Rc::new(self.lower_expr(guard))),
             body: Rc::new(self.lower_expr(arm.body)),
         }
     }
 
-    fn lower_pattern(pattern: &zeen_ast::expressions::Pattern, def_id: DefId) -> HirPattern {
+    fn lower_pattern(
+        pattern: &zeen_ast::expressions::Pattern,
+        def_id: DefId,
+        key: NodeKey,
+        consts: &HashMap<(NodeKey, usize), zeen_ast::expressions::Literal>,
+        index: usize,
+    ) -> HirPattern {
         match pattern {
             zeen_ast::expressions::Pattern::Literal(lit) => HirPattern::Literal(*lit),
             zeen_ast::expressions::Pattern::Named { name, span } => {
+                if let Some(lit) = consts.get(&(key, index)).copied() {
+                    return HirPattern::Literal(lit);
+                }
                 HirPattern::Binding(HirPatternBinding {
                     name: *name,
                     def_id,
@@ -664,7 +681,8 @@ impl<'res> HirLowering<'res> {
             zeen_ast::expressions::Pattern::Or(patterns) => HirPattern::Or(
                 patterns
                     .iter()
-                    .map(|inner| Self::lower_pattern(inner, def_id))
+                    .enumerate()
+                    .map(|(i, inner)| Self::lower_pattern(inner, def_id, key, consts, i))
                     .collect(),
             ),
         }
@@ -784,9 +802,54 @@ impl<'res> HirLowering<'res> {
                     }
                 };
 
+                // `Type#[T].member`: the object names a type whose
+                // instantiation the access needs (mirrors Call lowering).
+                let object_generic_args = match object.kind {
+                    ExpressionKind::Ident {
+                        generic_args: Some(object_args),
+                        ..
+                    } if !object_args.is_empty()
+                        && self.resolution.resolution_of_expr(object).is_some_and(|r| {
+                            matches!(r, Resolution::Def(id)
+                            if matches!(
+                                self.resolution.defs.get(&id).map(|i| &i.kind),
+                                Some(DefKind::Struct) | Some(DefKind::Enum)
+                            ))
+                        }) =>
+                    {
+                        object_args
+                            .iter()
+                            .map(|t| Rc::new(self.lower_type(t)))
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                };
+
+                let lowered_object = self.lower_expr(object);
+                // `Self.foo` names the enclosing type, like `Type.foo`.
+                let object = match &lowered_object.kind {
+                    HirExprKind::Error => match self.resolution.resolution_of_expr(object) {
+                        Some(zeen_resolve::Resolution::SelfType(id))
+                            if matches!(
+                                self.resolution.defs.get(&id).map(|i| &i.kind),
+                                Some(zeen_resolve::DefKind::Struct | zeen_resolve::DefKind::Enum)
+                            ) =>
+                        {
+                            Rc::new(HirExpr {
+                                id: self.fresh_id(),
+                                kind: HirExprKind::VarRef(id),
+                                source: lowered_object.source.clone(),
+                            })
+                        }
+                        _ => Rc::new(lowered_object),
+                    },
+                    _ => Rc::new(lowered_object),
+                };
+
                 HirExprKind::FieldAccess {
-                    object: Rc::new(self.lower_expr(object)),
+                    object,
                     field: (field_name, field_span),
+                    object_generic_args,
                 }
             }
 

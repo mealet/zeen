@@ -65,6 +65,11 @@ impl TypeCheckCtx {
         self.stack.last()?.generic_bindings.get(&def_id).copied()
     }
 
+    /// `DefId` of the innermost function under check, if any.
+    pub fn current_fn_def(&self) -> Option<DefId> {
+        self.stack.last().map(|ctx| ctx.fn_def)
+    }
+
     pub fn generic_bounds(&self, def_id: DefId) -> &[DefId] {
         self.stack
             .last()

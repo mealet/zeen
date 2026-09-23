@@ -1,0 +1,7 @@
+notfound: NotFound
+perm: PermissionDenied
+exist: AlreadyExists
+inval: InvalidInput
+unknown: Uncategorized
+custom kind: TimedOut msg: timed out
+eq

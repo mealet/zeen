@@ -3,7 +3,7 @@ use std.c.stdlib;
 /// Main standard library allocator
 pub struct Allocator {
   pub fn alloc(size: usize) *void {
-    let ptr = malloc(size);
+    let ptr = G_ALLOC(size);
     
     if (ptr == nullptr) {
       @panic("Null pointer appeared on std allocation");
@@ -13,7 +13,7 @@ pub struct Allocator {
   }
 
   pub fn realloc(ptr: *void, size: usize) *void {
-    let ptr = realloc(ptr, size);
+    let ptr = G_REALLOC(ptr, size);
 
     if (ptr == nullptr) {
       @panic("Null pointer appeared on std allocation");
@@ -24,6 +24,22 @@ pub struct Allocator {
 
   pub fn dealloc(ptr: *void) {
     if (ptr != nullptr)
-      free(ptr);
+      G_FREE(ptr);
   }
+
+  pub fn set_allocator(instance: AllocatorInstance) {
+    G_ALLOC = instance.alloc;
+    G_REALLOC = instance.realloc;
+    G_FREE = instance.free;
+  }
+}
+
+let G_ALLOC: fn(usize) *void = malloc;
+let G_REALLOC: fn(*void, usize) *void = realloc;
+let G_FREE: fn(*void) void = free;
+
+pub struct AllocatorInstance {
+  pub alloc: fn(usize) *void,
+  pub realloc: fn(*void, usize) *void,
+  pub free: fn(*void) void
 }

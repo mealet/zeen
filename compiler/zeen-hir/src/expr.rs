@@ -58,6 +58,7 @@ pub enum HirExprKind {
     FieldAccess {
         object: Rc<HirExpr>,
         field: (Spur, SourceSpan),
+        object_generic_args: Vec<Rc<HirTypeExpr>>,
     },
 
     SliceAccess {
@@ -159,6 +160,7 @@ pub enum HirMacroKind {
     Dbg,     // @dbg(expr) -> expr
     Uninit,  // @uninit() -> any
     EnumTag, // @enumTag(enum value) -> u8
+    Void,    // @void() -> void
 
     Unknown, // Unknown macro fallback
 }

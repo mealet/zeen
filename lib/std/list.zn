@@ -1,0 +1,854 @@
+use std.alloc;
+
+const InitialListCapacity: usize = 4;
+
+/// Insertion sort threshold (tiny runs).
+const SortInsertionThreshold: usize = 20;
+
+/// Dynamic heap-allocated array buffer
+pub struct List[T] {
+  ptr: [*]T,
+  _len: usize,
+  _capacity: usize,
+
+  /// Create new `List` instance
+  pub fn new() Self {
+    Self {
+      .ptr = @as([*]T, nullptr),
+      ._len = 0,
+      ._capacity = 0,
+    }
+  }
+
+  /// Create new `List` instance with aligned capacity
+  pub fn with_capacity(capacity: usize) Self {
+    let bytes_capacity = align_capacity_up(capacity * @sizeof(T));
+    let ptr = @as([*]T, Allocator.alloc(bytes_capacity));
+
+    Self {
+      .ptr = ptr,
+      ._len = 0,
+      ._capacity = capacity
+    }
+  }
+
+  /// Allocate new `List` with copying values from slice
+  pub fn from[T: Copy](value: []const T) Self {
+    let len = value.len;
+    let capacity = align_capacity_up(value.len + 1);
+    let ptr = @as([*]T, Allocator.alloc(capacity * @sizeof(T)));
+
+    let i: usize = 0;
+    while (i < len) {
+      ptr[i] = value[i];
+      i += 1;
+    };
+
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity,
+    }
+  }
+
+  /// Allocate new `List` with cloning values from slice
+  pub fn from_clone[T: Clone](value: []const T) Self {
+    let len = value.len;
+    let capacity = align_capacity_up(value.len + 1);
+    let ptr = @as([*]T, Allocator.alloc(capacity * @sizeof(T)));
+
+    let i: usize = 0;
+    while (i < len) {
+      ptr[i] = value[i].clone();
+      i += 1;
+    };
+
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity,
+    }
+
+  }
+
+  /// UNSAFE: Construct `List` from raw parts (pointer must be heap allocated)
+  pub fn from_raw_parts(ptr: [*]T, len: usize, capacity: usize) Self {
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity,
+    }
+  }
+
+  /// Initialization called on first push
+  fn __initialize_if_new(*self) {
+    if (self._capacity > 0) {
+      return;
+    }
+
+    let init_ptr: *T = Allocator.alloc(@sizeof(T) * InitialListCapacity);
+
+    self.ptr = @as([*]T, init_ptr);
+    self._len = 0;
+    self._capacity = InitialListCapacity;
+  }
+
+  /// `List`'s len getter
+  pub fn len(*const self) usize {
+    self._len
+  }
+
+  /// `List`'s capacity getter
+  pub fn capacity(*const self) usize {
+    self._capacity
+  }
+
+  /// Is empty getter (if len is 0)
+  pub fn is_empty(*const self) bool {
+    self._len == 0
+  }
+
+  /// Capacity private extender
+  fn __capacity_extend(*self) {
+    if (self._capacity - 1 < self._len) {
+      self._capacity = align_capacity_up(self._len + 1);
+
+      let new_ptr = @as(
+        [*]T,
+        Allocator.realloc(
+          @as(*void, self.ptr),
+          self._capacity * @sizeof(T)
+        )
+      );
+
+      self.ptr = new_ptr;
+    }
+  }
+
+  /// Push single element
+  pub fn push(*self, value: T) {
+    self.__initialize_if_new();
+    self._len += 1;
+
+    self.__capacity_extend();
+    self.ptr[self._len - 1] = value;
+  }
+  
+  /// Pop last element and return it
+  pub fn pop(*self) Option[T] {
+    if (self._capacity < 1 || self._len < 1) {
+      return Option.None;
+    }
+
+    self._len -= 1;
+    let output = self.ptr[self._len];
+
+    Option.Some(output)
+  }
+
+  /// Remove element by provided index and return it
+  pub fn remove(*self, index: usize) Option[T] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option.None;
+    };
+
+    if (index == self._len - 1) {
+      return self.pop();
+    };
+
+    let cursor = @as(*T, self.ptr);
+    let end = @as(*T, self.ptr + self._len);
+
+    cursor += index;
+    let output: T = *cursor;
+
+    let left = cursor;
+    let right = cursor;
+
+    right += 1;
+
+    while (right != end) {
+      *left = *right;
+
+      left += 1;
+      right += 1;
+    };
+
+    self._len -= 1;
+
+    Option.Some(output)
+  }
+
+  /// Get element by index, copying it out (out of bounds returns `None`)
+  pub fn get[T: Copy](*const self, index: usize) Option[T] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option.None;
+    };
+
+    Option.Some(self.ptr[index])
+  }
+
+  /// Get pointer to element by index (out of bounds returns `None`)
+  pub fn get_ptr(*const self, index: usize) Option[*T] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option.None;
+    };
+
+    Option.Some(&self.ptr[index])
+  }
+
+  /// Set element by index and return old (out of bounds returns `None`)
+  pub fn set(*self, index: usize, value: T) Option[T] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option.None;
+    };
+
+    let output = Option.Some(self.ptr[index]);
+    self.ptr[index] = value;
+
+    output
+  }
+
+  /// Find element in list:
+  /// * `Some(usize)` - if found, returns position
+  /// * `None` - if not found
+  pub fn find[T: Eq](*const self, value: *const T) Option[usize] {
+    let i: usize = 0;
+
+    while (i < self._len) {
+      if (self.ptr[i] == *value) {
+        return Option.Some(i);
+      };
+
+      i += 1;
+    };
+
+    return Option.None;
+  }
+
+  /// Reverse elements order in list
+  pub fn reverse(*self) {
+    if (self._capacity < 1 || self._len < 1) {
+      return;
+    };
+
+    let len = self._len;
+    let start: usize = 0;
+    let end: usize = len - 1;
+
+    while (start < end) {
+      let temp: T = self.ptr[start];
+      self.ptr[start] = self.ptr[end];
+      self.ptr[end] = temp;
+
+      start += 1;
+      end -= 1;
+    }
+  }
+
+  /// Clear list, dropping removed elements (capacity saves)
+  pub fn clear(*self) {
+    while (!self.is_empty()) {
+      let _item = self.pop().unwrap();
+    };
+  }
+
+  /// Truncate list with new length, dropping removed elements (capacity saves)
+  pub fn truncate(*self, new_len: usize) {
+    if (new_len >= self._len) { return; };
+
+    while (self._len > new_len) {
+      let _item = self.pop().unwrap();
+    };
+  }
+
+  /// Sort list in place (through `Ord`)
+  pub fn sort[T: Ord](*self) {
+    let len = self._len;
+
+    if (len < 2) { return; };
+
+    if (len <= SortInsertionThreshold) {
+      self.__insertion_sort(0, len);
+      return;
+    };
+
+    let buf_len = len / @as(usize, 2) + 1;
+    let buf = @as([*]T, Allocator.alloc(buf_len * @sizeof(T)));
+
+    self.__merge_sort(buf, 0, len);
+    Allocator.dealloc(@as(*void, buf));
+  }
+
+  /// Insertion sort through ordering interface `Ord`
+  fn __insertion_sort[T: Ord](*self, lo: usize, hi: usize) {
+    let i = lo + 1;
+
+    while (i < hi) {
+      let tmp = self.ptr[i];
+      let j = i;
+
+      while (j > lo && self.ptr[j - 1] > tmp) {
+        self.ptr[j] = self.ptr[j - 1];
+        j -= 1;
+      };
+
+      self.ptr[j] = tmp;
+      i += 1;
+    };
+  }
+
+  /// Top-down merge sort of `[lo, hi)` with `buf` scratch storage.
+  fn __merge_sort[T: Ord](*self, buf: [*]T, lo: usize, hi: usize) {
+    let len = hi - lo;
+
+    if (len <= SortInsertionThreshold) {
+      self.__insertion_sort(lo, hi);
+      return;
+    };
+
+    let mid = lo + len / @as(usize, 2);
+
+    self.__merge_sort(buf, lo, mid);
+    self.__merge_sort(buf, mid, hi);
+    self.__merge(buf, lo, mid, hi);
+  }
+
+  /// Merge sorted `[lo, mid)` and `[mid, hi)` back into `[lo, hi)`.
+  fn __merge[T: Ord](*self, buf: [*]T, lo: usize, mid: usize, hi: usize) {
+    let left_len = mid - lo;
+    let right_len = hi - mid;
+
+    if (left_len == 0 || right_len == 0) { return; };
+
+    let l = @as(*T, nullptr);
+    let r = @as(*T, nullptr);
+
+    if (left_len <= right_len) {
+      let i: usize = 0;
+      while (i < left_len) {
+        buf[i] = self.ptr[lo + i];
+        i += 1;
+      };
+
+      let left: usize = 0;
+      let right: usize = mid;
+      let out: usize = lo;
+
+      while (left < left_len && right < hi) {
+        l = @as(*T, buf + left);
+        let take_left = !(self.ptr[right] < *l);
+
+        if (take_left) {
+          self.ptr[out] = *l;
+          left += 1;
+        } else {
+          self.ptr[out] = self.ptr[right];
+          right += 1;
+        };
+
+        out += 1;
+      };
+
+      while (left < left_len) {
+        l = @as(*T, buf + left);
+        self.ptr[out] = *l;
+        left += 1;
+        out += 1;
+      };
+    } else {
+      let i: usize = 0;
+      while (i < right_len) {
+        buf[i] = self.ptr[mid + i];
+        i += 1;
+      };
+
+      let left: usize = mid;
+      let right: usize = right_len;
+      let out: usize = hi;
+
+      while (left > lo && right > 0) {
+        left -= 1;
+        right -= 1;
+
+        r = @as(*T, buf + right);
+        let take_left = *r < self.ptr[left];
+
+        if (take_left) {
+          out -= 1;
+          l = @as(*T, self.ptr + left);
+          self.ptr[out] = *l;
+          right += 1;
+        } else {
+          out -= 1;
+          self.ptr[out] = *r;
+          left += 1;
+        };
+      };
+
+      while (right > 0) {
+        right -= 1;
+        out -= 1;
+        r = @as(*T, buf + right);
+        self.ptr[out] = *r;
+      };
+    };
+  }
+
+  /// Sort list with comparator (stable).
+  pub fn sort_by(*self, compare: fn(*const T, *const T) Ordering) {
+    let len = self._len;
+
+    if (len < 2) { return; };
+
+    if (len <= SortInsertionThreshold) {
+      self.__insertion_sort_by(0, len, compare);
+      return;
+    };
+
+    let buf_len = len / @as(usize, 2) + 1;
+    let buf = @as([*]T, Allocator.alloc(buf_len * @sizeof(T)));
+
+    self.__merge_sort_by(buf, 0, len, compare);
+    Allocator.dealloc(@as(*void, buf));
+  }
+
+  /// Insertion sort with comparator.
+  fn __insertion_sort_by(*self, lo: usize, hi: usize, compare: fn(*const T, *const T) Ordering) {
+    let i = lo + 1;
+
+    while (i < hi) {
+      let tmp = self.ptr[i];
+      let j = i;
+
+      while (j > lo && compare(&self.ptr[j - 1], &tmp) == Ordering.Greater) {
+        self.ptr[j] = self.ptr[j - 1];
+        j -= 1;
+      };
+
+      self.ptr[j] = tmp;
+      i += 1;
+    };
+  }
+
+  /// Merge sort with comparator.
+  fn __merge_sort_by(*self, buf: [*]T, lo: usize, hi: usize, compare: fn(*const T, *const T) Ordering) {
+    let len = hi - lo;
+
+    if (len <= SortInsertionThreshold) {
+      self.__insertion_sort_by(lo, hi, compare);
+      return;
+    };
+
+    let mid = lo + len / @as(usize, 2);
+
+    self.__merge_sort_by(buf, lo, mid, compare);
+    self.__merge_sort_by(buf, mid, hi, compare);
+    self.__merge_by(buf, lo, mid, hi, compare);
+  }
+
+  /// Merge with comparator (stable).
+  fn __merge_by(*self, buf: [*]T, lo: usize, mid: usize, hi: usize, compare: fn(*const T, *const T) Ordering) {
+    let left_len = mid - lo;
+    let right_len = hi - mid;
+
+    if (left_len == 0 || right_len == 0) { return; };
+
+    let l = @as(*T, nullptr);
+    let r = @as(*T, nullptr);
+
+    if (left_len <= right_len) {
+      let i: usize = 0;
+      while (i < left_len) {
+        buf[i] = self.ptr[lo + i];
+        i += 1;
+      };
+
+      let left: usize = 0;
+      let right: usize = mid;
+      let out: usize = lo;
+
+      while (left < left_len && right < hi) {
+        l = @as(*T, buf + left);
+        r = @as(*T, self.ptr + right);
+        let take_left = !(compare(r, l) == Ordering.Less);
+
+        if (take_left) {
+          l = @as(*T, buf + left);
+          self.ptr[out] = *l;
+          left += 1;
+        } else {
+          r = @as(*T, self.ptr + right);
+          self.ptr[out] = *r;
+          right += 1;
+        };
+
+        out += 1;
+      };
+
+      while (left < left_len) {
+        l = @as(*T, buf + left);
+        self.ptr[out] = *l;
+        left += 1;
+        out += 1;
+      };
+    } else {
+      let i: usize = 0;
+      while (i < right_len) {
+        buf[i] = self.ptr[mid + i];
+        i += 1;
+      };
+
+      let left: usize = mid;
+      let right: usize = right_len;
+      let out: usize = hi;
+
+      while (left > lo && right > 0) {
+        left -= 1;
+        right -= 1;
+
+        l = @as(*T, self.ptr + left);
+        r = @as(*T, buf + right);
+        let take_left = compare(r, l) == Ordering.Less;
+
+        if (take_left) {
+          out -= 1;
+          l = @as(*T, self.ptr + left);
+          self.ptr[out] = *l;
+          right += 1;
+        } else {
+          out -= 1;
+          r = @as(*T, buf + right);
+          self.ptr[out] = *r;
+          left += 1;
+        };
+      };
+
+      while (right > 0) {
+        right -= 1;
+        out -= 1;
+        r = @as(*T, buf + right);
+        self.ptr[out] = *r;
+      };
+    };
+  }
+
+  /// Binary search on sorted list.
+  pub fn binary_search[T: Ord](*const self, value: *const T) Option[usize] {
+    let lo: usize = 0;
+    let hi: usize = self._len;
+
+    while (lo < hi) {
+      let mid = lo + (hi - lo) / @as(usize, 2);
+
+      if (self.ptr[mid] < *value) {
+        lo = mid + 1;
+      } else if (self.ptr[mid] > *value) {
+        hi = mid;
+      } else {
+        return Option.Some(mid);
+      };
+    };
+
+    return Option.None;
+  }
+
+  /// Insert element at index, shifting right (out of bounds panics).
+  pub fn insert(*self, index: usize, value: T) {
+    if (index > self._len) {
+      @panic("out of bounds, List len is {} but index is {}", self.len(), index);
+    };
+
+    if (index == self._len) {
+      self.push(value);
+      return;
+    };
+
+    self._len += 1;
+    self.__capacity_extend();
+
+    let w = @as(*T, nullptr);
+    let r = @as(*T, nullptr);
+    let i = self._len - 1;
+
+    while (i > index) {
+      r = @as(*T, self.ptr + i - 1);
+      w = @as(*T, self.ptr + i);
+      *w = *r;
+      i -= 1;
+    };
+
+    self.ptr[index] = value;
+  }
+
+  /// Move all elements from another list, leaving it empty.
+  pub fn append(*self, other: List[T]) {
+    let r = @as(*T, nullptr);
+    let i: usize = 0;
+
+    while (i < other._len) {
+      r = @as(*T, other.ptr + i);
+      self.push(*r);
+      i += 1;
+    };
+
+    other._len = 0;
+  }
+
+  /// Remove element by index, swapping in last (out of bounds is `None`).
+  pub fn swap_remove(*self, index: usize) Option[T] {
+    if (
+      self._capacity < 1
+      || self._len < 1
+      || index >= self._len
+    ) {
+      return Option.None;
+    };
+
+    if (index == self._len - 1) {
+      return self.pop();
+    };
+
+    let a = @as(*T, self.ptr + index);
+    let b = @as(*T, self.ptr + self._len - 1);
+    let tmp = *a;
+    *a = *b;
+    *b = tmp;
+
+    return self.pop();
+  }
+
+  /// Reserve capacity for `additional` elements more.
+  pub fn reserve(*self, additional: usize) {
+    let need = self._len + additional;
+
+    if (need <= self._capacity) { return; };
+
+    self._capacity = align_capacity_up(need);
+
+    let new_ptr = @as(
+      [*]T,
+      Allocator.realloc(
+        @as(*void, self.ptr),
+        self._capacity * @sizeof(T)
+      )
+    );
+
+    self.ptr = new_ptr;
+  }
+
+  /// First element copy (empty is `None`).
+  pub fn first[T: Copy](*const self) Option[T] {
+    return self.get(0);
+  }
+
+  /// Last element copy (empty is `None`).
+  pub fn last[T: Copy](*const self) Option[T] {
+    if (self._len < 1) {
+      return Option.None;
+    };
+
+    return self.get(self._len - 1);
+  }
+}
+
+// ===| List Interfaces Implementations |===
+
+implement[T] Drop : List[T] {
+  fn drop(self) {
+    self.clear();
+
+    let self_voided = @as(*void, self.ptr);
+    if (self_voided != nullptr)
+      Allocator.dealloc(self_voided);
+  }
+}
+
+implement[T: Copy] Clone : List[T] {
+  fn clone(*const self) Self {
+    let out = List#[T].new();
+
+    let i: usize = 0;
+    while (i < self._len) {
+      out.push(self.ptr[i]);
+      i += 1;
+    };
+
+    out
+  }
+}
+
+implement[T: Debug] Debug : List[T] {
+  fn debug[W: StrWriter](*const self, out: *W) {
+    (*out).write_str_single('[');
+
+    let i: usize = 0;
+    while (i < self._len) {
+      if (i > 0) {
+        (*out).write_str(", ");
+      };
+
+      self.ptr[i].debug(out);
+      i += 1;
+    };
+
+    (*out).write_str_single(']');
+  }
+}
+
+implement[T: Eq] Eq : List[T] {
+  fn eq(*const self, other: *const List[T]) bool {
+    if (self._len != other._len) {
+      return false;
+    };
+
+    let i: usize = 0;
+    while (i < self._len) {
+      if (self.ptr[i] != other.ptr[i]) {
+        return false;
+      };
+
+      i += 1;
+    };
+
+    true
+  }
+}
+
+implement[T: Copy] Index : List[T] {
+  fn index(*const self, index: usize) T {
+    let opt = self.get(index);
+
+    if (opt.is_none()) {
+      @panic("out of bounds, List len is {} but index is {}", self.len(), index);
+    }
+
+    opt.unwrap()
+  }
+}
+
+implement[T] IndexPtr : List[T] {
+  fn index_ptr(*self, index: usize) *T {
+    let opt = self.get_ptr(index);
+
+    if (opt.is_none()) {
+      @panic("out of bounds, List len is {} but index is {}", self.len(), index);
+    }
+
+    opt.unwrap()
+  }
+}
+
+implement[T] Sliceable : List[T] {
+  fn slice(*self, range: Range) []T {
+    let start = if (range.start.is_some()) {
+      range.start.unwrap()
+    } else {
+      0
+    };
+
+    let end = if (range.end.is_some()) {
+      range.end.unwrap()
+    } else {
+      self.len()
+    };
+
+    self.ptr[start..end]
+  }
+}
+
+/// Borrowing iterator over `List` elements.
+pub struct ListIter[T] {
+  ptr: [*]T,
+  len: usize,
+  idx: usize,
+}
+
+implement[T: Copy] Iterator : ListIter[T] {
+  fn next(*self) Option[T] {
+    if (self.idx >= self.len) {
+      return Option.None;
+    };
+
+    let i = self.idx;
+    self.idx += 1;
+
+    Option.Some(self.ptr[i])
+  }
+}
+
+implement[T: Copy] PtrIterator : List[T] {
+  fn iter(*self) ListIter[T] {
+    ListIter { .ptr = self.ptr, .len = self._len, .idx = 0 }
+  }
+}
+
+implement[T: Copy] OwnedIterator : List[T] {
+  fn into_iter(self) OwnedListIter[T] {
+    let ptr = self.ptr;
+    let len = self._len;
+    let capacity = self._capacity;
+
+    // Hand the buffer over: neutralize the shell so its `Drop` is a no-op.
+    self.ptr = @as([*]T, nullptr);
+    self._len = 0;
+    self._capacity = 0;
+
+    OwnedListIter { .ptr = ptr, .len = len, .idx = 0, ._capacity = capacity }
+  }
+}
+
+/// Owning iterator over `List` elements (takes the buffer over)
+pub struct OwnedListIter[T] {
+  ptr: [*]T,
+  len: usize,
+  idx: usize,
+  _capacity: usize,
+}
+
+implement[T: Copy] Iterator : OwnedListIter[T] {
+  fn next(*self) Option[T] {
+    if (self.idx >= self.len) {
+      return Option.None;
+    };
+
+    let i = self.idx;
+    self.idx += 1;
+
+    Option.Some(self.ptr[i])
+  }
+}
+
+implement[T] Drop : OwnedListIter[T] {
+  fn drop(self) {
+    while (self.idx < self.len) {
+      let _item = self.ptr[self.idx];
+      self.idx += 1;
+    };
+
+    Allocator.dealloc(@as(*void, self.ptr));
+  }
+}
+
+// ===| Helper Functions |===
+
+fn align_capacity_up(x: usize) usize {
+  const align: usize = 2;
+  return (x + align - 1) & ~(align - 1);
+}

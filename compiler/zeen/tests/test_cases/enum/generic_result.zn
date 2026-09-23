@@ -1,26 +1,13 @@
-enum Result[T, E] {
-  ok: T,
-  err: E,
-
-  pub fn is_ok(*const self) bool {
-    @enumTag(self) == 0
-  }
-
-  pub fn unwrap(self) T {
-    self.ok
-  }
-}
-
 fn main() {
-  let a: Result[i32, i32] = Result.ok(41);
+  let a: Result[i32, i32] = Result.Ok(41);
   @println("a: {} {}", a.is_ok(), a.unwrap() + 1);
 
-  let b = Result.ok#[i32, i32](7);
+  let b = Result.Ok#[i32, i32](7);
   @println("b: {} {}", b.is_ok(), b.unwrap());
 
-  let c = Result#[i32, i32].ok(8);
+  let c = Result#[i32, i32].Ok(8);
   @println("c: {} {}", c.is_ok(), c.unwrap());
 
-  let e: Result[i32, i32] = Result.err(9);
-  @println("e: {} {} {}", e.is_ok(), e.err, @enumTag(e));
+  let e: Result[i32, i32] = Result.Err(9);
+  @println("e: {} {} {}", e.is_ok(), e.Err, @enumTag(e));
 }
