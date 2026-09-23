@@ -2753,6 +2753,21 @@ impl<'res> TypeChecker<'res> {
                 self.result.interner.never()
             }
 
+            HirMacroKind::Void => {
+                if !args.is_empty() {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 0,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                }
+
+                self.result.interner.void()
+            }
+
             HirMacroKind::SizeOf | HirMacroKind::AlignOf => {
                 if args.len() != 1 {
                     self.report(TypeError::ArgCountMismatch {
@@ -7874,6 +7889,7 @@ mod tests {
     const CORE_OUT: &str = include_str!("../../../lib/core/io.zn");
     const CORE_ITER: &str = include_str!("../../../lib/core/iter.zn");
     const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
+    const CORE_RESULT: &str = include_str!("../../../lib/core/result.zn");
     const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
     fn typecheck(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
@@ -7916,6 +7932,7 @@ mod tests {
                 ("core.out", CORE_OUT),
                 ("core.iter", CORE_ITER),
                 ("core.option", CORE_OPTION),
+                ("core.result", CORE_RESULT),
                 ("core.slice", CORE_SLICE),
             ]
         } else {
@@ -10601,6 +10618,7 @@ mod tests {
                     1 => 2,
                     _ => 0,
                 };
+                let _ = 2;
             }
             "#,
         )

@@ -4290,7 +4290,9 @@ impl<'ctx> MirLowering<'ctx> {
                     self.lower_diverging_macro(fb, kind.0, block, &expr.source)
                 }
 
-                HirMacroKind::Uninit => (block, Operand::Constant(ConstValue::Void, None)),
+                HirMacroKind::Uninit | HirMacroKind::Void => {
+                    (block, Operand::Constant(ConstValue::Void, None))
+                }
 
                 HirMacroKind::Unknown => panic!("unknown macro reached MIR lowering"),
             },
