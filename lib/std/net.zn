@@ -44,6 +44,8 @@ pub struct SocketAddr {
   }
 
   /// Parse `a.b.c.d:port`.
+  ///
+  /// * IoErrorKind.InvalidInput
   pub fn from_str(s: []const char) Result[Self, IoError] {
     let cut: usize = 0;
     let i: usize = 0;
@@ -284,6 +286,11 @@ pub struct TcpListener {
   sock: usize,
 
   /// Bind and listen with a 128 backlog.
+  ///
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AddrInUse
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.Uncategorized
   pub fn bind(addr: *const SocketAddr) Result[Self, IoError] {
     @os[windows] {
       switch (ensure_wsa()) {
@@ -340,6 +347,10 @@ pub struct TcpListener {
   }
 
   /// Accept one incoming connection.
+  ///
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.OutOfMemory
+  /// * IoErrorKind.Uncategorized
   pub fn accept(*const self) Result[TcpStream, IoError] {
     @os[windows] {
       let sa: c_SockAddrInWin = @uninit();
@@ -365,6 +376,8 @@ pub struct TcpListener {
   }
 
   /// Address this listener is bound to.
+  ///
+  /// * IoErrorKind.Uncategorized
   pub fn local_addr(*const self) Result[SocketAddr, IoError] {
     socket_local_addr(self.sock)
   }
@@ -381,6 +394,12 @@ pub struct TcpStream {
   sock: usize,
 
   /// Connect to an address.
+  ///
+  /// * IoErrorKind.ConnectionRefused
+  /// * IoErrorKind.TimedOut
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
   pub fn connect(addr: *const SocketAddr) Result[Self, IoError] {
     @os[windows] {
       switch (ensure_wsa()) {
@@ -427,6 +446,10 @@ pub struct TcpStream {
   }
 
   /// Read some bytes, appending them to buffer. `Ok(0)` means end of stream.
+  ///
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
   pub fn read(*self, buf: *String) Result[usize, IoError] {
     @os[windows] {
       let chunk: [256]char = @uninit();
@@ -462,6 +485,11 @@ pub struct TcpStream {
   }
 
   /// Read exactly `n` bytes, appending them to buffer.
+  ///
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.UnexpectedEof
+  /// * IoErrorKind.Uncategorized
   pub fn read_exact(*self, buf: *String, n: usize) Result[usize, IoError] {
     let total: usize = 0;
 
@@ -486,6 +514,10 @@ pub struct TcpStream {
   }
 
   /// Read until end of stream into buffer.
+  ///
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
   pub fn read_to_string(*self, buf: *String) Result[usize, IoError] {
     let total: usize = 0;
 
@@ -506,6 +538,11 @@ pub struct TcpStream {
   }
 
   /// Write some bytes from the slice.
+  ///
+  /// * IoErrorKind.BrokenPipe
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
   pub fn write(*self, buf: []const char) Result[usize, IoError] {
     @os[windows] {
       let n = send(self.sock, @as([*]const c_char, buf.ptr), @as(c_int, buf.len), 0);
@@ -527,6 +564,12 @@ pub struct TcpStream {
   }
 
   /// Write the whole slice, retrying short writes.
+  ///
+  /// * IoErrorKind.BrokenPipe
+  /// * IoErrorKind.ConnectionReset
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.WriteZero
+  /// * IoErrorKind.Uncategorized
   pub fn write_all(*self, buf: []const char) Result[usize, IoError] {
     let total: usize = 0;
 
@@ -547,6 +590,9 @@ pub struct TcpStream {
   }
 
   /// Shut down both directions of the stream.
+  ///
+  /// * IoErrorKind.NotConnected
+  /// * IoErrorKind.Uncategorized
   pub fn shutdown(*const self) Result[void, IoError] {
     @os[windows] {
       if (shutdown(self.sock, SD_BOTH) != 0) {
@@ -564,11 +610,16 @@ pub struct TcpStream {
   }
 
   /// Address this stream is bound to locally.
+  ///
+  /// * IoErrorKind.Uncategorized
   pub fn local_addr(*const self) Result[SocketAddr, IoError] {
     socket_local_addr(self.sock)
   }
 
   /// Address the other end is bound to.
+  ///
+  /// * IoErrorKind.NotConnected
+  /// * IoErrorKind.Uncategorized
   pub fn peer_addr(*const self) Result[SocketAddr, IoError] {
     socket_peer_addr(self.sock)
   }
@@ -585,6 +636,11 @@ pub struct UdpSocket {
   sock: usize,
 
   /// Bind to an address for sending and receiving datagrams.
+  ///
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AddrInUse
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.Uncategorized
   pub fn bind(addr: *const SocketAddr) Result[Self, IoError] {
     @os[windows] {
       switch (ensure_wsa()) {
@@ -631,6 +687,11 @@ pub struct UdpSocket {
   }
 
   /// Send one datagram.
+  ///
+  /// * IoErrorKind.AddrNotAvailable
+  /// * IoErrorKind.InvalidInput
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
   pub fn send_to(*const self, buf: []const char, addr: *const SocketAddr) Result[usize, IoError] {
     @os[windows] {
       let sa: c_SockAddrInWin = @uninit();
@@ -670,6 +731,9 @@ pub struct UdpSocket {
   }
 
   /// Receive one datagram, appending it to buffer. Returns the sender.
+  ///
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
   pub fn recv_from(*self, buf: *String) Result[SocketAddr, IoError] {
     @os[windows] {
       let chunk: [2048]char = @uninit();
@@ -715,6 +779,8 @@ pub struct UdpSocket {
   }
 
   /// Address this socket is bound to.
+  ///
+  /// * IoErrorKind.Uncategorized
   pub fn local_addr(*const self) Result[SocketAddr, IoError] {
     socket_local_addr(self.sock)
   }

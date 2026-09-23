@@ -38,6 +38,7 @@ use std.c.types;
   pub const ENOTCONN: c_int = 126;
   pub const EADDRINUSE: c_int = 100;
   pub const EADDRNOTAVAIL: c_int = 101;
+  pub const ETIMEDOUT: c_int = 138;
 } else {
   // POSIX (glibc) signal numbers; the standard ERRNO constants.
   pub const EPERM: c_int = 1;
@@ -86,18 +87,21 @@ use std.c.types;
     pub const ENOTCONN: c_int = 107;
     pub const EADDRINUSE: c_int = 98;
     pub const EADDRNOTAVAIL: c_int = 99;
+    pub const ETIMEDOUT: c_int = 110;
   } else @os[darwin | freebsd] {
     pub const ECONNREFUSED: c_int = 61;
     pub const ECONNRESET: c_int = 54;
     pub const ENOTCONN: c_int = 57;
     pub const EADDRINUSE: c_int = 48;
     pub const EADDRNOTAVAIL: c_int = 49;
+    pub const ETIMEDOUT: c_int = 60;
   } else {
     pub const ECONNREFUSED: c_int = 111;
     pub const ECONNRESET: c_int = 104;
     pub const ENOTCONN: c_int = 107;
     pub const EADDRINUSE: c_int = 98;
     pub const EADDRNOTAVAIL: c_int = 99;
+    pub const ETIMEDOUT: c_int = 110;
   }
 }
 

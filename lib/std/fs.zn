@@ -31,6 +31,11 @@ pub struct File {
   handle: *void,
 
   /// Open an existing file for reading.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
   pub fn open(path: []const char) Result[File, IoError] {
     @os[windows] {
       let c = cpath(path);
@@ -63,6 +68,11 @@ pub struct File {
   }
 
   /// Create or truncate a file for writing.
+  ///
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
   pub fn create(path: []const char) Result[File, IoError] {
     @os[windows] {
       let c = cpath(path);
@@ -95,6 +105,11 @@ pub struct File {
   }
 
   /// Read some bytes, appending them to buffer. `Ok(0)` means end of file.
+  ///
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.Uncategorized
   pub fn read(*self, buf: *String) Result[usize, IoError] {
     @os[windows] {
       let chunk: [256]char = @uninit();
@@ -137,6 +152,12 @@ pub struct File {
   }
 
   /// Read exactly `n` bytes, appending them to buffer.
+  ///
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.UnexpectedEof
+  /// * IoErrorKind.Uncategorized
   pub fn read_exact(*self, buf: *String, n: usize) Result[usize, IoError] {
     @os[windows] {
       let total: usize = 0;
@@ -201,6 +222,11 @@ pub struct File {
   }
 
   /// Read the whole file into buffer.
+  ///
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.Uncategorized
   pub fn read_to_string(*self, buf: *String) Result[usize, IoError] {
     let total: usize = 0;
 
@@ -221,6 +247,9 @@ pub struct File {
   }
 
   /// Write some bytes from the slice.
+  ///
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
   pub fn write(*self, buf: []const char) Result[usize, IoError] {
     @os[windows] {
       let written: WinDWORD = 0;
@@ -249,6 +278,10 @@ pub struct File {
   }
 
   /// Write the whole slice, retrying short writes.
+  ///
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.WriteZero
+  /// * IoErrorKind.Uncategorized
   pub fn write_all(*self, buf: []const char) Result[usize, IoError] {
     let total: usize = 0;
 
@@ -271,6 +304,9 @@ pub struct File {
   }
 
   /// Flush file contents to disk.
+  ///
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
   pub fn sync_all(*const self) Result[void, IoError] {
     @os[windows] {
       if (FlushFileBuffers(@as(WinHANDLE, self.handle)) == 0) {
@@ -288,6 +324,8 @@ pub struct File {
   }
 
   /// Metadata of this file.
+  ///
+  /// * IoErrorKind.Uncategorized
   pub fn metadata(*const self) Result[Metadata, IoError] {
     @os[windows] {
       let high: WinDWORD = 0;
@@ -390,6 +428,14 @@ pub struct OpenOptions {
     opts
   }
 
+  /// Open a file with these options.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
   pub fn open(*const self, path: []const char) Result[File, IoError] {
     @os[windows] {
       let access = GENERIC_READ;
@@ -551,6 +597,11 @@ pub struct DirEntry {
 pub struct Fs {
 
   /// Metadata of the file at `path`, following symlinks.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
   pub fn metadata(path: []const char) Result[Metadata, IoError] {
     @os[windows] {
       let c = cpath(path);
@@ -582,6 +633,12 @@ pub struct Fs {
   }
 
   /// Metadata of the link at `path` itself.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Unsupported
+  /// * IoErrorKind.Uncategorized
   pub fn symlink_metadata(path: []const char) Result[Metadata, IoError] {
     @os[windows] {
       return Result.Err(IoError.new(IoErrorKind.Unsupported, "symlink_metadata needs reparse points"));
@@ -612,6 +669,11 @@ pub struct Fs {
   }
 
   /// Delete a file.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.Uncategorized
   pub fn remove_file(path: []const char) Result[void, IoError] {
     @os[windows] {
       let c = cpath(path);
@@ -633,6 +695,11 @@ pub struct Fs {
   }
 
   /// Delete an empty directory.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
   pub fn remove_dir(path: []const char) Result[void, IoError] {
     @os[windows] {
       let c = cpath(path);
@@ -654,6 +721,11 @@ pub struct Fs {
   }
 
   /// Create a directory with mode `0o755`.
+  ///
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
   pub fn create_dir(path: []const char) Result[void, IoError] {
     @os[windows] {
       let c = cpath(path);
@@ -675,6 +747,11 @@ pub struct Fs {
   }
 
   /// Move a file or directory to a new path.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.AlreadyExists
+  /// * IoErrorKind.Uncategorized
   pub fn rename(from: []const char, to: []const char) Result[void, IoError] {
     @os[windows] {
       let cfrom = cpath(from);
@@ -698,6 +775,11 @@ pub struct Fs {
   }
 
   /// List directory entries, skipping `.` and `..`.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.NotADirectory
+  /// * IoErrorKind.Uncategorized
   pub fn read_dir(path: []const char) Result[List[DirEntry], IoError] {
     @os[windows] {
       let pattern = String.from(path);
@@ -810,6 +892,12 @@ pub struct Fs {
   }
 
   /// Read the whole file at `path` into a new string.
+  ///
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.Uncategorized
   pub fn read_to_string(path: []const char) Result[String, IoError] {
     switch (File.open(path)) {
       .Ok(f) => {
@@ -830,6 +918,12 @@ pub struct Fs {
   }
 
   /// Create or truncate the file at `path` and write `contents` into it.
+  ///
+  /// * IoErrorKind.PermissionDenied
+  /// * IoErrorKind.IsADirectory
+  /// * IoErrorKind.Interrupted
+  /// * IoErrorKind.WriteZero
+  /// * IoErrorKind.Uncategorized
   pub fn write(path: []const char, contents: []const char) Result[usize, IoError] {
     switch (File.create(path)) {
       .Ok(f) => {
