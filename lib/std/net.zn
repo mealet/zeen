@@ -44,8 +44,8 @@ pub struct SocketAddr {
   }
 
   /// Parse `a.b.c.d:port`.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.InvalidInput
   pub fn from_str(s: []const char) Result[Self, IoError] {
     let cut: usize = 0;
@@ -287,8 +287,8 @@ pub struct TcpListener {
   sock: usize,
 
   /// Bind and listen with a 128 backlog.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.PermissionDenied
   /// * IoErrorKind.AddrInUse
   /// * IoErrorKind.AddrNotAvailable
@@ -349,8 +349,8 @@ pub struct TcpListener {
   }
 
   /// Accept one incoming connection.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.OutOfMemory
   /// * IoErrorKind.Uncategorized
@@ -379,8 +379,8 @@ pub struct TcpListener {
   }
 
   /// Address this listener is bound to.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.Uncategorized
   pub fn local_addr(*const self) Result[SocketAddr, IoError] {
     socket_local_addr(self.sock)
@@ -398,8 +398,8 @@ pub struct TcpStream {
   sock: usize,
 
   /// Connect to an address.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.ConnectionRefused
   /// * IoErrorKind.TimedOut
   /// * IoErrorKind.AddrNotAvailable
@@ -451,8 +451,8 @@ pub struct TcpStream {
   }
 
   /// Read some bytes, appending them to buffer. `Ok(0)` means end of stream.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.ConnectionReset
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.Uncategorized
@@ -491,8 +491,8 @@ pub struct TcpStream {
   }
 
   /// Read exactly `n` bytes, appending them to buffer.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.ConnectionReset
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.UnexpectedEof
@@ -521,8 +521,8 @@ pub struct TcpStream {
   }
 
   /// Read until end of stream into buffer.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.ConnectionReset
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.Uncategorized
@@ -546,8 +546,8 @@ pub struct TcpStream {
   }
 
   /// Write some bytes from the slice.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.BrokenPipe
   /// * IoErrorKind.ConnectionReset
   /// * IoErrorKind.Interrupted
@@ -573,8 +573,8 @@ pub struct TcpStream {
   }
 
   /// Write the whole slice, retrying short writes.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.BrokenPipe
   /// * IoErrorKind.ConnectionReset
   /// * IoErrorKind.Interrupted
@@ -600,8 +600,8 @@ pub struct TcpStream {
   }
 
   /// Shut down both directions of the stream.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.NotConnected
   /// * IoErrorKind.Uncategorized
   pub fn shutdown(*const self) Result[void, IoError] {
@@ -621,16 +621,16 @@ pub struct TcpStream {
   }
 
   /// Address this stream is bound to locally.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.Uncategorized
   pub fn local_addr(*const self) Result[SocketAddr, IoError] {
     socket_local_addr(self.sock)
   }
 
   /// Address the other end is bound to.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.NotConnected
   /// * IoErrorKind.Uncategorized
   pub fn peer_addr(*const self) Result[SocketAddr, IoError] {
@@ -649,8 +649,8 @@ pub struct UdpSocket {
   sock: usize,
 
   /// Bind to an address for sending and receiving datagrams.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.PermissionDenied
   /// * IoErrorKind.AddrInUse
   /// * IoErrorKind.AddrNotAvailable
@@ -701,8 +701,8 @@ pub struct UdpSocket {
   }
 
   /// Send one datagram.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.AddrNotAvailable
   /// * IoErrorKind.InvalidInput
   /// * IoErrorKind.Interrupted
@@ -746,8 +746,8 @@ pub struct UdpSocket {
   }
 
   /// Receive one datagram, appending it to buffer. Returns the sender.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.Interrupted
   /// * IoErrorKind.Uncategorized
   pub fn recv_from(*self, buf: *String) Result[SocketAddr, IoError] {
@@ -795,8 +795,8 @@ pub struct UdpSocket {
   }
 
   /// Address this socket is bound to.
-  /// Possible IoError variants:
   ///
+  /// Possible IoError variants:
   /// * IoErrorKind.Uncategorized
   pub fn local_addr(*const self) Result[SocketAddr, IoError] {
     socket_local_addr(self.sock)
