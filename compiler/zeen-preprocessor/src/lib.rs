@@ -417,6 +417,39 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
         None
     }
 
+    /// Restores block shape after guard splicing.
+    ///
+    /// A spliced branch may end in a bare value, leaving `TrailingExpr`
+    /// inside the statement list. The parser only produces it as the last
+    /// statement, so mid list entries become plain statements and a last
+    /// one becomes the block tail when there is none yet.
+    fn finish_block_stmts(
+        &mut self,
+        stmts: &[&'a Statement<'a>],
+        trailing: Option<&'a Expression<'a>>,
+    ) -> (&'a [&'a Statement<'a>], Option<&'a Expression<'a>>) {
+        let mut out: SmallVec<[&'a Statement<'a>; 8]> = SmallVec::new();
+        let mut tail = trailing;
+        let last = stmts.len().saturating_sub(1);
+
+        for (i, s) in stmts.iter().enumerate() {
+            if let StatementKind::TrailingExpr(expr) = s.kind {
+                if i == last && tail.is_none() {
+                    tail = Some(expr);
+                    continue;
+                }
+                out.push(self.arena.alloc(Statement {
+                    kind: StatementKind::Expr(expr),
+                    span: s.span,
+                }));
+                continue;
+            }
+            out.push(*s);
+        }
+
+        (self.alloc_slice(&out), tail)
+    }
+
     /// Expands a statement-level conditional used as a single statement body
     /// (e.g. the body of an `if`/`while`/`for`). The matching branch is resolved
     /// and wrapped back into a block expression statement.
@@ -427,11 +460,9 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
     ) -> Option<&'a Statement<'a>> {
         let branch = self.matched_stmt_branch(block)?;
         let stmts = self.resolve_stmt_list(branch);
+        let (stmts, trailing) = self.finish_block_stmts(stmts, None);
         let expr = self.arena.alloc(Expression {
-            kind: ExpressionKind::Block {
-                stmts,
-                trailing: None,
-            },
+            kind: ExpressionKind::Block { stmts, trailing },
             span,
         });
         Some(self.arena.alloc(Statement {
@@ -623,10 +654,12 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 len: self.resolve_expr(len),
             },
 
-            ExpressionKind::Block { stmts, trailing } => ExpressionKind::Block {
-                stmts: self.resolve_stmt_list(stmts),
-                trailing: trailing.map(|e| self.resolve_expr(e)),
-            },
+            ExpressionKind::Block { stmts, trailing } => {
+                let trailing = trailing.map(|e| self.resolve_expr(e));
+                let stmts = self.resolve_stmt_list(stmts);
+                let (stmts, trailing) = self.finish_block_stmts(stmts, trailing);
+                ExpressionKind::Block { stmts, trailing }
+            }
 
             ExpressionKind::Closure {
                 params,
@@ -938,5 +971,29 @@ mod tests {
         };
         assert_eq!(inner.len(), 1);
         assert!(matches!(inner[0].kind, StatementKind::Let { .. }));
+    }
+
+    #[test]
+    fn stmt_guard_trailing_value_becomes_block_tail() {
+        let (decls, _) = run(
+            "fn main() { @os[windows] { return 1; } else { 2 } }",
+            linux(),
+            CompilationMode::Debug,
+        );
+        let DeclarationKind::FnDecl { body, .. } = decls[0].kind else {
+            panic!("expected fn decl");
+        };
+        let Statement { kind, .. } = body.unwrap();
+        let StatementKind::Expr(expr) = kind else {
+            panic!("expected expr stmt: {kind:?}");
+        };
+        let ExpressionKind::Block { stmts, trailing } = expr.kind else {
+            panic!("expected block expr: {expr:?}");
+        };
+        assert!(stmts.is_empty());
+        assert!(matches!(
+            trailing.unwrap().kind,
+            ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(2))
+        ));
     }
 }
