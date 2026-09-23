@@ -1,0 +1,62 @@
+use std.fs;
+use std.io;
+use std.string;
+
+fn main() {
+  let base: []const char = "/tmp/zeen_fs_basic";
+  let file: []const char = "/tmp/zeen_fs_basic/hello.txt";
+  let moved: []const char = "/tmp/zeen_fs_basic/moved.txt";
+
+  let _ = remove_file(moved);
+  let _ = remove_file(file);
+  let _ = remove_dir(base);
+
+  @println("create_dir: {}", create_dir(base).unwrap());
+  @println("exists: {}", exists(base));
+  @println("write_file: {}", write_file(file, "hello fs\nsecond\n").unwrap());
+
+  let m = metadata(file).unwrap();
+  @println("len: {} empty: {} file: {} dir: {}", m.len(), m.is_empty(), m.is_file(), m.is_dir());
+  @println("read_to_string: {}", read_to_string(file).unwrap().len());
+
+  let part = String.new();
+  let reader = File.open(file).unwrap();
+  @println("read_exact: {}", reader.read_exact(&part, 5).unwrap());
+  @println("part_len: {}", part.len());
+
+  let entries = read_dir(base).unwrap();
+  @println("entries: {}", entries.len());
+
+  let listed = read_dir(base).unwrap();
+  let rest = listed;
+  let files: i32 = 0;
+  let seen_hello = false;
+  while (true) {
+    let next = rest.pop();
+    if (next.is_none()) {
+      break;
+    };
+    let e = next.unwrap();
+    if (e.is_file()) {
+      files += 1;
+    };
+    let name = e.into_name();
+    if (name == String.from("hello.txt")) {
+      seen_hello = true;
+    };
+  };
+  @println("files: {} seen_hello: {}", files, seen_hello);
+
+  let writer = OpenOptions.new().write(true).create(true).truncate(true).open(moved).unwrap();
+  @println("opts write: {}", writer.write_all("moved\n").unwrap());
+  @println("sync: {}", writer.sync_all().unwrap());
+
+  @println("rename: {}", rename_path(moved, file).unwrap());
+  @println("remove_file: {}", remove_file(file).unwrap());
+  @println("remove_dir: {}", remove_dir(base).unwrap());
+  @println("exists after: {}", exists(file));
+
+  let missing = File.open("/tmp/zeen_fs_basic_nope/x");
+  @println("missing is_err: {}", missing.is_err());
+  @println("missing kind: {}", missing.unwrap_err().kind());
+}
