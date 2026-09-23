@@ -545,300 +545,307 @@ pub struct DirEntry {
   }
 }
 
-/// Metadata of the file at `path`, following symlinks.
-pub fn metadata(path: []const char) Result[Metadata, IoError] {
-  @os[windows] {
-    let c = cpath(path);
-    let data: c_FileAttrData = @uninit();
+/// Filesystem helpers on paths.
+/// Static methods on purpose: plain free functions would collide
+/// with user names once imported.
+pub struct Fs {
 
-    if (GetFileAttributesExA(@as([*]const c_char, c.slice(..).ptr), 0, &data) == 0) {
-      return Result.Err(IoError.last_os_error());
-    };
+  /// Metadata of the file at `path`, following symlinks.
+  pub fn metadata(path: []const char) Result[Metadata, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+      let data: c_FileAttrData = @uninit();
 
-    let dir = (data.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-
-    return Result.Ok(Metadata {
-      ._len = (@as(u64, data.size_high) << @as(u64, 32)) | @as(u64, data.size_low),
-      ._is_dir = dir,
-      ._is_file = !dir,
-      ._is_symlink = false,
-      ._mode = 0,
-    });
-  } else {
-    let c = cpath(path);
-    let st: c_Stat = @uninit();
-
-    if (stat(@as([*]const char, c.slice(..).ptr), &st) != 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(metadata_of(&st));
-  }
-}
-
-/// Metadata of the link at `path` itself.
-pub fn symlink_metadata(path: []const char) Result[Metadata, IoError] {
-  @os[windows] {
-    return Result.Err(IoError.new(IoErrorKind.Unsupported, "symlink_metadata needs reparse points"));
-  } else {
-    let c = cpath(path);
-    let st: c_Stat = @uninit();
-
-    if (lstat(@as([*]const char, c.slice(..).ptr), &st) != 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(metadata_of(&st));
-  }
-}
-
-/// `true` when `path` can be stated.
-pub fn exists(path: []const char) bool {
-  @os[windows] {
-    let c = cpath(path);
-
-    return GetFileAttributesA(@as([*]const c_char, c.slice(..).ptr)) != INVALID_FILE_ATTRIBUTES;
-  } else {
-    let c = cpath(path);
-    let st: c_Stat = @uninit();
-
-    return stat(@as([*]const char, c.slice(..).ptr), &st) == 0;
-  }
-}
-
-/// Delete a file.
-pub fn remove_file(path: []const char) Result[void, IoError] {
-  @os[windows] {
-    let c = cpath(path);
-
-    if (DeleteFileA(@as([*]const c_char, c.slice(..).ptr)) == 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(@void());
-  } else {
-    let c = cpath(path);
-
-    if (unlink(@as([*]const char, c.slice(..).ptr)) != 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(@void());
-  }
-}
-
-/// Delete an empty directory.
-pub fn remove_dir(path: []const char) Result[void, IoError] {
-  @os[windows] {
-    let c = cpath(path);
-
-    if (RemoveDirectoryA(@as([*]const c_char, c.slice(..).ptr)) == 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(@void());
-  } else {
-    let c = cpath(path);
-
-    if (rmdir(@as([*]const char, c.slice(..).ptr)) != 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(@void());
-  }
-}
-
-/// Create a directory with mode `0o755`.
-pub fn create_dir(path: []const char) Result[void, IoError] {
-  @os[windows] {
-    let c = cpath(path);
-
-    if (CreateDirectoryA(@as([*]const c_char, c.slice(..).ptr), nullptr) == 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(@void());
-  } else {
-    let c = cpath(path);
-
-    if (mkdir(@as([*]const char, c.slice(..).ptr), 0o755) != 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(@void());
-  }
-}
-
-/// Move a file or directory to a new path.
-pub fn rename_path(from: []const char, to: []const char) Result[void, IoError] {
-  @os[windows] {
-    let cfrom = cpath(from);
-    let cto = cpath(to);
-
-    if (MoveFileA(@as([*]const c_char, cfrom.slice(..).ptr), @as([*]const c_char, cto.slice(..).ptr)) == 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(@void());
-  } else {
-    let cfrom = cpath(from);
-    let cto = cpath(to);
-
-    if (rename(@as([*]const char, cfrom.slice(..).ptr), @as([*]const char, cto.slice(..).ptr)) != 0) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    return Result.Ok(@void());
-  }
-}
-
-/// List directory entries, skipping `.` and `..`.
-pub fn read_dir(path: []const char) Result[List[DirEntry], IoError] {
-  @os[windows] {
-    let pattern = String.from(path);
-    pattern.push('/');
-    pattern.push('*');
-    let cpattern = cpath(pattern.slice(..));
-
-    let data: c_FindData = @uninit();
-    let dir = FindFirstFileA(@as([*]const c_char, cpattern.slice(..).ptr), &data);
-
-    if (dir == INVALID_HANDLE_VALUE) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    let out = List#[DirEntry].new();
-
-    while (true) {
-      let raw = @as([*]const char, &data.name[0]);
-
-      if (raw[0] == '.') {
-        if (raw[1] == '\0') {
-          if (FindNextFileA(dir, &data) == 0) {
-            break;
-          };
-          continue;
-        };
-
-        if (raw[1] == '.' && raw[2] == '\0') {
-          if (FindNextFileA(dir, &data) == 0) {
-            break;
-          };
-          continue;
-        };
+      if (GetFileAttributesExA(@as([*]const c_char, c.slice(..).ptr), 0, &data) == 0) {
+        return Result.Err(IoError.last_os_error());
       };
 
-      let name = String.from_cstr(raw);
+      let dir = (data.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
-      let full = String.from(path);
-      full.push('/');
-      full.push_str(name.slice(..));
-
-      let dir_flag = (data.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-
-      out.push(DirEntry {
-        ._name = name,
-        ._path = full,
-        ._is_dir = dir_flag,
-        ._is_file = !dir_flag,
+      return Result.Ok(Metadata {
+        ._len = (@as(u64, data.size_high) << @as(u64, 32)) | @as(u64, data.size_low),
+        ._is_dir = dir,
+        ._is_file = !dir,
         ._is_symlink = false,
+        ._mode = 0,
       });
+    } else {
+      let c = cpath(path);
+      let st: c_Stat = @uninit();
 
-      if (FindNextFileA(dir, &data) == 0) {
-        break;
-      };
-    };
-
-    let _ = FindClose(dir);
-
-    return Result.Ok(out);
-  } else {
-    let c = cpath(path);
-    let dir = opendir(@as([*]const char, c.slice(..).ptr));
-
-    if (dir == nullptr) {
-      return Result.Err(IoError.last_os_error());
-    };
-
-    let out = List#[DirEntry].new();
-
-    while (true) {
-      let e = readdir(dir);
-
-      if (e == nullptr) {
-        break;
+      if (stat(@as([*]const char, c.slice(..).ptr), &st) != 0) {
+        return Result.Err(IoError.last_os_error());
       };
 
-      let raw = @as([*]const char, &(*e).d_name[0]);
-
-      if (raw[0] == '.') {
-        if (raw[1] == '\0') {
-          continue;
-        };
-
-        if (raw[1] == '.' && raw[2] == '\0') {
-          continue;
-        };
-      };
-
-      let name = String.from_cstr(raw);
-
-      let full = String.from(path);
-      full.push('/');
-      full.push_str(name.slice(..));
-
-      let dtype = (*e).d_type;
-
-      out.push(DirEntry {
-        ._name = name,
-        ._path = full,
-        ._is_dir = dtype == DT_DIR,
-        ._is_file = dtype == DT_REG,
-        ._is_symlink = dtype == DT_LNK,
-      });
-    };
-
-    let _ = closedir(dir);
-
-    return Result.Ok(out);
-  }
-}
-
-/// Read the whole file at `path` into a new string.
-pub fn read_to_string(path: []const char) Result[String, IoError] {
-  switch (File.open(path)) {
-    .Ok(f) => {
-      let buf = String.new();
-      let mut_file = f;
-
-      switch (mut_file.read_to_string(&buf)) {
-        .Ok(_bytes) => Result.Ok(buf),
-        .Err(e) => {
-          return Result.Err(e);
-        }
-      }
-    },
-    .Err(e) => {
-      return Result.Err(e);
+      return Result.Ok(metadata_of(&st));
     }
   }
-}
 
-/// Create or truncate the file at `path` and write `contents` into it.
-pub fn write_file(path: []const char, contents: []const char) Result[usize, IoError] {
-  switch (File.create(path)) {
-    .Ok(f) => {
-      let mut_file = f;
+  /// Metadata of the link at `path` itself.
+  pub fn symlink_metadata(path: []const char) Result[Metadata, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "symlink_metadata needs reparse points"));
+    } else {
+      let c = cpath(path);
+      let st: c_Stat = @uninit();
 
-      switch (mut_file.write_all(contents)) {
-        .Ok(n) => Result.Ok(n),
-        .Err(e) => {
-          return Result.Err(e);
-        }
-      }
-    },
-    .Err(e) => {
-      return Result.Err(e);
+      if (lstat(@as([*]const char, c.slice(..).ptr), &st) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(metadata_of(&st));
     }
   }
+
+  /// `true` when `path` can be stated.
+  pub fn exists(path: []const char) bool {
+    @os[windows] {
+      let c = cpath(path);
+
+      return GetFileAttributesA(@as([*]const c_char, c.slice(..).ptr)) != INVALID_FILE_ATTRIBUTES;
+    } else {
+      let c = cpath(path);
+      let st: c_Stat = @uninit();
+
+      return stat(@as([*]const char, c.slice(..).ptr), &st) == 0;
+    }
+  }
+
+  /// Delete a file.
+  pub fn remove_file(path: []const char) Result[void, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+
+      if (DeleteFileA(@as([*]const c_char, c.slice(..).ptr)) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    } else {
+      let c = cpath(path);
+
+      if (unlink(@as([*]const char, c.slice(..).ptr)) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// Delete an empty directory.
+  pub fn remove_dir(path: []const char) Result[void, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+
+      if (RemoveDirectoryA(@as([*]const c_char, c.slice(..).ptr)) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    } else {
+      let c = cpath(path);
+
+      if (rmdir(@as([*]const char, c.slice(..).ptr)) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// Create a directory with mode `0o755`.
+  pub fn create_dir(path: []const char) Result[void, IoError] {
+    @os[windows] {
+      let c = cpath(path);
+
+      if (CreateDirectoryA(@as([*]const c_char, c.slice(..).ptr), nullptr) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    } else {
+      let c = cpath(path);
+
+      if (mkdir(@as([*]const char, c.slice(..).ptr), 0o755) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// Move a file or directory to a new path.
+  pub fn rename(from: []const char, to: []const char) Result[void, IoError] {
+    @os[windows] {
+      let cfrom = cpath(from);
+      let cto = cpath(to);
+
+      if (MoveFileA(@as([*]const c_char, cfrom.slice(..).ptr), @as([*]const c_char, cto.slice(..).ptr)) == 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    } else {
+      let cfrom = cpath(from);
+      let cto = cpath(to);
+
+      if (rename(@as([*]const char, cfrom.slice(..).ptr), @as([*]const char, cto.slice(..).ptr)) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@void());
+    }
+  }
+
+  /// List directory entries, skipping `.` and `..`.
+  pub fn read_dir(path: []const char) Result[List[DirEntry], IoError] {
+    @os[windows] {
+      let pattern = String.from(path);
+      pattern.push('/');
+      pattern.push('*');
+      let cpattern = cpath(pattern.slice(..));
+
+      let data: c_FindData = @uninit();
+      let dir = FindFirstFileA(@as([*]const c_char, cpattern.slice(..).ptr), &data);
+
+      if (dir == INVALID_HANDLE_VALUE) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      let out = List#[DirEntry].new();
+
+      while (true) {
+        let raw = @as([*]const char, &data.name[0]);
+
+        if (raw[0] == '.') {
+          if (raw[1] == '\0') {
+            if (FindNextFileA(dir, &data) == 0) {
+              break;
+            };
+            continue;
+          };
+
+          if (raw[1] == '.' && raw[2] == '\0') {
+            if (FindNextFileA(dir, &data) == 0) {
+              break;
+            };
+            continue;
+          };
+        };
+
+        let name = String.from_cstr(raw);
+
+        let full = String.from(path);
+        full.push('/');
+        full.push_str(name.slice(..));
+
+        let dir_flag = (data.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+        out.push(DirEntry {
+          ._name = name,
+          ._path = full,
+          ._is_dir = dir_flag,
+          ._is_file = !dir_flag,
+          ._is_symlink = false,
+        });
+
+        if (FindNextFileA(dir, &data) == 0) {
+          break;
+        };
+      };
+
+      let _ = FindClose(dir);
+
+      return Result.Ok(out);
+    } else {
+      let c = cpath(path);
+      let dir = opendir(@as([*]const char, c.slice(..).ptr));
+
+      if (dir == nullptr) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      let out = List#[DirEntry].new();
+
+      while (true) {
+        let e = readdir(dir);
+
+        if (e == nullptr) {
+          break;
+        };
+
+        let raw = @as([*]const char, &(*e).d_name[0]);
+
+        if (raw[0] == '.') {
+          if (raw[1] == '\0') {
+            continue;
+          };
+
+          if (raw[1] == '.' && raw[2] == '\0') {
+            continue;
+          };
+        };
+
+        let name = String.from_cstr(raw);
+
+        let full = String.from(path);
+        full.push('/');
+        full.push_str(name.slice(..));
+
+        let dtype = (*e).d_type;
+
+        out.push(DirEntry {
+          ._name = name,
+          ._path = full,
+          ._is_dir = dtype == DT_DIR,
+          ._is_file = dtype == DT_REG,
+          ._is_symlink = dtype == DT_LNK,
+        });
+      };
+
+      let _ = closedir(dir);
+
+      return Result.Ok(out);
+    }
+  }
+
+  /// Read the whole file at `path` into a new string.
+  pub fn read_to_string(path: []const char) Result[String, IoError] {
+    switch (File.open(path)) {
+      .Ok(f) => {
+        let buf = String.new();
+        let mut_file = f;
+
+        switch (mut_file.read_to_string(&buf)) {
+          .Ok(_bytes) => Result.Ok(buf),
+          .Err(e) => {
+            return Result.Err(e);
+          }
+        }
+      },
+      .Err(e) => {
+        return Result.Err(e);
+      }
+    }
+  }
+
+  /// Create or truncate the file at `path` and write `contents` into it.
+  pub fn write(path: []const char, contents: []const char) Result[usize, IoError] {
+    switch (File.create(path)) {
+      .Ok(f) => {
+        let mut_file = f;
+
+        switch (mut_file.write_all(contents)) {
+          .Ok(n) => Result.Ok(n),
+          .Err(e) => {
+            return Result.Err(e);
+          }
+        }
+      },
+      .Err(e) => {
+        return Result.Err(e);
+      }
+    }
+  }
+
 }

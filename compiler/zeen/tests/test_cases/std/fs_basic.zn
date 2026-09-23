@@ -7,29 +7,29 @@ fn main() {
   let file: []const char = "/tmp/zeen_fs_basic/hello.txt";
   let moved: []const char = "/tmp/zeen_fs_basic/moved.txt";
 
-  let _ = remove_file(moved);
-  let _ = remove_file(file);
-  let _ = remove_dir(base);
+  let _ = Fs.remove_file(moved);
+  let _ = Fs.remove_file(file);
+  let _ = Fs.remove_dir(base);
 
   @println("create_dir");
-  create_dir(base).unwrap();
-  @println("exists: {}", exists(base));
-  @println("write_file: {}", write_file(file, "hello fs\nsecond\n").unwrap());
+  Fs.create_dir(base).unwrap();
+  @println("exists: {}", Fs.exists(base));
+  @println("write: {}", Fs.write(file, "hello fs\nsecond\n").unwrap());
 
-  let m = metadata(file).unwrap();
+  let m = Fs.metadata(file).unwrap();
   @println("len: {} empty: {} file: {} dir: {}", m.len(), m.is_empty(), m.is_file(), m.is_dir());
-  @println("read_to_string: {}", read_to_string(file).unwrap().len());
-  @println("read again: [{}]", read_to_string(file).unwrap().slice(..));
+  @println("read_to_string: {}", Fs.read_to_string(file).unwrap().len());
+  @println("read again: [{}]", Fs.read_to_string(file).unwrap().slice(..));
 
   let part = String.new();
   let reader = File.open(file).unwrap();
   @println("read_exact: {}", reader.read_exact(&part, 5).unwrap());
   @println("part_len: {}", part.len());
 
-  let entries = read_dir(base).unwrap();
+  let entries = Fs.read_dir(base).unwrap();
   @println("entries: {}", entries.len());
 
-  let listed = read_dir(base).unwrap();
+  let listed = Fs.read_dir(base).unwrap();
   let rest = listed;
   let files: i32 = 0;
   let seen_hello = false;
@@ -55,12 +55,12 @@ fn main() {
   writer.sync_all().unwrap();
 
   @println("rename");
-  rename_path(moved, file).unwrap();
+  Fs.rename(moved, file).unwrap();
   @println("remove_file");
-  remove_file(file).unwrap();
+  Fs.remove_file(file).unwrap();
   @println("remove_dir");
-  remove_dir(base).unwrap();
-  @println("exists after: {}", exists(file));
+  Fs.remove_dir(base).unwrap();
+  @println("exists after: {}", Fs.exists(file));
 
   let missing = File.open("/tmp/zeen_fs_basic_nope/x");
   @println("missing is_err: {}", missing.is_err());
