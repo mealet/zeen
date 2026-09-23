@@ -11,7 +11,7 @@ use std::{
 
 use zeen_ast::{
     declarations::{Declaration, DeclarationKind, EnumVariantPayload, GenericType},
-    expressions::{Expression, ExpressionKind, Pattern},
+    expressions::{Expression, ExpressionKind, Literal, Pattern, UnaryOp},
     statements::{Statement, StatementKind},
     types::{TypeExpr, TypeKind},
 };
@@ -452,6 +452,7 @@ impl<'ctx> NameResolver {
                 name,
                 is_const,
                 is_pub,
+                value,
                 ..
             } => {
                 let def_id = self.define_at(
@@ -464,6 +465,10 @@ impl<'ctx> NameResolver {
                         is_pub,
                     },
                 );
+
+                if is_const && let Some(lit) = Self::const_literal(value) {
+                    self.result.const_values.insert(def_id, lit);
+                }
 
                 self.table.declare_value(name.0, def_id);
             }
@@ -1277,6 +1282,13 @@ impl<'ctx> NameResolver {
                 });
                 self.table.declare_value(name, def_id);
 
+                if is_const
+                    && let Some(value) = value
+                    && let Some(lit) = Self::const_literal(value)
+                {
+                    self.result.const_values.insert(def_id, lit);
+                }
+
                 self.result
                     .expr_bindings
                     .insert(NodeKey::from_stmt(stmt), Resolution::Def(def_id));
@@ -1408,6 +1420,27 @@ impl<'ctx> NameResolver {
         }
     }
 
+    fn const_literal(value: &Expression<'ctx>) -> Option<Literal> {
+        match value.kind {
+            ExpressionKind::Literal(lit) => Some(lit),
+            ExpressionKind::Unary {
+                expr,
+                op: UnaryOp::Neg,
+            } => match expr.kind {
+                ExpressionKind::Literal(Literal::Int(n)) => Some(Literal::Int(n.wrapping_neg())),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn is_const_def(&self, def_id: DefId) -> bool {
+        matches!(
+            self.result.defs.get(&def_id).map(|info| &info.kind),
+            Some(DefKind::GlobalVar { is_const: true } | DefKind::Variable { is_const: true })
+        )
+    }
+
     fn resolve_expr(&mut self, expr: &'ctx Expression<'ctx>) {
         match expr.kind {
             ExpressionKind::Literal(_) => {}
@@ -1473,7 +1506,25 @@ impl<'ctx> NameResolver {
                 for arm in arms.iter().copied() {
                     self.table.push(ScopeKind::Block);
 
-                    if let Some((name, span)) = Self::arm_binding(&arm.pattern) {
+                    if let Pattern::Named { name, span } = arm.pattern
+                        && let Some(def_id) = self.table.lookup_value(name)
+                        && self.is_const_def(def_id)
+                    {
+                        match self.result.const_values.get(&def_id).copied() {
+                            Some(lit) => {
+                                self.result
+                                    .arm_const_values
+                                    .insert(NodeKey::from_arm(arm), lit);
+                            }
+                            None => {
+                                self.report(ResolveError::NonLiteralConstPattern {
+                                    name: self.interner_resolve(&name),
+                                    src: self.named_src(),
+                                    span,
+                                });
+                            }
+                        }
+                    } else if let Some((name, span)) = Self::arm_binding(&arm.pattern) {
                         let def_id = self.define(DefInfo {
                             name,
                             kind: DefKind::Variable { is_const: false },
