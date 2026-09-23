@@ -341,9 +341,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     /// Sets the body of each payload-enum struct: `{ tag: u8, union }`. The
     /// union member must cover the largest payload size *and* satisfy the
     /// strictest payload alignment, or payload accesses through the union
-    /// would be misaligned (UB): a single payload rarely covers both (e.g.
-    /// `[9]u8` next to a `u64`), so the fallback pads the most-aligned
-    /// payload up to the largest size. Runs after all struct bodies so
+    /// would be misaligned (UB). A lone payload reuses its own type: with
+    /// no smaller payload nothing can overlap its padding. With several
+    /// payloads the union is an untyped blob: reusing the largest payload
+    /// type would leave smaller payloads overlapping its padding, and
+    /// those bytes do not survive copies. Runs after all struct bodies so
     /// payload structs are sized.
     fn fill_enum_layouts(&mut self) {
         for &ty in self.program.enum_layouts.keys() {
@@ -374,35 +376,47 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             let union_ty: BasicTypeEnum<'ctx> = if max_size == 0 {
                 self.context.i8_type().into()
-            } else if let Some(&(_, _, payload)) = measured
-                .iter()
-                .find(|m| m.0 == max_size && m.1 == max_align)
-            {
-                self.map_basic_type(payload)
+            } else if measured.len() == 1 {
+                self.map_basic_type(measured[0].2)
             } else {
-                let (_, _, align_payload) = measured
-                    .iter()
-                    .filter(|m| m.1 == max_align)
-                    .max_by_key(|m| m.0)
-                    .copied()
-                    .expect("max alignment comes from a payload");
-                let pad = max_size
-                    - self
-                        .target_data
-                        .get_abi_size(&self.map_basic_type(align_payload));
-                if pad == 0 {
-                    self.map_basic_type(align_payload)
-                } else {
-                    let pad_ty = self.context.i8_type().array_type(pad as u32);
-                    let fields: [BasicTypeEnum<'ctx>; 2] =
-                        [self.map_basic_type(align_payload), pad_ty.into()];
-                    BasicTypeEnum::StructType(self.context.struct_type(&fields, false))
-                }
+                self.opaque_union(max_size, max_align)
             };
 
             let tag_ty = self.context.i8_type().into();
             opaque.set_body(&[tag_ty, union_ty], false);
         }
+    }
+
+    /// Untyped union slot: every byte is real data, so any payload
+    /// survives copies. Sized to the largest payload, aligned to the
+    /// strictest one.
+    fn opaque_union(&self, max_size: u64, max_align: u64) -> BasicTypeEnum<'ctx> {
+        let i8_ty = self.context.i8_type();
+        if max_align < 2 {
+            return i8_ty.array_type(max_size as u32).into();
+        }
+        let (words, rest) = if max_align >= 8 {
+            (
+                self.context.i64_type().array_type((max_size / 8) as u32),
+                (max_size % 8) as u32,
+            )
+        } else if max_align >= 4 {
+            (
+                self.context.i32_type().array_type((max_size / 4) as u32),
+                (max_size % 4) as u32,
+            )
+        } else {
+            (
+                self.context.i16_type().array_type((max_size / 2) as u32),
+                (max_size % 2) as u32,
+            )
+        };
+        if rest == 0 {
+            return words.into();
+        }
+        let tail = i8_ty.array_type(rest);
+        let fields: [BasicTypeEnum<'ctx>; 2] = [words.into(), tail.into()];
+        BasicTypeEnum::StructType(self.context.struct_type(&fields, false))
     }
 
     /// Creates LLVM globals with real lowered types.
