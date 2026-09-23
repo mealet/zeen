@@ -3,6 +3,9 @@ exists: true
 write_file: 16
 len: 16 empty: false file: true dir: false
 read_to_string: 16
+read again: [hello fs
+second
+]
 read_exact: 5
 part_len: 5
 entries: 1
