@@ -1,0 +1,604 @@
+use std.alloc;
+use std.string;
+use std.list;
+use std.io;
+use std.c.types;
+use std.c.string;
+use std.c.stdio;
+use std.c.errno;
+use std.c.posix.fcntl;
+use std.c.posix.unistd;
+use std.c.posix.sys.stat;
+use std.c.posix.dirent;
+
+/// Null terminated copy of a path for C calls.
+fn cpath(path: []const char) String {
+  let s = String.from(path);
+  s.push('\0');
+  s
+}
+
+/// Owned file handle. Closes the descriptor on drop.
+pub struct File {
+  fd: c_int,
+
+  /// Open an existing file for reading.
+  pub fn open(path: []const char) Result[File, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "File.open is not supported on windows"));
+    } else {
+      let c = cpath(path);
+      let fd = open(@as([*]const char, c.slice(..).ptr), O_RDONLY, 0);
+
+      if (fd < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(File { .fd = fd });
+    }
+  }
+
+  /// Create or truncate a file for writing.
+  pub fn create(path: []const char) Result[File, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "File.create is not supported on windows"));
+    } else {
+      let c = cpath(path);
+      let fd = open(@as([*]const char, c.slice(..).ptr), O_CREAT | O_WRONLY | O_TRUNC, 0o666);
+
+      if (fd < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(File { .fd = fd });
+    }
+  }
+
+  /// Read some bytes, appending them to buffer. `Ok(0)` means end of file.
+  pub fn read(*self, buf: *String) Result[usize, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "File.read is not supported on windows"));
+    } else {
+      let chunk: [256]char = @uninit();
+      let got = read(self.fd, @as(*void, &chunk[0]), 256);
+
+      if (got < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      if (got == 0) {
+        return Result.Ok(@as(usize, 0));
+      };
+
+      (*buf).push_str(chunk[0..@as(usize, got)]);
+
+      return Result.Ok(@as(usize, got));
+    }
+  }
+
+  /// Read exactly `n` bytes, appending them to buffer.
+  pub fn read_exact(*self, buf: *String, n: usize) Result[usize, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "File.read_exact is not supported on windows"));
+    } else {
+      let total: usize = 0;
+
+      while (total < n) {
+        let chunk: [256]char = @uninit();
+        let want: usize = 256;
+
+        if (n - total < want) {
+          want = n - total;
+        };
+
+        let got = read(self.fd, @as(*void, &chunk[0]), want);
+
+        if (got < 0) {
+          return Result.Err(IoError.last_os_error());
+        };
+
+        if (got == 0) {
+          return Result.Err(IoError.new(IoErrorKind.UnexpectedEof, "early end of file"));
+        };
+
+        (*buf).push_str(chunk[0..@as(usize, got)]);
+        total += @as(usize, got);
+      };
+
+      return Result.Ok(total);
+    }
+  }
+
+  /// Read the whole file into buffer.
+  pub fn read_to_string(*self, buf: *String) Result[usize, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "File.read_to_string is not supported on windows"));
+    } else {
+      let total: usize = 0;
+
+      while (true) {
+        switch (self.read(buf)) {
+          .Ok(got) => if (got == 0) {
+            break;
+          } else {
+            total += got;
+          },
+          .Err(e) => {
+            return Result.Err(e);
+          },
+        };
+      };
+
+      return Result.Ok(total);
+    }
+  }
+
+  /// Write some bytes from the slice.
+  pub fn write(*self, buf: []const char) Result[usize, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "File.write is not supported on windows"));
+    } else {
+      let n = write(self.fd, @as([*]const void, buf.ptr), buf.len);
+
+      if (n < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(@as(usize, n));
+    }
+  }
+
+  /// Write the whole slice, retrying short writes.
+  pub fn write_all(*self, buf: []const char) Result[usize, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "File.write_all is not supported on windows"));
+    } else {
+      let total: usize = 0;
+
+      while (total < buf.len) {
+        let rest = buf[total..buf.len];
+        let n = write(self.fd, @as([*]const void, rest.ptr), rest.len);
+
+        if (n < 0) {
+          return Result.Err(IoError.last_os_error());
+        };
+
+        if (n == 0) {
+          return Result.Err(IoError.new(IoErrorKind.WriteZero, "failed to write whole buffer"));
+        };
+
+        total += @as(usize, n);
+      };
+
+      return Result.Ok(total);
+    }
+  }
+
+  /// Flush file contents to disk.
+  pub fn sync_all(*const self) Result[bool, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "File.sync_all is not supported on windows"));
+    } else {
+      if (fsync(self.fd) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(true);
+    }
+  }
+
+  /// Metadata of this file.
+  pub fn metadata(*const self) Result[Metadata, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "File.metadata is not supported on windows"));
+    } else {
+      let st: c_Stat = @uninit();
+
+      if (fstat(self.fd, &st) != 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(metadata_of(&st));
+    }
+  }
+}
+
+implement Drop : File {
+  fn drop(self) {
+    @os[windows] {
+      let _ = 0;
+    } else {
+      let _ = close(self.fd);
+    }
+  }
+}
+
+/// File open options builder.
+pub struct OpenOptions {
+  _read: bool,
+  _write: bool,
+  _append: bool,
+  _truncate: bool,
+  _create: bool,
+  _create_new: bool,
+  _mode: u32,
+
+  pub fn new() Self {
+    Self {
+      ._read = false,
+      ._write = false,
+      ._append = false,
+      ._truncate = false,
+      ._create = false,
+      ._create_new = false,
+      ._mode = 0o666,
+    }
+  }
+
+  pub fn read(self, value: bool) Self {
+    let opts = self;
+    opts._read = value;
+    opts
+  }
+
+  pub fn write(self, value: bool) Self {
+    let opts = self;
+    opts._write = value;
+    opts
+  }
+
+  pub fn append(self, value: bool) Self {
+    let opts = self;
+    opts._append = value;
+    opts
+  }
+
+  pub fn truncate(self, value: bool) Self {
+    let opts = self;
+    opts._truncate = value;
+    opts
+  }
+
+  pub fn create(self, value: bool) Self {
+    let opts = self;
+    opts._create = value;
+    opts
+  }
+
+  pub fn create_new(self, value: bool) Self {
+    let opts = self;
+    opts._create_new = value;
+    opts
+  }
+
+  pub fn mode(self, value: u32) Self {
+    let opts = self;
+    opts._mode = value;
+    opts
+  }
+
+  pub fn open(*const self, path: []const char) Result[File, IoError] {
+    @os[windows] {
+      return Result.Err(IoError.new(IoErrorKind.Unsupported, "OpenOptions.open is not supported on windows"));
+    } else {
+      let flags = O_RDONLY;
+
+      if (self._write) {
+        flags = O_WRONLY;
+      };
+
+      if (self._read && self._write) {
+        flags = O_RDWR;
+      };
+
+      if (self._append) {
+        flags = flags | O_APPEND;
+      };
+
+      if (self._truncate) {
+        flags = flags | O_TRUNC;
+      };
+
+      if (self._create) {
+        flags = flags | O_CREAT;
+      };
+
+      if (self._create_new) {
+        flags = flags | O_CREAT | O_EXCL;
+      };
+
+      let c = cpath(path);
+      let fd = open(@as([*]const char, c.slice(..).ptr), flags, @as(c_mode_t, self._mode));
+
+      if (fd < 0) {
+        return Result.Err(IoError.last_os_error());
+      };
+
+      return Result.Ok(File { .fd = fd });
+    }
+  }
+}
+
+/// File metadata snapshot.
+pub struct Metadata {
+  _len: u64,
+  _is_dir: bool,
+  _is_file: bool,
+  _is_symlink: bool,
+  _mode: u32,
+
+  pub fn len(*const self) u64 {
+    self._len
+  }
+
+  pub fn is_empty(*const self) bool {
+    self._len == 0
+  }
+
+  pub fn is_dir(*const self) bool {
+    self._is_dir
+  }
+
+  pub fn is_file(*const self) bool {
+    self._is_file
+  }
+
+  pub fn is_symlink(*const self) bool {
+    self._is_symlink
+  }
+
+  pub fn mode(*const self) u32 {
+    self._mode
+  }
+}
+
+@os[linux | android | darwin | freebsd] {
+  fn metadata_of(st: *const c_Stat) Metadata {
+    let kind = (*st).st_mode & S_IFMT;
+
+    Metadata {
+      ._len = @as(u64, (*st).st_size),
+      ._is_dir = kind == S_IFDIR,
+      ._is_file = kind == S_IFREG,
+      ._is_symlink = kind == S_IFLNK,
+      ._mode = @as(u32, (*st).st_mode),
+    }
+  }
+}
+
+/// One directory entry: name plus full path.
+pub struct DirEntry {
+  _name: String,
+  _path: String,
+  _is_dir: bool,
+  _is_file: bool,
+  _is_symlink: bool,
+
+  pub fn into_name(self) String {
+    self._name
+  }
+
+  pub fn into_path(self) String {
+    self._path
+  }
+
+  pub fn is_dir(*const self) bool {
+    self._is_dir
+  }
+
+  pub fn is_file(*const self) bool {
+    self._is_file
+  }
+
+  pub fn is_symlink(*const self) bool {
+    self._is_symlink
+  }
+}
+
+/// Metadata of the file at `path`, following symlinks.
+pub fn metadata(path: []const char) Result[Metadata, IoError] {
+  @os[windows] {
+    return Result.Err(IoError.new(IoErrorKind.Unsupported, "metadata is not supported on windows"));
+  } else {
+    let c = cpath(path);
+    let st: c_Stat = @uninit();
+
+    if (stat(@as([*]const char, c.slice(..).ptr), &st) != 0) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    return Result.Ok(metadata_of(&st));
+  }
+}
+
+/// Metadata of the link at `path` itself.
+pub fn symlink_metadata(path: []const char) Result[Metadata, IoError] {
+  @os[windows] {
+    return Result.Err(IoError.new(IoErrorKind.Unsupported, "symlink_metadata is not supported on windows"));
+  } else {
+    let c = cpath(path);
+    let st: c_Stat = @uninit();
+
+    if (lstat(@as([*]const char, c.slice(..).ptr), &st) != 0) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    return Result.Ok(metadata_of(&st));
+  }
+}
+
+/// `true` when `path` can be stated.
+pub fn exists(path: []const char) bool {
+  @os[windows] {
+    return false;
+  } else {
+    let c = cpath(path);
+    let st: c_Stat = @uninit();
+
+    return stat(@as([*]const char, c.slice(..).ptr), &st) == 0;
+  }
+}
+
+/// Delete a file.
+pub fn remove_file(path: []const char) Result[bool, IoError] {
+  @os[windows] {
+    return Result.Err(IoError.new(IoErrorKind.Unsupported, "remove_file is not supported on windows"));
+  } else {
+    let c = cpath(path);
+
+    if (unlink(@as([*]const char, c.slice(..).ptr)) != 0) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    return Result.Ok(true);
+  }
+}
+
+/// Delete an empty directory.
+pub fn remove_dir(path: []const char) Result[bool, IoError] {
+  @os[windows] {
+    return Result.Err(IoError.new(IoErrorKind.Unsupported, "remove_dir is not supported on windows"));
+  } else {
+    let c = cpath(path);
+
+    if (rmdir(@as([*]const char, c.slice(..).ptr)) != 0) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    return Result.Ok(true);
+  }
+}
+
+/// Create a directory with mode `0o755`.
+pub fn create_dir(path: []const char) Result[bool, IoError] {
+  @os[windows] {
+    return Result.Err(IoError.new(IoErrorKind.Unsupported, "create_dir is not supported on windows"));
+  } else {
+    let c = cpath(path);
+
+    if (mkdir(@as([*]const char, c.slice(..).ptr), 0o755) != 0) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    return Result.Ok(true);
+  }
+}
+
+/// Move a file or directory to a new path.
+pub fn rename_path(from: []const char, to: []const char) Result[bool, IoError] {
+  @os[windows] {
+    return Result.Err(IoError.new(IoErrorKind.Unsupported, "rename_path is not supported on windows"));
+  } else {
+    let cfrom = cpath(from);
+    let cto = cpath(to);
+
+    if (rename(@as([*]const char, cfrom.slice(..).ptr), @as([*]const char, cto.slice(..).ptr)) != 0) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    return Result.Ok(true);
+  }
+}
+
+/// List directory entries, skipping `.` and `..`.
+pub fn read_dir(path: []const char) Result[List[DirEntry], IoError] {
+  @os[windows] {
+    return Result.Err(IoError.new(IoErrorKind.Unsupported, "read_dir is not supported on windows"));
+  } else {
+    let c = cpath(path);
+    let dir = opendir(@as([*]const char, c.slice(..).ptr));
+
+    if (dir == nullptr) {
+      return Result.Err(IoError.last_os_error());
+    };
+
+    let out = List#[DirEntry].new();
+
+    while (true) {
+      let e = readdir(dir);
+
+      if (e == nullptr) {
+        break;
+      };
+
+      let raw = @as([*]const char, &(*e).d_name[0]);
+
+      if (raw[0] == '.') {
+        if (raw[1] == '\0') {
+          continue;
+        };
+
+        if (raw[1] == '.' && raw[2] == '\0') {
+          continue;
+        };
+      };
+
+      let name = String.from_cstr(raw);
+
+      let full = String.from(path);
+      full.push('/');
+      full.push_str(name.slice(..));
+
+      let dtype = (*e).d_type;
+
+      out.push(DirEntry {
+        ._name = name,
+        ._path = full,
+        ._is_dir = dtype == DT_DIR,
+        ._is_file = dtype == DT_REG,
+        ._is_symlink = dtype == DT_LNK,
+      });
+    };
+
+    let _ = closedir(dir);
+
+    return Result.Ok(out);
+  }
+}
+
+/// Read the whole file at `path` into a new string.
+pub fn read_to_string(path: []const char) Result[String, IoError] {
+  @os[windows] {
+    return Result.Err(IoError.new(IoErrorKind.Unsupported, "read_to_string is not supported on windows"));
+  } else {
+    switch (File.open(path)) {
+      .Ok(f) => {
+        let buf = String.new();
+        let mut_file = f;
+
+        switch (mut_file.read_to_string(&buf)) {
+          .Ok(_bytes) => Result.Ok(buf),
+          .Err(e) => {
+            return Result.Err(e);
+          }
+        }
+      },
+      .Err(e) => {
+        return Result.Err(e);
+      }
+    }
+  }
+}
+
+/// Create or truncate the file at `path` and write `contents` into it.
+pub fn write_file(path: []const char, contents: []const char) Result[usize, IoError] {
+  @os[windows] {
+    return Result.Err(IoError.new(IoErrorKind.Unsupported, "write_file is not supported on windows"));
+  } else {
+    switch (File.create(path)) {
+      .Ok(f) => {
+        let mut_file = f;
+
+        switch (mut_file.write_all(contents)) {
+          .Ok(n) => Result.Ok(n),
+          .Err(e) => {
+            return Result.Err(e);
+          }
+        }
+      },
+      .Err(e) => {
+        return Result.Err(e);
+      }
+    }
+  }
+}
