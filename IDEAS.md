@@ -1,34 +1,13 @@
 List of ideas for future language infrastructure (may be implemented before v1.0.0, but after first stable release v0.1.0):
 
 > [!NOTE]
-> ### Preprocessor:
-> ```zn
-> @os[linux | macos] { ... }
-> 
-> @os[windows] { ... }
-> 
-> @env[gnu] { ... } else { ... }
-> 
-> @arch[x86] { ... }
-> 
-> @debug { ... }
-> 
-> @release { ... }
-> 
-> ----
-> 
-> fn main() {
->   let is_linux: bool = @var[is_os_linux];
->   @println("{}", is_linux);
-> }
+> ### Comptime constants and functions
 > ```
-
-> [!NOTE]
-> ### Const functions
-> ```
-> const fn square(x: u32) u32 {
+> comptime fn square(x: comptime_int) comptime_int {
 >   x * x
 > }
+> 
+> comptime ThreadsCount = square(4);
 > ```
 > Requires some kind of MIR interpreter with macros comptime replacements and stack trace on const fn panic.
 
