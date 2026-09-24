@@ -37,8 +37,8 @@ fn find_in_bucket[K: Hash + Eq, V](bucket: *List[Entry[K, V]], key: *const K, ha
 
 pub struct Entry[K, V] {
   pub hash: u64,
-  pub key: K,
   pub value: V,
+  pub key: K,
 
   pub fn value_ptr(*self) *V {
     &self.value
