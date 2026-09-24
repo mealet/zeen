@@ -4535,11 +4535,21 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             let mut body_bb = matched_bb;
-            let bound_local = if let Some((name, def_id, span)) = Self::arm_binding(arm) {
+            let bound_local = if let Some((name, def_id, span, is_ref)) = Self::arm_binding(arm) {
                 let variant_def = enum_def.and_then(|def| self.arm_enum_variant(&arm.pattern, def));
-                let bind_ty = match variant_def {
+                let payload_ty = match variant_def {
                     Some(variant) => self.enum_payload_ty(scrut_ty, variant),
                     None => scrut_ty,
+                };
+                let bind_ty = if is_ref {
+                    self.typecheck
+                        .interner
+                        .intern(Type::Pointer {
+                            inner: payload_ty,
+                            is_const: false,
+                        })
+                } else {
+                    payload_ty
                 };
                 let local = fb.new_local(
                     bind_ty,
@@ -4550,25 +4560,43 @@ impl<'ctx> MirLowering<'ctx> {
                 );
                 fb.locals_by_def.insert(def_id, local);
                 fb.push_stmt(matched_bb, MirStatement::StorageLive(local));
-                let value = match variant_def {
-                    Some(variant) => {
-                        let payload = scrut_place.clone().enum_payload(variant);
-                        self.place_to_operand(payload, bind_ty, Some(expr.source.clone()))
-                    }
-                    None => self.place_to_operand(
-                        scrut_place.clone(),
-                        scrut_ty,
-                        Some(expr.source.clone()),
-                    ),
-                };
-                fb.push_stmt(
-                    matched_bb,
-                    MirStatement::Assign {
-                        place: Place::from_local(local),
-                        rvalue: Rvalue::Use(value),
-                        source: Some(expr.source.clone()),
-                    },
-                );
+                if is_ref {
+                    let payload_place = match variant_def {
+                        Some(variant) => scrut_place.clone().enum_payload(variant),
+                        None => scrut_place.clone(),
+                    };
+                    fb.push_stmt(
+                        matched_bb,
+                        MirStatement::Assign {
+                            place: Place::from_local(local),
+                            rvalue: Rvalue::Ref {
+                                place: payload_place,
+                                is_const: false,
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                } else {
+                    let value = match variant_def {
+                        Some(variant) => {
+                            let payload = scrut_place.clone().enum_payload(variant);
+                            self.place_to_operand(payload, bind_ty, Some(expr.source.clone()))
+                        }
+                        None => self.place_to_operand(
+                            scrut_place.clone(),
+                            scrut_ty,
+                            Some(expr.source.clone()),
+                        ),
+                    };
+                    fb.push_stmt(
+                        matched_bb,
+                        MirStatement::Assign {
+                            place: Place::from_local(local),
+                            rvalue: Rvalue::Use(value),
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                }
                 Some(local)
             } else {
                 None
@@ -4759,16 +4787,16 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    fn arm_binding(arm: &HirSwitchArm) -> Option<(Spur, DefId, SourceSpan)> {
+    fn arm_binding(arm: &HirSwitchArm) -> Option<(Spur, DefId, SourceSpan, bool)> {
         match &arm.pattern {
-            HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span)),
+            HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span, binding.is_ref)),
             HirPattern::Enum { binding, .. } => {
-                binding.as_ref().map(|b| (b.name, b.def_id, b.span))
+                binding.as_ref().map(|b| (b.name, b.def_id, b.span, b.is_ref))
             }
             HirPattern::Or(patterns) => patterns.iter().find_map(|inner| match inner {
-                HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span)),
+                HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span, binding.is_ref)),
                 HirPattern::Enum { binding, .. } => {
-                    binding.as_ref().map(|b| (b.name, b.def_id, b.span))
+                    binding.as_ref().map(|b| (b.name, b.def_id, b.span, b.is_ref))
                 }
                 _ => None,
             }),

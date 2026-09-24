@@ -657,16 +657,23 @@ impl<'res> HirLowering<'res> {
                     name: *name,
                     def_id,
                     span: *span,
+                    is_ref: false,
                 })
             }
             zeen_ast::expressions::Pattern::EnumVariant {
                 variant,
                 variant_span,
                 binding,
+                is_ref,
             } => HirPattern::Enum {
                 variant: *variant,
                 variant_span: *variant_span,
-                binding: binding.map(|(name, span)| HirPatternBinding { name, def_id, span }),
+                binding: binding.map(|(name, span)| HirPatternBinding {
+                    name,
+                    def_id,
+                    span,
+                    is_ref: *is_ref,
+                }),
             },
             zeen_ast::expressions::Pattern::Range {
                 start,

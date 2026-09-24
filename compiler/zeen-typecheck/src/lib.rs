@@ -4197,6 +4197,15 @@ impl<'res> TypeChecker<'res> {
             }
         };
 
+        if binding.is_ref {
+            let ptr_ty = self.result.interner.intern(Type::Pointer {
+                inner: payload_ty,
+                is_const: false,
+            });
+            self.result.def_types.insert(binding.def_id, ptr_ty);
+            return;
+        }
+
         if !self.type_is_copy(payload_ty) && enum_info.capabalities.has_explicit_drop {
             self.result.def_types.insert(binding.def_id, payload_ty);
             self.report(TypeError::EnumExtractFromDrop {

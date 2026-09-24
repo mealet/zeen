@@ -140,6 +140,7 @@ pub struct HirPatternBinding {
     pub name: Spur,
     pub def_id: DefId,
     pub span: SourceSpan,
+    pub is_ref: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
