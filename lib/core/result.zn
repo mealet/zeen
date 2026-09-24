@@ -96,7 +96,7 @@ pub enum Result[T, E] {
 
   pub fn inspect(self, f: FnOnce(*T) void) Self {
     switch (self) {
-      .Ok(value) => f(&value),
+      .Ok(&value) => f(value),
       .Err(_error) => {},
     };
 
@@ -106,7 +106,7 @@ pub enum Result[T, E] {
   pub fn inspect_err(self, f: FnOnce(*E) void) Self {
     switch (self) {
       .Ok(_value) => {},
-      .Err(error) => f(&error),
+      .Err(&error) => f(error),
     };
 
     self

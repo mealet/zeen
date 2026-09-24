@@ -54,7 +54,7 @@ pub enum Option[T] {
 
   pub fn inspect(self, f: FnOnce(*T) void) Option[T] {
     switch (self) {
-      .Some(value) => f(&value),
+      .Some(&value) => f(value),
       .None => {}
     };
 
