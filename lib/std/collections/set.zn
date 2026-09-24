@@ -39,7 +39,7 @@ pub struct SetEntry[T] {
 }
 
 pub struct HashSet[T: Hash + Eq] {
-  buckets: List[List[SetEntry[T]]>,
+  buckets: List[List[SetEntry[T]]],
   _len: usize,
   _capacity: usize,
 
