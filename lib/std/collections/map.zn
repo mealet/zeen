@@ -1,0 +1,363 @@
+use std.alloc;
+use std.collections.list;
+
+const InitialMapCapacity: usize = 8;
+
+fn next_pow2(n: usize) usize {
+  let cap: usize = 1;
+
+  while (cap < n) {
+    cap <<= @as(usize, 1);
+  };
+
+  cap
+}
+
+fn bucket_index(hash: u64, cap: usize) usize {
+  @as(usize, hash % @as(u64, cap))
+}
+
+fn find_in_bucket[K: Hash + Eq, V](bucket: *List[Entry[K, V]], key: *const K, hash: u64) Option[usize] {
+  let len = bucket.len();
+  let idx: usize = 0;
+
+  while (idx < len) {
+    switch (bucket.get_ptr(idx)) {
+      .Some(entry) => if ((*entry).hash == hash && (*entry).key == *key) {
+        return Option.Some(idx);
+      },
+      .None => {},
+    };
+
+    idx += 1;
+  };
+
+  return Option.None;
+}
+
+pub struct Entry[K, V] {
+  pub hash: u64,
+  pub key: K,
+  pub value: V,
+
+  pub fn value_ptr(*self) *V {
+    &self.value
+  }
+
+  pub fn value_const_ptr(*const self) *const V {
+    &self.value
+  }
+}
+
+pub struct HashMap[K: Hash + Eq, V] {
+  buckets: List[List[Entry[K, V]]],
+  _len: usize,
+  _capacity: usize,
+
+  pub fn new() Self {
+    let cap = InitialMapCapacity;
+    let buckets = List#[List[Entry[K, V]]].with_capacity(cap);
+
+    let idx: usize = 0;
+    while (idx < cap) {
+      buckets.push(List#[Entry[K, V]].new());
+      idx += 1;
+    };
+
+    Self {
+      .buckets = buckets,
+      ._len = 0,
+      ._capacity = cap,
+    }
+  }
+
+  pub fn with_capacity(cap: usize) Self {
+    let cap = next_pow2(if (cap < InitialMapCapacity) { InitialMapCapacity } else { cap });
+    let buckets = List#[List[Entry[K, V]]].with_capacity(cap);
+
+    let idx: usize = 0;
+    while (idx < cap) {
+      buckets.push(List#[Entry[K, V]].new());
+      idx += 1;
+    };
+
+    Self {
+      .buckets = buckets,
+      ._len = 0,
+      ._capacity = cap,
+    }
+  }
+
+  pub fn len(*const self) usize {
+    self._len
+  }
+
+  pub fn is_empty(*const self) bool {
+    self._len == 0
+  }
+
+  pub fn capacity(*const self) usize {
+    self._capacity
+  }
+
+  pub fn clear(*self) {
+    let idx: usize = 0;
+
+    while (idx < self._capacity) {
+      switch (self.buckets.get_ptr(idx)) {
+        .Some(bucket) => (*bucket).clear(),
+        .None => {},
+      };
+
+      idx += 1;
+    };
+
+    self._len = 0;
+  }
+
+  pub fn contains_key(*const self, key: *const K) bool {
+    if (self._capacity == 0) {
+      return false;
+    };
+
+    let hash = (*key).hash();
+    let idx = bucket_index(hash, self._capacity);
+
+    switch (self.buckets.get_ptr(idx)) {
+      .Some(bucket) => {
+        switch (find_in_bucket(bucket, key, hash)) {
+          .Some(_) => true,
+          .None => false,
+        }
+      },
+      .None => false,
+    }
+  }
+
+  pub fn get(*const self, key: *const K) Option[V] {
+    if (self._capacity == 0) {
+      return Option.None;
+    };
+
+    let hash = (*key).hash();
+    let idx = bucket_index(hash, self._capacity);
+
+    switch (self.buckets.get_ptr(idx)) {
+      .Some(bucket) => {
+        switch (find_in_bucket(bucket, key, hash)) {
+          .Some(pos) => {
+            switch (bucket.get_ptr(pos)) {
+              .Some(entry) => Option.Some((*entry).value),
+              .None => Option.None,
+            }
+          },
+          .None => Option.None,
+        }
+      },
+      .None => Option.None,
+    }
+  }
+
+  pub fn get_mut(*self, key: *const K) Option[*V] {
+    if (self._capacity == 0) {
+      return Option.None;
+    };
+
+    let hash = (*key).hash();
+    let idx = bucket_index(hash, self._capacity);
+
+    switch (self.buckets.get_ptr(idx)) {
+      .Some(bucket) => {
+        switch (find_in_bucket(bucket, key, hash)) {
+          .Some(pos) => {
+            switch (bucket.get_ptr(pos)) {
+              .Some(entry) => Option.Some(entry.value_ptr()),
+              .None => Option.None,
+            }
+          },
+          .None => Option.None,
+        }
+      },
+      .None => Option.None,
+    }
+  }
+
+  pub fn insert(*self, key: K, value: V) Option[V] {
+    if (self._capacity == 0) {
+      let new_buckets = List#[List[Entry[K, V]]].with_capacity(InitialMapCapacity);
+
+      let idx: usize = 0;
+      while (idx < InitialMapCapacity) {
+        new_buckets.push(List#[Entry[K, V]].new());
+        idx += 1;
+      };
+
+      self.buckets = new_buckets;
+      self._capacity = InitialMapCapacity;
+    };
+
+    let hash = key.hash();
+    let idx = bucket_index(hash, self._capacity);
+
+    switch (self.buckets.get_ptr(idx)) {
+      .Some(bucket) => {
+        switch (find_in_bucket(bucket, &key, hash)) {
+          .Some(pos) => {
+            switch (bucket.get_ptr(pos)) {
+              .Some(entry) => {
+                let old = (*entry).value;
+                (*entry).value = value;
+
+                let _drop_key = key;
+                return Option.Some(old);
+              },
+              .None => {},
+            };
+          },
+          .None => {},
+        };
+
+        bucket.push(Entry { .hash = hash, .key = key, .value = value });
+        self._len += 1;
+
+        if (self._len * @as(usize, 4) > self._capacity * @as(usize, 3)) {
+          self.grow();
+        };
+
+        return Option.None;
+      },
+      .None => Option.None,
+    }
+  }
+
+  fn grow(*self) {
+    let new_cap = self._capacity * @as(usize, 2);
+    let new_buckets = List#[List[Entry[K, V]]].with_capacity(new_cap);
+
+    let idx: usize = 0;
+    while (idx < new_cap) {
+      new_buckets.push(List#[Entry[K, V]].new());
+      idx += 1;
+    };
+
+    let idx: usize = 0;
+    while (idx < self._capacity) {
+      switch (self.buckets.get_ptr(idx)) {
+        .Some(bucket) => {
+          while (!bucket.is_empty()) {
+            switch (bucket.pop()) {
+              .Some(entry) => {
+                let new_idx = bucket_index(entry.hash, new_cap);
+
+                switch (new_buckets.get_ptr(new_idx)) {
+                  .Some(dest) => dest.push(entry),
+                  .None => {},
+                };
+              },
+              .None => {},
+            };
+          };
+        },
+        .None => {},
+      };
+
+      idx += 1;
+    };
+
+    self.buckets = new_buckets;
+    self._capacity = new_cap;
+  }
+
+  pub fn remove(*self, key: *const K) Option[V] {
+    if (self._capacity == 0) {
+      return Option.None;
+    };
+
+    let hash = (*key).hash();
+    let idx = bucket_index(hash, self._capacity);
+
+    switch (self.buckets.get_ptr(idx)) {
+      .Some(bucket) => {
+        switch (find_in_bucket(bucket, key, hash)) {
+          .Some(pos) => {
+            switch (bucket.remove(pos)) {
+              .Some(entry) => {
+                self._len -= 1;
+
+                let _drop_key = entry.key;
+                return Option.Some(entry.value);
+              },
+              .None => Option.None,
+            }
+          },
+          .None => Option.None,
+        }
+      },
+      .None => Option.None,
+    }
+  }
+
+  pub fn remove_entry(*self, key: *const K) Option[Entry[K, V]] {
+    if (self._capacity == 0) {
+      return Option.None;
+    };
+
+    let hash = (*key).hash();
+    let idx = bucket_index(hash, self._capacity);
+
+    switch (self.buckets.get_ptr(idx)) {
+      .Some(bucket) => {
+        switch (find_in_bucket(bucket, key, hash)) {
+          .Some(pos) => {
+            switch (bucket.remove(pos)) {
+              .Some(entry) => {
+                self._len -= 1;
+                return Option.Some(entry);
+              },
+              .None => Option.None,
+            }
+          },
+          .None => Option.None,
+        }
+      },
+      .None => Option.None,
+    }
+  }
+}
+
+implement[K: Hash + Eq, V] Drop : HashMap[K, V] {
+  fn drop(self) {
+    self.clear();
+  }
+}
+
+implement[K: Hash + Eq + Clone, V: Clone] Clone : HashMap[K, V] {
+  fn clone(*const self) Self {
+    let out = HashMap#[K, V].with_capacity(self._capacity);
+
+    let idx: usize = 0;
+    while (idx < self._capacity) {
+      switch (self.buckets.get_ptr(idx)) {
+        .Some(bucket) => {
+          let pos: usize = 0;
+
+          while (pos < bucket.len()) {
+            switch (bucket.get_ptr(pos)) {
+              .Some(entry) => {
+                out.insert((*entry).key.clone(), (*entry).value.clone());
+              },
+              .None => {},
+            };
+
+            pos += 1;
+          };
+        },
+        .None => {},
+      };
+
+      idx += 1;
+    };
+
+    out
+  }
+}
