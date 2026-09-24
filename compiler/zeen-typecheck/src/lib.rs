@@ -4910,6 +4910,58 @@ impl<'res> TypeChecker<'res> {
             );
         }
 
+        // Concrete builtin method calls (e.g. `42.hash()`). Builtins satisfy
+        // interfaces like `Hash` via `builtin_interface_names`; there is no
+        // struct impl to dispatch to, so resolve the interface method
+        // directly.
+        match self.result.interner.get(obj_ty).clone() {
+            Type::Builtin(_) | Type::IntLiteral | Type::FloatLiteral => {
+                let builtin_ty = match self.result.interner.get(obj_ty).clone() {
+                    Type::IntLiteral => zeen_ast::types::BuiltinType::i32,
+                    Type::FloatLiteral => zeen_ast::types::BuiltinType::f64,
+                    Type::Builtin(b) => b,
+                    _ => unreachable!(),
+                };
+                let field_str = self.interner.borrow().resolve(&field_name).to_string();
+                for iface_name in Self::builtin_interface_names(builtin_ty) {
+                    let Some(iface_def) = self.interface_registry.get(iface_name) else {
+                        continue;
+                    };
+                    if let Some(methods) = self.interface_methods.get(&iface_def) {
+                        for &method_def in methods {
+                            let mname = self.def_name(method_def).unwrap_or_default();
+                            if mname != field_str {
+                                continue;
+                            }
+                            let (sig_params_len, sig_ret) = {
+                                let Some(sig) = self.fn_sigs.get(&method_def) else {
+                                    panic!("interface method sig missing for {}", mname);
+                                };
+                                (sig.params.len(), sig.ret)
+                            };
+                            if args.len() != sig_params_len - 1 {
+                                self.report(TypeError::ArgCountMismatch {
+                                    expected: sig_params_len - 1,
+                                    found: args.len(),
+                                    src: source.src(),
+                                    span: source.span,
+                                });
+                            }
+                            self.result.call_resolutions.insert(
+                                call_id,
+                                crate::result::CallResolution {
+                                    fn_def: method_def,
+                                    generic_args: Vec::new(),
+                                },
+                            );
+                            return Some(sig_ret);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
         let (struct_def, struct_generic_args, obj_is_ptr, ptr_is_const) =
             match self.result.interner.get(obj_ty).clone() {
                 Type::Struct {
@@ -6322,22 +6374,23 @@ impl<'res> TypeChecker<'res> {
 
         match b {
             i8 | i16 | i32 | i64 | isize => &[
-                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
-                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Neg", "Copy",
+                "Display", "Debug", "Eq", "Ord", "Hash", "Add", "Sub", "Mul", "Div", "Mod",
+                "BitAnd", "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Neg", "Copy",
             ],
 
             u8 | u16 | u32 | u64 | usize => &[
-                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Mod", "BitAnd",
-                "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Copy",
+                "Display", "Debug", "Eq", "Ord", "Hash", "Add", "Sub", "Mul", "Div", "Mod",
+                "BitAnd", "BitOr", "BitXor", "BitShl", "BitShr", "BitNot", "Copy",
             ],
 
             f32 | f64 => &[
-                "Display", "Debug", "Eq", "Ord", "Add", "Sub", "Mul", "Div", "Neg", "Copy",
+                "Display", "Debug", "Eq", "Ord", "Hash", "Add", "Sub", "Mul", "Div", "Neg",
+                "Copy",
             ],
 
-            bool => &["Display", "Debug", "Eq", "Not", "Copy"],
+            bool => &["Display", "Debug", "Eq", "Hash", "Not", "Copy"],
 
-            char => &["Display", "Debug", "Eq", "Ord", "Copy"],
+            char => &["Display", "Debug", "Eq", "Ord", "Hash", "Copy"],
 
             void => &[],
             never => &[],
@@ -6345,7 +6398,7 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn enum_interface_names() -> &'static [&'static str] {
-        &["Display", "Debug", "Eq"]
+        &["Display", "Debug", "Eq", "Hash"]
     }
 
     fn enum_has_payloads(&self, def_id: DefId) -> bool {

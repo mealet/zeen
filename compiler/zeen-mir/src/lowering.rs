@@ -4098,6 +4098,16 @@ impl<'ctx> MirLowering<'ctx> {
                     ) {
                         return chain;
                     }
+                    if let Some(chain) = self.try_lower_builtin_hash(
+                        fb,
+                        block,
+                        &object,
+                        recv_ty,
+                        fn_def,
+                        Some(expr.source.clone()),
+                    ) {
+                        return chain;
+                    }
                     let (b, self_operand) = self.lower_receiver_operand(fb, &object, fn_def, block);
                     block = b;
                     arg_operands.push(self_operand);
@@ -6860,6 +6870,178 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         Some((next, Operand::Constant(ConstValue::Void, None)))
+    }
+
+    fn try_lower_builtin_hash(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        object: &Rc<HirExpr>,
+        recv_ty: TypeId,
+        fn_def: DefId,
+        source: Option<Source>,
+    ) -> Option<(BlockId, Operand)> {
+        let method_name = {
+            let r = self.rodeo.borrow();
+            r.resolve(&self.resolution.defs[&fn_def].name).to_string()
+        };
+        if method_name != "hash" {
+            return None;
+        }
+
+        let recv_sub = self.substitute_fn_type(fb, recv_ty);
+        let builtin = match self.typecheck.interner.get(recv_sub).clone() {
+            Type::Builtin(b) => b,
+            Type::IntLiteral => zeen_ast::types::BuiltinType::i32,
+            Type::FloatLiteral => zeen_ast::types::BuiltinType::f64,
+            _ => return None,
+        };
+
+        let u64_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::u64));
+
+        let (block, value_op) = self.lower_expr_to_operand(fb, object, block);
+
+        let val_local = fb.new_temp(recv_sub);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(val_local),
+                rvalue: Rvalue::Use(value_op),
+                source: source.clone(),
+            },
+        );
+
+        let as_u64 = |fb: &mut FnBuilder, block: BlockId, op: Operand, from_ty: TypeId| {
+            let tmp = fb.new_temp(u64_ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(tmp),
+                    rvalue: Rvalue::Cast {
+                        operand: op,
+                        target: u64_ty,
+                    },
+                    source: source.clone(),
+                },
+            );
+            let _ = from_ty;
+            tmp
+        };
+
+        let raw_u64 = match builtin {
+            zeen_ast::types::BuiltinType::bool => {
+                let bool_u64 = as_u64(fb, block, Operand::Move(Place::from_local(val_local), None), recv_sub);
+                bool_u64
+            }
+            zeen_ast::types::BuiltinType::char => {
+                let u32_ty = self
+                    .typecheck
+                    .interner
+                    .intern(Type::Builtin(zeen_ast::types::BuiltinType::u32));
+                let c_u32 = fb.new_temp(u32_ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(c_u32),
+                        rvalue: Rvalue::Cast {
+                            operand: Operand::Move(Place::from_local(val_local), None),
+                            target: u32_ty,
+                        },
+                        source: source.clone(),
+                    },
+                );
+                let c_u64 = fb.new_temp(u64_ty);
+                fb.push_stmt(
+                    block,
+                    MirStatement::Assign {
+                        place: Place::from_local(c_u64),
+                        rvalue: Rvalue::Cast {
+                            operand: Operand::Move(Place::from_local(c_u32), None),
+                            target: u64_ty,
+                        },
+                        source: source.clone(),
+                    },
+                );
+                c_u64
+            }
+            zeen_ast::types::BuiltinType::f32 | zeen_ast::types::BuiltinType::f64 => {
+                as_u64(fb, block, Operand::Move(Place::from_local(val_local), None), recv_sub)
+            }
+            _ => as_u64(fb, block, Operand::Move(Place::from_local(val_local), None), recv_sub),
+        };
+
+        let mut cur = raw_u64;
+
+        let mix_const = |fb: &mut FnBuilder, block: BlockId, cur: LocalId, k: u64| {
+            let k_local = fb.new_temp(u64_ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(k_local),
+                    rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(k as i128), None)),
+                    source: source.clone(),
+                },
+            );
+            let next = fb.new_temp(u64_ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(next),
+                    rvalue: Rvalue::BinaryOp {
+                        op: zeen_ast::expressions::BinaryOp::BitXor,
+                        lhs: Operand::Move(Place::from_local(cur), None),
+                        rhs: Operand::Move(Place::from_local(k_local), None),
+                    },
+                    source: source.clone(),
+                },
+            );
+            next
+        };
+
+        let mul_const = |fb: &mut FnBuilder, block: BlockId, cur: LocalId, k: u64| {
+            let k_local = fb.new_temp(u64_ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(k_local),
+                    rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(k as i128), None)),
+                    source: source.clone(),
+                },
+            );
+            let next = fb.new_temp(u64_ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(next),
+                    rvalue: Rvalue::BinaryOp {
+                        op: zeen_ast::expressions::BinaryOp::Mul,
+                        lhs: Operand::Move(Place::from_local(cur), None),
+                        rhs: Operand::Move(Place::from_local(k_local), None),
+                    },
+                    source: source.clone(),
+                },
+            );
+            next
+        };
+
+        cur = mix_const(fb, block, cur, 0x9e3779b97f4a7c15u64);
+        cur = mul_const(fb, block, cur, 0xbf58476d1ce4e5b9u64);
+        cur = mul_const(fb, block, cur, 0x94d049bb133111ebu64);
+
+        let dest = fb.new_temp(u64_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(dest),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(cur), None)),
+                source: source.clone(),
+            },
+        );
+
+        Some((block, Operand::Move(Place::from_local(dest), source)))
     }
 
     /// Resolves the `std.string` `String` struct (the heap string writer).
