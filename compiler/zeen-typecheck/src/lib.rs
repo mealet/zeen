@@ -2397,6 +2397,48 @@ impl<'res> TypeChecker<'res> {
                         }
                         None => inner,
                     },
+                    Type::Pointer { inner, .. } => match self.result.interner.get(inner).clone() {
+                        Type::Struct {
+                            def_id,
+                            generic_args,
+                        } => match range_index {
+                            Some(_) => self.check_range_slice_on_struct(
+                                def_id,
+                                &generic_args,
+                                expr.id,
+                                &expr.source,
+                            ),
+                            None => self.check_slice_access_on_struct(
+                                def_id,
+                                &generic_args,
+                                usize_index_ty,
+                                expr.id,
+                                &expr.source,
+                            ),
+                        },
+                        Type::Array { element, .. } => match range_index {
+                            Some(_) => self.result.interner.intern(Type::Slice {
+                                element,
+                                is_const: false,
+                            }),
+                            None => element,
+                        },
+                        Type::Slice { element, is_const } => match range_index {
+                            Some(_) => self
+                                .result
+                                .interner
+                                .intern(Type::Slice { element, is_const }),
+                            None => element,
+                        },
+                        _ => {
+                            self.report(TypeError::NotIndexable {
+                                child_type: self.display_type(obj_ty).into(),
+                                src: object.source.src(),
+                                span: object.source.span,
+                            });
+                            self.result.interner.error()
+                        }
+                    },
                     Type::Struct {
                         def_id,
                         generic_args,
@@ -2959,10 +3001,13 @@ impl<'res> TypeChecker<'res> {
             Type::Enum { def_id, .. } => !self.enum_has_payloads(def_id),
 
             Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
-                matches!(
+                if matches!(
                     self.result.interner.get(inner).clone(),
                     Type::Builtin(BuiltinType::char)
-                )
+                ) {
+                    return true;
+                }
+                self.type_implements_display(inner)
             }
 
             Type::Array { element, .. } | Type::Slice { element, .. } => {
@@ -3005,10 +3050,13 @@ impl<'res> TypeChecker<'res> {
             Type::Enum { def_id, .. } => !self.enum_has_payloads(def_id),
 
             Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
-                matches!(
+                if matches!(
                     self.result.interner.get(inner).clone(),
                     Type::Builtin(BuiltinType::char)
-                )
+                ) {
+                    return true;
+                }
+                self.type_implements_debug(inner)
             }
 
             Type::Array { element, .. } | Type::Slice { element, .. } => {
@@ -3175,10 +3223,14 @@ impl<'res> TypeChecker<'res> {
         method_name: &str,
         arg: &HirExpr,
     ) -> bool {
+        let inner = match self.result.interner.get(arg_ty).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+            _ => arg_ty,
+        };
         let Type::Struct {
             def_id,
             generic_args,
-        } = self.result.interner.get(arg_ty).clone()
+        } = self.result.interner.get(inner).clone()
         else {
             return false;
         };
@@ -6482,6 +6534,10 @@ impl<'res> TypeChecker<'res> {
                 bounds.contains(&iface_def)
             }
 
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+                self.type_satisfies_interface(inner, iface_def)
+            }
+
             _ => false,
         }
     }
@@ -6936,13 +6992,25 @@ impl<'res> TypeChecker<'res> {
             let method_name = self.def_name(iface_method_def).unwrap_or_default();
             let iface_name = self.def_name(iface_def).unwrap_or_default();
             let expected_signature = self.format_signature(&method_name, &iface_params, iface_ret);
+            let sig_src = self
+                .resolution
+                .defs
+                .get(&impl_method_def)
+                .map(|info| info.span.src.clone())
+                .unwrap_or_else(|| source.src());
+            let sig_span = self
+                .resolution
+                .defs
+                .get(&impl_method_def)
+                .map(|info| info.span.span)
+                .unwrap_or(source.span);
 
             self.report(TypeError::InterfaceMethodSignatureMismatch {
                 interface: iface_name.into(),
                 method: method_name.into(),
                 signature: expected_signature.into(),
-                src: source.src(),
-                span: source.span,
+                src: sig_src,
+                span: sig_span,
             });
         }
     }

@@ -6254,11 +6254,9 @@ impl<'ctx> MirLowering<'ctx> {
                             let arg = value_exprs.get(value_idx);
                             let ty = arg.map(|a| self.expr_type(fb, a));
                             let err_ty = self.typecheck.interner.error();
-                            let is_struct_display =
-                                matches!(
-                                    self.typecheck.interner.get(ty.unwrap_or(err_ty)),
-                                    Type::Struct { .. }
-                                ) && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
+                            let is_struct_display = self
+                                .format_display_target(ty.unwrap_or(err_ty))
+                                && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
 
                             if is_struct_display {
                                 if is_panic && !seg_chunks.is_empty() {
@@ -6410,11 +6408,8 @@ impl<'ctx> MirLowering<'ctx> {
                         let arg = value_exprs.get(value_idx);
                         let ty = arg.map(|a| self.expr_type(fb, a));
                         let err_ty = self.typecheck.interner.error();
-                        let is_struct_display =
-                            matches!(
-                                self.typecheck.interner.get(ty.unwrap_or(err_ty)),
-                                Type::Struct { .. }
-                            ) && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
+                        let is_struct_display = self.format_display_target(ty.unwrap_or(err_ty))
+                            && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
 
                         if is_struct_display {
                             if !seg_chunks.is_empty() {
@@ -6612,11 +6607,8 @@ impl<'ctx> MirLowering<'ctx> {
                         let arg = value_exprs.get(value_idx);
                         let ty = arg.map(|a| self.expr_type(fb, a));
                         let err_ty = self.typecheck.interner.error();
-                        let is_struct_display =
-                            matches!(
-                                self.typecheck.interner.get(ty.unwrap_or(err_ty)),
-                                Type::Struct { .. }
-                            ) && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
+                        let is_struct_display = self.format_display_target(ty.unwrap_or(err_ty))
+                            && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
 
                         if is_struct_display {
                             if !seg_chunks.is_empty() {
@@ -7126,6 +7118,17 @@ impl<'ctx> MirLowering<'ctx> {
         self.resolve_interface_method(def_id, iface_name, method_name, &generic_args)
     }
 
+    fn format_display_target(&self, ty: TypeId) -> bool {
+        let inner = match self.typecheck.interner.get(ty).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+            _ => ty,
+        };
+        matches!(
+            self.typecheck.interner.get(inner).clone(),
+            Type::Struct { .. }
+        )
+    }
+
     /// Lowers a struct `{}`/`{:?}` format argument into a call to the
     /// struct's `display`/`debug` interface method, passing a pointer to the
     /// given writer so the method writes its representation into it.
@@ -7161,10 +7164,14 @@ impl<'ctx> MirLowering<'ctx> {
         let writer_operand =
             self.place_to_operand(Place::from_local(writer_addr_temp), writer_ptr_ty, None);
         let (iface_name, method_name) = iface;
+        let inner = match self.typecheck.interner.get(obj_ty).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+            _ => obj_ty,
+        };
         let Type::Struct {
             def_id: struct_def,
             generic_args,
-        } = self.typecheck.interner.get(obj_ty).clone()
+        } = self.typecheck.interner.get(inner).clone()
         else {
             return block;
         };

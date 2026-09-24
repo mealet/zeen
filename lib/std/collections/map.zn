@@ -134,7 +134,7 @@ pub struct HashMap[K: Hash + Eq, V] {
     }
   }
 
-  pub fn get(*const self, key: *const K) Option[*V] {
+  pub fn get(*const self, key: *const K) Option[*const V] {
     if (self._capacity == 0) {
       return Option.None;
     };
@@ -147,7 +147,7 @@ pub struct HashMap[K: Hash + Eq, V] {
         switch (find_in_bucket(bucket, key, hash)) {
           .Some(pos) => {
             switch (bucket.get_ptr(pos)) {
-              .Some(entry) => Option.Some(entry.value_ptr()),
+              .Some(entry) => Option.Some(entry.value_const_ptr()),
               .None => Option.None,
             }
           },
