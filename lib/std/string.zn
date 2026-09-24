@@ -2,7 +2,7 @@ use std.c.string;
 use std.c.ctype;
 
 use std.alloc;
-use std.list;
+use std.collections.list;
 
 /// String initial capacity size (initialization on first push).
 const InitialStringCapacity: usize = 8;
@@ -555,6 +555,21 @@ implement Eq : String {
     };
 
     return strncmp(self.ptr, other.ptr, self._len) == 0;
+  }
+}
+
+implement Hash : String {
+  fn hash(*const self) u64 {
+    let h: u64 = 1469598103934665603;
+    let idx: usize = 0;
+
+    while (idx < self._len) {
+      h ^= @as(u64, self.ptr[idx]);
+      h *= 1099511628211;
+      idx += 1;
+    };
+
+    h
   }
 }
 

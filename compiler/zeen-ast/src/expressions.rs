@@ -280,6 +280,7 @@ pub enum Pattern<'arena> {
         variant: Spur,
         variant_span: SourceSpan,
         binding: Option<(Spur, SourceSpan)>,
+        is_ref: bool,
     },
     Range {
         start: Option<Literal>,

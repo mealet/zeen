@@ -1730,13 +1730,15 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                     .to_owned();
                 let variant_id = self.p.get_or_intern(variant_slice);
 
-                let binding = if self.p.eat(TokenKind::OpenParen) {
+                let (binding, is_ref) = if self.p.eat(TokenKind::OpenParen) {
+                    let is_ref = self.p.eat(TokenKind::Ref) || self.p.eat(TokenKind::Ampersand);
+
                     if self.p.current().kind == TokenKind::Underscore {
                         let discard = self.p.current_clone();
                         let _ = self.p.advance_not_eof()?;
                         let _ = self.p.expect(TokenKind::CloseParen, ")")?;
 
-                        Some((self.p.get_or_intern("_"), discard.span))
+                        (Some((self.p.get_or_intern("_"), discard.span)), is_ref)
                     } else {
                         let binding_token = self.p.expect(TokenKind::Ident, "binding name")?;
                         let binding_slice = self.p.src[binding_token.span.offset()
@@ -1745,16 +1747,17 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                         let binding_id = self.p.get_or_intern(binding_slice);
                         let _ = self.p.expect(TokenKind::CloseParen, ")")?;
 
-                        Some((binding_id, binding_token.span))
+                        (Some((binding_id, binding_token.span)), is_ref)
                     }
                 } else {
-                    None
+                    (None, false)
                 };
 
                 Some(Pattern::EnumVariant {
                     variant: variant_id,
                     variant_span: variant_token.span,
                     binding,
+                    is_ref,
                 })
             }
 
