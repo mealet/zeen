@@ -17,16 +17,19 @@ fn set_bucket_index(hash: u64, cap: usize) usize {
 
 fn set_find_in_bucket[T: Hash + Eq](bucket: *List[SetEntry[T]], key: *const T, hash: u64) Option[usize] {
   let len = bucket.len();
-  let i: usize = 0;
-  while (i < len) {
-    switch (bucket.get_ptr(i)) {
-      .Some(e) => if ((*e).hash == hash && (*e).key == *key) {
-        return Option.Some(i);
+  let idx: usize = 0;
+
+  while (idx < len) {
+    switch (bucket.get_ptr(idx)) {
+      .Some(entry) => if ((*entry).hash == hash && (*entry).key == *key) {
+        return Option.Some(idx);
       },
       .None => {},
     };
-    i += 1;
+
+    idx += 1;
   };
+
   return Option.None;
 }
 
@@ -43,11 +46,13 @@ pub struct HashSet[T: Hash + Eq] {
   pub fn new() Self {
     let cap = InitialSetCapacity;
     let buckets = List#[List[SetEntry[T]]].with_capacity(cap);
-    let i: usize = 0;
-    while (i < cap) {
+
+    let idx: usize = 0;
+    while (idx < cap) {
       buckets.push(List#[SetEntry[T]].new());
-      i += 1;
+      idx += 1;
     };
+
     Self {
       .buckets = buckets,
       ._len = 0,
@@ -58,11 +63,13 @@ pub struct HashSet[T: Hash + Eq] {
   pub fn with_capacity(cap: usize) Self {
     let cap = next_pow2_set(if (cap < InitialSetCapacity) { InitialSetCapacity } else { cap });
     let buckets = List#[List[SetEntry[T]]].with_capacity(cap);
-    let i: usize = 0;
-    while (i < cap) {
+
+    let idx: usize = 0;
+    while (idx < cap) {
       buckets.push(List#[SetEntry[T]].new());
-      i += 1;
+      idx += 1;
     };
+
     Self {
       .buckets = buckets,
       ._len = 0,
@@ -83,14 +90,17 @@ pub struct HashSet[T: Hash + Eq] {
   }
 
   pub fn clear(*self) {
-    let i: usize = 0;
-    while (i < self._capacity) {
-      switch (self.buckets.get_ptr(i)) {
-        .Some(b) => (*b).clear(),
+    let idx: usize = 0;
+
+    while (idx < self._capacity) {
+      switch (self.buckets.get_ptr(idx)) {
+        .Some(bucket) => (*bucket).clear(),
         .None => {},
       };
-      i += 1;
+
+      idx += 1;
     };
+
     self._len = 0;
   }
 
@@ -115,14 +125,16 @@ pub struct HashSet[T: Hash + Eq] {
     if (self._capacity == 0) {
       return Option.None;
     };
-    let h = (*value).hash();
-    let idx = set_bucket_index(h, self._capacity);
+
+    let hash = (*value).hash();
+    let idx = set_bucket_index(hash, self._capacity);
+
     switch (self.buckets.get_ptr(idx)) {
-      .Some(b) => {
-        switch (set_find_in_bucket(b, value, h)) {
+      .Some(bucket) => {
+        switch (set_find_in_bucket(bucket, value, hash)) {
           .Some(pos) => {
-            switch (b.get_ptr(pos)) {
-              .Some(e) => Option.Some(&(*e).key),
+            switch (bucket.get_ptr(pos)) {
+              .Some(entry) => Option.Some(&(*entry).key),
               .None => Option.None,
             }
           },
@@ -135,32 +147,38 @@ pub struct HashSet[T: Hash + Eq] {
 
   pub fn insert(*self, value: T) bool {
     if (self._capacity == 0) {
-      let nb = List#[List[SetEntry[T]]].with_capacity(InitialSetCapacity);
-      let i: usize = 0;
-      while (i < InitialSetCapacity) {
-        nb.push(List#[SetEntry[T]].new());
-        i += 1;
+      let new_buckets = List#[List[SetEntry[T]]].with_capacity(InitialSetCapacity);
+
+      let idx: usize = 0;
+      while (idx < InitialSetCapacity) {
+        new_buckets.push(List#[SetEntry[T]].new());
+        idx += 1;
       };
-      self.buckets = nb;
+
+      self.buckets = new_buckets;
       self._capacity = InitialSetCapacity;
     };
 
-    let h = value.hash();
-    let idx = set_bucket_index(h, self._capacity);
+    let hash = value.hash();
+    let idx = set_bucket_index(hash, self._capacity);
+
     switch (self.buckets.get_ptr(idx)) {
-      .Some(b) => {
-        switch (set_find_in_bucket(b, &value, h)) {
+      .Some(bucket) => {
+        switch (set_find_in_bucket(bucket, &value, hash)) {
           .Some(_) => {
-            let _v = value;
+            let _drop = value;
             return false;
           },
           .None => {},
         };
-        b.push(SetEntry { .hash = h, .key = value });
+
+        bucket.push(SetEntry { .hash = hash, .key = value });
         self._len += 1;
+
         if (self._len * @as(usize, 4) > self._capacity * @as(usize, 3)) {
           self.grow();
         };
+
         return true;
       },
       .None => false,
@@ -170,22 +188,24 @@ pub struct HashSet[T: Hash + Eq] {
   fn grow(*self) {
     let new_cap = self._capacity * @as(usize, 2);
     let new_buckets = List#[List[SetEntry[T]]].with_capacity(new_cap);
-    let i: usize = 0;
-    while (i < new_cap) {
+
+    let idx: usize = 0;
+    while (idx < new_cap) {
       new_buckets.push(List#[SetEntry[T]].new());
-      i += 1;
+      idx += 1;
     };
 
-    let i: usize = 0;
-    while (i < self._capacity) {
-      switch (self.buckets.get_ptr(i)) {
-        .Some(b) => {
-          while (!b.is_empty()) {
-            switch (b.pop()) {
+    let outer: usize = 0;
+    while (outer < self._capacity) {
+      switch (self.buckets.get_ptr(outer)) {
+        .Some(bucket) => {
+          while (!bucket.is_empty()) {
+            switch (bucket.pop()) {
               .Some(entry) => {
-                let idx = set_bucket_index(entry.hash, new_cap);
-                switch (new_buckets.get_ptr(idx)) {
-                  .Some(nb) => nb.push(entry),
+                let new_idx = set_bucket_index(entry.hash, new_cap);
+
+                switch (new_buckets.get_ptr(new_idx)) {
+                  .Some(dest) => dest.push(entry),
                   .None => {},
                 };
               },
@@ -195,7 +215,8 @@ pub struct HashSet[T: Hash + Eq] {
         },
         .None => {},
       };
-      i += 1;
+
+      outer += 1;
     };
 
     self.buckets = new_buckets;
@@ -206,16 +227,19 @@ pub struct HashSet[T: Hash + Eq] {
     if (self._capacity == 0) {
       return false;
     };
-    let h = (*value).hash();
-    let idx = set_bucket_index(h, self._capacity);
+
+    let hash = (*value).hash();
+    let idx = set_bucket_index(hash, self._capacity);
+
     switch (self.buckets.get_ptr(idx)) {
-      .Some(b) => {
-        switch (set_find_in_bucket(b, value, h)) {
+      .Some(bucket) => {
+        switch (set_find_in_bucket(bucket, value, hash)) {
           .Some(pos) => {
-            switch (b.remove(pos)) {
+            switch (bucket.remove(pos)) {
               .Some(entry) => {
                 self._len -= 1;
-                let _k = entry.key;
+
+                let _drop = entry.key;
                 return true;
               },
               .None => false,
@@ -238,25 +262,30 @@ implement[T: Hash + Eq] Drop : HashSet[T] {
 implement[T: Hash + Eq + Clone] Clone : HashSet[T] {
   fn clone(*const self) Self {
     let out = HashSet#[T].with_capacity(self._capacity);
-    let i: usize = 0;
-    while (i < self._capacity) {
-      switch (self.buckets.get_ptr(i)) {
-        .Some(b) => {
-          let j: usize = 0;
-          while (j < b.len()) {
-            switch (b.get_ptr(j)) {
-              .Some(e) => {
-                out.insert((*e).key.clone());
+
+    let idx: usize = 0;
+    while (idx < self._capacity) {
+      switch (self.buckets.get_ptr(idx)) {
+        .Some(bucket) => {
+          let pos: usize = 0;
+
+          while (pos < bucket.len()) {
+            switch (bucket.get_ptr(pos)) {
+              .Some(entry) => {
+                out.insert((*entry).key.clone());
               },
               .None => {},
             };
-            j += 1;
+
+            pos += 1;
           };
         },
         .None => {},
       };
-      i += 1;
+
+      idx += 1;
     };
+
     out
   }
 }
