@@ -1,5 +1,5 @@
 use std.string;
-use std.list;
+use std.collections.list;
 use std.io;
 use std.net;
 

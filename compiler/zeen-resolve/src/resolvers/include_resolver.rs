@@ -31,11 +31,15 @@ struct RawModule<'arena> {
 }
 
 /// Which std modules a program needs injected: `@format(...)` pulls in
-/// `std.string`, closure/fat usage pulls in `std.fn`.
+/// `std.string`, closure/fat usage pulls in `std.fn`. On top of that the
+/// prelude (`std.string`, `std.collections.list`) is injected when the
+/// program mentions `String` or `List`.
 #[derive(Default)]
 struct UsageFlags {
     has_format: bool,
     has_fat: bool,
+    has_string: bool,
+    has_list: bool,
 }
 
 pub struct IncludeResolver<'ctx> {
@@ -239,11 +243,21 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
     }
 
+    fn check_prelude_name(&self, spur: Spur, flags: &mut UsageFlags) {
+        let name = self.interner_resolve(&spur);
+        if name == "String" {
+            flags.has_string = true;
+        } else if name == "List" {
+            flags.has_list = true;
+        }
+    }
+
     fn expr_usage(&self, expr: &Expression<'ctx>, flags: &mut UsageFlags) {
         match &expr.kind {
-            ExpressionKind::Literal(_)
-            | ExpressionKind::Ident { .. }
-            | ExpressionKind::TargetVar(_) => {}
+            ExpressionKind::Literal(_) | ExpressionKind::TargetVar(_) => {}
+            ExpressionKind::Ident { name, .. } => {
+                self.check_prelude_name(*name, flags);
+            }
 
             ExpressionKind::Binary { lhs, rhs, .. } => {
                 self.expr_usage(lhs, flags);
@@ -375,17 +389,23 @@ impl<'ctx> IncludeResolver<'ctx> {
             }
 
             TypeKind::Named {
+                name,
                 generic_args: Some(args),
                 ..
             } => {
+                self.check_prelude_name(*name, flags);
                 for arg in args.iter() {
                     self.type_usage(arg, flags);
                 }
             }
 
             TypeKind::Named {
-                generic_args: None, ..
-            } => {}
+                name,
+                generic_args: None,
+                ..
+            } => {
+                self.check_prelude_name(*name, flags);
+            }
 
             TypeKind::Const(inner)
             | TypeKind::SinglePointer(inner)
@@ -458,20 +478,51 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
 
         let usage = self.usage_flags(root_decls);
-        if usage.has_format || usage.has_fat {
-            let span = SourceSpan::new(0.into(), 0);
-            let source = root_decls
-                .first()
-                .map(|decl| decl.source.clone())
-                .unwrap_or_else(|| Source::from((span, self.named_src())));
+        let span = SourceSpan::new(0.into(), 0);
+        let source = root_decls
+            .first()
+            .map(|decl| decl.source.clone())
+            .unwrap_or_else(|| Source::from((span, self.named_src())));
 
-            if usage.has_format {
-                self.push_synthetic_use(&mut out, "std.string", span, source.clone());
+        let mut injected: Vec<&str> = Vec::new();
+
+        // Prelude: `String` and `List` work without an explicit import.
+        // Injected only when the program mentions them, plus `@format`
+        // still pulls `std.string`. Best effort when std root is missing.
+        let prelude = [
+            ("std.string", usage.has_string || usage.has_format),
+            ("std.collections.list", usage.has_list),
+        ];
+
+        for (module, needed) in prelude {
+            if !needed {
+                continue;
             }
-            if usage.has_fat {
-                self.push_synthetic_use(&mut out, "std.fn", span, source.clone());
+            let relative = module
+                .strip_prefix("std.")
+                .unwrap_or(module)
+                .replace('.', "/")
+                + ".zn";
+            let available = self
+                .context
+                .paths
+                .std_root
+                .as_deref()
+                .is_some_and(|root| root.join(&relative).is_file());
+            if available {
+                self.push_synthetic_use(&mut out, module, span, source.clone());
+                injected.push(module);
+            } else if needed && module == "std.string" && usage.has_format {
+                self.push_synthetic_use(&mut out, module, span, source.clone());
+                injected.push(module);
             }
         }
+
+        if usage.has_fat {
+            self.push_synthetic_use(&mut out, "std.fn", span, source.clone());
+        }
+
+        let _ = injected;
 
         root_decls.iter().for_each(|decl| out.push(decl));
 

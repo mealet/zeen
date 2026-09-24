@@ -1,6 +1,6 @@
 use std.alloc;
 use std.string;
-use std.list;
+use std.collections.list;
 use std.io;
 use std.c.types;
 use std.c.string;
