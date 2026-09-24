@@ -4542,12 +4542,10 @@ impl<'ctx> MirLowering<'ctx> {
                     None => scrut_ty,
                 };
                 let bind_ty = if is_ref {
-                    self.typecheck
-                        .interner
-                        .intern(Type::Pointer {
-                            inner: payload_ty,
-                            is_const: false,
-                        })
+                    self.typecheck.interner.intern(Type::Pointer {
+                        inner: payload_ty,
+                        is_const: false,
+                    })
                 } else {
                     payload_ty
                 };
@@ -4789,15 +4787,19 @@ impl<'ctx> MirLowering<'ctx> {
 
     fn arm_binding(arm: &HirSwitchArm) -> Option<(Spur, DefId, SourceSpan, bool)> {
         match &arm.pattern {
-            HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span, binding.is_ref)),
-            HirPattern::Enum { binding, .. } => {
-                binding.as_ref().map(|b| (b.name, b.def_id, b.span, b.is_ref))
+            HirPattern::Binding(binding) => {
+                Some((binding.name, binding.def_id, binding.span, binding.is_ref))
             }
+            HirPattern::Enum { binding, .. } => binding
+                .as_ref()
+                .map(|b| (b.name, b.def_id, b.span, b.is_ref)),
             HirPattern::Or(patterns) => patterns.iter().find_map(|inner| match inner {
-                HirPattern::Binding(binding) => Some((binding.name, binding.def_id, binding.span, binding.is_ref)),
-                HirPattern::Enum { binding, .. } => {
-                    binding.as_ref().map(|b| (b.name, b.def_id, b.span, b.is_ref))
+                HirPattern::Binding(binding) => {
+                    Some((binding.name, binding.def_id, binding.span, binding.is_ref))
                 }
+                HirPattern::Enum { binding, .. } => binding
+                    .as_ref()
+                    .map(|b| (b.name, b.def_id, b.span, b.is_ref)),
                 _ => None,
             }),
             HirPattern::Literal(_) | HirPattern::Range { .. } | HirPattern::Wildcard => None,
@@ -6960,10 +6962,12 @@ impl<'ctx> MirLowering<'ctx> {
         };
 
         let raw_u64 = match builtin {
-            zeen_ast::types::BuiltinType::bool => {
-                let bool_u64 = as_u64(fb, block, Operand::Move(Place::from_local(val_local), None), recv_sub);
-                bool_u64
-            }
+            zeen_ast::types::BuiltinType::bool => as_u64(
+                fb,
+                block,
+                Operand::Move(Place::from_local(val_local), None),
+                recv_sub,
+            ),
             zeen_ast::types::BuiltinType::char => {
                 let u32_ty = self
                     .typecheck
@@ -6995,10 +6999,18 @@ impl<'ctx> MirLowering<'ctx> {
                 );
                 c_u64
             }
-            zeen_ast::types::BuiltinType::f32 | zeen_ast::types::BuiltinType::f64 => {
-                as_u64(fb, block, Operand::Move(Place::from_local(val_local), None), recv_sub)
-            }
-            _ => as_u64(fb, block, Operand::Move(Place::from_local(val_local), None), recv_sub),
+            zeen_ast::types::BuiltinType::f32 | zeen_ast::types::BuiltinType::f64 => as_u64(
+                fb,
+                block,
+                Operand::Move(Place::from_local(val_local), None),
+                recv_sub,
+            ),
+            _ => as_u64(
+                fb,
+                block,
+                Operand::Move(Place::from_local(val_local), None),
+                recv_sub,
+            ),
         };
 
         let mut cur = raw_u64;

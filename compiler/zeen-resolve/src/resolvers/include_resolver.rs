@@ -509,10 +509,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 .std_root
                 .as_deref()
                 .is_some_and(|root| root.join(&relative).is_file());
-            if available {
-                self.push_synthetic_use(&mut out, module, span, source.clone());
-                injected.push(module);
-            } else if needed && module == "std.string" && usage.has_format {
+            if available || (module == "std.string" && usage.has_format) {
                 self.push_synthetic_use(&mut out, module, span, source.clone());
                 injected.push(module);
             }

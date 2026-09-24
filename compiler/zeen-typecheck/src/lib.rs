@@ -6393,8 +6393,7 @@ impl<'res> TypeChecker<'res> {
             ],
 
             f32 | f64 => &[
-                "Display", "Debug", "Eq", "Ord", "Hash", "Add", "Sub", "Mul", "Div", "Neg",
-                "Copy",
+                "Display", "Debug", "Eq", "Ord", "Hash", "Add", "Sub", "Mul", "Div", "Neg", "Copy",
             ],
 
             bool => &["Display", "Debug", "Eq", "Hash", "Not", "Copy"],
