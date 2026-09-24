@@ -1,5 +1,5 @@
 use std.string;
-use std.list;
+use std.collections.list;
 use std.io;
 use std.net;
 
@@ -92,6 +92,28 @@ pub struct Response {
   status: u16,
   body: String,
 
+  pub fn new(status: u16, body: []const char) Self {
+    Self {
+      .status = status,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn empty(status: u16) Self {
+    Self {
+      .status = status,
+      .body = String.new(),
+    }
+  }
+
+  pub fn status_code(*const self) u16 {
+    self.status
+  }
+
+  pub fn set_status_code(*self, code: u16) {
+    self.status = code;
+  }
+
   pub fn ok(body: []const char) Self {
     Self {
       .status = 200,
@@ -103,6 +125,426 @@ pub struct Response {
     Self {
       .status = 404,
       .body = String.from("Not Found\n"),
+    }
+  }
+
+  pub fn continue_() Self {
+    Self {
+      .status = 100,
+      .body = String.new(),
+    }
+  }
+
+  pub fn switching_protocols() Self {
+    Self {
+      .status = 101,
+      .body = String.new(),
+    }
+  }
+
+  pub fn processing() Self {
+    Self {
+      .status = 102,
+      .body = String.new(),
+    }
+  }
+
+  pub fn early_hints() Self {
+    Self {
+      .status = 103,
+      .body = String.new(),
+    }
+  }
+
+  pub fn created(body: []const char) Self {
+    Self {
+      .status = 201,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn accepted(body: []const char) Self {
+    Self {
+      .status = 202,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn non_authoritative_information(body: []const char) Self {
+    Self {
+      .status = 203,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn no_content() Self {
+    Self {
+      .status = 204,
+      .body = String.new(),
+    }
+  }
+
+  pub fn reset_content() Self {
+    Self {
+      .status = 205,
+      .body = String.new(),
+    }
+  }
+
+  pub fn partial_content(body: []const char) Self {
+    Self {
+      .status = 206,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn multi_status(body: []const char) Self {
+    Self {
+      .status = 207,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn already_reported(body: []const char) Self {
+    Self {
+      .status = 208,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn im_used(body: []const char) Self {
+    Self {
+      .status = 226,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn multiple_choices(body: []const char) Self {
+    Self {
+      .status = 300,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn moved_permanently(body: []const char) Self {
+    Self {
+      .status = 301,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn found(body: []const char) Self {
+    Self {
+      .status = 302,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn see_other(body: []const char) Self {
+    Self {
+      .status = 303,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn not_modified() Self {
+    Self {
+      .status = 304,
+      .body = String.new(),
+    }
+  }
+
+  pub fn use_proxy(body: []const char) Self {
+    Self {
+      .status = 305,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn temporary_redirect(body: []const char) Self {
+    Self {
+      .status = 307,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn permanent_redirect(body: []const char) Self {
+    Self {
+      .status = 308,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn bad_request(body: []const char) Self {
+    Self {
+      .status = 400,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn unauthorized(body: []const char) Self {
+    Self {
+      .status = 401,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn payment_required(body: []const char) Self {
+    Self {
+      .status = 402,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn forbidden(body: []const char) Self {
+    Self {
+      .status = 403,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn method_not_allowed(body: []const char) Self {
+    Self {
+      .status = 405,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn not_acceptable(body: []const char) Self {
+    Self {
+      .status = 406,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn proxy_authentication_required(body: []const char) Self {
+    Self {
+      .status = 407,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn request_timeout(body: []const char) Self {
+    Self {
+      .status = 408,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn conflict(body: []const char) Self {
+    Self {
+      .status = 409,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn gone(body: []const char) Self {
+    Self {
+      .status = 410,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn length_required(body: []const char) Self {
+    Self {
+      .status = 411,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn precondition_failed(body: []const char) Self {
+    Self {
+      .status = 412,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn payload_too_large(body: []const char) Self {
+    Self {
+      .status = 413,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn uri_too_long(body: []const char) Self {
+    Self {
+      .status = 414,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn unsupported_media_type(body: []const char) Self {
+    Self {
+      .status = 415,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn range_not_satisfiable(body: []const char) Self {
+    Self {
+      .status = 416,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn expectation_failed(body: []const char) Self {
+    Self {
+      .status = 417,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn im_a_teapot(body: []const char) Self {
+    Self {
+      .status = 418,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn misdirected_request(body: []const char) Self {
+    Self {
+      .status = 421,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn unprocessable_content(body: []const char) Self {
+    Self {
+      .status = 422,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn locked(body: []const char) Self {
+    Self {
+      .status = 423,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn failed_dependency(body: []const char) Self {
+    Self {
+      .status = 424,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn too_early(body: []const char) Self {
+    Self {
+      .status = 425,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn upgrade_required(body: []const char) Self {
+    Self {
+      .status = 426,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn precondition_required(body: []const char) Self {
+    Self {
+      .status = 428,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn too_many_requests(body: []const char) Self {
+    Self {
+      .status = 429,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn request_header_fields_too_large(body: []const char) Self {
+    Self {
+      .status = 431,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn unavailable_for_legal_reasons(body: []const char) Self {
+    Self {
+      .status = 451,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn internal_server_error(body: []const char) Self {
+    Self {
+      .status = 500,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn not_implemented(body: []const char) Self {
+    Self {
+      .status = 501,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn bad_gateway(body: []const char) Self {
+    Self {
+      .status = 502,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn service_unavailable(body: []const char) Self {
+    Self {
+      .status = 503,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn gateway_timeout(body: []const char) Self {
+    Self {
+      .status = 504,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn http_version_not_supported(body: []const char) Self {
+    Self {
+      .status = 505,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn variant_also_negotiates(body: []const char) Self {
+    Self {
+      .status = 506,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn insufficient_storage(body: []const char) Self {
+    Self {
+      .status = 507,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn loop_detected(body: []const char) Self {
+    Self {
+      .status = 508,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn not_extended(body: []const char) Self {
+    Self {
+      .status = 510,
+      .body = String.from(body),
+    }
+  }
+
+  pub fn network_authentication_required(body: []const char) Self {
+    Self {
+      .status = 511,
+      .body = String.from(body),
     }
   }
 
@@ -134,12 +576,68 @@ pub struct Response {
 
 fn status_text(status: u16) []const char {
   switch (status) {
+    100 => "Continue",
+    101 => "Switching Protocols",
+    102 => "Processing",
+    103 => "Early Hints",
     200 => "OK",
     201 => "Created",
+    202 => "Accepted",
+    203 => "Non-Authoritative Information",
     204 => "No Content",
+    205 => "Reset Content",
+    206 => "Partial Content",
+    207 => "Multi-Status",
+    208 => "Already Reported",
+    226 => "IM Used",
+    300 => "Multiple Choices",
+    301 => "Moved Permanently",
+    302 => "Found",
+    303 => "See Other",
+    304 => "Not Modified",
+    305 => "Use Proxy",
+    307 => "Temporary Redirect",
+    308 => "Permanent Redirect",
     400 => "Bad Request",
+    401 => "Unauthorized",
+    402 => "Payment Required",
+    403 => "Forbidden",
     404 => "Not Found",
+    405 => "Method Not Allowed",
+    406 => "Not Acceptable",
+    407 => "Proxy Authentication Required",
+    408 => "Request Timeout",
+    409 => "Conflict",
+    410 => "Gone",
+    411 => "Length Required",
+    412 => "Precondition Failed",
+    413 => "Payload Too Large",
+    414 => "URI Too Long",
+    415 => "Unsupported Media Type",
+    416 => "Range Not Satisfiable",
+    417 => "Expectation Failed",
+    418 => "I Am A Teapot",
+    421 => "Misdirected Request",
+    422 => "Unprocessable Content",
+    423 => "Locked",
+    424 => "Failed Dependency",
+    425 => "Too Early",
+    426 => "Upgrade Required",
+    428 => "Precondition Required",
+    429 => "Too Many Requests",
+    431 => "Request Header Fields Too Large",
+    451 => "Unavailable For Legal Reasons",
     500 => "Internal Server Error",
+    501 => "Not Implemented",
+    502 => "Bad Gateway",
+    503 => "Service Unavailable",
+    504 => "Gateway Timeout",
+    505 => "HTTP Version Not Supported",
+    506 => "Variant Also Negotiates",
+    507 => "Insufficient Storage",
+    508 => "Loop Detected",
+    510 => "Not Extended",
+    511 => "Network Authentication Required",
     _ => "Unknown",
   }
 }

@@ -112,3 +112,8 @@ pub interface[T] Index {
 pub interface[T] IndexPtr {
   fn index_ptr(*self, index: usize) *T;
 }
+
+/// Hash value generation for hash based collections.
+pub interface Hash {
+  fn hash(*const self) u64;
+}
