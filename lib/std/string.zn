@@ -2,7 +2,7 @@ use std.c.string;
 use std.c.ctype;
 
 use std.alloc;
-use std.list;
+use std.collections.list;
 
 /// String initial capacity size (initialization on first push).
 const InitialStringCapacity: usize = 8;
