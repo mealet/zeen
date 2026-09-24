@@ -558,6 +558,21 @@ implement Eq : String {
   }
 }
 
+implement Hash : String {
+  fn hash(*const self) u64 {
+    let h: u64 = 1469598103934665603;
+    let idx: usize = 0;
+
+    while (idx < self._len) {
+      h ^= @as(u64, self.ptr[idx]);
+      h *= 1099511628211;
+      idx += 1;
+    };
+
+    h
+  }
+}
+
 implement Index : String {
   fn index(*const self, index: usize) char {
     let opt = self.get(index);
