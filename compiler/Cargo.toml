@@ -9,7 +9,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["mealet <workjason34@gmail.com>"]
 description = "Compiler of Zeen Programming Language"
-repository = "https://codeberg.org/mealet/zeen"
+repository = "https://github.com/mealet/zeen"
 license = "Apache-2.0"
 
 [profile.dev]
