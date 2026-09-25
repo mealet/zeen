@@ -173,10 +173,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
+      # Homebrew has no x86_64 bottle for llvm@22, building LLVM from source takes hours
       - name: Install LLVM 22
-        uses: ZhongRuoyu/setup-llvm@7c7b10581c91652ab125ad911df7765c112f94bc
-        with:
-          llvm-version: 22
+        shell: bash
+        run: |
+          curl -Ls https://micro.mamba.pm/api/micromamba/osx-64/latest | tar -xj -C "$HOME" bin/micromamba
+          "$HOME/bin/micromamba" create -y -p "$HOME/llvm-env" -c conda-forge llvmdev=22.1.8
+          echo "$HOME/llvm-env/bin" >> "$GITHUB_PATH"
+          echo "LLVM_SYS_221_PREFIX=$HOME/llvm-env" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
