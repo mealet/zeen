@@ -109,7 +109,7 @@ pub struct Shared[T] {
   }
 
   /// Raw access to the shared value.
-  pub fn get(*const self) *T {
+  pub fn get(*const self) *const T {
     self.ptr
   }
 
