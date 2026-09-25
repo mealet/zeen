@@ -44,11 +44,12 @@ pub struct Args {
     pub target: Option<String>,
 
     /// `--std` flag to specify the std library root directory. Overrides the
-    /// `ZEEN_STD` environment variable and the default `~/.zeen/std` location.
+    /// `ZEEN_STD` environment variable, the `~/.zeen/std` location, and the
+    /// `share/zeen/std` directory installed next to the executable.
     #[arg(
         long = "std",
         value_name = "PATH",
-        help = "Path to the std library root (default: $ZEEN_STD or ~/.zeen/std)"
+        help = "Path to the std library root (default: $ZEEN_STD, ~/.zeen/std, then share/zeen/std)"
     )]
     pub std: Option<PathBuf>,
 
