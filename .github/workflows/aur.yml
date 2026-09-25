@@ -1,0 +1,83 @@
+name: AUR
+
+on:
+  release:
+    types: [ published ]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to the AUR
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    steps:
+      - name: Refresh the keyring and install tools
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm --needed git openssh curl
+
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Check for the AUR credentials
+        id: key
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          if [ -n "$AUR_SSH_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "AUR_SSH_KEY is not configured, skipping the AUR publish" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Update the package
+        if: steps.key.outputs.present == 'true'
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -eu
+
+          PKGVER="${TAG#v}"
+          echo "publishing zeen $PKGVER"
+
+          curl -fsSL -o /tmp/source.tar.gz \
+            "https://github.com/mealet/zeen/archive/refs/tags/$TAG.tar.gz"
+          SHA="$(sha256sum /tmp/source.tar.gz | cut -d' ' -f1)"
+
+          cd "$GITHUB_WORKSPACE/packaging/aur"
+          sed -i "s/^pkgver=.*/pkgver=$PKGVER/" PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('$SHA')/" PKGBUILD
+          makepkg --printsrcinfo > .SRCINFO
+
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
+          eval "$(ssh-agent -s)"
+          printf '%s\n' "$AUR_SSH_KEY" | ssh-add -
+
+          rm -rf /tmp/aur
+          if git clone -q ssh://aur@aur.archlinux.org/zeen.git /tmp/aur; then
+              cd /tmp/aur
+          else
+              mkdir -p /tmp/aur
+              cd /tmp/aur
+              git init -q -b master
+              git remote add origin ssh://aur@aur.archlinux.org/zeen.git
+          fi
+
+          cp "$GITHUB_WORKSPACE/packaging/aur/PKGBUILD" \
+             "$GITHUB_WORKSPACE/packaging/aur/.SRCINFO" .
+          git config user.name "zeen-release-bot"
+          git config user.email "zeen-release-bot@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+
+          if git diff --cached --quiet; then
+              echo "the AUR package already carries zeen $PKGVER" >> "$GITHUB_STEP_SUMMARY"
+          else
+              git commit -q -m "Update to $PKGVER"
+              git push -q
+              echo "published zeen $PKGVER to the AUR" >> "$GITHUB_STEP_SUMMARY"
+          fi
