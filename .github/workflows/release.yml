@@ -228,6 +228,11 @@ jobs:
         with:
           key: windows-x86_64
 
+      # llvm-sys passes xml2s.lib to link.exe and the runner has no such file
+      - name: Provide xml2s.lib
+        shell: bash
+        run: cp compiler/xml2s.lib "$(llvm-config --libdir)/xml2s.lib"
+
       - name: Build
         shell: bash
         run: ci/build.sh
