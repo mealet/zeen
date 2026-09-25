@@ -19,7 +19,7 @@ param(
     [switch]$System
 )
 
-$ErrorActionPreference = 'Stop'
+$PrevEAP = $ErrorActionPreference
 
 try {
     [Net.ServicePointManager]::SecurityProtocol =
@@ -76,6 +76,7 @@ $Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("zeen-" + [System.IO.Path]::
 New-Item -ItemType Directory -Path $Tmp -Force | Out-Null
 
 try {
+    $ErrorActionPreference = 'Stop'
     $ZipPath = Join-Path $Tmp $Name
     try {
         Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing
@@ -123,5 +124,6 @@ try {
     Write-Host "installed zeen into $Prefix"
     Write-Host 'open a new terminal for the PATH change to take effect'
 } finally {
+    $ErrorActionPreference = $PrevEAP
     if (Test-Path $Tmp) { Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue }
 }
