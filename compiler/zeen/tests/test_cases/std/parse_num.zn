@@ -1,0 +1,84 @@
+use std.string;
+
+fn show_i32(s: String) {
+  switch (s.parse_i32()) {
+    .Some(v) => @println("i32 [{}] = {}", s, v),
+    .None => @println("i32 [{}] = None", s),
+  }
+}
+
+fn show_i64(s: String) {
+  switch (s.parse_i64()) {
+    .Some(v) => @println("i64 [{}] = {}", s, v),
+    .None => @println("i64 [{}] = None", s),
+  }
+}
+
+fn show_u32(s: String) {
+  switch (s.parse_u32()) {
+    .Some(v) => @println("u32 [{}] = {}", s, v),
+    .None => @println("u32 [{}] = None", s),
+  }
+}
+
+fn show_u64(s: String) {
+  switch (s.parse_u64()) {
+    .Some(v) => @println("u64 [{}] = {}", s, v),
+    .None => @println("u64 [{}] = None", s),
+  }
+}
+
+fn show_f64(s: String) {
+  switch (s.parse_f64()) {
+    .Some(v) => @println("f64 [{}] = {}", s, v),
+    .None => @println("f64 [{}] = None", s),
+  }
+}
+
+fn show_f32(s: String) {
+  switch (s.parse_f32()) {
+    .Some(v) => @println("f32 [{}] = {}", s, v),
+    .None => @println("f32 [{}] = None", s),
+  }
+}
+
+fn main() {
+  show_i32(String.from("42"));
+  show_i32(String.from("  -17  "));
+  show_i32(String.from("+8"));
+  show_i32(String.from("2147483647"));
+  show_i32(String.from("2147483648"));
+  show_i32(String.from("-2147483648"));
+  show_i32(String.from("-2147483649"));
+  show_i32(String.from(""));
+  show_i32(String.from("12x"));
+  show_i32(String.from("--5"));
+
+  show_i64(String.from("9223372036854775807"));
+  show_i64(String.from("9223372036854775808"));
+  show_i64(String.from("-9223372036854775808"));
+  show_i64(String.from("-9223372036854775809"));
+
+  show_u32(String.from("4294967295"));
+  show_u32(String.from("4294967296"));
+  show_u32(String.from("-1"));
+  show_u32(String.from("+7"));
+
+  show_u64(String.from("18446744073709551615"));
+  show_u64(String.from("18446744073709551616"));
+  show_u64(String.from("0"));
+
+  show_f64(String.from("3.14"));
+  show_f64(String.from("-0.5"));
+  show_f64(String.from(".5"));
+  show_f64(String.from("5."));
+  show_f64(String.from("1e3"));
+  show_f64(String.from("1.5E-2"));
+  show_f64(String.from("  +2.0e+1  "));
+  show_f64(String.from("abc"));
+  show_f64(String.from("1e"));
+  show_f64(String.from("1.2.3"));
+
+  show_f32(String.from("2.5"));
+  show_f32(String.from("oops"));
+}

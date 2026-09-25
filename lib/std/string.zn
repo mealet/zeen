@@ -506,6 +506,65 @@ pub struct String {
 
     out
   }
+
+  /// Parse the whole string as `i32` (decimal, optional sign).
+  /// Outer whitespace is allowed. Overflow and garbage give `None`.
+  pub fn parse_i32(*const self) Option[i32] {
+    let max: i64 = 2147483647;
+
+    switch (parse_signed(self.ptr, self._len, max)) {
+      .Some(value) => Option.Some(@as(i32, value)),
+      .None => Option.None,
+    }
+  }
+
+  /// Parse the whole string as `i64` (decimal, optional sign).
+  /// Outer whitespace is allowed. Overflow and garbage give `None`.
+  pub fn parse_i64(*const self) Option[i64] {
+    let max: i64 = 9223372036854775807;
+
+    switch (parse_signed(self.ptr, self._len, max)) {
+      .Some(value) => Option.Some(value),
+      .None => Option.None,
+    }
+  }
+
+  /// Parse the whole string as `u32` (decimal, optional `+`).
+  /// Outer whitespace is allowed. Overflow and garbage give `None`.
+  pub fn parse_u32(*const self) Option[u32] {
+    let max: u64 = 4294967295;
+
+    switch (parse_unsigned(self.ptr, self._len, max)) {
+      .Some(value) => Option.Some(@as(u32, value)),
+      .None => Option.None,
+    }
+  }
+
+  /// Parse the whole string as `u64` (decimal, optional `+`).
+  /// Outer whitespace is allowed. Overflow and garbage give `None`.
+  pub fn parse_u64(*const self) Option[u64] {
+    const max: u64 = @as(u64, 9223372036854775807) * @as(u64, 2) + @as(u64, 1);
+
+    switch (parse_unsigned(self.ptr, self._len, max)) {
+      .Some(value) => Option.Some(value),
+      .None => Option.None,
+    }
+  }
+
+  /// Parse the whole string as `f32` (decimal, optional exponent).
+  /// Outer whitespace is allowed. Garbage gives `None`.
+  pub fn parse_f32(*const self) Option[f32] {
+    switch (parse_float(self.ptr, self._len)) {
+      .Some(value) => Option.Some(@as(f32, value)),
+      .None => Option.None,
+    }
+  }
+
+  /// Parse the whole string as `f64` (decimal, optional exponent).
+  /// Outer whitespace is allowed. Garbage gives `None`.
+  pub fn parse_f64(*const self) Option[f64] {
+    parse_float(self.ptr, self._len)
+  }
 }
 
 // ===| String Interfaces Implementations |===
@@ -677,4 +736,271 @@ fn next_capacity(size: usize) usize {
   }
 
   capacity
+}
+
+/// Skip whitespace from `pos` on, return the first other index.
+fn skip_ws(ptr: [*]const char, len: usize, pos: usize) usize {
+  let i = pos;
+
+  while (i < len) {
+    if (isspace(@as(i32, ptr[i])) == 0) {
+      break;
+    };
+
+    i += 1;
+  };
+
+  i
+}
+
+/// Digit value of `c`, or `-1` for other characters.
+fn digit_value(c: char) i32 {
+  let v = @as(i32, c) - @as(i32, '0');
+
+  if (v < 0 || v > 9) {
+    return -1;
+  };
+
+  v
+}
+
+/// Strict signed parse with `max` as the positive bound.
+/// The negative bound is `max + 1` by two complement.
+fn parse_signed(ptr: [*]const char, len: usize, max: i64) Option[i64] {
+  let i = skip_ws(ptr, len, 0);
+
+  if (i >= len) {
+    return Option.None;
+  };
+
+  let neg = false;
+
+  if (ptr[i] == '+') {
+    i += 1;
+  } else if (ptr[i] == '-') {
+    neg = true;
+    i += 1;
+  };
+
+  let limit: u64 = @as(u64, max) + @as(u64, 1);
+  let bound: u64 = if (neg) { limit } else { @as(u64, max) };
+  let cutoff = bound / @as(u64, 10);
+  let cutlim = bound % @as(u64, 10);
+
+  let acc: u64 = 0;
+  let digits: usize = 0;
+
+  while (i < len) {
+    let d = digit_value(ptr[i]);
+
+    if (d < 0) {
+      break;
+    };
+
+    digits += 1;
+
+    if (acc > cutoff || (acc == cutoff && @as(u64, d) > cutlim)) {
+      return Option.None;
+    };
+
+    acc = acc * @as(u64, 10) + @as(u64, d);
+    i += 1;
+  };
+
+  if (digits == 0) {
+    return Option.None;
+  };
+
+  if (skip_ws(ptr, len, i) != len) {
+    return Option.None;
+  };
+
+  if (neg) {
+    if (acc == limit) {
+      return Option.Some(-max - @as(i64, 1));
+    };
+
+    return Option.Some(-@as(i64, acc));
+  };
+
+  Option.Some(@as(i64, acc))
+}
+
+/// Strict unsigned parse with `max` as the bound.
+fn parse_unsigned(ptr: [*]const char, len: usize, max: u64) Option[u64] {
+  let i = skip_ws(ptr, len, 0);
+
+  if (i >= len) {
+    return Option.None;
+  };
+
+  if (ptr[i] == '+') {
+    i += 1;
+  } else if (ptr[i] == '-') {
+    return Option.None;
+  };
+
+  let cutoff = max / @as(u64, 10);
+  let cutlim = max % @as(u64, 10);
+
+  let acc: u64 = 0;
+  let digits: usize = 0;
+
+  while (i < len) {
+    let d = digit_value(ptr[i]);
+
+    if (d < 0) {
+      break;
+    };
+
+    digits += 1;
+
+    if (acc > cutoff || (acc == cutoff && @as(u64, d) > cutlim)) {
+      return Option.None;
+    };
+
+    acc = acc * @as(u64, 10) + @as(u64, d);
+    i += 1;
+  };
+
+  if (digits == 0) {
+    return Option.None;
+  };
+
+  if (skip_ws(ptr, len, i) != len) {
+    return Option.None;
+  };
+
+  Option.Some(acc)
+}
+
+/// Strict float parse: optional sign, digits with optional point,
+/// optional `e`/`E` exponent. Huge values saturate to infinity.
+fn parse_float(ptr: [*]const char, len: usize) Option[f64] {
+  let i = skip_ws(ptr, len, 0);
+
+  if (i >= len) {
+    return Option.None;
+  };
+
+  let neg = false;
+
+  if (ptr[i] == '+') {
+    i += 1;
+  } else if (ptr[i] == '-') {
+    neg = true;
+    i += 1;
+  };
+
+  let int_part: f64 = 0.0;
+  let int_digits: usize = 0;
+
+  while (i < len) {
+    let d = digit_value(ptr[i]);
+
+    if (d < 0) {
+      break;
+    };
+
+    int_digits += 1;
+    int_part = int_part * 10.0 + @as(f64, d);
+    i += 1;
+  };
+
+  let frac_part: f64 = 0.0;
+  let frac_scale: f64 = 1.0;
+  let frac_digits: usize = 0;
+
+  if (i < len) {
+    if (ptr[i] == '.') {
+      i += 1;
+
+      while (i < len) {
+        let d = digit_value(ptr[i]);
+
+        if (d < 0) {
+          break;
+        };
+
+        frac_digits += 1;
+        frac_part = frac_part * 10.0 + @as(f64, d);
+        frac_scale *= 10.0;
+        i += 1;
+      };
+    };
+  };
+
+  if (int_digits == 0 && frac_digits == 0) {
+    return Option.None;
+  };
+
+  let exp_neg = false;
+  let exp_val: i32 = 0;
+
+  if (i < len) {
+    if (ptr[i] == 'e' || ptr[i] == 'E') {
+      let j = i + 1;
+
+      if (j < len) {
+        if (ptr[j] == '+') {
+          j += 1;
+        } else if (ptr[j] == '-') {
+          exp_neg = true;
+          j += 1;
+        };
+      };
+
+      let exp_digits: usize = 0;
+
+      while (j < len) {
+        let d = digit_value(ptr[j]);
+
+        if (d < 0) {
+          break;
+        };
+
+        exp_digits += 1;
+
+        if (exp_val < 3000) {
+          exp_val = exp_val * 10 + d;
+        };
+
+        j += 1;
+      };
+
+      if (exp_digits == 0) {
+        return Option.None;
+      };
+
+      i = j;
+    };
+  };
+
+  if (skip_ws(ptr, len, i) != len) {
+    return Option.None;
+  };
+
+  let value = int_part + frac_part / frac_scale;
+
+  if (exp_val != 0) {
+    let scale: f64 = 1.0;
+    let n: i32 = 0;
+
+    while (n < exp_val) {
+      scale *= 10.0;
+      n += 1;
+    };
+
+    if (exp_neg) {
+      value /= scale;
+    } else {
+      value *= scale;
+    };
+  };
+
+  if (neg) {
+    value = -value;
+  };
+
+  Option.Some(value)
 }
