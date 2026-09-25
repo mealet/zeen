@@ -1,10 +1,6 @@
 use std.alloc;
 
-/// Exclusive owning pointer to a heap value.
-///
-/// Move only: no `Copy`, no `Clone`. Always holds a value; use
-/// `Option[Unique[T]]` for nullable ownership. The held value is
-/// freed when the owner goes out of scope.
+/// Exclusive owning smart pointer to a heap value.
 pub struct Unique[T] {
   ptr: *T,
 
@@ -17,7 +13,7 @@ pub struct Unique[T] {
   }
 
   /// Raw access to the held value.
-  pub fn get(*const self) *T {
+  pub fn get(*const self) *const T {
     self.ptr
   }
 
@@ -70,10 +66,21 @@ implement[T] DerefPtr : Unique[T] {
   }
 }
 
+implement[T: Display] Display : Unique[T] {
+  fn display[W: StrWriter](*const self, out: *W) {
+    (*self.ptr).display(out);
+  }
+}
+
+implement[T: Debug] Debug : Unique[T] {
+  fn debug[W: StrWriter](*const self, out: *W) {
+    (*self.ptr).debug(out);
+  }
+}
+
 /// Shared ownership with a strong count (single threaded).
 ///
-/// Cloning shares the value and bumps the count. Always holds a value;
-/// use `Option[Shared[T]]` for nullable ownership. The value is freed
+/// Cloning shares the value and bumps the count. The value is freed
 /// once the last owner goes out of scope. The count lives in its own
 /// heap cell next to the value.
 pub struct Shared[T] {
@@ -143,5 +150,17 @@ implement[T: Copy] Deref : Shared[T] {
 implement[T] DerefPtr : Shared[T] {
   fn deref_ptr(*self) *T {
     self.ptr
+  }
+}
+
+implement[T: Display] Display : Shared[T] {
+  fn display[W: StrWriter](*const self, out: *W) {
+    (*self.ptr).display(out);
+  }
+}
+
+implement[T: Debug] Debug : Shared[T] {
+  fn debug[W: StrWriter](*const self, out: *W) {
+    (*self.ptr).debug(out);
   }
 }
