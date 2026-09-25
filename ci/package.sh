@@ -71,23 +71,57 @@ case "$OS" in
             esac
         done
 
-        if [ "$MODE" = "dynamic" ]; then
+        RPATHS="$(otool -l "$BIN_DEST" | awk '/cmd LC_RPATH/{getline; print $2}')"
+        BUNDLED=0
+
+        # /usr/lib and /System stay external, the rest ships inside the archive
+        for dep in $DEPS; do
+            case "$dep" in
+                (/usr/lib/* | /System/*)
+                    continue
+                    ;;
+            esac
+
+            NAME="$(basename "$dep")"
+            SRC=""
+
+            case "$dep" in
+                (/*)
+                    if [ -f "$dep" ]; then
+                        SRC="$dep"
+                    fi
+                    ;;
+                (*)
+                    for RPATH in $RPATHS; do
+                        case "$RPATH" in
+                            (@loader_path*)
+                                RPATH="$(dirname "$BIN_DEST")${RPATH#@loader_path}"
+                                ;;
+                            (@executable_path*)
+                                RPATH="$(dirname "$BIN_DEST")${RPATH#@executable_path}"
+                                ;;
+                        esac
+                        if [ -f "$RPATH/$NAME" ]; then
+                            SRC="$RPATH/$NAME"
+                            break
+                        fi
+                    done
+                    ;;
+            esac
+
+            if [ -z "$SRC" ]; then
+                echo "the packaged binary has an unresolved shared library: $dep" >&2
+                exit 1
+            fi
+
             mkdir -p "$OUT/$ROOT/lib/zeen"
+            cp -L "$SRC" "$OUT/$ROOT/lib/zeen/$NAME"
+            echo "bundled $NAME"
+            BUNDLED=1
+        done
 
-            for dep in $DEPS; do
-                case "$dep" in
-                    (*libLLVM* | *libclang-cpp*)
-                        ;;
-                    (*)
-                        continue
-                        ;;
-                esac
-                NAME="$(basename "$dep")"
-                cp -L "$dep" "$OUT/$ROOT/lib/zeen/$NAME"
-                echo "bundled $NAME"
-            done
-
-            # point the binary and the bundled dylibs at the copies next to them
+        # point the binary and the bundled dylibs at the copies next to them
+        if [ "$BUNDLED" = "1" ]; then
             for target in "$BIN_DEST" "$OUT/$ROOT/lib/zeen"/*.dylib; do
                 if [ ! -f "$target" ]; then
                     continue
