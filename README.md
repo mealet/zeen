@@ -1,7 +1,5 @@
 <div align="center">
   <picture>
-    <!-- <source media="(prefers-color-scheme: dark)" srcset="assets/logo/Zeen Letter Black.png"> -->
-    <!-- <img alt="logo" src="assets/logo/Zeen Letter White.png" width="10%"> -->
     <img alt="logo" src="assets/Zeen.png" width="10%">
   </picture>
 
@@ -15,23 +13,30 @@
 
 <br/>
 
-> [!WARNING]
-> **Project is currently under active development and not ready to use**
+**Zeen** is a modern systems programming language focused on performance, safety
+and simplicity.
 
-## Install
+It uses move semantics with automatic drops, so data is released
+right after usage without a garbage collector or runtime overhead, and there is
+no borrow checker. Most errors are caught at compile time, and the compiler
+emits native code through LLVM.
 
-```sh
-# Linux, macOS
-curl -fsSL https://github.com/mealet/zeen/releases/latest/download/install.sh | sh
-```
+See examples and documentation at: [zeen-lang.tech](https://zeen-lang.tech)
 
-```powershell
-# Windows PowerShell
-[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12;iex ((New-Object Net.WebClient).DownloadString('https://github.com/mealet/zeen/releases/latest/download/install.ps1'))
-```
+## Why Zeen?
 
-Options like `--prefix` and `--version` are passed to `install.sh` or
-`install.ps1` directly.
+- **Familiar by design.** Clean, modern syntax inspired by Rust and Zig.
+- **Native performance.** Built on LLVM, compiles to optimized native code.
+- **Move semantics.** Explicit ownership and automatic drops, without a
+  garbage collector or hidden runtime overhead.
+- **Freedom to build.** No unnecessary restrictions, direct control over your
+  data, memory and program flow.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+contribution guide.
 
 ## License
+
 Project is licensed under the Apache 2.0 license. See LICENSE file for more information.
