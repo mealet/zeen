@@ -19,10 +19,19 @@
       "include": "#numbers"
     },
     {
+      "include": "#preprocessor"
+    },
+    {
       "include": "#macros"
     },
     {
       "include": "#declarations"
+    },
+    {
+      "include": "#use-paths"
+    },
+    {
+      "include": "#function-types"
     },
     {
       "include": "#keywords"
@@ -31,7 +40,10 @@
       "include": "#types"
     },
     {
-      "include": "#function-types"
+      "include": "#turbofish"
+    },
+    {
+      "include": "#constants"
     },
     {
       "include": "#generic-types"
@@ -40,10 +52,7 @@
       "include": "#self"
     },
     {
-      "include": "#constants"
-    },
-    {
-      "include": "#enum-members"
+      "include": "#members"
     },
     {
       "include": "#function-calls"
@@ -79,7 +88,7 @@
           "patterns": [
             {
               "name": "constant.character.escape.zeen",
-              "match": "\\\\(?:[abfnrtv0\\\\\"']|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\})"
+              "match": "\\\\."
             }
           ]
         },
@@ -108,23 +117,54 @@
       "patterns": [
         {
           "name": "constant.numeric.hex.zeen",
-          "match": "\\b0[xX][0-9A-Fa-f]+\\b"
+          "match": "\\b0[xX][0-9A-Fa-f_]+\\b"
         },
         {
           "name": "constant.numeric.binary.zeen",
-          "match": "\\b0[bB][01]+\\b"
+          "match": "\\b0[bB][01_]+\\b"
         },
         {
           "name": "constant.numeric.octal.zeen",
-          "match": "\\b0[oO][0-7]+\\b"
+          "match": "\\b0[oO][0-7_]+\\b"
         },
         {
           "name": "constant.numeric.float.zeen",
-          "match": "\\b(?:[0-9]+\\.[0-9]+(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)\\b"
+          "match": "\\b[0-9][0-9_]*\\.(?![A-Za-z_.])(?:[0-9][0-9_]*)?"
         },
         {
           "name": "constant.numeric.integer.zeen",
-          "match": "\\b[0-9]+(?:_[0-9]+)*\\b"
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+
+    "preprocessor": {
+      "patterns": [
+        {
+          "match": "@(os|arch|env|target|family)\\[([^\\]]*)\\]",
+          "captures": {
+            "1": {
+              "name": "keyword.control.preprocessor.zeen"
+            },
+            "2": {
+              "name": "string.unquoted.preprocessor.zeen"
+            }
+          }
+        },
+        {
+          "match": "@(var)\\[([^\\]]*)\\]",
+          "captures": {
+            "1": {
+              "name": "keyword.control.preprocessor.zeen"
+            },
+            "2": {
+              "name": "string.unquoted.preprocessor.zeen"
+            }
+          }
+        },
+        {
+          "name": "keyword.control.preprocessor.zeen",
+          "match": "@(?:debug|release)\\b(?!\\[)"
         }
       ]
     },
@@ -163,7 +203,7 @@
           }
         },
         {
-          "match": "\\b(interface)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(interface)(?:\\s*\\[[^\\]]*\\])?\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
               "name": "keyword.declaration.interface.zeen"
@@ -194,10 +234,39 @@
               "name": "entity.name.type.alias.zeen"
             }
           }
+        }
+      ]
+    },
+
+    "use-paths": {
+      "patterns": [
+        {
+          "match": "\\b(use)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": {
+              "name": "keyword.module.zeen"
+            },
+            "2": {
+              "name": "entity.name.namespace.zeen"
+            }
+          }
+        }
+      ]
+    },
+
+    "function-types": {
+      "patterns": [
+        {
+          "match": "\\bFnOnce\\s*(?=\\()",
+          "name": "storage.type.function.fnonce.zeen"
         },
         {
-          "name": "keyword.declaration.implement.zeen",
-          "match": "\\bimplement\\b"
+          "match": "\\bFn\\s*(?=\\()",
+          "name": "storage.type.function.fat.zeen"
+        },
+        {
+          "match": "\\bfn\\s*(?=\\()",
+          "name": "storage.type.function.zeen"
         }
       ]
     },
@@ -210,7 +279,7 @@
         },
         {
           "name": "keyword.declaration.zeen",
-          "match": "\\b(?:fn|struct|interface|enum|implement|alias|let)\\b"
+          "match": "\\b(?:fn|struct|enum|interface|implement|alias|let|type)\\b"
         },
         {
           "name": "keyword.module.zeen",
@@ -242,10 +311,6 @@
           "match": "\\bSelf\\b"
         },
         {
-          "name": "storage.type.pointer.zeen",
-          "match": "\\*(?=\\s*(?:const\\s+)?(?:[A-Za-z_][A-Za-z0-9_]*|\\[|\\())"
-        },
-        {
           "name": "storage.type.many-pointer.zeen",
           "match": "\\[\\*\\]"
         },
@@ -255,46 +320,20 @@
         },
         {
           "name": "storage.type.array.zeen",
-          "match": "\\[[0-9]+\\]"
+          "match": "\\[[0-9][0-9_]*\\]"
+        },
+        {
+          "name": "storage.type.pointer.zeen",
+          "match": "\\*(?=\\s*(?:const\\s+)?(?:[A-Z]|\\[|self\\b|void\\b|never\\b|char\\b|bool\\b|fn\\b|Fn\\b|isize\\b|usize\\b|(?:i|u)(?:8|16|32|64)\\b|f(?:32|64)\\b))"
         }
       ]
     },
 
-    "function-types": {
+    "turbofish": {
       "patterns": [
         {
-          "match": "\\bFnOnce\\s*(?=\\()",
-          "name": "storage.type.function.fatonce.zeen"
-        },
-        {
-          "match": "\\bFn\\s*(?=\\()",
-          "name": "storage.type.function.fat.zeen"
-        },
-        {
-          "match": "\\bfn\\s*(?=\\()",
-          "name": "storage.type.function.zeen"
-        }
-      ]
-    },
-
-    "generic-types": {
-      "patterns": [
-        {
-          "match": "\\b[A-Z][A-Za-z0-9_]*\\s*(?=\\[)",
-          "name": "entity.name.type.zeen"
-        },
-        {
-          "match": "\\b[A-Z][A-Za-z0-9_]*\\b",
-          "name": "entity.name.type.generic.zeen"
-        }
-      ]
-    },
-
-    "self": {
-      "patterns": [
-        {
-          "name": "variable.language.self.zeen",
-          "match": "\\bself\\b"
+          "name": "keyword.operator.generic.zeen",
+          "match": "#\\["
         }
       ]
     },
@@ -308,17 +347,83 @@
         {
           "name": "constant.language.null.zeen",
           "match": "\\bnullptr\\b"
+        },
+        {
+          "name": "variable.language.wildcard.zeen",
+          "match": "\\b_\\b"
+        },
+        {
+          "name": "constant.other.zeen",
+          "match": "\\b[A-Z][A-Z0-9_]+\\b"
         }
       ]
     },
 
-    "enum-members": {
+    "generic-types": {
       "patterns": [
         {
-          "match": "\\.\\s*([A-Z][A-Za-z0-9_]*)",
+          "name": "entity.name.type.zeen",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+
+    "self": {
+      "patterns": [
+        {
+          "name": "variable.language.self.zeen",
+          "match": "\\bself\\b"
+        }
+      ]
+    },
+
+    "members": {
+      "patterns": [
+        {
+          "match": "\\.([A-Za-z_][A-Za-z0-9_]*)(?=\\s*=>)",
           "captures": {
             "1": {
-              "name": "variable.other.enummember.zeen"
+              "name": "entity.name.variant.zeen"
+            }
+          }
+        },
+        {
+          "match": "\\.([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\([^()]*\\)\\s*(?:if\\s*\\([^()]*\\))?\\s*=>)",
+          "captures": {
+            "1": {
+              "name": "entity.name.variant.zeen"
+            }
+          }
+        },
+        {
+          "match": "\\.([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\{)",
+          "captures": {
+            "1": {
+              "name": "entity.name.variant.zeen"
+            }
+          }
+        },
+        {
+          "match": "\\.([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.zeen"
+            }
+          }
+        },
+        {
+          "match": "\\.([A-Za-z_][A-Za-z0-9_]*)(?=\\s*=)",
+          "captures": {
+            "1": {
+              "name": "variable.other.property.zeen"
+            }
+          }
+        },
+        {
+          "match": "\\.([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "variable.other.property.zeen"
             }
           }
         }
@@ -337,16 +442,16 @@
     "operators": {
       "patterns": [
         {
+          "name": "keyword.operator.range.zeen",
+          "match": "\\.\\.(?:=|\\.)?"
+        },
+        {
           "name": "keyword.operator.zeen",
-          "match": ">>|<<|=>|==|!=|<=|>=|&&|\\|\\||\\+=|-=|\\*=|/=|%=|\\+\\+|--|[+\\-/%=<>!|^~?]"
+          "match": "=>|==|!=|<=|>=|<<|>>|&&|\\|\\|"
         },
         {
-          "name": "keyword.operator.pointer.zeen",
-          "match": "\\*"
-        },
-        {
-          "name": "keyword.operator.address-of.zeen",
-          "match": "&"
+          "name": "keyword.operator.zeen",
+          "match": "[+\\-*/%^=<>!~?&|]"
         }
       ]
     },
@@ -372,6 +477,10 @@
         {
           "name": "punctuation.accessor.zeen",
           "match": "\\."
+        },
+        {
+          "name": "punctuation.definition.generic.zeen",
+          "match": "#"
         }
       ]
     }
