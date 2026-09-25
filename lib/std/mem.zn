@@ -1,0 +1,176 @@
+use std.alloc;
+
+/// Exclusive owning pointer to a heap value.
+///
+/// Move only: no `Copy`, no `Clone`. The held value is freed when the
+/// owner goes out of scope.
+pub struct Unique[T] {
+  ptr: *T,
+
+  /// Move `value` into a new heap allocation.
+  pub fn new(value: T) Self {
+    let ptr = @as(*T, Allocator.alloc(@sizeof(T)));
+    *ptr = value;
+
+    Self { .ptr = ptr }
+  }
+
+  /// Empty pointer holding nothing.
+  pub fn empty() Self {
+    Self { .ptr = @as(*T, nullptr) }
+  }
+
+  /// `true` when no value is held.
+  pub fn is_null(*const self) bool {
+    self.ptr == nullptr
+  }
+
+  /// Raw access to the held value (`nullptr` when empty).
+  pub fn get(*const self) *T {
+    self.ptr
+  }
+
+  /// Mutable raw access to the held value (`nullptr` when empty).
+  pub fn get_mut(*self) *T {
+    self.ptr
+  }
+
+  /// Give up ownership and hand the raw pointer out. The caller takes
+  /// over and must free it.
+  pub fn release(self) *T {
+    let ptr = self.ptr;
+    self.ptr = @as(*T, nullptr);
+
+    ptr
+  }
+
+  /// Drop the held value (if any) and take ownership of a new one.
+  pub fn reset(*self, value: T) {
+    if (self.ptr != nullptr) {
+      let _old: T = *self.ptr;
+      Allocator.dealloc(@as(*void, self.ptr));
+    };
+
+    let ptr = @as(*T, Allocator.alloc(@sizeof(T)));
+    *ptr = value;
+    self.ptr = ptr;
+  }
+}
+
+implement[T] Drop : Unique[T] {
+  fn drop(self) {
+    if (self.ptr == nullptr) {
+      return;
+    };
+
+    let _owned: T = *self.ptr;
+    Allocator.dealloc(@as(*void, self.ptr));
+  }
+}
+
+implement[T: Copy] Deref : Unique[T] {
+  fn deref(*const self) T {
+    *self.ptr
+  }
+}
+
+implement[T] DerefPtr : Unique[T] {
+  fn deref_ptr(*self) *T {
+    self.ptr
+  }
+}
+
+/// Shared ownership with a strong count (single threaded).
+///
+/// Cloning shares the value and bumps the count. The value is freed
+/// once the last owner goes out of scope. The count lives in its own
+/// heap cell next to the value.
+pub struct Shared[T] {
+  ptr: *T,
+  count: *usize,
+
+  /// Move `value` into a new heap allocation with count one.
+  pub fn new(value: T) Self {
+    let ptr = @as(*T, Allocator.alloc(@sizeof(T)));
+    *ptr = value;
+
+    let count = @as(*usize, Allocator.alloc(@sizeof(usize)));
+    *count = 1;
+
+    Self { .ptr = ptr, .count = count }
+  }
+
+  /// Empty pointer holding nothing.
+  pub fn empty() Self {
+    Self { .ptr = @as(*T, nullptr), .count = @as(*usize, nullptr) }
+  }
+
+  /// `true` when no value is held.
+  pub fn is_null(*const self) bool {
+    self.ptr == nullptr
+  }
+
+  /// Number of owners sharing the value (zero when empty).
+  pub fn use_count(*const self) usize {
+    if (self.count == nullptr) {
+      return 0;
+    };
+
+    *self.count
+  }
+
+  /// `true` when this is the only owner.
+  pub fn is_unique(*const self) bool {
+    self.use_count() == 1
+  }
+
+  /// Raw access to the shared value (`nullptr` when empty).
+  pub fn get(*const self) *T {
+    self.ptr
+  }
+
+  /// Mutable raw access to the shared value. Visible to every owner.
+  pub fn get_mut(*self) *T {
+    self.ptr
+  }
+}
+
+implement[T] Clone : Shared[T] {
+  fn clone(*const self) Self {
+    if (self.count != nullptr) {
+      *self.count += 1;
+    };
+
+    Self { .ptr = self.ptr, .count = self.count }
+  }
+}
+
+implement[T] Drop : Shared[T] {
+  fn drop(self) {
+    if (self.count == nullptr) {
+      return;
+    };
+
+    *self.count -= 1;
+
+    if (*self.count == 0) {
+      let raw_value = @as(*void, self.ptr);
+      let raw_count = @as(*void, self.count);
+      let _owned: T = *self.ptr;
+      Allocator.dealloc(raw_value);
+      Allocator.dealloc(raw_count);
+    };
+  }
+}
+
+implement[T: Copy] Deref : Shared[T] {
+  fn deref(*const self) T {
+    *self.ptr
+  }
+}
+
+implement[T] DerefPtr : Shared[T] {
+  fn deref_ptr(*self) *T {
+    self.ptr
+  }
+}

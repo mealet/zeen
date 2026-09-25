@@ -1,0 +1,53 @@
+use std.alloc;
+use std.mem;
+
+struct Noisy {
+  pub id: i32,
+}
+
+implement Drop : Noisy {
+  fn drop(self) {
+    @println("drop {}", self.id);
+  }
+}
+
+fn main() {
+  let u = Unique.new(42);
+  @println("u={}", *u);
+  *u = 100;
+  @println("u={}", *u);
+  @println("null={}", u.is_null());
+
+  let e = Unique#[i32].empty();
+  @println("empty null={}", e.is_null());
+  e.reset(7);
+  @println("reset={}", *e);
+
+  let raw = e.release();
+  @println("released={}", *raw);
+  Allocator.dealloc(@as(*void, raw));
+
+  let s = Shared.new(10);
+  @println("count={}", s.use_count());
+  @println("unique={}", s.is_unique());
+
+  let t = s.clone();
+  @println("count={}", s.use_count());
+  @println("t={}", *t);
+  *t = 20;
+  @println("s={}", *s);
+  @println("unique={}", s.is_unique());
+
+  let n = Unique.new(Noisy { .id = 1 });
+  @println("noisy={}", n.get().id);
+  n.reset(Noisy { .id = 2 });
+  @println("noisy={}", n.get().id);
+
+  let sh = Shared.new(Noisy { .id = 3 });
+  {
+    let sh2 = sh.clone();
+    @println("shared count={}", sh.use_count());
+    @println("id={}", sh2.get().id);
+  };
+  @println("shared count={}", sh.use_count());
+}
