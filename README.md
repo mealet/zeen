@@ -21,7 +21,7 @@ right after usage without a garbage collector or runtime overhead, and there is
 no borrow checker. Most errors are caught at compile time, and the compiler
 emits native code through LLVM.
 
-See examples and documentation at: [zeen-lang.tech](https://zeen-lang.tech)
+See examples, installation and documentation at: [zeen-lang.tech](https://zeen-lang.tech)
 
 ## Why Zeen?
 
