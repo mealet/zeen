@@ -7,6 +7,9 @@ description.workspace = true
 repository.workspace = true
 license.workspace = true
 
+[features]
+llvm-dynamic = ["inkwell/llvm22-1-prefer-dynamic"]
+
 [dependencies]
 inkwell = { version = "0.10.0", features = ["llvm22-1"] }
 lasso = "0.7.3"
