@@ -1,7 +1,5 @@
 u=42
 u=100
-null=false
-empty null=true
 reset=7
 released=7
 count=1
@@ -10,6 +8,8 @@ count=2
 t=10
 s=20
 unique=false
+maybe=5
+has=false
 noisy=1
 drop 1
 noisy=2

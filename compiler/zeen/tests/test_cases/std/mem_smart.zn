@@ -16,14 +16,11 @@ fn main() {
   @println("u={}", *u);
   *u = 100;
   @println("u={}", *u);
-  @println("null={}", u.is_null());
 
-  let e = Unique#[i32].empty();
-  @println("empty null={}", e.is_null());
-  e.reset(7);
-  @println("reset={}", *e);
+  u.reset(7);
+  @println("reset={}", *u);
 
-  let raw = e.release();
+  let raw = u.release();
   @println("released={}", *raw);
   Allocator.dealloc(@as(*void, raw));
 
@@ -37,6 +34,15 @@ fn main() {
   *t = 20;
   @println("s={}", *s);
   @println("unique={}", s.is_unique());
+
+  let maybe: Option[Unique[i32]] = Option.Some(Unique.new(5));
+  switch (maybe) {
+    .Some(v) => @println("maybe={}", *v),
+    .None => @println("maybe=None"),
+  };
+
+  let none: Option[Unique[i32]] = Option.None;
+  @println("has={}", none.is_some());
 
   let n = Unique.new(Noisy { .id = 1 });
   @println("noisy={}", n.get().id);
