@@ -181,6 +181,7 @@ jobs:
           "$HOME/bin/micromamba" create -y -p "$HOME/llvm-env" -c conda-forge llvmdev=22.1.8
           echo "$HOME/llvm-env/bin" >> "$GITHUB_PATH"
           echo "LLVM_SYS_221_PREFIX=$HOME/llvm-env" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-C link-arg=-Wl,-rpath,$HOME/llvm-env/lib" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
