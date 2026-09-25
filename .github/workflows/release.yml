@@ -1,0 +1,319 @@
+name: Release
+
+on:
+  push:
+    tags: [ "v*.*.*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  meta:
+    name: Meta
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Resolve version and tag
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+            echo "tag=release-$(date +%s)" >> "$GITHUB_OUTPUT"
+          fi
+
+  linux-gnu:
+    name: Linux gnu ${{ matrix.asset }}
+    needs: meta
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: linux-x86_64-gnu
+          - runner: ubuntu-24.04-arm
+            asset: linux-aarch64-gnu
+    env:
+      ZEEN_VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Install base dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl git gnupg pkg-config
+
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Install LLVM 22
+        run: ci/setup-llvm-apt.sh
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: ${{ matrix.asset }}
+
+      - name: Build
+        run: ci/build.sh
+
+      - name: Package
+        run: ci/package.sh "${{ matrix.asset }}" compiler/target/release/zeen
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zeen-${{ matrix.asset }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  linux-musl:
+    name: Linux musl x86_64
+    needs: meta
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    env:
+      ZEEN_VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Build and package in Alpine
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src" \
+            -w /src \
+            -e ZEEN_VERSION \
+            alpine:edge sh -c '
+              set -eux
+              apk add --no-cache build-base git rust cargo \
+                llvm22-dev llvm22-static \
+                zlib-dev zstd-dev libffi-dev libxml2-dev libedit-dev ncurses-dev z3-dev
+              sh ci/build.sh
+              sh ci/package.sh linux-x86_64-musl compiler/target/release/zeen
+            '
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zeen-linux-x86_64-musl
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  darwin-aarch64:
+    name: macOS aarch64
+    needs: meta
+    runs-on: macos-15
+    env:
+      ZEEN_VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Install LLVM 22
+        uses: ZhongRuoyu/setup-llvm@7c7b10581c91652ab125ad911df7765c112f94bc
+        with:
+          llvm-version: 22
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: darwin-aarch64
+
+      - name: Build
+        run: ci/build.sh
+
+      - name: Package
+        run: ci/package.sh darwin-aarch64 compiler/target/release/zeen
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zeen-darwin-aarch64
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  darwin-x86_64:
+    name: macOS x86_64
+    needs: meta
+    runs-on: macos-15-intel
+    env:
+      ZEEN_VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Install LLVM 22
+        uses: ZhongRuoyu/setup-llvm@7c7b10581c91652ab125ad911df7765c112f94bc
+        with:
+          llvm-version: 22
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: darwin-x86_64
+
+      - name: Build
+        run: ci/build.sh
+
+      - name: Package
+        run: ci/package.sh darwin-x86_64 compiler/target/release/zeen
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zeen-darwin-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  windows-x86_64:
+    name: Windows x86_64
+    needs: meta
+    runs-on: windows-2025
+    env:
+      ZEEN_VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Install LLVM 22
+        uses: ZhongRuoyu/setup-llvm@7c7b10581c91652ab125ad911df7765c112f94bc
+        with:
+          llvm-version: 22
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: windows-x86_64
+
+      - name: Build
+        shell: bash
+        run: ci/build.sh
+
+      - name: Package
+        shell: bash
+        run: ci/package.sh windows-x86_64 compiler/target/release/zeen.exe
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zeen-windows-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  freebsd:
+    name: FreeBSD x86_64
+    needs: meta
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    env:
+      ZEEN_VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Build and package in the FreeBSD VM
+        uses: vmactions/freebsd-vm@4469451fe39bee80be4066836c5170362e9349f3
+        with:
+          release: "14"
+          envs: ZEEN_VERSION
+          prepare: pkg install -y rust llvm22
+          run: |
+            sh ci/build.sh
+            sh ci/package.sh freebsd-x86_64 compiler/target/release/zeen
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zeen-freebsd-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs:
+      - meta
+      - linux-gnu
+      - linux-musl
+      - darwin-aarch64
+      - darwin-x86_64
+      - windows-x86_64
+      - freebsd
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: zeen-*
+          merge-multiple: true
+          path: dist
+
+      - name: Attach the installers
+        run: |
+          mkdir -p dist
+          cp install.sh install.ps1 dist/
+          ls -la dist/
+
+      - name: Create the draft release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: v${{ needs.meta.outputs.version }}
+          draft: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/install.sh
+            dist/install.ps1
