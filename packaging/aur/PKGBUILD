@@ -1,0 +1,40 @@
+# Maintainer: mealet <workjason34@gmail.com>
+pkgname=zeen
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Compiler of Zeen Programming Language"
+arch=('x86_64')
+url="https://github.com/mealet/zeen"
+license=('Apache-2.0')
+depends=('gcc-libs' 'glibc' 'llvm-libs')
+makedepends=('cargo' 'llvm')
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --manifest-path compiler/Cargo.toml
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo build --frozen --release --manifest-path compiler/Cargo.toml -p zeen --features llvm-dynamic
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export ZEEN_STD="$PWD/lib/std"
+    cargo test --frozen --manifest-path compiler/Cargo.toml --workspace
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 compiler/target/release/zeen "$pkgdir/usr/bin/zeen"
+    install -d "$pkgdir/usr/share/zeen"
+    cp -r lib/std "$pkgdir/usr/share/zeen/std"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

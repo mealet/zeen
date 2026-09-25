@@ -1,0 +1,17 @@
+pkgbase = zeen
+	pkgdesc = Compiler of Zeen Programming Language
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/mealet/zeen
+	arch = x86_64
+	license = Apache-2.0
+	makedepends = cargo
+	makedepends = llvm
+	depends = gcc-libs
+	depends = glibc
+	depends = llvm-libs
+	options = !lto
+	source = zeen-0.1.0.tar.gz::https://github.com/mealet/zeen/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = zeen
