@@ -7,6 +7,9 @@ description.workspace = true
 repository.workspace = true
 license.workspace = true
 
+[features]
+llvm-dynamic = ["inkwell/llvm22-1-prefer-dynamic", "zeen-codegen-llvm/llvm-dynamic"]
+
 [dependencies]
 bumpalo = { version = "3.20.2", features = ["boxed"] }
 lasso = "0.7.3"
