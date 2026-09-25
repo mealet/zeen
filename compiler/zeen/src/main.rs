@@ -24,8 +24,9 @@ fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
-/// Resolves the std root from `--std`, `ZEEN_STD`, or the default
-/// `~/.zeen/std`. Explicit paths must exist; without a configured root,
+/// Resolves the std root from `--std`, `ZEEN_STD`, `~/.zeen/std`, or the
+/// `<exe dir>/../share/zeen/std` layout that release archives and system
+/// packages install. Explicit paths must exist. Without a configured root,
 /// std imports are diagnosed later.
 fn resolve_std_root(explicit: Option<&Path>) -> Result<Option<std::path::PathBuf>, String> {
     const REPO: &str = "https://github.com/mealet/zeen";
@@ -54,9 +55,23 @@ fn resolve_std_root(explicit: Option<&Path>) -> Result<Option<std::path::PathBuf
     }
 
     let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
-    Ok(home
+    if let Some(path) = home
         .map(|home| Path::new(&home).join(".zeen").join("std"))
-        .filter(|path| path.is_dir()))
+        .filter(|path| path.is_dir())
+    {
+        return Ok(Some(path));
+    }
+
+    let next_to_exe = env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.parent()?
+                .parent()
+                .map(|prefix| prefix.join("share").join("zeen").join("std"))
+        })
+        .filter(|path| path.is_dir());
+
+    Ok(next_to_exe)
 }
 
 fn main() {
