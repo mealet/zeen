@@ -2,8 +2,9 @@ use std.alloc;
 
 /// Exclusive owning pointer to a heap value.
 ///
-/// Move only: no `Copy`, no `Clone`. The held value is freed when the
-/// owner goes out of scope.
+/// Move only: no `Copy`, no `Clone`. Always holds a value; use
+/// `Option[Unique[T]]` for nullable ownership. The held value is
+/// freed when the owner goes out of scope.
 pub struct Unique[T] {
   ptr: *T,
 
@@ -15,22 +16,12 @@ pub struct Unique[T] {
     Self { .ptr = ptr }
   }
 
-  /// Empty pointer holding nothing.
-  pub fn empty() Self {
-    Self { .ptr = @as(*T, nullptr) }
-  }
-
-  /// `true` when no value is held.
-  pub fn is_null(*const self) bool {
-    self.ptr == nullptr
-  }
-
-  /// Raw access to the held value (`nullptr` when empty).
+  /// Raw access to the held value.
   pub fn get(*const self) *T {
     self.ptr
   }
 
-  /// Mutable raw access to the held value (`nullptr` when empty).
+  /// Mutable raw access to the held value.
   pub fn get_mut(*self) *T {
     self.ptr
   }
@@ -44,12 +35,10 @@ pub struct Unique[T] {
     ptr
   }
 
-  /// Drop the held value (if any) and take ownership of a new one.
+  /// Drop the held value and take ownership of a new one.
   pub fn reset(*self, value: T) {
-    if (self.ptr != nullptr) {
-      let _old: T = *self.ptr;
-      Allocator.dealloc(@as(*void, self.ptr));
-    };
+    let _old: T = *self.ptr;
+    Allocator.dealloc(@as(*void, self.ptr));
 
     let ptr = @as(*T, Allocator.alloc(@sizeof(T)));
     *ptr = value;
@@ -59,6 +48,7 @@ pub struct Unique[T] {
 
 implement[T] Drop : Unique[T] {
   fn drop(self) {
+    // release poison
     if (self.ptr == nullptr) {
       return;
     };
@@ -82,7 +72,8 @@ implement[T] DerefPtr : Unique[T] {
 
 /// Shared ownership with a strong count (single threaded).
 ///
-/// Cloning shares the value and bumps the count. The value is freed
+/// Cloning shares the value and bumps the count. Always holds a value;
+/// use `Option[Shared[T]]` for nullable ownership. The value is freed
 /// once the last owner goes out of scope. The count lives in its own
 /// heap cell next to the value.
 pub struct Shared[T] {
@@ -100,22 +91,8 @@ pub struct Shared[T] {
     Self { .ptr = ptr, .count = count }
   }
 
-  /// Empty pointer holding nothing.
-  pub fn empty() Self {
-    Self { .ptr = @as(*T, nullptr), .count = @as(*usize, nullptr) }
-  }
-
-  /// `true` when no value is held.
-  pub fn is_null(*const self) bool {
-    self.ptr == nullptr
-  }
-
-  /// Number of owners sharing the value (zero when empty).
+  /// Number of owners sharing the value.
   pub fn use_count(*const self) usize {
-    if (self.count == nullptr) {
-      return 0;
-    };
-
     *self.count
   }
 
@@ -124,7 +101,7 @@ pub struct Shared[T] {
     self.use_count() == 1
   }
 
-  /// Raw access to the shared value (`nullptr` when empty).
+  /// Raw access to the shared value.
   pub fn get(*const self) *T {
     self.ptr
   }
@@ -137,9 +114,7 @@ pub struct Shared[T] {
 
 implement[T] Clone : Shared[T] {
   fn clone(*const self) Self {
-    if (self.count != nullptr) {
-      *self.count += 1;
-    };
+    *self.count += 1;
 
     Self { .ptr = self.ptr, .count = self.count }
   }
@@ -147,10 +122,6 @@ implement[T] Clone : Shared[T] {
 
 implement[T] Drop : Shared[T] {
   fn drop(self) {
-    if (self.count == nullptr) {
-      return;
-    };
-
     *self.count -= 1;
 
     if (*self.count == 0) {
