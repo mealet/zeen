@@ -311,7 +311,7 @@ jobs:
       - name: Attach the installers
         run: |
           mkdir -p dist
-          cp install.sh install.ps1 assets/zeen.tmLanguage.json dist/
+          cp install.sh install.ps1 dist/
           ls -la dist/
 
       - name: Create the draft release
@@ -327,4 +327,3 @@ jobs:
             dist/*.zip
             dist/install.sh
             dist/install.ps1
-            dist/zeen.tmLanguage.json
