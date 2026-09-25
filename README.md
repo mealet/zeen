@@ -13,7 +13,7 @@
 
 <br/>
 
-<ul>**Zeen**</ul> - a modern systems programming language focused on performance, safety
+**Zeen** - a modern systems programming language focused on performance, safety
 and simplicity.
 
 It uses move semantics with automatic drops, so data is released
