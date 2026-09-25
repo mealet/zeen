@@ -71,7 +71,7 @@ case "$OS" in
             esac
         done
 
-        RPATHS="$(otool -l "$BIN_DEST" | awk '/cmd LC_RPATH/{getline; print $2}')"
+        RPATHS="$(otool -l "$BIN_DEST" | awk '/cmd LC_RPATH/{r=1; next} r && $1 == "path" {print $2; r=0}')"
         BUNDLED=0
 
         # /usr/lib and /System stay external, the rest ships inside the archive
@@ -111,6 +111,7 @@ case "$OS" in
 
             if [ -z "$SRC" ]; then
                 echo "the packaged binary has an unresolved shared library: $dep" >&2
+                echo "runpaths: ${RPATHS:-none}" >&2
                 exit 1
             fi
 
