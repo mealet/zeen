@@ -5,7 +5,7 @@ use std::{
 
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
-use crate::diagnostics;
+use crate::{diagnostics, semantic};
 
 #[derive(Debug)]
 pub struct Backend {
@@ -36,6 +36,14 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                semantic_tokens_provider: Some(
+                    SemanticTokensOptions {
+                        legend: semantic::legend(),
+                        full: Some(SemanticTokensFullOptions::Bool(true)),
+                        ..Default::default()
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -54,6 +62,30 @@ impl LanguageServer for Backend {
 
     async fn shutdown(&self) -> Result<()> {
         Ok(())
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let text = self
+            .documents
+            .read()
+            .expect("RwLock guard error")
+            .get(&params.text_document.uri)
+            .cloned();
+
+        let Some(text) = text else {
+            return Ok(None);
+        };
+
+        Ok(Some(
+            SemanticTokens {
+                result_id: None,
+                data: semantic::tokens_for(&text),
+            }
+            .into(),
+        ))
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
