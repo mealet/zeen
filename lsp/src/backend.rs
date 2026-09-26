@@ -1,10 +1,7 @@
-use std::{
-    collections::HashMap,
-    sync::Arc, time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 use tokio::sync::RwLock;
+use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
 use crate::{diagnostics, semantic};
 
@@ -152,10 +149,7 @@ impl LanguageServer for Backend {
             text: change.text,
         };
 
-        self.documents
-            .write()
-            .await
-            .insert(uri.clone(), document);
+        self.documents.write().await.insert(uri.clone(), document);
 
         let client = self.client.clone();
         let documents = Arc::clone(&self.documents);
