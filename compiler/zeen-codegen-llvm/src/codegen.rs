@@ -583,6 +583,285 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
+    fn rvalue_value(
+        &mut self,
+        rvalue: &Rvalue,
+        expected_ty: TypeId,
+        func: &MirFunction,
+    ) -> BasicValueEnum<'ctx> {
+        match rvalue {
+            Rvalue::Use(operand) => self.operand_value(operand, Some(expected_ty), func),
+
+            Rvalue::BinaryOp { op, lhs, rhs } => self.binary_op(*op, lhs, rhs, expected_ty, func),
+
+            Rvalue::UnaryOp { op, operand } => self.unary_op(*op, operand, expected_ty, func),
+
+            Rvalue::Ref { place, .. } => self.place_ptr(place, func).into(),
+
+            Rvalue::Cast { operand, target } => self.cast_op(operand, *target, func),
+
+            Rvalue::SizeOf(ty) => self.size_of(*ty),
+
+            Rvalue::AlignOf(ty) => self.align_of(*ty),
+
+            Rvalue::Aggregate { .. } => {
+                unimplemented!("struct/array/slice aggregates are not implemented in codegen yet")
+            }
+
+            Rvalue::Discriminant(_) => {
+                unimplemented!("enum discriminants are not implemented in codegen yet")
+            }
+        }
+    }
+
+    fn operand_value(
+        &mut self,
+        operand: &Operand,
+        expected: Option<TypeId>,
+        func: &MirFunction,
+    ) -> BasicValueEnum<'ctx> {
+        match operand {
+            Operand::Copy(place, _) | Operand::Move(place, _) => self.load_place(place, func),
+            Operand::Constant(value, _) => self.const_value(value, expected, func),
+        }
+    }
+
+    fn operand_type(&self, operand: &Operand, func: &MirFunction) -> Option<TypeId> {
+        match operand {
+            Operand::Copy(place, _) | Operand::Move(place, _) => Some(self.place_type(place, func)),
+            Operand::Constant(_, _) => None,
+        }
+    }
+
+    fn const_value(
+        &mut self,
+        c: &ConstValue,
+        expected: Option<TypeId>,
+        _func: &MirFunction,
+    ) -> BasicValueEnum<'ctx> {
+        match c {
+            ConstValue::Int(n) => {
+                let int_ty = match expected {
+                    Some(ty) => self.map_basic_type(ty).into_int_type(),
+                    None => self.context.i32_type(),
+                };
+                let signed = expected.map(|ty| self.is_signed(ty)).unwrap_or(true);
+                int_ty.const_int(*n as u64, signed).into()
+            }
+
+            ConstValue::Float(f) => self.context.f64_type().const_float(*f).into(),
+
+            ConstValue::Bool(b) => self.context.bool_type().const_int(*b as u64, false).into(),
+
+            ConstValue::Char(ch) => self.context.i8_type().const_int(*ch as u64, false).into(),
+
+            ConstValue::Str(spur) => {
+                let content = self.resolve_spur(*spur);
+                self.get_str_global(&content).as_pointer_value().into()
+            }
+
+            ConstValue::NullPtr => self
+                .context
+                .ptr_type(AddressSpace::default())
+                .const_null()
+                .into(),
+
+            ConstValue::Void => unimplemented!("void constants are not value-typed"),
+        }
+    }
+
+    fn binary_op(
+        &mut self,
+        op: BinaryOp,
+        lhs: &Operand,
+        rhs: &Operand,
+        ty: TypeId,
+        func: &MirFunction,
+    ) -> BasicValueEnum<'ctx> {
+        let is_float = matches!(
+            self.typecheck.interner.get(ty),
+            Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral
+        );
+
+        let lhs_v = self.operand_value(lhs, Some(ty), func);
+        let rhs_v = self.operand_value(rhs, Some(ty), func);
+
+        if is_float {
+            let l = lhs_v.into_float_value();
+            let r = rhs_v.into_float_value();
+            let b = &self.builder;
+            return match op {
+                BinaryOp::Add => b.build_float_add(l, r, "").unwrap().into(),
+                BinaryOp::Sub => b.build_float_sub(l, r, "").unwrap().into(),
+                BinaryOp::Mul => b.build_float_mul(l, r, "").unwrap().into(),
+                BinaryOp::Div => b.build_float_div(l, r, "").unwrap().into(),
+                BinaryOp::Mod => b.build_float_rem(l, r, "").unwrap().into(),
+                BinaryOp::Eq => b
+                    .build_float_compare(FloatPredicate::OEQ, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Ne => b
+                    .build_float_compare(FloatPredicate::ONE, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Lt => b
+                    .build_float_compare(FloatPredicate::OLT, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Gt => b
+                    .build_float_compare(FloatPredicate::OGT, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Le => b
+                    .build_float_compare(FloatPredicate::OLE, l, r, "")
+                    .unwrap()
+                    .into(),
+                BinaryOp::Ge => b
+                    .build_float_compare(FloatPredicate::OGE, l, r, "")
+                    .unwrap()
+                    .into(),
+                _ => unimplemented!("float binary op {op:?}"),
+            };
+        }
+
+        let l = lhs_v.into_int_value();
+        let r = rhs_v.into_int_value();
+        let signed = self.is_signed(ty);
+        let b = &self.builder;
+
+        match op {
+            BinaryOp::Add => b.build_int_add(l, r, "").unwrap().into(),
+            BinaryOp::Sub => b.build_int_sub(l, r, "").unwrap().into(),
+            BinaryOp::Mul => b.build_int_mul(l, r, "").unwrap().into(),
+            BinaryOp::Div => if signed {
+                b.build_int_signed_div(l, r, "").unwrap()
+            } else {
+                b.build_int_unsigned_div(l, r, "").unwrap()
+            }
+            .into(),
+            BinaryOp::Mod => if signed {
+                b.build_int_signed_rem(l, r, "").unwrap()
+            } else {
+                b.build_int_unsigned_rem(l, r, "").unwrap()
+            }
+            .into(),
+            BinaryOp::BitAnd => b.build_and(l, r, "").unwrap().into(),
+            BinaryOp::BitOr => b.build_or(l, r, "").unwrap().into(),
+            BinaryOp::BitXor => b.build_xor(l, r, "").unwrap().into(),
+            BinaryOp::Shl => b.build_left_shift(l, r, "").unwrap().into(),
+            BinaryOp::Shr => b.build_right_shift(l, r, signed, "").unwrap().into(),
+
+            BinaryOp::Eq => b
+                .build_int_compare(IntPredicate::EQ, l, r, "")
+                .unwrap()
+                .into(),
+            BinaryOp::Ne => b
+                .build_int_compare(IntPredicate::NE, l, r, "")
+                .unwrap()
+                .into(),
+            BinaryOp::Lt => b
+                .build_int_compare(
+                    if signed {
+                        IntPredicate::SLT
+                    } else {
+                        IntPredicate::ULT
+                    },
+                    l,
+                    r,
+                    "",
+                )
+                .unwrap()
+                .into(),
+            BinaryOp::Gt => b
+                .build_int_compare(
+                    if signed {
+                        IntPredicate::SGT
+                    } else {
+                        IntPredicate::UGT
+                    },
+                    l,
+                    r,
+                    "",
+                )
+                .unwrap()
+                .into(),
+            BinaryOp::Le => b
+                .build_int_compare(
+                    if signed {
+                        IntPredicate::SLE
+                    } else {
+                        IntPredicate::ULE
+                    },
+                    l,
+                    r,
+                    "",
+                )
+                .unwrap()
+                .into(),
+            BinaryOp::Ge => b
+                .build_int_compare(
+                    if signed {
+                        IntPredicate::SGE
+                    } else {
+                        IntPredicate::UGE
+                    },
+                    l,
+                    r,
+                    "",
+                )
+                .unwrap()
+                .into(),
+
+            BinaryOp::LogicalAnd => b.build_and(l, r, "").unwrap().into(),
+            BinaryOp::LogicalOr => b.build_or(l, r, "").unwrap().into(),
+        }
+    }
+
+    fn unary_op(
+        &mut self,
+        op: UnaryOp,
+        operand: &Operand,
+        expected_ty: TypeId,
+        func: &MirFunction,
+    ) -> BasicValueEnum<'ctx> {
+        match op {
+            UnaryOp::Neg => {
+                let v = self.operand_value(operand, Some(expected_ty), func);
+                if matches!(
+                    self.typecheck.interner.get(expected_ty),
+                    Type::Builtin(BuiltinType::f32 | BuiltinType::f64)
+                ) {
+                    self.builder
+                        .build_float_neg(v.into_float_value(), "")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_int_neg(v.into_int_value(), "")
+                        .unwrap()
+                        .into()
+                }
+            }
+            UnaryOp::Not => {
+                let v = self.operand_value(operand, Some(expected_ty), func);
+                self.builder
+                    .build_not(v.into_int_value(), "")
+                    .unwrap()
+                    .into()
+            }
+            UnaryOp::BitNot => {
+                let v = self
+                    .operand_value(operand, Some(expected_ty), func)
+                    .into_int_value();
+                let ones = v.get_type().const_int(u64::MAX, false);
+                self.builder.build_xor(v, ones, "").unwrap().into()
+            }
+            UnaryOp::Deref | UnaryOp::AddrOf => {
+                unimplemented!("unary deref/addrof are not implemented in codegen yet")
+            }
+        }
+    }
+
     fn emit_terminator(&mut self, term: &Terminator, func: &MirFunction, fn_id: MirFunctionId) {
         let _ = fn_id;
         match term {
