@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 tower-lsp-server = "0.23.0"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "io-std", "sync"] }
+miette = { version = "7.6.0" }
 
 zeen-lexer = { path = "../compiler/zeen-lexer" }
 zeen-parser = { path = "../compiler/zeen-parser" }

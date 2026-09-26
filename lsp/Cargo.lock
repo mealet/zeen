@@ -1123,6 +1123,7 @@ dependencies = [
 name = "zeen-lsp"
 version = "0.1.0"
 dependencies = [
+ "miette",
  "tokio",
  "tower-lsp-server",
  "zeen-driver",
