@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::position;
+use crate::{analysis::Analysis, position};
 
 use bumpalo::Bump;
 use lasso::Rodeo;
@@ -15,9 +15,17 @@ use tower_lsp_server::ls_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Uri,
 };
 
-pub fn check(uri: &Uri, text: &str) -> Vec<Diagnostic> {
+pub struct CheckOutput {
+    pub diagnostics: Vec<Diagnostic>,
+    pub analysis: Analysis,
+}
+
+pub fn check(uri: &Uri, text: &str) -> CheckOutput {
     let Some(entry_path) = file_uri_to_path(uri) else {
-        return check_syntax(uri, text);
+        return CheckOutput {
+            diagnostics: check_syntax(uri, text),
+            analysis: Analysis::default(),
+        };
     };
 
     check_full(&entry_path, uri, text)
@@ -46,7 +54,7 @@ fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
     }
 }
 
-fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> Vec<Diagnostic> {
+fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
     let filename = Rc::new(uri_filename(uri));
     let content = Arc::new(text.to_string());
     let interner = Rc::new(RefCell::new(Rodeo::default()));
@@ -69,7 +77,11 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> Vec<Diagnostic> {
             for err in errors.iter() {
                 push_diagnostic(&mut diags, uri, text, err);
             }
-            return diags;
+
+            return CheckOutput {
+                diagnostics: diags,
+                analysis: Analysis::default(),
+            };
         }
     };
 
@@ -117,7 +129,10 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> Vec<Diagnostic> {
             for err in errors.iter() {
                 push_diagnostic(&mut diags, uri, text, err);
             }
-            return diags;
+            return CheckOutput {
+                diagnostics: diags,
+                analysis: Analysis::default(),
+            };
         }
     };
 
@@ -137,7 +152,10 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> Vec<Diagnostic> {
             for err in errors.iter() {
                 push_diagnostic(&mut diags, uri, text, err);
             }
-            return diags;
+            return CheckOutput {
+                diagnostics: diags,
+                analysis: Analysis::default(),
+            };
         }
     };
 
@@ -153,7 +171,10 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> Vec<Diagnostic> {
             for err in errors.iter() {
                 push_diagnostic(&mut diags, uri, text, err);
             }
-            return diags;
+            return CheckOutput {
+                diagnostics: diags,
+                analysis: Analysis::default(),
+            };
         }
     };
 
@@ -172,14 +193,20 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> Vec<Diagnostic> {
                 push_diagnostic(&mut diags, uri, text, warning);
             }
 
-            diags
-        },
+            CheckOutput {
+                diagnostics: diags,
+                analysis: Analysis::default(),
+            }
+        }
         Err(errors) => {
             for err in errors.iter() {
                 push_diagnostic(&mut diags, uri, text, err);
             }
 
-            diags
+            CheckOutput {
+                diagnostics: diags,
+                analysis: Analysis::default(),
+            }
         }
     }
 }
@@ -254,7 +281,6 @@ fn push_diagnostic(
             message: related_message.clone(),
         });
     }
-
 
     let severity = match err.severity().unwrap_or(Severity::Error) {
         Severity::Error => DiagnosticSeverity::ERROR,

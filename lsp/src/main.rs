@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+mod analysis;
 mod backend;
 mod diagnostics;
 mod position;

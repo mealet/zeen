@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
-use crate::{diagnostics, semantic};
+use crate::{analysis, diagnostics, semantic};
 
 const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(100);
 
@@ -17,6 +17,7 @@ pub struct Backend {
 struct Document {
     version: i32,
     text: String,
+    analysis: analysis::Analysis,
 }
 
 impl Backend {
@@ -25,13 +26,6 @@ impl Backend {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
         }
-    }
-
-    async fn publish(&self, uri: Uri, text: String) {
-        let diagnostics = diagnostics::check(&uri, &text);
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
     }
 }
 
@@ -125,17 +119,23 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
-        let document = Document {
-            version: params.text_document.version,
-            text: params.text_document.text,
-        };
+        let version = params.text_document.version;
+        let text = params.text_document.text;
 
-        self.documents
-            .write()
-            .await
-            .insert(uri.clone(), document.clone());
+        let output = diagnostics::check(&uri, &text);
 
-        self.publish(uri, document.text).await;
+        self.documents.write().await.insert(
+            uri.clone(),
+            Document {
+                version,
+                text,
+                analysis: output.analysis,
+            },
+        );
+
+        self.client
+            .publish_diagnostics(uri, output.diagnostics, None)
+            .await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -144,12 +144,16 @@ impl LanguageServer for Backend {
         };
 
         let uri = params.text_document.uri;
-        let document = Document {
-            version: params.text_document.version,
-            text: change.text,
-        };
+        let version = params.text_document.version;
 
-        self.documents.write().await.insert(uri.clone(), document);
+        self.documents.write().await.insert(
+            uri.clone(),
+            Document {
+                version,
+                text: change.text,
+                analysis: crate::analysis::Analysis::default(),
+            },
+        );
 
         let client = self.client.clone();
         let documents = Arc::clone(&self.documents);
@@ -168,8 +172,20 @@ impl LanguageServer for Backend {
                 return;
             }
 
-            let diagnostics = diagnostics::check(&uri, &current.text);
-            client.publish_diagnostics(uri, diagnostics, None).await;
+            let output = diagnostics::check(&uri, &current.text);
+
+            documents.write().await.insert(
+                uri.clone(),
+                Document {
+                    version,
+                    text: current.text,
+                    analysis: output.analysis,
+                },
+            );
+
+            client
+                .publish_diagnostics(uri, output.diagnostics, None)
+                .await;
         });
     }
 
