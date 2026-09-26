@@ -31,7 +31,7 @@ impl Backend {
     }
 
     async fn publish(&self, uri: Uri, text: String) {
-        let diagnostics = diagnostics::check(&text);
+        let diagnostics = diagnostics::check(&uri, &text);
         self.client
             .publish_diagnostics(uri, diagnostics, None)
             .await;
@@ -174,7 +174,7 @@ impl LanguageServer for Backend {
                 return;
             }
 
-            let diagnostics = diagnostics::check(&current.text);
+            let diagnostics = diagnostics::check(&uri, &current.text);
             client.publish_diagnostics(uri, diagnostics, None).await;
         });
     }
