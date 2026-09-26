@@ -20,6 +20,19 @@ pub fn tokenize(input: &str) -> impl Iterator<Item = Token> + use<'_> {
     })
 }
 
+pub fn tokenize_with_comments(input: &str) -> impl Iterator<Item = Token> + use<'_> {
+    let mut tokenizer = Tokenizer::with_comments(input);
+
+    std::iter::from_fn(move || {
+        let token = tokenizer.advance_token();
+        if token.kind != TokenKind::Eof {
+            Some(token)
+        } else {
+            None
+        }
+    })
+}
+
 const EOF_CHAR: char = '\0';
 
 pub struct Tokenizer<'inp> {
@@ -30,6 +43,7 @@ pub struct Tokenizer<'inp> {
 
     length: usize,
     remaining: usize,
+    emit_comments: bool,
 }
 
 impl<'inp> Tokenizer<'inp> {
@@ -42,7 +56,14 @@ impl<'inp> Tokenizer<'inp> {
 
             length: input.len(),
             remaining: input.len(),
+            emit_comments: false,
         }
+    }
+
+    pub fn with_comments(input: &'inp str) -> Self {
+        let mut tokenizer = Self::new(input);
+        tokenizer.emit_comments = true;
+        tokenizer
     }
 
     pub fn as_str(&self) -> &'inp str {
@@ -106,6 +127,10 @@ impl<'inp> Tokenizer<'inp> {
                     break;
                 }
             } else if chr == '/' {
+                if self.emit_comments && matches!(self.second(), '/' | '*') {
+                    break;
+                }
+
                 match self.second() {
                     '/' => {
                         while !self.is_eof() {
@@ -155,6 +180,44 @@ impl<'inp> Tokenizer<'inp> {
     pub fn advance_token(&mut self) -> Token {
         if let Some(span) = self.skip_whitespace() {
             return Token::new(TokenKind::LexError, span);
+        }
+
+        if self.emit_comments && self.first() == '/' && matches!(self.second(), '/' | '*') {
+            let start = self.pos_start();
+
+            if self.second() == '/' {
+                while !self.is_eof() && self.first() != '\n' {
+                    self.bump();
+                }
+            } else {
+                loop {
+                    if self.is_eof() {
+                        self.reset_pos();
+
+                        return Token::new(
+                            TokenKind::LexError,
+                            SourceSpan::new(start.into(), self.length - start),
+                        );
+                    }
+
+                    if self.first() == '*' && self.second() == '/' {
+                        self.bump_n(2);
+                        break;
+                    }
+
+                    if self.bump().is_none() {
+                        self.reset_pos();
+                        return Token::new(
+                            TokenKind::LexError,
+                            SourceSpan::new(start.into(), self.length - start),
+                        );
+                    }
+                }
+            }
+
+            let len = self.pos_len();
+            self.reset_pos();
+            return Token::new(TokenKind::Comment, SourceSpan::new(start.into(), len));
         }
 
         let Some(first_char) = self.bump() else {
