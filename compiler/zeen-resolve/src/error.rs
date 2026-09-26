@@ -43,12 +43,11 @@ pub enum ResolveError {
         related: Vec<DuplicateLocation>,
     },
 
-    // TODO: Help's link must be replaced when docs are out
     #[error("name `{name}` is reserved by compiler's core")]
     #[diagnostic(
         severity(Error),
         code(zeen::resolver::core_reserved),
-        help("see compiler's core libraries at: https://github.com/mealet/zeen")
+        help("see compiler's core libraries at: https://zeen-lang.tech/library/core/ops")
     )]
     CoreReserved {
         name: SmolStr,
