@@ -242,3 +242,187 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             })
     }
 
+    fn register_struct_layouts(&mut self) {
+        for &ty in self.program.struct_layouts.keys() {
+            let name = self.mangle_struct_name(ty);
+            let opaque = self.context.opaque_struct_type(&name);
+            self.struct_types.insert(ty, opaque);
+        }
+
+        let mut bodies: Vec<(TypeId, Vec<BasicTypeEnum<'ctx>>)> = Vec::new();
+        for &ty in self.program.struct_layouts.keys() {
+            let layout = &self.program.struct_layouts[&ty];
+            let fields: Vec<BasicTypeEnum<'ctx>> = layout
+                .fields
+                .iter()
+                .map(|f| self.map_basic_type(f.ty))
+                .collect();
+            bodies.push((ty, fields));
+        }
+
+        for (ty, fields) in bodies {
+            self.struct_types[&ty].set_body(&fields, false);
+        }
+    }
+
+    fn declare_externs(&mut self) {
+        for decl in &self.program.extern_fns {
+            let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = decl
+                .param_types
+                .iter()
+                .map(|&t| self.map_basic_type(t).into())
+                .collect();
+            let ret = self.map_ret_type(decl.ret_ty);
+            let fn_type = self.make_fn_type(ret, &param_types, decl.is_variadic);
+            if self.module.get_function(&decl.symbol_name).is_none() {
+                self.module.add_function(
+                    &decl.symbol_name,
+                    fn_type,
+                    Some(inkwell::module::Linkage::External),
+                );
+            }
+        }
+
+        for decl in &self.program.extern_vars {
+            let global =
+                self.module
+                    .add_global(self.map_basic_type(decl.ty), None, &decl.symbol_name);
+            global.set_linkage(inkwell::module::Linkage::External);
+        }
+    }
+
+    fn declare_functions(&mut self) {
+        let mut ids: Vec<MirFunctionId> = self.program.functions.keys().copied().collect();
+        ids.sort_by_key(|id| id.0);
+
+        for id in ids {
+            let func = &self.program.functions[&id];
+            let name = self.function_symbol_name(id, func);
+
+            let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
+                .params
+                .iter()
+                .map(|&local| self.map_basic_type(func.local(local).ty).into())
+                .collect();
+            let ret = self.map_ret_type(func.ret_ty);
+            let fn_type = self.make_fn_type(ret, &param_types, false);
+
+            let function = self.module.add_function(&name, fn_type, None);
+            self.functions.insert(id, function);
+        }
+    }
+
+    fn emit_function_bodies(&mut self) {
+        let mut ids: Vec<MirFunctionId> = self.program.functions.keys().copied().collect();
+        ids.sort_by_key(|id| id.0);
+
+        for id in ids {
+            self.emit_function(id);
+        }
+    }
+
+    fn function_symbol_name(&self, id: MirFunctionId, func: &MirFunction) -> String {
+        if let Some(symbol) = self.program.extern_exports.get(&id) {
+            return symbol.clone();
+        }
+        if func.is_drop_impl {
+            return format!("zeen.drop.{}", id.0);
+        }
+
+        let readable = self
+            .program
+            .function_names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| format!("fn{}", id.0));
+
+        if readable == "main" {
+            return "zeen_main".to_string();
+        }
+
+        self.mangle_function_name(&readable, id)
+    }
+
+    fn mangle_function_name(&self, readable: &str, id: MirFunctionId) -> String {
+        let mut mangled = String::new();
+        for ch in readable.chars() {
+            match ch {
+                '[' => mangled.push('$'),
+                ']' => mangled.push('$'),
+                ',' => mangled.push('_'),
+                ' ' => mangled.push('_'),
+                c => mangled.push(c),
+            }
+        }
+        if self.module.get_function(&mangled).is_some() {
+            mangled.push_str(&format!("${}", id.0));
+        }
+        mangled
+    }
+
+    fn mangle_struct_name(&self, ty: TypeId) -> String {
+        match self.typecheck.interner.get(ty) {
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let base = self.resolve_def_name(*def_id);
+                if generic_args.is_empty() {
+                    base
+                } else {
+                    let args: Vec<String> = generic_args
+                        .iter()
+                        .map(|&arg| self.mangle_type_name(arg))
+                        .collect();
+                    format!("{base}${}", args.join("$"))
+                }
+            }
+            Type::Slice { element, .. } => format!("slice.{}", self.mangle_type_name(*element)),
+            _ => format!("struct.{}", ty.0),
+        }
+    }
+
+    fn mangle_type_name(&self, ty: TypeId) -> String {
+        match self.typecheck.interner.get(ty) {
+            Type::Builtin(b) => format!("{b:?}"),
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let base = self.resolve_def_name(*def_id);
+                if generic_args.is_empty() {
+                    base
+                } else {
+                    let args: Vec<String> = generic_args
+                        .iter()
+                        .map(|&arg| self.mangle_type_name(arg))
+                        .collect();
+                    format!("{base}${}", args.join("$"))
+                }
+            }
+            Type::Pointer { inner, .. } => format!("ptr.{}", self.mangle_type_name(*inner)),
+            Type::ManyPointer { inner, .. } => format!("many.{}", self.mangle_type_name(*inner)),
+            Type::Array { element, len } => {
+                format!(
+                    "arr{}.{}",
+                    len.unwrap_or(0),
+                    self.mangle_type_name(*element)
+                )
+            }
+            Type::Slice { element, .. } => format!("slice.{}", self.mangle_type_name(*element)),
+            Type::Enum { def_id } => self.resolve_def_name(*def_id),
+            Type::Fn { .. } => "fn".to_string(),
+            Type::IntLiteral => "i32".to_string(),
+            Type::FloatLiteral => "f64".to_string(),
+            _ => format!("ty{}", ty.0),
+        }
+    }
+
+    fn resolve_def_name(&self, def_id: DefId) -> String {
+        self.resolution
+            .defs
+            .get(&def_id)
+            .map(|info| self.resolve_spur(info.name))
+            .unwrap_or_else(|| format!("<def#{def_id:?}>"))
+    }
+}
