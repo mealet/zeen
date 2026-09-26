@@ -10,7 +10,7 @@ use crate::position;
 
 use bumpalo::Bump;
 use lasso::Rodeo;
-use miette::Diagnostic as _;
+use miette::{Diagnostic as _, Severity};
 use tower_lsp_server::ls_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Uri,
 };
@@ -157,13 +157,23 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> Vec<Diagnostic> {
         }
     };
 
+    for warning in lowered.warnings.iter() {
+        push_diagnostic(&mut diags, uri, text, warning);
+    }
+
     match zeen_flow::run_dataflow(
         &mut lowered.program,
         &mut typechecker_result,
         &resolution_result,
         Rc::clone(&interner),
     ) {
-        Ok(_) => diags,
+        Ok(flow_result) => {
+            for warning in flow_result.warnings.iter() {
+                push_diagnostic(&mut diags, uri, text, warning);
+            }
+
+            diags
+        },
         Err(errors) => {
             for err in errors.iter() {
                 push_diagnostic(&mut diags, uri, text, err);
@@ -245,9 +255,16 @@ fn push_diagnostic(
         });
     }
 
+
+    let severity = match err.severity().unwrap_or(Severity::Error) {
+        Severity::Error => DiagnosticSeverity::ERROR,
+        Severity::Warning => DiagnosticSeverity::WARNING,
+        Severity::Advice => DiagnosticSeverity::HINT,
+    };
+
     diags.push(Diagnostic {
         range: position::span_to_range(text, main.0, main.1),
-        severity: Some(DiagnosticSeverity::ERROR),
+        severity: Some(severity),
         code: err
             .code()
             .map(|code| NumberOrString::String(code.to_string())),
