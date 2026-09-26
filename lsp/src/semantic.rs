@@ -12,6 +12,7 @@ enum TokenType {
     Macro,
     Decorator,
     Variable,
+    Operator
 }
 
 struct RawToken {
@@ -33,6 +34,7 @@ pub fn legend() -> SemanticTokensLegend {
             SemanticTokenType::MACRO,
             SemanticTokenType::DECORATOR,
             SemanticTokenType::VARIABLE,
+            SemanticTokenType::OPERATOR,
         ],
         token_modifiers: Vec::new(),
     }
@@ -130,8 +132,9 @@ fn token_kind_index(kind: TokenKind) -> Option<TokenType> {
         | TokenKind::PreprocessorRelease => Some(TokenType::Decorator),
 
         TokenKind::Comment => Some(TokenType::Comment),
+        TokenKind::Unknown | TokenKind::LexError | TokenKind::Eof => None,
 
-        _ => None,
+        _ => Some(TokenType::Operator),
     }
 }
 
