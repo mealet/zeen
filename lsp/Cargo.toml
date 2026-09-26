@@ -7,6 +7,8 @@ edition = "2024"
 tower-lsp-server = "0.23.0"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "io-std", "sync"] }
 miette = { version = "7.6.0" }
+bumpalo = { version = "3.20.2", features = ["boxed"] }
+lasso = "0.7.3"
 
 zeen-lexer = { path = "../compiler/zeen-lexer" }
 zeen-parser = { path = "../compiler/zeen-parser" }

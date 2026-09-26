@@ -1123,6 +1123,8 @@ dependencies = [
 name = "zeen-lsp"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
+ "lasso",
  "miette",
  "tokio",
  "tower-lsp-server",
