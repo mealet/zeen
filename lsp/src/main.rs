@@ -3,6 +3,7 @@
 mod backend;
 mod diagnostics;
 mod position;
+mod semantic;
 
 use backend::Backend;
 use tower_lsp_server::{LspService, Server};
