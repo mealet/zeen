@@ -321,6 +321,85 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
+    fn emit_function(&mut self, id: MirFunctionId) {
+        let func = &self.program.functions[&id];
+        let function = self.functions[&id];
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.locals.clear();
+        self.blocks.clear();
+        self.builder.position_at_end(entry);
+
+        for (idx, decl) in func.locals.iter().enumerate() {
+            if self.is_void_ty(decl.ty) {
+                continue;
+            }
+            let alloca = self
+                .builder
+                .build_alloca(self.map_basic_type(decl.ty), &format!("%{idx}"))
+                .unwrap();
+            self.locals.insert(LocalId(idx as u32), alloca);
+        }
+
+        for (i, &param_local) in func.params.iter().enumerate() {
+            let Some(arg) = function.get_nth_param(i as u32) else {
+                continue;
+            };
+            let ptr = self.locals[&param_local];
+            self.builder.build_store(ptr, arg).unwrap();
+        }
+
+        for idx in 1..func.blocks.len() {
+            let block = self
+                .context
+                .append_basic_block(function, &format!("bb{idx}"));
+            self.blocks.insert(BlockId(idx as u32), block);
+        }
+        self.blocks.insert(func.entry_block, entry);
+
+        for (idx, block) in func.blocks.iter().enumerate() {
+            let block_id = BlockId(idx as u32);
+            self.builder.position_at_end(self.blocks[&block_id]);
+            for stmt in &block.statements {
+                self.emit_statement(stmt, func);
+            }
+            self.emit_terminator(&block.terminator, func, id);
+        }
+
+        assert!(
+            function.verify(false),
+            "LLVM failed to verify function:\n{}",
+            self.print_ir()
+        );
+    }
+
+    fn emit_main_wrapper(&mut self) {
+        let Some(main_fn) = self.options.main_fn else {
+            return;
+        };
+        let zeen_main = self.functions[&main_fn];
+        let ret_ty = self.program.functions[&main_fn].ret_ty;
+
+        let main_ty = self.context.i32_type().fn_type(&[], false);
+        let main = self.module.add_function("main", main_ty, None);
+        let entry = self.context.append_basic_block(main, "entry");
+        self.builder.position_at_end(entry);
+
+        if self.is_integer_return(ret_ty) {
+            let call = self.builder.build_call(zeen_main, &[], "").unwrap();
+            let value = call.try_as_basic_value().unwrap_basic();
+            let value = self.coerce_to_i32(value, ret_ty);
+            self.builder.build_return(Some(&value)).unwrap();
+        } else {
+            self.builder.build_call(zeen_main, &[], "").unwrap();
+            self.builder
+                .build_return(Some(&self.context.i32_type().const_int(0, false)))
+                .unwrap();
+        }
+
+        assert!(main.verify(false), "LLVM failed to verify main wrapper");
+    }
+
     fn map_type(&self, ty: TypeId) -> AnyTypeEnum<'ctx> {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(BuiltinType::void) => self.context.void_type().into(),
@@ -473,6 +552,168 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
         } else {
             int.into()
+        }
+    }
+
+    fn emit_statement(&mut self, stmt: &MirStatement, func: &MirFunction) {
+        match stmt {
+            MirStatement::Assign { place, rvalue, .. } => {
+                let place_ty = self.place_type(place, func);
+                let value = self.rvalue_value(rvalue, place_ty, func);
+                self.store_place(place, value, func);
+            }
+
+            MirStatement::Discard(operand) => {
+                let is_void = match self.operand_type(operand, func) {
+                    Some(ty) => {
+                        matches!(self.typecheck.interner.get(ty), Type::Void | Type::Never)
+                    }
+                    None => false,
+                };
+                if !is_void {
+                    let _ = self.operand_value(operand, None, func);
+                }
+            }
+
+            MirStatement::Drop(_) => {
+                unimplemented!("RAII/drop is not implemented in codegen yet")
+            }
+
+            MirStatement::StorageLive(_) | MirStatement::StorageDead(_) | MirStatement::Nop => {}
+        }
+    }
+
+    fn emit_terminator(&mut self, term: &Terminator, func: &MirFunction, fn_id: MirFunctionId) {
+        let _ = fn_id;
+        match term {
+            Terminator::Goto(block) => {
+                let target = self.blocks[block];
+                self.builder.build_unconditional_branch(target).unwrap();
+            }
+
+            Terminator::SwitchInt {
+                discriminant,
+                targets,
+                otherwise,
+            } => {
+                let value = self
+                    .operand_value(discriminant, None, func)
+                    .into_int_value();
+                let otherwise = self.blocks[otherwise];
+                let cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> = targets
+                    .iter()
+                    .map(|&(v, block)| {
+                        (
+                            value.get_type().const_int(v as u64, false),
+                            self.blocks[&block],
+                        )
+                    })
+                    .collect();
+                self.builder.build_switch(value, otherwise, &cases).unwrap();
+            }
+
+            Terminator::Call {
+                func: target,
+                args,
+                destination,
+                target: next,
+                ..
+            } => {
+                self.emit_call(target, args, destination, *next, func);
+            }
+
+            Terminator::MacroCall {
+                kind,
+                format_chunks,
+                args,
+                destination,
+                target,
+                ..
+            } => {
+                self.emit_macro_call(
+                    *kind,
+                    format_chunks.as_deref(),
+                    args,
+                    destination,
+                    *target,
+                    func,
+                );
+            }
+
+            Terminator::Return(operand) => {
+                if matches!(operand, Operand::Constant(ConstValue::Void, _)) {
+                    self.builder.build_return(None).unwrap();
+                } else {
+                    let value = self.operand_value(operand, Some(func.ret_ty), func);
+                    self.builder.build_return(Some(&value)).unwrap();
+                }
+            }
+
+            Terminator::Unreachable => {
+                self.builder.build_unreachable().unwrap();
+            }
+        }
+    }
+
+    fn emit_call(
+        &mut self,
+        target: &CallTarget,
+        args: &[Operand],
+        destination: &Place,
+        next: Option<BlockId>,
+        func: &MirFunction,
+    ) {
+        let arg_values: Vec<BasicMetadataValueEnum<'ctx>> = args
+            .iter()
+            .map(|arg| {
+                let ty = self.operand_type(arg, func);
+                self.operand_value(arg, ty, func).into()
+            })
+            .collect();
+
+        let call = match target {
+            CallTarget::Direct(id) => {
+                let callee = self.functions[id];
+                self.builder.build_call(callee, &arg_values, "").unwrap()
+            }
+            CallTarget::Extern(idx) => {
+                let decl = &self.program.extern_fns[*idx];
+                let callee = self.module.get_function(&decl.symbol_name).unwrap();
+                self.builder.build_call(callee, &arg_values, "").unwrap()
+            }
+            CallTarget::Indirect(operand) => {
+                let fptr = self.operand_value(operand, None, func).into_pointer_value();
+                let op_ty = self
+                    .operand_type(operand, func)
+                    .expect("fn pointer operand");
+                let fn_ty = self.map_fn_pointer_type(op_ty);
+                self.builder
+                    .build_indirect_call(fn_ty, fptr, &arg_values, "")
+                    .unwrap()
+            }
+        };
+
+        match call.try_as_basic_value() {
+            ValueKind::Basic(value) => self.store_place(destination, value, func),
+            ValueKind::Instruction(_) => {}
+        }
+
+        if let Some(next) = next {
+            let block = self.blocks[&next];
+            self.builder.build_unconditional_branch(block).unwrap();
+        }
+    }
+
+    fn map_fn_pointer_type(&self, ty: TypeId) -> FunctionType<'ctx> {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Fn { params, ret } => {
+                let params: Vec<BasicMetadataTypeEnum<'ctx>> = params
+                    .iter()
+                    .map(|&p| self.map_basic_type(p).into())
+                    .collect();
+                self.make_fn_type(self.map_ret_type(ret), &params, false)
+            }
+            _ => unimplemented!("indirect call through a non-fn value"),
         }
     }
 
