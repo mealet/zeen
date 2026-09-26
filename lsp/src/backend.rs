@@ -49,6 +49,7 @@ impl LanguageServer for Backend {
                     SemanticTokensOptions {
                         legend: semantic::legend(),
                         full: Some(SemanticTokensFullOptions::Bool(true)),
+                        range: Some(true),
                         ..Default::default()
                     }
                     .into(),
@@ -92,6 +93,34 @@ impl LanguageServer for Backend {
             SemanticTokens {
                 result_id: None,
                 data: semantic::tokens_for(&text),
+            }
+            .into(),
+        ))
+    }
+
+    async fn semantic_tokens_range(
+        &self,
+        params: SemanticTokensRangeParams,
+    ) -> Result<Option<SemanticTokensRangeResult>> {
+        let text = self
+            .documents
+            .read()
+            .await
+            .get(&params.text_document.uri)
+            .map(|document| document.text.clone());
+
+        let Some(text) = text else {
+            return Ok(None);
+        };
+
+        Ok(Some(
+            SemanticTokens {
+                result_id: None,
+                data: semantic::tokens_in_range(
+                    &text,
+                    params.range.start.line,
+                    params.range.end.line,
+                ),
             }
             .into(),
         ))

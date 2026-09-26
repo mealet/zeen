@@ -12,7 +12,7 @@ enum TokenType {
     Macro,
     Decorator,
     Variable,
-    Operator
+    Operator,
 }
 
 struct RawToken {
@@ -41,6 +41,19 @@ pub fn legend() -> SemanticTokensLegend {
 }
 
 pub fn tokens_for(text: &str) -> Vec<SemanticToken> {
+    encode(collect(text))
+}
+
+pub fn tokens_in_range(text: &str, start_line: u32, end_line: u32) -> Vec<SemanticToken> {
+    encode(
+        collect(text)
+            .into_iter()
+            .filter(|item| item.line >= start_line && item.line <= end_line)
+            .collect(),
+    )
+}
+
+fn collect(text: &str) -> Vec<RawToken> {
     let starts = line_starts(text);
     let mut items: Vec<RawToken> = Vec::new();
 
@@ -85,6 +98,10 @@ pub fn tokens_for(text: &str) -> Vec<SemanticToken> {
         }
     }
 
+    items
+}
+
+fn encode(items: Vec<RawToken>) -> Vec<SemanticToken> {
     let mut out = Vec::with_capacity(items.len());
     let mut prev_line = 0;
     let mut prev_start = 0;
