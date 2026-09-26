@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 use crate::{diagnostics, semantic};
 
-const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(120);
+const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub struct Backend {
