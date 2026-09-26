@@ -101,33 +101,24 @@ pub enum DefKind {
 /// Final output of Name Resolver
 #[derive(Debug, Clone, Default)]
 pub struct ResolutionResult {
-    /// Expr -> Resolution
     pub expr_bindings: HashMap<NodeKey, Resolution>,
-    /// Type Expr -> Resolution
     pub type_bindings: HashMap<NodeKey, Resolution>,
+
     /// Generic bindings of `implement` decls -> Resolution (indexed by slot)
     pub implement_generic_bindings: HashMap<BindingSlotKey, Resolution>,
-    /// All known defs
     pub defs: HashMap<DefId, DefInfo>,
+
     /// (struct, interface) -> methods
     pub impls: HashMap<(DefId, DefId), Vec<DefId>>,
     pub binding_sites: HashMap<NodeKey, DefId>,
     pub implement_names: HashMap<NodeKey, (Resolution, Resolution)>,
     pub interface_self_placeholders: HashMap<DefId, DefId>,
-    /// Switch arm and alternative index -> literal of the matched `const`:
-    /// a bare name that resolves to a constant compares instead of binding.
-    /// A bare arm pattern uses index 0.
+
     pub arm_const_values: HashMap<(NodeKey, usize), Literal>,
-    /// `const` definition -> its literal initializer, if any.
     pub const_values: HashMap<DefId, Literal>,
 
-    /// Nested fn `DefId` -> enclosing fn `DefId`.
     pub nested_fn_parents: HashMap<DefId, DefId>,
-
-    /// Closure `DefId` -> captured `DefId`s in first-use order.
     pub closure_captures: HashMap<DefId, Vec<DefId>>,
-
-    /// Anonymous-struct-payload variant -> synthetic payload `DefKind::Struct`.
     pub enum_payload_struct_defs: HashMap<DefId, DefId>,
 }
 

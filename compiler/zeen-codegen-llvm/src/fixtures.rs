@@ -40,7 +40,6 @@ pub struct Fixture {
     pub resolution: ResolutionResult,
     pub rodeo: Rc<RefCell<lasso::Rodeo>>,
     pub program: MirProgram,
-    /// Set automatically when a function named `main` is built.
     pub main_fn: Option<MirFunctionId>,
 }
 
@@ -200,8 +199,6 @@ impl Fixture {
     }
 }
 
-/// Builder for a single [`MirFunction`]. Locals/blocks are created in order,
-/// the first block created is the entry block (`bb0`).
 pub struct FnBuilder<'f> {
     fixture: &'f mut Fixture,
     name: String,

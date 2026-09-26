@@ -750,7 +750,7 @@ fn global_initialized_from_another_global() {
 use crate::{
     AggregateKind, CallTarget, ConstValue, LocalId, MirFunctionId, Operand, Rvalue, Terminator,
 };
-use zeen_types::{CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD};
+use zeen_types::CLOSURE_FAT_ENV_FIELD;
 
 fn fn_id_by_name(mir: &MirLoweringResult, name: &str) -> Option<MirFunctionId> {
     mir.program
@@ -759,21 +759,6 @@ fn fn_id_by_name(mir: &MirLoweringResult, name: &str) -> Option<MirFunctionId> {
         .find(|(_, n)| n.as_str() == name)
         .map(|(id, _)| *id)
 }
-
-fn calls_of(mir: &MirLoweringResult, id: MirFunctionId) -> Vec<&Terminator> {
-    mir.program.functions[&id]
-        .blocks
-        .iter()
-        .map(|b| &b.terminator)
-        .collect()
-}
-
-// Capturing closures lower to a fat value: a static `{ $fn, $env }`
-// envelope whose `$env` points at a heap-allocated struct of captures. The
-// closure body gets a leading `*const` parameter pointing at that env
-// struct (env-first ABI); call sites dispatch indirectly through `$fn` with
-// `$env` as the leading argument, so provenance never matters at the call
-// site.
 
 fn closure_id_named(mir: &MirLoweringResult, name: &str) -> MirFunctionId {
     fn_id_by_name(mir, name).expect("expected closure function by name")
@@ -1777,11 +1762,6 @@ fn switch_inclusive_range_emits_le_test() {
         })
     });
     assert!(has_le, "expected an inclusive upper bound test");
-}
-
-fn verifies(ty: zeen_types::TypeId, _all: usize) -> bool {
-    let _ = ty;
-    true
 }
 
 fn print_mir_ok(src: &str) -> String {

@@ -15,10 +15,6 @@ use zeen_ast::{
 };
 use zeen_driver::{CompilationMode, Target};
 
-/// Resolves the preprocessor: removes non-matching `@name[...]` declaration
-/// blocks and replaces `@var[...]` expressions with concrete literals. Runs
-/// right after parsing, before resolve/HIR, so platform-specific code that
-/// does not exist on the current target is dropped from the AST.
 pub struct Preprocessor<'a, 'b> {
     arena: &'a Bump,
     interner: &'b Rc<RefCell<Rodeo>>,
@@ -44,8 +40,6 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
         }
     }
 
-    /// Filters a top-level declaration list, returning a new arena slice where
-    /// conditional blocks have been expanded and `@var` replaced.
     pub fn resolve_program(&mut self, decls: &[&'a Declaration<'a>]) -> &'a [&'a Declaration<'a>] {
         let out: SmallVec<[&'a Declaration<'a>; 8]> = self.resolve_block(decls);
         self.alloc_slice(&out)
@@ -370,8 +364,6 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
         })
     }
 
-    /// Resolves a statement list, flattening statement-level conditional blocks
-    /// into the statements of the single matching branch.
     fn resolve_stmt_list(&mut self, stmts: &'a [&'a Statement<'a>]) -> &'a [&'a Statement<'a>] {
         let mut out: SmallVec<[&'a Statement<'a>; 8]> = SmallVec::new();
         for s in stmts {
@@ -395,8 +387,6 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
         }
     }
 
-    /// Returns the statements of the single matching branch of a statement-level
-    /// conditional, walking the `else if` / `else` chain.
     fn matched_stmt_branch(
         &self,
         block: &'a StmtConditionalBlock<'a>,
@@ -417,12 +407,6 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
         None
     }
 
-    /// Restores block shape after guard splicing.
-    ///
-    /// A spliced branch may end in a bare value, leaving `TrailingExpr`
-    /// inside the statement list. The parser only produces it as the last
-    /// statement, so mid list entries become plain statements and a last
-    /// one becomes the block tail when there is none yet.
     fn finish_block_stmts(
         &mut self,
         stmts: &[&'a Statement<'a>],
@@ -450,9 +434,6 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
         (self.alloc_slice(&out), tail)
     }
 
-    /// Expands a statement-level conditional used as a single statement body
-    /// (e.g. the body of an `if`/`while`/`for`). The matching branch is resolved
-    /// and wrapped back into a block expression statement.
     fn expand_stmt_conditional_single(
         &mut self,
         block: &'a StmtConditionalBlock<'a>,
@@ -554,8 +535,6 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
         })
     }
 
-    /// Replaces an expression-level conditional block with the body of the
-    /// single matching branch.
     fn expand_expr_conditional(
         &mut self,
         block: &'a ExprConditionalBlock<'a>,
@@ -726,7 +705,6 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
     }
 }
 
-/// Convenience entry point.
 pub fn resolve<'a>(
     program: &[&'a Declaration<'a>],
     arena: &'a Bump,

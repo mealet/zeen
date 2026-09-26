@@ -56,8 +56,6 @@ pub struct TypeChecker<'res> {
     expect_assign_interface: bool,
     found_main_fn: bool,
 
-    /// Function bodies checked so far. Guarded against re-entry (bodies in
-    /// progress) so a body is never checked twice.
     bodies_checked: HashSet<DefId>,
     bodies_in_progress: HashSet<DefId>,
 
@@ -78,26 +76,12 @@ pub struct TypeChecker<'res> {
     enum_generics: HashMap<DefId, Vec<DefId>>,
 
     type_aliases: HashMap<DefId, AliasDef>,
-
-    /// Alias defs currently being expanded, to catch infinite recursive aliases.
     in_progress_aliases: HashSet<DefId>,
 
-    /// Declared interface bounds of every generic parameter, keyed by the
-    /// generic parameter's `DefId`. Collected from structs, fn/method
-    /// signatures and implement blocks so alias bound checks can consult a
-    /// generic parameter's bounds even while lowering a signature (Pass 1),
-    /// where no function context is active.
     all_generic_bounds: HashMap<DefId, Vec<DefId>>,
-
     method_owning_interface: HashMap<DefId, DefId>,
-
     extracting_typename: bool,
 
-    /// `VarRef` expressions that reference a type-only def (`Struct`,
-    /// `Interface`, `Enum`, `TypeAlias`) where a value is expected. Legitimate
-    /// uses remove themselves: a static method call receiver and a `typeof`
-    /// operand. Anything left after checking is a misuse reported in
-    /// [`TypeChecker::finalize_type_name_usage`].
     type_names_as_values: HashMap<HirId, (DefId, Source)>,
 }
 
@@ -123,16 +107,11 @@ struct InterfaceCallResult {
     pub method_def: DefId,
 }
 
-/// Implement-block context carried into the check of its methods: the
-/// lowered object slots, whether the block specializes a concrete
-/// instantiation, and the implement generics' bounds.
 struct MethodImplCtx {
     object_args: Vec<TypeId>,
     generic_bounds: Vec<(DefId, Vec<DefId>)>,
 }
 
-/// Implement-block data needed to compare an interface method signature
-/// against the implementing method.
 struct ImplSigCtx<'a> {
     imp_generics: &'a [DefId],
     object_args: &'a [TypeId],
@@ -284,9 +263,6 @@ impl<'res> TypeChecker<'res> {
             self.compute_structs_capabilities(decl);
         }
 
-        // Closure allocation analysis reads the HIR and the capture map only,
-        // so it runs before body checking: the fat type a closure literal gets
-        // must already know whether its env escapes (heap) or stays local.
         self.result.closure_allocs = analyze_closures(module, &self.resolution.closure_captures);
 
         for decl in &module.decls {
@@ -334,8 +310,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Struct(s) => {
-                // Code below is moved to `check_module` parent function (Pass 0).
-
                 let mut fields = Vec::with_capacity(s.fields.len());
 
                 for field in &s.fields {
@@ -752,11 +726,6 @@ impl<'res> TypeChecker<'res> {
             return;
         };
 
-        // `Copy` and `Drop` are mutually exclusive: a `Copy` value is dropped
-        // implicitly (bitwise + nothing to release), so letting the user run a
-        // custom `drop` on it would double-manage whatever it owns. Reject the
-        // `Drop` implementation early and watch the impl registry directly so
-        // the check also fires when `Copy` is implemented afterwards.
         if iface_def
             == self
                 .interface_registry
@@ -795,10 +764,6 @@ impl<'res> TypeChecker<'res> {
         );
     }
 
-    /// Lowers the object slots of an implement block. A slot is either a bare
-    /// generic parameter of the implement (`Box[T]`) or a fully concrete type
-    /// (`Box[i32]`); anything mixing both is reported when `report_mixed` is
-    /// set (the declare pass; the check pass recomputes silently).
     fn impl_object_args(
         &mut self,
         imp: &zeen_hir::HirImplement,
@@ -831,7 +796,6 @@ impl<'res> TypeChecker<'res> {
         (object_args, is_specialized)
     }
 
-    /// Builds the per-method implement context for an implement block.
     fn impl_method_ctx(&mut self, imp: &zeen_hir::HirImplement) -> Option<MethodImplCtx> {
         imp.object?;
 
@@ -940,10 +904,6 @@ impl<'res> TypeChecker<'res> {
         zeen_types::substitute_generics(&mut self.result.interner, body_id, &bindings)
     }
 
-    /// Whether a generic parameter's declared bounds include `iface_def`.
-    /// Unlike `type_satisfies_interface`'s `GenericParam` arm, this consults a
-    /// global map of declared bounds so it works while lowering signatures
-    /// (Pass 1), where no function context is active.
     fn generic_param_satisfies_interface(&self, gen_def: DefId, iface_def: DefId) -> bool {
         self.all_generic_bounds
             .get(&gen_def)
@@ -1421,8 +1381,6 @@ impl<'res> TypeChecker<'res> {
             return;
         };
 
-        // On-demand checks may race with the declaration loop; check each
-        // body exactly once.
         if self.bodies_checked.contains(&def_id) || !self.bodies_in_progress.insert(def_id) {
             return;
         }
@@ -1448,10 +1406,6 @@ impl<'res> TypeChecker<'res> {
                 self.struct_generics.get(&sd).cloned().unwrap_or_default()
             };
 
-            // An interface implementation's methods see `Self` through the
-            // block's own object slots: a specialization pins concrete types
-            // (`Box[i32]`), a generic impl binds them to the block's generic
-            // parameters.
             let generic_args: Vec<TypeId> = if let Some(ictx) = impl_ctx
                 && iface_def.is_some()
                 && ictx.object_args.len() == owner_generics.len()
@@ -1497,10 +1451,6 @@ impl<'res> TypeChecker<'res> {
             generic_bindings.insert(*generic, ty);
         }
 
-        // Methods declared inside a generic struct may reference the struct's
-        // generic parameters (e.g. `Self { .. }` or `value: T`) without listing
-        // them on the method itself. Seed those so the body sees them bound and
-        // `Self` construction keeps the struct's own instantiation.
         if let Some(sd) = struct_def {
             let owner_generics = if matches!(self.def_kind(sd), Some(DefKind::Enum)) {
                 self.enum_generics.get(&sd).cloned().unwrap_or_default()
@@ -1519,17 +1469,12 @@ impl<'res> TypeChecker<'res> {
         }
 
         for (g, bounds) in &sig_generic_bounds {
-            // A method generic may name a struct generic to add bounds to
-            // it (`from_clone[T: Clone]` inside `struct List[T]`): keep the
-            // struct's own bounds and extend them with the method's.
             generic_bounds
                 .entry(*g)
                 .or_default()
                 .extend(bounds.iter().copied());
         }
 
-        // The implement block's own generics (`implement[T: Display]`) and
-        // their bounds are in scope for every method of the block.
         if let Some(ictx) = impl_ctx {
             for (g, bounds) in &ictx.generic_bounds {
                 generic_bounds.entry(*g).or_insert_with(|| bounds.clone());
@@ -1553,9 +1498,6 @@ impl<'res> TypeChecker<'res> {
                     let ty = self.check_block(stmts, trailing, Some(sig_ret), &sig_source);
                     self.result.record_expr_type(block_expr.id, ty);
 
-                    // A trailing value in a `Fn`/`FnOnce`-returning function
-                    // determines its concrete return type just like a
-                    // `return` statement does.
                     if matches!(
                         self.result.interner.get(sig_ret),
                         Type::FatFn { erased: true, .. }
@@ -1581,15 +1523,10 @@ impl<'res> TypeChecker<'res> {
         self.bodies_checked.insert(def_id);
     }
 
-    /// Checks a return-position expression against the declared return type.
-    /// Capturing closures are only compatible with `Fn`/`FnOnce` return types;
-    /// a bare `fn` return type stays a plain fn pointer (no elaboration).
     fn coerce_return_expr(&mut self, expr: &HirExpr) -> TypeId {
         let expected = self.ctx.current().return_type;
         let ty = self.check_expr(expr, expected, false);
 
-        // Erased `Fn`/`FnOnce` returns resolve from the body, after all
-        // bodies check.
         if matches!(
             self.result.interner.get(expected),
             Type::FatFn { erased: true, .. }
@@ -1605,7 +1542,6 @@ impl<'res> TypeChecker<'res> {
         ty
     }
 
-    /// Reports type-only `VarRef`s left after body checking as misuses.
     fn finalize_type_name_usage(&mut self) {
         let flagged: Vec<(DefId, Source)> = self
             .type_names_as_values
@@ -1635,8 +1571,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Resolves erased `Fn`/`FnOnce` annotations to concrete closure types
-    /// after all bodies are checked.
     fn finalize_fat_types(&mut self) {
         let mut resolved: HashMap<DefId, TypeId> = HashMap::new();
         let candidates: Vec<(DefId, Vec<(HirId, Source)>)> = self
@@ -1650,12 +1584,10 @@ impl<'res> TypeChecker<'res> {
             if self.resolve_fn_fat_return(fn_def, &exprs, &mut resolved, &mut HashSet::new()) {
                 continue;
             }
-            // The first offending expression was already reported.
         }
 
         self.result.fn_return_fats = resolved.clone();
 
-        // Rewrite erased bounds to the concrete storage they hold.
         let def_snapshot: Vec<(DefId, TypeId)> = self
             .result
             .def_types
@@ -1697,7 +1629,6 @@ impl<'res> TypeChecker<'res> {
         )
     }
 
-    /// Whether the type contains an erased `Fn`/`FnOnce` bound anywhere.
     fn type_contains_fat_bound(&self, ty: TypeId) -> bool {
         match self.result.interner.get(ty).clone() {
             Type::FatFn { erased, .. } => erased,
@@ -1714,8 +1645,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Resolves the concrete return type of a fat-returning function from its
-    /// recorded return expressions.
     fn resolve_fn_fat_return(
         &mut self,
         fn_def: DefId,
@@ -1728,7 +1657,6 @@ impl<'res> TypeChecker<'res> {
             return true;
         }
         if !resolving.insert(fn_def) {
-            // Self-recursive fat returns never resolve.
             return false;
         }
 
@@ -1769,7 +1697,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Resolves the concrete fat type of a value expression.
     fn resolve_fat_expr(
         &mut self,
         expr_id: HirId,
@@ -1796,8 +1723,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Resolves the concrete fat type a variable def holds. Params stay
-    /// erased.
     fn resolve_fat_def(
         &mut self,
         def_id: DefId,
@@ -1815,7 +1740,6 @@ impl<'res> TypeChecker<'res> {
         None
     }
 
-    /// A `Source` pointing at just the function's signature.
     fn fn_signature_source(&self, hir_fn: &HirFn, body: &Source) -> Source {
         let mut start = hir_fn.name.1.offset();
         let mut end = start + hir_fn.name.1.len();
@@ -1858,8 +1782,6 @@ impl<'res> TypeChecker<'res> {
                     None => self.synth_expr(val),
                 });
 
-                // A `Fn`/`FnOnce` annotation is a bound, not storage: it
-                // needs an initializer to resolve.
                 let declared_is_fat_bound =
                     declared_ty.is_some_and(|ty| self.type_contains_fat_bound(ty));
                 if declared_is_fat_bound && value.is_none() {
@@ -2019,9 +1941,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Checks a nested function declaration: rejects `pub`, then declares and
-    /// checks it like a regular function. It is not the entry point, so the
-    /// `main` detection in `declare_signature` must be skipped.
     fn check_nested_fn(&mut self, decl: &HirDecl) {
         if let HirDeclKind::Fn(f) = &decl.kind {
             if f.is_pub {
@@ -2037,8 +1956,6 @@ impl<'res> TypeChecker<'res> {
         self.check_decl_body(decl);
     }
 
-    /// Types a closure expression, then computes the closure value type.
-    /// Zero-capture closures are plain `fn` pointers.
     fn check_closure(&mut self, def_id: DefId, def: &Rc<HirFn>, source: &Source) -> TypeId {
         self.declare_fn_signature(def_id, def);
         self.check_fn_body(def_id, def, None, None, None);
@@ -2063,7 +1980,6 @@ impl<'res> TypeChecker<'res> {
             return fn_ty;
         }
 
-        // Generic-typed captures are not supported.
         for captured in &captures {
             let cap_ty = self.lookup_def_type(*captured, source.clone());
             if self.type_contains_generic(cap_ty) {
@@ -2123,8 +2039,6 @@ impl<'res> TypeChecker<'res> {
         ty
     }
 
-    /// The value expression a statement produces as a block tail: a bare
-    /// expression statement, or a block's trailing expression.
     fn stmt_trailing_expr<'a>(&self, stmt: &'a HirStmt) -> Option<&'a HirExpr> {
         match &stmt.kind {
             HirStmtKind::Expr(e) => match &e.kind {
@@ -2135,7 +2049,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Merges string-literal if-branches of different lengths into `[]char`.
     fn unify_string_literal_branches(
         &mut self,
         then_stmt: &HirStmt,
@@ -2350,8 +2263,6 @@ impl<'res> TypeChecker<'res> {
                 let obj_ty = self.synth_expr(object);
                 let usize_ty = self.result.interner.builtin(BuiltinType::usize);
 
-                // A `Range` index (`arr[a..b]`) is a slice; any other index
-                // must unify with `usize`.
                 let (range_index, usize_index_ty) = match &index.kind {
                     HirExprKind::Range { inclusive, .. } => {
                         self.synth_expr(index);
@@ -2380,8 +2291,6 @@ impl<'res> TypeChecker<'res> {
                     },
                     Type::ManyPointer { inner, is_const } => match range_index {
                         Some(_) => {
-                            // An open end needs a length; unsized pointers
-                            // require an explicit end bound.
                             if let HirExprKind::Range { end: None, .. } = &index.kind {
                                 self.report(TypeError::UnsizedPointerSlice {
                                     child_type: self.display_type(obj_ty).into(),
@@ -2685,8 +2594,6 @@ impl<'res> TypeChecker<'res> {
 
     // >> Macros
 
-    /// Resolves the heap `String` struct of `std.string`, the type
-    /// `@format` returns.
     fn resolve_string_type(&mut self) -> Option<TypeId> {
         let string_def = self.resolution.defs.iter().find_map(|(def, info)| {
             matches!(info.kind, DefKind::Struct)
@@ -2715,7 +2622,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirMacroKind::Format => {
-                // Formats into a heap `String` returned by the macro.
                 self.check_format_macro(call_id, args, source.clone());
 
                 match self.resolve_string_type() {
@@ -3110,7 +3016,6 @@ impl<'res> TypeChecker<'res> {
             Err(err) => {
                 self.report(format_error_to_diagnostic(&err, &fmt_arg.source));
 
-                // still check remaining args
                 for arg in &args[1..] {
                     self.synth_expr(arg);
                 }
@@ -3213,9 +3118,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Resolves the interface method used to format a struct-typed argument
-    /// and records it, so MIR dispatches to the same implementation the
-    /// checker picked. Returns `false` when the type is not a struct.
     fn resolve_format_struct_arg(
         &mut self,
         arg_ty: TypeId,
@@ -3296,9 +3198,6 @@ impl<'res> TypeChecker<'res> {
         let obj_ty = self.synth_expr(object);
         self.type_names_as_values.remove(&object.id);
 
-        // Builtin `.len` and `.ptr` fields for arrays/slices resolve to
-        // synthetic `DefId`s so MIR lowering can project into slice storage.
-
         {
             let mut interner = self.interner.borrow_mut();
             let len_name = interner.get_or_intern("len");
@@ -3323,8 +3222,6 @@ impl<'res> TypeChecker<'res> {
                 _ => {}
             }
         }
-
-        // ----------------------------------------------------------
 
         if let Type::Enum {
             def_id: enum_def,
@@ -3495,9 +3392,6 @@ impl<'res> TypeChecker<'res> {
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
 
-        // When the expected type is the same struct, seed its generic
-        // arguments so field literals use the expected instantiation.
-        // Explicit generic arguments still take precedence.
         if let Some(expected) = expected
             && let Type::Struct {
                 def_id: expected_def,
@@ -3510,9 +3404,6 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        // `Self { .. }` inside its own methods is already bound to the
-        // current instantiation; seed it unless the expected type or
-        // explicit arguments already bound the generic above.
         for g in &struct_generics {
             if let Some(bound) = self.ctx.generic_binding(*g) {
                 bindings.entry(*g).or_insert(bound);
@@ -3569,9 +3460,6 @@ impl<'res> TypeChecker<'res> {
             field_value_types.insert(f.name, value_ty);
 
             if self.type_contains_generic(info.field_ty) {
-                // Generics fully bound by the expected type or explicit args
-                // are not re-inferred from the field value: the check loop
-                // below coerces the value to the bound type instead.
                 let substituted = self.substitute_generics(info.field_ty, &bindings);
                 if self.type_contains_generic(substituted) {
                     let value_ty = self.default_literal(value_ty);
@@ -3622,9 +3510,6 @@ impl<'res> TypeChecker<'res> {
                 f.value.kind,
                 HirExprKind::ArrayInit { .. } | HirExprKind::ArrayRepeatInit { .. }
             ) {
-                // Let `check_expr` check each element against the expected
-                // array element type (string literals coerce to slices), and
-                // record the coerced array type for MIR lowering.
                 self.check_expr(&f.value, expected_ty, false);
             } else {
                 self.coerce_or_error(actual_ty, expected_ty, &f.value, false);
@@ -3657,11 +3542,6 @@ impl<'res> TypeChecker<'res> {
         struct_ty
     }
 
-    /// Expected types inside an implement block method are viewed through
-    /// the block's generics: signatures use the struct's own slots (`Self`
-    /// is `List[T_struct]`), while method values use the block slots, so a
-    /// struct-flavored expectation would never match. Empty outside
-    /// implement block methods.
     fn impl_flavored_expected(&mut self, expected: TypeId) -> TypeId {
         let Some(fn_def) = self.ctx.current_fn_def() else {
             return expected;
@@ -3706,9 +3586,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirExprKind::ArrayInit { elements } => {
-                // When the expected type is a fixed-size array, check each
-                // element against its element type directly (so e.g. string
-                // literals coerce to `[]const char` inside `[N][]const char`).
                 let element_ty = match self.result.interner.get(expected).clone() {
                     Type::Array {
                         element,
@@ -3827,11 +3704,6 @@ impl<'res> TypeChecker<'res> {
             CoerceResult::ErrorRecovery => expected,
 
             CoerceResult::FatFnCoercion => {
-                // The coercion must produce the *storage* type of the value:
-                // concrete fat types pass through unchanged (the bound is
-                // only a check), while a basic fn value gets its concrete
-                // fat form (inline env + static target, or an inline fn
-                // pointer) - never the erased bound.
                 let storage = self.fat_coercion_storage(actual, expected, expr);
                 self.result.record_expr_type(id, storage);
                 storage
@@ -3847,9 +3719,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             CoerceResult::ArrayToSlice => {
-                // String literals are the only implicit array -> slice coercion:
-                // codegen lowers `ConstValue::Str` straight into a slice.
-                // Every other array requires an explicit `&`.
                 if matches!(&expr.kind, HirExprKind::Literal(Literal::String(_))) {
                     self.result.record_expr_type(id, expected);
                     expected
@@ -3916,7 +3785,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Computes the concrete storage type produced by a fat coercion.
     fn fat_coercion_storage(
         &mut self,
         actual: TypeId,
@@ -3944,7 +3812,6 @@ impl<'res> TypeChecker<'res> {
                 erased: false,
             }),
 
-            // Bound erasure is annotation-only.
             _ if !self.type_contains_fat_bound(actual) => actual,
 
             _ => expected,
@@ -4500,8 +4367,6 @@ impl<'res> TypeChecker<'res> {
             })
     }
 
-    /// Defaults the type of a literal-valued expression, widening an
-    /// integer literal that overflows `i32` to the smallest fitting builtin.
     fn default_literal_with_value(&mut self, value: &HirExpr, ty: TypeId) -> TypeId {
         let defaulted = self.default_literal(ty);
         let defaulted_ty = self.result.interner.get(defaulted).clone();
@@ -4711,9 +4576,6 @@ impl<'res> TypeChecker<'res> {
             self.result.record_expr_type(arg.id, arg_ty);
         }
 
-        // An expected type in the same shape as the return type pins the
-        // call's generics (e.g. `let a: Gen[i32] = make_gen();`). It is the
-        // lowest-priority source: explicit and inferred bindings stay intact.
         if let Some(expected) = expected {
             self.seed_inference_bindings(sig_ret, expected, &mut bindings);
         }
@@ -4811,7 +4673,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Resolves a method call made on a bounded generic parameter.
     fn try_check_generic_bound_method_call(
         &mut self,
         call_id: HirId,
@@ -4921,10 +4782,6 @@ impl<'res> TypeChecker<'res> {
                 Some(DefKind::Struct | DefKind::Enum)
             )
         {
-            // Unknown associated functions on structs report directly
-            // instead of falling through to a confusing `void` error.
-            // Enums keep the fallthrough: a missing name may be a variant
-            // and already diagnoses as `UnknownEnumVariant` downstream.
             if matches!(self.def_kind(*referenced_def), Some(DefKind::Struct))
                 && !self
                     .struct_methods
@@ -4971,10 +4828,6 @@ impl<'res> TypeChecker<'res> {
             );
         }
 
-        // Concrete builtin method calls (e.g. `42.hash()`). Builtins satisfy
-        // interfaces like `Hash` via `builtin_interface_names`; there is no
-        // struct impl to dispatch to, so resolve the interface method
-        // directly.
         match self.result.interner.get(obj_ty).clone() {
             Type::Builtin(_) | Type::IntLiteral | Type::FloatLiteral => {
                 let builtin_ty = match self.result.interner.get(obj_ty).clone() {
@@ -5209,9 +5062,6 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
-        // Implement-block generics carry their own bounds (`implement[T:
-        // Copy]`): the receiver instantiation must satisfy them, or the
-        // bounded method does not apply at all.
         if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
             && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
             && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
@@ -5467,9 +5317,6 @@ impl<'res> TypeChecker<'res> {
         let enum_generics = self.type_member_generics(enum_def);
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
 
-        // Expected-type seeding (struct-init parity): an annotation like
-        // `let x: Result[i32, E] = ...` provides what the value cannot.
-        // Explicit generic arguments still take precedence.
         if let Some(expected) = expected
             && let Type::Enum {
                 def_id: expected_def,
@@ -5482,8 +5329,6 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        // `Self::Variant` inside generic enum methods is already bound.
-        // Expected-type bindings above take precedence.
         for g in &enum_generics {
             if let Some(bound) = self.ctx.generic_binding(*g) {
                 bindings.entry(*g).or_insert(bound);
@@ -5631,10 +5476,6 @@ impl<'res> TypeChecker<'res> {
             }
         };
 
-        // Moving a payload out of an enum with an explicit `Drop`
-        // implementation is forbidden: the tag-dispatched drop would run
-        // on a partial value. Any other non-Copy payload moves out like a
-        // struct field move (the whole enum is consumed).
         if !self.type_is_copy(payload_ty)
             && self
                 .result
@@ -5921,8 +5762,6 @@ impl<'res> TypeChecker<'res> {
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
 
-        // Explicit call-site arguments bind the struct's generics first (there
-        // is no receiver to provide them), then the method's own.
         let bind_order: Vec<DefId> = type_generics
             .iter()
             .copied()
@@ -5938,11 +5777,6 @@ impl<'res> TypeChecker<'res> {
             self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
         }
 
-        // The expected type (annotated `let`, return position, argument
-        // position) usually pins the struct's generics for `Self`-returning
-        // methods; the return type is matched structurally against it. It is
-        // the lowest-priority source: explicit call-site arguments and
-        // argument inference stay intact.
         if let Some(expected) = expected {
             self.seed_inference_bindings(sig_ret, expected, &mut bindings);
         }
@@ -5996,9 +5830,6 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
-        // Same implement-block bound check as for instance calls: a
-        // bounded static method does not apply when its instantiation
-        // misses a bound.
         if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
             && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
             && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
@@ -6096,9 +5927,6 @@ impl<'res> TypeChecker<'res> {
                 ret
             }
 
-            // Calling through `*Fn(T) R` / `*FnOnce(T) R`: dereference the
-            // pointer to get to the closure struct, then call it like a
-            // direct fat value.
             Type::Pointer {
                 inner: ptr_inner, ..
             } => {
@@ -6141,10 +5969,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Seeds generic bindings by walking a generic-containing type against
-    /// the expected type in parallel. Only new bindings are inserted, so
-    /// explicit call-site and argument-inferred bindings win. A `GenericParam`
-    /// on the expected side carries no information and is skipped.
     fn seed_inference_bindings(
         &mut self,
         pattern: TypeId,
@@ -6223,8 +6047,6 @@ impl<'res> TypeChecker<'res> {
 
             let substituted = self.substitute_generics(param_ty, bindings);
             match try_coerce(&mut self.result.interner, arg_ty, substituted) {
-                // Like the concrete path, only string literals coerce to
-                // slices implicitly: any other array needs `arr[..]`.
                 CoerceResult::ArrayToSlice
                     if !matches!(&arg.kind, HirExprKind::Literal(Literal::String(_))) =>
                 {
@@ -6624,9 +6446,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Selects the applicable `(struct, interface)` implementation.
-    /// Priority: exact specialization, matching bounded generic impl,
-    /// then boundless wildcard. `None` when nothing applies.
     fn applicable_impl(
         &self,
         struct_def: DefId,
@@ -6654,8 +6473,6 @@ impl<'res> TypeChecker<'res> {
                 .unwrap_or_default()
         };
 
-        // The concrete type bound to an implement generic comes from the
-        // struct's generic slot the generic is bound to.
         let bound_arg = |entry: &ImplEntry, imp_g: DefId| -> Option<TypeId> {
             let struct_g = entry
                 .generic_bindings
@@ -6666,8 +6483,6 @@ impl<'res> TypeChecker<'res> {
             generic_args.get(index).copied()
         };
 
-        // Generic implementations with bounds are more specific than a
-        // boundless wildcard: pick the first whose bounds are satisfied.
         for entry in entries
             .iter()
             .filter(|e| !e.is_specialized && !e.generic_bounds.is_empty())
@@ -6687,18 +6502,12 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        // A boundless wildcard implementation applies to every
-        // instantiation.
         entries
             .iter()
             .find(|e| !e.is_specialized && e.generic_bounds.is_empty())
             .cloned()
     }
 
-    /// Resolves the element type and the concrete `next` method for a for-loop
-    /// over a struct implementing `Iterator`. The element type is the single
-    /// generic argument of `Option[T]` the `next` method returns, resolved
-    /// through the implementation's generic bindings.
     fn for_iterator_elem(
         &mut self,
         struct_def: DefId,
@@ -6723,8 +6532,6 @@ impl<'res> TypeChecker<'res> {
             .zip(generic_args.iter().copied())
             .collect();
 
-        // The implementation's generic parameters resolve through the struct's
-        // generic slots (`implement[T] Iterator : Box[T]` -> `T` is `Box`'s `T`).
         for (imp_g, struct_g) in &entry.generic_bindings {
             if let Some(&concrete) = bindings.get(struct_g) {
                 bindings.insert(*imp_g, concrete);
@@ -6833,7 +6640,6 @@ impl<'res> TypeChecker<'res> {
             .zip(struct_generic_args.iter().copied())
             .collect();
 
-        // Implementation generics resolve through the struct's slots.
         for (imp_g, struct_g) in &entry.generic_bindings {
             if let Some(&concrete) = bindings.get(struct_g) {
                 bindings.insert(*imp_g, concrete);
@@ -6843,9 +6649,6 @@ impl<'res> TypeChecker<'res> {
         for (param_ty, &arg_ty) in sig_params.iter().zip(explicit_args.iter()) {
             let expected = self.substitute_generics(*param_ty, &bindings);
 
-            // An operator RHS whose method parameter is a pointer (`Eq.eq(
-            // other: *const Self)`) is passed by address, not by value: a
-            // value matching the pointee satisfies the pointer parameter.
             let auto_addr = match self.result.interner.get(expected) {
                 Type::Pointer { inner, .. } => arg_ty == *inner,
                 _ => false,
@@ -6888,10 +6691,7 @@ impl<'res> TypeChecker<'res> {
             .get(&iface_def)
             .cloned()
             .unwrap_or_default();
-        // Both signatures are compared in terms of the struct's own
-        // generics: the interface one rebinds its generic parameters to the
-        // struct's generic slots, the impl one substitutes its implement
-        // generics below (`implement[U] Deref: Box[U]` -> Box[T]).
+
         let struct_args: Vec<TypeId> = match self.result.interner.get(self_struct_ty) {
             Type::Struct {
                 generic_args: args, ..
@@ -6907,8 +6707,6 @@ impl<'res> TypeChecker<'res> {
             generic_subst.insert(*iface_g, *struct_arg);
         }
 
-        // Implement generics bind positionally to the object's slots;
-        // specializations pin concrete types instead.
         let struct_generics: Vec<DefId> = match self.result.interner.get(self_struct_ty) {
             Type::Struct { def_id, .. } => self
                 .struct_generics
@@ -6951,7 +6749,6 @@ impl<'res> TypeChecker<'res> {
             .collect();
         let impl_ret = self.substitute_generics(impl_ret_raw, &impl_subst);
 
-        // Unbound interface and method generics infer from impl types.
         let mut all_iface_generics = iface_generics.clone();
         all_iface_generics.extend(iface_method_generics.iter().copied());
         for (&iface_param, &impl_param) in iface_params_raw.iter().zip(impl_params.iter()) {
@@ -7015,7 +6812,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Unifies an interface signature type against the impl method's type.
     fn unify_iface_generics(
         &mut self,
         iface_ty: TypeId,
@@ -7094,7 +6890,6 @@ impl<'res> TypeChecker<'res> {
                 .unwrap_or_default()
         };
 
-        // Specializations pin concrete types; generic impls keep slots.
         let self_generic_args: Vec<TypeId> =
             if sig_ctx.is_specialized && sig_ctx.object_args.len() == owner_generics.len() {
                 sig_ctx.object_args.to_vec()
@@ -7151,8 +6946,6 @@ impl<'res> TypeChecker<'res> {
                         source,
                     );
 
-                    // implement methods fulfilling an interface take their
-                    // visibility from the interface method declaration
                     let iface_is_pub = self
                         .fn_sigs
                         .get(&iface_method_def)
@@ -7193,7 +6986,6 @@ impl<'res> TypeChecker<'res> {
                 def_id,
                 generic_args,
             } => {
-                // `==`/`!=` prefer `Eq.eq`, falling back to `Ord.cmp`.
                 let (iface_name, method_name) = if matches!(op, Eq | Ne) {
                     if self.struct_implements_interface(def_id, "Eq", &generic_args) {
                         ("Eq", "eq")
@@ -7281,7 +7073,6 @@ impl<'res> TypeChecker<'res> {
     ) -> TypeId {
         use BinaryOp::*;
 
-        // Pointer arithmetic keeps the pointer type; `ptr - ptr` yields a count.
         if matches!(op, Add | Sub)
             && let Some(result_ty) = self.pointer_arith_operand(op, lhs, rhs)
         {
@@ -7499,7 +7290,6 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    /// Whether `struct_def` has an applicable implementation of the interface.
     fn struct_implements_interface(
         &self,
         struct_def: DefId,
@@ -7514,7 +7304,6 @@ impl<'res> TypeChecker<'res> {
             })
     }
 
-    /// Maps a comparison operator to the `Ordering` variant it accepts.
     fn ordering_cmp_target(&self, ty: TypeId, op: BinaryOp) -> Option<OrderingCmpTarget> {
         let Type::Enum { def_id, .. } = self.result.interner.get(ty).clone() else {
             return None;
@@ -7761,8 +7550,6 @@ impl<'res> TypeChecker<'res> {
                     },
                 );
 
-                // Placeholder; MIR corrects this from the monomorphized
-                // signature.
                 operand
             }
 
@@ -8043,8 +7830,6 @@ mod tests {
         typecheck_fixture(source, target, true)
     }
 
-    /// The bare fixture has no core/std modules; the full fixture mirrors
-    /// the real compiler (core files + filesystem std root).
     fn typecheck_fixture(
         source: &str,
         target: Option<&str>,
@@ -8392,8 +8177,6 @@ mod tests {
         );
     }
 
-    // > Generic inference through wrapped types
-
     #[test]
     fn generic_infers_through_pointer_wrapper_in_associated_call() {
         let result = typecheck(
@@ -8661,7 +8444,6 @@ mod tests {
             "expected CannotInferGeneric, got: {errors:?}"
         );
 
-        // The cascading `*error` mismatch should be suppressed by recovery.
         assert!(
             !errors
                 .iter()
@@ -9175,7 +8957,6 @@ mod tests {
 
     use zeen_types::Type;
 
-    /// Finds a concrete (non-erased) fat type.
     fn find_fat_fn(result: &TypeCheckResult) -> Option<zeen_types::TypeId> {
         result
             .def_types
@@ -9316,8 +9097,6 @@ mod tests {
         );
     }
 
-    // --> Closure returns
-
     const MULT_SOURCE: &str =
         "fn mult() Fn(i32) i32 { let a = 10; return fn(x: i32) i32 { return x * a; }; }";
     const MULT_WITH_MAIN: &str = "fn mult() Fn(i32) i32 { let a = 10; return fn(x: i32) i32 { return x * a; }; } fn main() i32 { let r = mult(); let q = mult()(2); return 0; }";
@@ -9355,7 +9134,6 @@ mod tests {
             "a capturing closure must have a concrete fat type"
         );
 
-        // A closure capturing a non-Copy value is `FnOnce` (move-only).
         let result = typecheck_full(
             "struct Wrap { pub v: i32 } \
              fn main() i32 { \
@@ -9488,8 +9266,6 @@ mod tests {
         )
         .expect("fn, Fn and FnOnce params must accept bare fn and closures");
     }
-
-    // --> Closure env allocation (S4 escape analysis)
 
     use crate::closure_alloc::ClosureAllocKind;
 

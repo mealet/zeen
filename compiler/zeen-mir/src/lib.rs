@@ -1,6 +1,3 @@
-// TODO: Remove `unused` config in working version to remove unnecessary code.
-#![allow(unused)]
-
 use std::collections::HashMap;
 
 use lasso::Spur;

@@ -38,17 +38,13 @@ use zeen_types::{Type, TypeId};
 
 use crate::error::CodegenError;
 
-/// Compilation options for the codegen stage.
 #[derive(Debug, Clone)]
 pub struct CodegenOptions {
     /// Debug vs Release (affects optimization level and panic strategy).
     pub mode: CompilationMode,
-    /// User-provided target triple (see `--target`). `None` = host triple.
+    /// Target triple (see `--target`). `None` = host triple.
     pub target: Option<String>,
-    /// The real `main` function of the program, if any. It is emitted under
-    /// the symbol `zeen_main`, wrapped by a generated `main` entry point.
     pub main_fn: Option<MirFunctionId>,
-    /// Source file name, used for the module's `source_filename` metadata.
     pub source_file_name: String,
 }
 
@@ -63,7 +59,6 @@ impl Default for CodegenOptions {
     }
 }
 
-/// Computes the 1-based line number of the byte `offset` inside `source`.
 fn source_line(source: &str, offset: usize) -> usize {
     1 + source
         .as_bytes()
@@ -72,9 +67,6 @@ fn source_line(source: &str, offset: usize) -> usize {
         .unwrap_or(0)
 }
 
-/// Depth of the fixed shadow-stack buffer used to record the call stack for
-/// Debug panics. Each active function holds one `ptr` slot pointing at its
-/// pre-formatted `module:line "function"` string.
 const PANIC_STACK_DEPTH: u32 = 256;
 
 pub struct CodeGen<'ctx, 'prog> {
@@ -104,8 +96,6 @@ pub struct CodeGen<'ctx, 'prog> {
     // per-function state
     locals: HashMap<LocalId, PointerValue<'ctx>>,
     blocks: HashMap<BlockId, BasicBlock<'ctx>>,
-    /// Entry block of the function currently being emitted; allocas must be
-    /// created there so loops don't grow the stack on every iteration.
     current_entry: Option<BasicBlock<'ctx>>,
 }
 
@@ -189,7 +179,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         &self.module
     }
 
-    /// Runs `module.verify()`. Call after [`CodeGen::generate`].
     pub fn verify(&self) -> Result<(), CodegenError> {
         self.module
             .verify()
@@ -199,12 +188,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             })
     }
 
-    /// Prints the module as LLVM IR text (useful for tests and `--emit IR`).
     pub fn print_ir(&self) -> String {
         self.module.print_to_string().to_string_lossy().into_owned()
     }
 
-    /// Generates IR for the whole MIR program
     pub fn generate(&mut self) -> Result<(), CodegenError> {
         if self.options.mode == CompilationMode::Debug {
             self.emit_panic_stack_globals();
@@ -229,7 +216,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         Ok(())
     }
 
-    /// Emits the module to an object file (`.o`).
     pub fn emit_object(&self, path: &Path) -> Result<(), CodegenError> {
         self.machine
             .write_to_file(&self.module, FileType::Object, path)
@@ -240,7 +226,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             })
     }
 
-    /// Emits the module to an assembly file (`.s`).
     pub fn emit_assembly(&self, path: &Path) -> Result<(), CodegenError> {
         self.machine
             .write_to_file(&self.module, FileType::Assembly, path)
@@ -251,7 +236,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             })
     }
 
-    /// Emits the module as LLVM IR text (`.ll`).
     pub fn emit_ir(&self, path: &Path) -> Result<(), CodegenError> {
         self.module
             .print_to_file(path)
@@ -278,12 +262,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn register_struct_layouts(&mut self) {
-        // A slice's constness is not part of its runtime layout: `[]T` and
-        // `[]const T` type to the same `{ ptr, len }` pair. Sharing one LLVM
-        // struct per name keeps call signatures valid (a const slice passed
-        // into a generic `[]T` param), since LLVM treats name-identical but
-        // distinct handles (`%slice.char` vs `%slice.char.0`) as different
-        // types.
         let mut by_name: HashMap<String, inkwell::types::StructType<'ctx>> = HashMap::new();
         for &ty in self.program.struct_layouts.keys() {
             let name = self.mangle_struct_name(ty);
@@ -313,9 +291,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Declares the opaque tagged-union structs for payload enums up front, so
-    /// `map_type` resolves an enum inside a struct field while the struct
-    /// body is still being built.
     fn register_enum_layouts(&mut self) {
         let mut by_name: HashMap<String, inkwell::types::StructType<'ctx>> = HashMap::new();
         for &ty in self.program.enum_layouts.keys() {
@@ -338,15 +313,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Sets the body of each payload-enum struct: `{ tag: u8, union }`. The
-    /// union member must cover the largest payload size *and* satisfy the
-    /// strictest payload alignment, or payload accesses through the union
-    /// would be misaligned (UB). A lone payload reuses its own type: with
-    /// no smaller payload nothing can overlap its padding. With several
-    /// payloads the union is an untyped blob: reusing the largest payload
-    /// type would leave smaller payloads overlapping its padding, and
-    /// those bytes do not survive copies. Runs after all struct bodies so
-    /// payload structs are sized.
     fn fill_enum_layouts(&mut self) {
         for &ty in self.program.enum_layouts.keys() {
             let Some(opaque) = self.enum_types.get(&ty).copied() else {
@@ -391,9 +357,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Untyped union slot: every byte is real data, so any payload
-    /// survives copies. Sized to the largest payload, aligned to the
-    /// strictest one.
     fn opaque_union(&self, max_size: u64, max_align: u64) -> BasicTypeEnum<'ctx> {
         let i8_ty = self.context.i8_type();
         if max_align < 2 {
@@ -423,7 +386,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         BasicTypeEnum::StructType(self.context.struct_type(&fields, false))
     }
 
-    /// Creates LLVM globals with real lowered types.
     fn emit_globals(&mut self) {
         for (id, gv) in self.program.global_vars.iter().enumerate() {
             let llvm_ty = match self.typecheck.interner.get(gv.ty).clone() {
@@ -480,7 +442,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Pointer to a declared extern function (see `declare_externs`).
     fn extern_fn_value(&self, idx: usize) -> PointerValue<'ctx> {
         let decl = &self.program.extern_fns[idx];
         self.module
@@ -490,9 +451,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .as_pointer_value()
     }
 
-    /// Defines the body of the core-provided `__zeen_stdout_write` runtime
-    /// (declared as `extern` in `core.out`): writes `len` bytes from `ptr`
-    /// to stdout. Emitted only when the program actually references it.
     fn emit_stdout_write_runtime(&mut self) {
         const SYMBOL: &str = "__zeen_stdout_write";
 
@@ -677,15 +635,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
 
             Type::Enum { .. } => {
-                // Payload enums are tagged `{ u8, union }` structs; empty-only
-                // enums stay a bare `u8` tag scalar.
                 if let Some(entry) = self.enum_types.get(&ty) {
                     (*entry).into()
                 } else {
                     self.context.i8_type().into()
                 }
             }
-            // Never reach codegen on a valid program.
             Type::Interface { .. } | Type::InterfaceSelfPlaceholder(_) | Type::GenericParam(_) => {
                 self.context.i32_type().into()
             }
@@ -830,10 +785,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Builds an `alloca` at the top of the current function's entry block.
-    /// An alloca created at the current position would execute on every visit
-    /// of its block, growing the stack each time - a loop creating aggregate
-    /// temporaries would exhaust it after enough iterations.
     fn entry_alloca(&self, ty: BasicTypeEnum<'ctx>, name: &str) -> PointerValue<'ctx> {
         let entry = self
             .current_entry
@@ -883,11 +834,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Drops the value stored at `ptr`: either calls the monomorphized `drop`
-    /// function of a struct with an explicit `Drop` implementation, calls the
-    /// synthesized env-free of a heap-owning fat closure, calls the
-    /// synthesized tag-switch teardown of an enum, or tears down an
-    /// aggregate element-by-element (recursively).
     fn emit_drop_ptr(&mut self, ptr: PointerValue<'ctx>, ty: TypeId) {
         match self.typecheck.interner.get(ty).clone() {
             Type::Struct { .. } | Type::FatFn { .. } | Type::Enum { .. } => {
@@ -950,9 +896,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     ) -> BasicValueEnum<'ctx> {
         match rvalue {
             Rvalue::Use(operand) => {
-                // A string literal stored into an array/slice slot must be
-                // materialized as the slot's value (null-terminated bytes or
-                // `{ ptr, len }`), not as a raw pointer to the global.
                 if matches!(operand, Operand::Constant(ConstValue::Str(_), _))
                     && matches!(
                         self.typecheck.interner.get(expected_ty),
@@ -964,10 +907,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
                 let value = self.operand_value(operand, Some(expected_ty), func);
 
-                // Copy/move operands keep their own width, so a plain store
-                // would overflow a narrower slot (e.g. the `usize` range
-                // counter copied into an `i32` loop variable) and clobber
-                // adjacent stack slots. Narrow/widen integer copies instead.
                 match self.operand_type(operand, func) {
                     Some(src_ty)
                         if src_ty != expected_ty
@@ -1072,15 +1011,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             ConstValue::ExternFn(idx) => self.extern_fn_value(*idx).into(),
 
-            // A void value is only ever produced as the placeholder result of
-            // an expression with no value (e.g. an `if` without an `else`).
-            // Valid programs never store it, so a throwaway zero is enough.
             ConstValue::Void => self.context.i8_type().const_zero().into(),
         }
     }
 
-    /// Builds a struct/array/slice literal: stores each operand into a fresh
-    /// temporary aggregate, then loads the whole value back out.
     fn aggregate_value(
         &mut self,
         kind: AggregateKind,
@@ -1091,8 +1025,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let agg_ty = self.map_basic_type(expected_ty);
         let alloca = self.entry_alloca(agg_ty, "aggregate");
 
-        // An enum aggregate writes the tag into field 0 and the payload into
-        // the union field (index 1); empty variants leave the union untouched.
         if let AggregateKind::Enum {
             enum_def,
             variant_def,
@@ -1121,16 +1053,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
 
         for (i, operand) in operands.iter().enumerate() {
-            // A string literal stored into an array/slice field must be
-            // coerced to the field's value type (bytes for `[N]char`,
-            // `{ ptr, len }` for slices) instead of being stored as a raw
-            // pointer to the global literal.
             let elem_ty = match kind {
                 AggregateKind::Struct(_) | AggregateKind::Slice => {
-                    // Slices store through their registered layout: the `len`
-                    // field is `usize` - storing it narrower leaves the rest
-                    // of the slot uninitialized garbage, which the loop
-                    // condition then reads as a huge length.
                     self.program.struct_layouts[&expected_ty].fields[i].ty
                 }
                 _ => self.index_element_type(expected_ty),
@@ -1168,11 +1092,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         ty: TypeId,
         func: &MirFunction,
     ) -> BasicValueEnum<'ctx> {
-        // The result type only matches the operand type for arithmetic
-        // operations: comparisons yield `bool` and shifts take a `usize`
-        // count. Derive the operand types separately so integer constants are
-        // promoted to the other operand's width and signedness is read from
-        // the real operand type instead of the `bool` result.
         let lhs_ty = self.operand_type(lhs, func);
         let rhs_ty = self.operand_type(rhs, func);
         let operand_ty = lhs_ty.or(rhs_ty).unwrap_or(ty);
@@ -1184,19 +1103,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral
             );
 
-        // Equality over an array/slice value compares contents, so a string
-        // literal on either side must be materialized as that aggregate
-        // (bytes or `{ ptr, len }`). Left as a raw global pointer it would
-        // take the pointer path below and compare addresses instead.
         let aggregate_ty = match self.typecheck.interner.get(operand_ty) {
             Type::Array { .. } | Type::Slice { .. } => Some(operand_ty),
             _ => None,
         };
 
-        // Integer constants must never be coerced to a pointer operand type
-        // (`ptr + 1` would otherwise map the constant to `*u8` and panic):
-        // fall back to the default `i32` width, which the pointer-arithmetic
-        // branch widens to the pointer-sized integer later.
         let const_expected =
             |other_ty: Option<TypeId>| match other_ty.map(|t| self.typecheck.interner.get(t)) {
                 Some(Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Fn { .. }) => None,
@@ -1218,8 +1129,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             _ => self.operand_value(rhs, Some(operand_ty), func),
         };
 
-        // Enums compare by tag. Payload enums are aggregates, so pull the `u8`
-        // tag field out of each side before comparing.
         if let Type::Enum { .. } = self.typecheck.interner.get(operand_ty) {
             let b = &self.builder;
             let l = self.enum_tag_of_value(lhs_v);
@@ -1287,17 +1196,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .build_float_compare(FloatPredicate::OGE, l, r, "")
                     .unwrap()
                     .into(),
-                // Bitwise/shift/logical operators never apply to floats.
                 _ => unreachable!("binary op {op:?} on a float operand"),
             };
         }
 
-        // Pointer equality (`ptr == nullptr`, `p1 != p2`): LLVM's `icmp` works
-        // on pointers, so cast both to the pointer-size integer and compare as
-        // integers. The `operand_ty` check covers pointer-typed operands; the
-        // constant checks cover the all-constant cases: `nullptr == nullptr`,
-        // `fn == fn` and string-literal equality, where no operand carries a
-        // pointer TypeId to inspect.
         let is_pointer_cmp = matches!(op, BinaryOp::Eq | BinaryOp::Ne)
             && aggregate_ty.is_none()
             && (matches!(
@@ -1350,9 +1252,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             };
         }
 
-        // Pointer arithmetic: `ptr + n` / `ptr - n` scale the offset by the
-        // element size and yield the pointer type; `ptr - ptr` yields the
-        // element count as `isize`.
         let is_pointer_arith = matches!(op, BinaryOp::Add | BinaryOp::Sub)
             && matches!(
                 self.typecheck.interner.get(operand_ty),
@@ -1380,8 +1279,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             };
             let elem_size = self.target_data.get_abi_size(&self.map_type(inner));
 
-            // `ptr - ptr`: subtract the addresses, then divide by the element
-            // size to get the element count.
             if op == BinaryOp::Sub && is_ptr(&lhs_v) && is_ptr(&rhs_v) {
                 let l = to_int(lhs_v);
                 let r = to_int(rhs_v);
@@ -1391,8 +1288,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 return count.into();
             }
 
-            // `ptr + n` / `ptr - n`: scale the integer offset by the element
-            // size and apply it to the pointer.
             let (ptr_v, offset_v) = if is_ptr(&lhs_v) {
                 (lhs_v, rhs_v)
             } else {
@@ -1525,7 +1420,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         ty: TypeId,
     ) -> BasicValueEnum<'ctx> {
         let eq = match self.typecheck.interner.get(ty).clone() {
-            // Fixed-size arrays: compare each element, unrolled.
             Type::Array { element, len } => {
                 let len = len.unwrap_or(0) as u32;
                 let mut acc: Option<BasicValueEnum<'ctx>> = None;
@@ -1554,7 +1448,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 }
             }
 
-            // Slices: equal lengths, then a loop over the shared prefix.
             Type::Slice { element, .. } => {
                 let int_ty = self.context.ptr_sized_int_type(&self.target_data, None);
                 let l = lhs.into_struct_value();
@@ -1583,8 +1476,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .builder
                     .build_int_compare(IntPredicate::EQ, l_len, r_len, "")
                     .unwrap();
-                // Different lengths mean false, and skipping the loop avoids
-                // indexing past the shorter side's valid elements.
                 let loop_until = self
                     .builder
                     .build_select(len_eq, l_len, int_ty.const_zero(), "")
@@ -1656,8 +1547,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .into()
             }
 
-            // Structs compare structurally over their layout fields; a fat
-            // closure is its `{ $fn, $env, $drop }` pointer envelope.
             Type::Struct { .. } | Type::FatFn { .. } => {
                 let Some(fields) = self.program.struct_layouts.get(&ty) else {
                     debug_assert!(
@@ -1733,8 +1622,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 }
             }
 
-            // Scalars: `icmp` covers integers, pointers and enums; floats are
-            // compared with `fcmp`.
             _ => {
                 let b = &self.builder;
                 match self.typecheck.interner.get(ty).clone() {
@@ -1826,8 +1713,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .unwrap()
             }
             UnaryOp::AddrOf => match operand {
-                // MIR normally lowers `&place` to `Rvalue::Ref`; this arm is a
-                // safety net that takes the address of the underlying place.
                 Operand::Copy(place, _) | Operand::Move(place, _) => {
                     self.place_ptr(place, func).into()
                 }
@@ -1878,20 +1763,14 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     ) -> BasicValueEnum<'ctx> {
         match operand {
             Operand::Constant(c, _) => {
-                // A string literal coerces to a slice or a `[N]char` array.
                 if let ConstValue::Str(spur) = c {
                     match self.typecheck.interner.get(target).clone() {
-                        // `-> []T`: build the `{ ptr, len }` fat pointer
-                        // directly, using the compile-time string length
-                        // (the null terminator is not part of the slice).
                         Type::Slice { .. } => {
                             let content = self.resolve_spur(*spur);
                             let ptr = self.get_str_global(&content).as_pointer_value();
                             let slice_ty = self.map_basic_type(target);
                             return self.make_slice_value(slice_ty, ptr, content.len() as u64);
                         }
-                        // `-> [N]char`: load the null-terminated global's
-                        // array value.
                         Type::Array { element, len } => {
                             debug_assert!(
                                 matches!(
@@ -1917,8 +1796,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     ConstValue::Float(_) => Type::Builtin(BuiltinType::f64),
                     ConstValue::Bool(_) => Type::Builtin(BuiltinType::bool),
                     ConstValue::Char(_) => Type::Builtin(BuiltinType::char),
-                    // String constants lower to a pointer to a null-terminated
-                    // global, so treat them as `*const char` for casting.
                     ConstValue::Str(_) => Type::Pointer {
                         inner: TypeId(0),
                         is_const: true,
@@ -1934,7 +1811,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     ConstValue::Void => unreachable!("cannot cast a void constant"),
                 };
 
-                // Identical source and target types need no cast machinery.
                 if *self.typecheck.interner.get(target) == src_ty {
                     return self.const_value(c, Some(target), func);
                 }
@@ -1947,13 +1823,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .operand_type(operand, func)
                     .expect("typed cast operand");
 
-                // Identical source and target types need no cast machinery.
                 if src_ty == target {
                     return self.operand_value(operand, Some(src_ty), func);
                 }
 
-                // `[N]T -> [*]T`: the operand is a loaded array value, so use
-                // the address of its storage instead of a value cast.
                 if matches!(
                     self.typecheck.interner.get(src_ty).clone(),
                     Type::Array { .. }
@@ -1974,7 +1847,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Builds a `{ ptr, len }` slice value from a raw pointer and a length.
     fn make_slice_value(
         &mut self,
         slice_ty: BasicTypeEnum<'ctx>,
@@ -2149,8 +2021,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             (Builtin(BuiltinType::char), Builtin(BuiltinType::char)) => value,
 
-            // `@as(int, enum_value)`: the runtime tag (u8), widened to the
-            // destination integer type.
             (Enum { .. }, Builtin(b)) if builtin_is_integer(b) => {
                 let tag = self.enum_tag_of_value(value);
                 let dst_int = self.map_basic_type(dst).into_int_type();
@@ -2169,8 +2039,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 }
             }
 
-            // `@as(enum, int_value)`: truncate to the `u8` tag and assemble the
-            // tagged aggregate (empty-only enums stay a bare tag).
             (Builtin(b), Enum { .. }) if builtin_is_integer(b) => {
                 let int = value.into_int_value();
                 let tag = self
@@ -2265,14 +2133,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             (Enum { .. }, Enum { .. }) => value,
 
-            // A fat-to-fat cast is the env-kind widening (a concrete closure
-            // flowing into an `Opaque` `Fn`/`FnOnce` slot). Both layouts are
-            // the same `{ $fn, $env }` pair, so the value passes through.
             (FatFn { .. }, FatFn { .. }) => value,
 
-            // A slice-to-slice cast only loosens constness (`[]const T` into
-            // a generic `[]T` param slot); the run-time `{ ptr, len }` pair
-            // is unchanged.
             (Slice { .. }, Type::Slice { .. }) => value,
 
             _ => {
@@ -2346,8 +2208,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 if matches!(operand, Operand::Constant(ConstValue::Void, _)) {
                     self.builder.build_return(None).unwrap();
                 } else if matches!(operand, Operand::Constant(ConstValue::Str(_), _)) {
-                    // String literals coerce to slices / `[N]char` arrays in
-                    // return position just like they do in argument position.
                     let value = self.cast_op(operand, func.ret_ty, func);
                     self.builder.build_return(Some(&value)).unwrap();
                 } else {
@@ -2370,10 +2230,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         next: Option<BlockId>,
         func: &MirFunction,
     ) {
-        // A bodyless interface method whose receiver monomorphized to a
-        // builtin/enum type (`self.value.display(out)` for `T: Display` with
-        // `T = i32`) has no implementation to dispatch to: render the value
-        // straight into stdout like format macros do.
         if let CallTarget::Direct(id) = target {
             let source_def = self.program.functions[id].source_def;
             if self
@@ -2390,13 +2246,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
         }
 
-        // Coerce each argument to the callee's declared parameter type: a
-        // constant like `123` defaults to `i32`, but the parameter may be
-        // `usize`/`i64`, so the value must be widened before the call.
-        // Indirect callees carry their signature in the operand type; use it
-        // when the counts agree (fat `$fn` temporaries are typed with the
-        // env-first signature by MIR). On count mismatch the ABI is rebuilt
-        // from the call site below, so leave the args alone here too.
         let param_types: Vec<TypeId> = match target {
             CallTarget::Direct(id) => self.program.functions[id]
                 .params
@@ -2434,9 +2283,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     return value.into();
                 }
 
-                // Variadic args have no declared parameter type: an array
-                // decays to a pointer to its storage and a slice passes its
-                // data pointer (C varargs ABI).
                 if is_variadic_extern && let Some(arg_ty) = self.operand_type(arg, func) {
                     match self.typecheck.interner.get(arg_ty).clone() {
                         Type::Array { .. } => {
@@ -2477,9 +2323,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .operand_type(operand, func)
                     .expect("fn pointer operand");
 
-                // Closure calls pass the captured environment as trailing
-                // arguments beyond the `$fn_ptr` signature, so the ABI must be
-                // rebuilt from the call site when the counts disagree.
                 let declared_params: Vec<TypeId> = match self.typecheck.interner.get(op_ty) {
                     Type::Fn { params, .. } => params.clone(),
                     _ => Vec::new(),
@@ -2521,10 +2364,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Emits a bodyless interface method call (`Display::display` /
-    /// `Debug::debug`) whose receiver monomorphized to a builtin or enum
-    /// type as a direct stdout write. Returns `false` when the receiver is
-    /// not a builtin/enum, leaving the call to the normal path.
     fn emit_builtin_interface_method(
         &mut self,
         fn_id: MirFunctionId,
@@ -2550,7 +2389,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             None => return false,
         };
 
-        // The receiver is always passed by pointer (`*const self` / `*self`).
         let pointee = match self.typecheck.interner.get(recv_ty).clone() {
             Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
             _ => return false,
@@ -2614,7 +2452,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .builder
                         .build_load(self.map_basic_type(pointee), ptr, "")
                         .unwrap();
-                    // printf-family variadic calls widen `f32` to `f64`.
+
                     let val = if b == BuiltinType::f32 {
                         self.builder
                             .build_float_ext(val.into_float_value(), self.context.f64_type(), "")
@@ -2633,8 +2471,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     ("%d".to_string(), val)
                 }
 
-                // String data: a `[*]const char` or a `[N]char` behind the
-                // receiver pointer already is a C string, print it as is.
                 Type::ManyPointer { inner, .. }
                     if matches!(
                         self.typecheck.interner.get(inner).clone(),
@@ -2745,12 +2581,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 );
 
                 if self.options.mode == CompilationMode::Debug {
-                    // Print the message (the header line has already been
-                    // emitted by a separate print segment), then dump the
-                    // shadow-stack call frames (see `emit_panic_runtime`) and
-                    // abort. The panicking function's own frame is still on
-                    // the stack because the prologue frame is only popped by
-                    // a `Return`.
                     let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
                         self.get_str_global(&format!("{format}\n"))
                             .as_pointer_value()
@@ -2767,7 +2597,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     );
                     self.builder.build_call(panic_stack, &[], "").unwrap();
                 } else {
-                    // Release: print the message and exit.
                     let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
                         self.get_str_global(&format!("{format}\n"))
                             .as_pointer_value()
@@ -2805,8 +2634,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     true,
                 );
 
-                // First call: measure how many bytes the formatted string
-                // needs (`snprintf(NULL, 0, ...)` returns the required size).
                 let mut measure_args: Vec<BasicMetadataValueEnum<'ctx>> =
                     vec![null_ptr.into(), size_ty.const_zero().into(), fmt_ptr.into()];
                 measure_args.extend(values.iter().map(|v| BasicMetadataValueEnum::from(*v)));
@@ -2819,9 +2646,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .unwrap_basic()
                     .into_int_value();
 
-                // `snprintf` returns a negative encoding error on malformed
-                // input; clamp it so the buffer size and the reported length
-                // stay sane.
                 let zero_i32 = self.context.i32_type().const_int(0, false);
                 let negative = self
                     .builder
@@ -2833,7 +2657,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .unwrap()
                     .into_int_value();
 
-                // Allocate exactly `needed + 1` bytes for the string.
                 let buffer_size = self
                     .builder
                     .build_int_add(needed, self.context.i32_type().const_int(1, false), "")
@@ -2843,8 +2666,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     .build_array_alloca(self.context.i8_type(), buffer_size, "")
                     .unwrap();
 
-                // Second call: write the formatted string into the buffer,
-                // bounded by its size so the write can never overflow.
                 let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
                     buffer.into(),
                     self.builder
@@ -2859,8 +2680,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
                 let dest_ty = self.place_type(destination, func);
                 if !self.is_void_ty(dest_ty) {
-                    // The macro result is `[]const char`: build the
-                    // `{ ptr, len }` fat pointer over the stack buffer.
                     let slice_ty = self.map_basic_type(dest_ty);
                     let slice_alloca = self.entry_alloca(slice_ty, "fmt_slice");
                     let ptr_field = self
@@ -2890,9 +2709,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 };
                 let (specifier, values, value) = self.debug_operand(arg, func);
 
-                // A plain integer constant is displayed 64-bit wide so a large
-                // literal isn't truncated to `int`, but `value` is kept in its
-                // original type since it's stored back as the `@dbg` result.
                 let (display_values, specifier) =
                     if let Operand::Constant(ConstValue::Int(n), _) = arg {
                         (
@@ -2925,8 +2741,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     true,
                 );
 
-                // replacing format specifiers characters to avoid undefined behavior on code that
-                // contains formatters
                 let debug_inner = debug_inner.replace('%', "%%");
 
                 let format = format!("[{debug_location}]> `{debug_inner}` = {specifier}\n");
@@ -2998,16 +2812,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 self.builder.build_unreachable().unwrap();
             }
 
-            // `@as`, `@sizeof`, `@alignof` never reach codegen: MIR lowers them
-            // to plain rvalues before the macro terminator is emitted.
             _ => unreachable!("macro {kind:?} is lowered to a plain rvalue by MIR"),
         }
     }
 
-    /// Returns `(printf specifier, print values, storable value)` for a `@dbg`
-    /// operand. Constants are handled here because `operand_type` only
-    /// describes place operands. The storable value is the operand in its
-    /// original type, used as the `@dbg` result.
     fn debug_operand(
         &mut self,
         operand: &Operand,
@@ -3035,8 +2843,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
             Operand::Copy(place, _) | Operand::Move(place, _) => {
                 let ty = self.place_type(place, func);
-                // A `[N]char` array prints as a bounded C string: `%.*s` with
-                // the compile-time length.
                 if let Type::Array { element, len } = self.typecheck.interner.get(ty).clone()
                     && matches!(
                         self.typecheck.interner.get(element).clone(),
@@ -3080,8 +2886,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Returns the function name, module and definition line of `func`, used
-    /// to build panic headers and shadow-stack frame strings.
     fn panic_parts(&self, func: &MirFunction, fn_id: MirFunctionId) -> (String, String, usize) {
         let fn_name = self
             .program
@@ -3104,16 +2908,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         (fn_name, module, line)
     }
 
-    /// Builds a `module:line "function"` location string for the current panic
-    /// site, used in both debug and release panic messages.
     fn panic_location(&self, func: &MirFunction, fn_id: MirFunctionId) -> String {
         let (fn_name, module, line) = self.panic_parts(func, fn_id);
         format!("{module}:{line} \"{fn_name}\"")
     }
 
-    /// Creates the shadow-stack globals used by Debug panics: a fixed buffer of
-    /// frame slots and a depth counter. Emitted eagerly in Debug so that every
-    /// function prologue can reference them.
     fn emit_panic_stack_globals(&mut self) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let arr_ty = ptr_ty.array_type(PANIC_STACK_DEPTH);
@@ -3129,9 +2928,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         depth.set_initializer(&self.context.i32_type().const_zero());
     }
 
-    /// Pushes the current function's `module:line "function"` frame onto the
-    /// shadow stack. Skipped for generated `drop` functions (their frame would
-    /// only add noise) and outside Debug mode.
     fn emit_panic_prologue(&mut self, func: &MirFunction, fn_id: MirFunctionId) {
         if self.options.mode != CompilationMode::Debug || func.is_drop_impl {
             return;
@@ -3154,13 +2950,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .unwrap()
             .into_int_value();
 
-        // Circular buffer: the slot is `depth % PANIC_STACK_DEPTH` (a power of
-        // two, so this is an AND). The depth itself keeps counting, so a panic
-        // stack overflowing with deep recursion never writes out of bounds;
-        // the runtime then prints the most recent frames. When recursion runs
-        // deeper than the buffer and then unwinds, reused slots may hold stale
-        // frames from the deeper calls - this only affects Debug diagnostics,
-        // never memory safety.
         let slot = self
             .builder
             .build_and(
@@ -3195,7 +2984,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .unwrap();
     }
 
-    /// Pops the current function's shadow-stack frame (undoes the prologue).
     fn emit_panic_epilogue(&mut self, func: &MirFunction) {
         if self.options.mode != CompilationMode::Debug || func.is_drop_impl {
             return;
@@ -3219,10 +3007,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .unwrap();
     }
 
-    /// Emits the `zeen.panic_stack` runtime: prints each recorded frame
-    /// (`  at module:line "function"`, innermost first) and aborts. Called after
-    /// the panic message has been printed. Self-contained in the module so the
-    /// binary only links against libc.
     fn emit_panic_runtime(&mut self) {
         let Some(frames) = self.module.get_global("zeen.panic.frames") else {
             return;
@@ -3252,8 +3036,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let frame_fmt = self.get_str_global("  at %s\n").as_pointer_value();
 
         let fn_type = self.context.void_type().fn_type(&[], false);
-        // Reuse the `zeen.panic_stack` declaration created at panic sites so
-        // the call and the definition resolve to the same symbol.
+
         let f = match self.module.get_function("zeen.panic_stack") {
             Some(f) => f,
             None => self.module.add_function(
@@ -3274,8 +3057,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .build_load(i32_ty, depth_global.as_pointer_value(), "panic.depth")
             .unwrap()
             .into_int_value();
-        // The buffer holds at most PANIC_STACK_DEPTH frames, so at most that
-        // many are printed even when recursion overflowed the shadow stack.
+
         let cap = i32_ty.const_int(PANIC_STACK_DEPTH as u64, false);
         let under_cap = self
             .builder
@@ -3359,8 +3141,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         );
     }
 
-    /// Builds a printf-style format string and the converted argument values
-    /// from `format_chunks` + operands.
     fn build_format(
         &mut self,
         chunks: &[FormatChunk],
@@ -3385,10 +3165,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     let (specifier, arg_values) =
                         self.format_arg_value(operand, arg_ty, *spec, func);
 
-                    // printf-family variadic calls apply default argument
-                    // promotion, so an `f32` argument must be widened to the
-                    // `f64` that `%f` reads.  Similarly, sub-`int` integer
-                    // types (i8, i16) must be sign/zero-extended to `i32`.
                     for value in arg_values {
                         let value = match value.get_type() {
                             BasicTypeEnum::FloatType(t) if t.get_bit_width() == 32 => self
@@ -3429,11 +3205,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         (format, values)
     }
 
-    /// Renders a single format argument into a printf specifier + value.
-    ///
-    /// Enum-typed args print their variant name (Display) or `EnumName.Variant`
-    /// (Debug) by indexing a per-enum table of variant-name strings with the
-    /// discriminant, instead of dumping the raw discriminant integer.
     fn format_arg_value(
         &mut self,
         operand: &Operand,
@@ -3471,9 +3242,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         match (operand, spec) {
             (Operand::Constant(c, _), _) => {
                 if let ConstValue::Int(n) = c {
-                    // `{bin}` prints the raw bits without leading zeros, which
-                    // printf has no specifier for, so bake them into a literal
-                    // string.
                     if matches!(spec, FormatSpec::Bin) {
                         let bits = arg_ty
                             .map(|t| self.map_basic_type(t).into_int_type().get_bit_width())
@@ -3521,9 +3289,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             _ => {
                 let ty = self.operand_type(operand, func).expect("typed format arg");
 
-                // `[N]char` string arrays print as bounded C strings: `%.*s`
-                // with the compile-time length so printf stops at the array
-                // end instead of reading past it.
                 if let Type::Array { element, len } = self.typecheck.interner.get(ty).clone()
                     && matches!(
                         self.typecheck.interner.get(element).clone(),
@@ -3549,8 +3314,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     return (specifier, vec![len_i32.into(), ptr.into()]);
                 }
 
-                // `[]char` slices print as bounded C strings: `%.*s` with the
-                // slice's runtime length.
                 if let Type::Slice { element, .. } = self.typecheck.interner.get(ty).clone()
                     && matches!(
                         self.typecheck.interner.get(element).clone(),
@@ -3594,8 +3357,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     return ("%s".to_string(), vec![ptr]);
                 }
 
-                // `{bin}` on runtime values renders the digits into a stack
-                // buffer since printf has no binary specifier.
                 if matches!(spec, FormatSpec::Bin) {
                     let bits = self.map_basic_type(ty).into_int_type().get_bit_width();
                     let val = self.operand_value(operand, Some(ty), func).into_int_value();
@@ -3618,7 +3379,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         let base = self.display_specifier(ty);
                         match base.as_str() {
                             "%s" => "\"%s\"".to_string(),
-                            // Debug chars print as `'a'` (single quotes).
                             _ if matches!(
                                 self.typecheck.interner.get(ty).clone(),
                                 Type::Builtin(BuiltinType::char)
@@ -3639,8 +3399,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Builds the NUL-terminated binary representation of `value` (its lower
-    /// `bits` bits) into a fresh stack buffer.
     fn emit_bin_buffer(&mut self, value: IntValue<'ctx>, bits: u32) -> PointerValue<'ctx> {
         let i8_ty = self.context.i8_type();
         let i32_ty = self.context.i32_type();
@@ -3656,7 +3414,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             )
             .unwrap();
 
-        // NUL terminator.
         let nul_slot = unsafe {
             self.builder
                 .build_in_bounds_gep(i8_ty, buffer, &[size_ty.const_int(bits as u64, false)], "")
@@ -3698,9 +3455,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             self.builder.build_store(slot, ch).unwrap();
         }
 
-        // Skip the leading zeros so `%s` prints the minimal digit count.
-        // For a zero value the whole buffer is '0's, so fall back to the last
-        // digit instead of pointing at the NUL terminator.
         let idx = self.builder.build_alloca(i32_ty, "bin.idx").unwrap();
         self.builder
             .build_store(idx, i32_ty.const_int(0, false))
@@ -3801,21 +3555,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// Length prefix for an integer printf specifier, chosen from the value's
-    /// actual (platform-dependent) emitted width. 64-bit values need `ll` so
-    /// printf reads them back correctly on both LP64 (Linux/macOS) and LLP64
-    /// (Windows) ABIs; narrower values are promoted to `int` by varargs and
-    /// need no prefix.
     fn int_spec_width(&self, ty: TypeId) -> &'static str {
         let width = self.map_basic_type(ty).into_int_type().get_bit_width();
         if width >= 64 { "ll" } else { "" }
     }
 
-    /// Decides width/sign for displaying an integer constant and returns the
-    /// value to hand to printf.  Typed constants use their type's width;
-    /// unpinned literal constants (`IntLiteral`, defaulting to i32) are
-    /// widened to 64-bit when their value doesn't fit in 32 bits so large
-    /// literals aren't truncated to `int`.
     fn int_format_arg(
         &mut self,
         n: i128,
@@ -3940,10 +3684,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         self.builder.build_store(ptr, value).unwrap();
     }
 
-    /// Narrows/widens a float rvalue result to the destination slot's width.
-    /// Float-literal operands are `f64` by default, so e.g. `Div(4.0, 3.0)`
-    /// produces an `f64` even when the result lands in an `f32` slot; storing
-    /// it unchanged would clobber adjacent memory.
     fn coerce_float_to_slot(
         &mut self,
         value: BasicValueEnum<'ctx>,
@@ -4100,8 +3840,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         ty
     }
 
-    /// The concrete payload type of `variant_def` within the enum `enum_ty`
-    /// (from the enum layout registered during lowering).
     fn enum_payload_type(&self, enum_ty: TypeId, variant_def: DefId) -> TypeId {
         self.program
             .enum_layouts
@@ -4111,8 +3849,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .unwrap_or(TypeId(u32::MAX))
     }
 
-    /// Loads the running tag of an enum value: payload enums read the `u8`
-    /// tag field of the aggregate, empty-only enums are already a bare tag.
     fn load_enum_tag(&self, place: &Place, func: &MirFunction) -> BasicValueEnum<'ctx> {
         let ptr = self.place_ptr(place, func);
         let enum_ty = self.place_type(place, func);
@@ -4136,7 +3872,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    /// The ordinal of `variant_def` within `enum_def` (the runtime tag).
     fn enum_variant_tag(&self, enum_def: DefId, variant_def: DefId) -> u64 {
         self.typecheck
             .enum_variants
@@ -4145,8 +3880,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             .unwrap_or(0) as u64
     }
 
-    /// The running tag (`i8`) of an enum value: reads the tag field of a
-    /// payload-enum aggregate, or uses the bare-tag scalar directly.
     fn enum_tag_of_value(&self, value: BasicValueEnum<'ctx>) -> IntValue<'ctx> {
         match value {
             BasicValueEnum::StructValue(s) => self
@@ -4246,7 +3979,6 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 ']' => mangled.push('$'),
                 ',' => mangled.push('_'),
                 ' ' => mangled.push('_'),
-                // nested functions: `<parent>-><child>` mangles to a dot
                 '-' | '>' => mangled.push('.'),
                 c => mangled.push(c),
             }

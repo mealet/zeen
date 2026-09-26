@@ -1,14 +1,12 @@
+use std::collections::HashMap;
 use std::rc::Rc;
-use std::{cell::RefCell, collections::HashMap};
 
-use lasso::Rodeo;
 use zeen_hir::{
     HirModule,
     decl::{HirDecl, HirDeclKind, HirFn},
     stmt::{HirStmt, HirStmtKind},
 };
 use zeen_resolve::DefId;
-use zeen_typecheck::result::TypeCheckResult;
 
 pub fn collect_hir_fns(module: &HirModule) -> HashMap<DefId, Rc<HirFn>> {
     let mut map = HashMap::new();

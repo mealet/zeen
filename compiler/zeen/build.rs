@@ -6,7 +6,6 @@ use std::{
 fn main() {
     // @ Core Modules Builtin Import
     {
-        // project/lib/core
         let core_dir = Path::new("../../lib/core");
 
         println!("cargo:rerun-if-changed={}", core_dir.display());

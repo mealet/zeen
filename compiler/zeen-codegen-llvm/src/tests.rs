@@ -1,9 +1,4 @@
-//! Unit tests for LLVM codegen.
-//!
-//! The frontend pipeline lives in the `zeen` binary crate, so these tests
-//! hand-build MIR with [`crate::fixtures::Fixture`] and feed it straight to
-//! [`crate::CodeGen`]. Every test generates the module and runs
-//! `module.verify()`, so the IR is guaranteed to be well-formed.
+//! Unit tests for LLVM codegen
 
 use std::rc::Rc;
 
@@ -21,7 +16,7 @@ use zeen_types::Type;
 use crate::codegen::{CodeGen, CodegenOptions};
 use crate::fixtures::*;
 
-/// Runs the full codegen pipeline on a fixture and returns the printed IR.
+/// Runs the full codegen pipeline on a fixture and returns the printed IR
 fn compile(fx: &Fixture, mode: CompilationMode) -> String {
     let context = Context::create();
     let options = CodegenOptions {

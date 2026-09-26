@@ -13,35 +13,32 @@ use zeen_ast::{
 };
 use zeen_driver::CompilationMode;
 use zeen_hir::{
-    HirId, HirMacroKind, HirModule, HirTypeExpr,
-    decl::{HirDecl, HirDeclKind, HirFn},
+    HirId, HirMacroKind, HirModule,
+    decl::{HirDeclKind, HirFn},
     expr::{HirExpr, HirExprKind, HirFieldInit, HirPattern, HirSwitchArm},
     stmt::{HirStmt, HirStmtKind},
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_typecheck::{
     coerce::builtin_is_integer,
-    format_str::{FormatChunk, FormatSpec, arg_specs},
+    format_str::{FormatChunk, FormatSpec},
     result::{CallResolution, OperatorResolution, TypeCheckResult},
 };
 use zeen_types::{
     CLOSURE_FAT_DEF, CLOSURE_FAT_DROP_FIELD, CLOSURE_FAT_ENV_FIELD, CLOSURE_FAT_FN_FIELD,
-    SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId, TypeInterner,
+    SLICE_LEN_FIELD, SLICE_PTR_FIELD, SLICE_STRUCT_DEF, StructTypeInfo, Type, TypeId,
     VariantPayload,
 };
 
 use crate::error::{MirError, MirWarning};
 use crate::{
-    AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, EnumLayout, EnumVariantLayout,
-    ExternFnDecl, LocalDecl, LocalId, LocalKind, MirFunction, MirFunctionId, MirGlobalVar,
-    MirGlobalVarId, MirProgram, MirStatement, Mutability, Operand, Place, PlaceElem, Rvalue,
-    StructFieldLayout, StructLayout, Terminator,
+    AggregateKind, BlockId, CallTarget, ConstValue, EnumLayout, EnumVariantLayout, ExternFnDecl,
+    LocalDecl, LocalId, LocalKind, MirFunction, MirFunctionId, MirGlobalVar, MirGlobalVarId,
+    MirProgram, MirStatement, Mutability, Operand, Place, PlaceElem, Rvalue, StructFieldLayout,
+    StructLayout, Terminator,
 };
 
-/// Base `DefId` of synthesized closure env structs. Real program defs stay
-/// small; shifting the (closure_def, stride) plane up here keeps them apart.
 const CLOSURE_SYNTH_BASE: u32 = 1 << 30;
-/// How many synthetic def slots each closure env struct (def + fields) takes.
 const CLOSURE_SYNTH_STRIDE: u32 = 1024;
 
 pub struct MirLoweringResult {
@@ -60,8 +57,7 @@ pub fn lower_program<'ctx>(
     let main_def = typecheck.main_fn_def;
 
     let hir_fns_by_def = crate::collecter::collect_hir_fns(module);
-    // Only top-level (non-nested) functions are eagerly lowered; nested ones
-    // are registered when the enclosing function actually calls them.
+
     let fns_with_owners: Vec<(DefId, Rc<HirFn>, Option<DefId>)> = hir_fns_by_def
         .iter()
         .filter(|(_, f)| f.parent_fn.is_none())
@@ -106,8 +102,6 @@ pub fn lower_program<'ctx>(
         });
     }
 
-    // Register layouts for every user-defined struct regardless of usage, so
-    // `@sizeof(Struct)` on an otherwise-unused type has a registered layout.
     lowering.register_user_struct_layouts(resolution);
 
     lowering.build_init_globals();
@@ -140,74 +134,32 @@ pub struct MirLowering<'ctx> {
     errors: Vec<MirError>,
     warnings: Vec<MirWarning>,
 
-    /// Stack of functions currently being lowered. Used to resolve the parent
-    /// of a nested function so its MIR name becomes `<parent>-><name>`.
     fn_stack: Vec<FnContext>,
 
-    /// Cache of synthesized bare-fn → fat-`{fn,env}` adapter functions, keyed
-    /// by (target, fat signature) so each adapter is emitted once.
     fat_adapter_cache: HashMap<(MirFunctionId, TypeId), MirFunctionId>,
-
-    /// Same as above for bodyless extern targets, keyed by
-    /// (extern_fns index, fat signature).
     fat_extern_adapter_cache: HashMap<(usize, TypeId), MirFunctionId>,
-
-    /// Cache of synthesized fn-pointer-box → fat adapter functions, keyed by
-    /// the plain `fn` signature type each adapter forwards for.
     fat_pointer_adapter_cache: HashMap<TypeId, MirFunctionId>,
-
-    /// Cache of synthesized per-fat-type drop functions (env teardown + `free`),
-    /// keyed by the fat `TypeId`.
     fat_drop_cache: HashMap<TypeId, MirFunctionId>,
 
-    /// Cache of synthesized per-enum drop functions (tag switch + current
-    /// payload teardown), keyed by the concrete enum `TypeId`.
     enum_drop_cache: HashMap<TypeId, MirFunctionId>,
-
-    /// Cache of synthesized per-fat-type frees-only functions (env `free`
-    /// without capture teardown), keyed by the fat `TypeId`. Used after a
-    /// consuming `FnOnce` call.
     fat_free_cache: HashMap<TypeId, MirFunctionId>,
-
-    /// Cache of synthesized per-env-struct capture teardown functions
-    /// (`*const void env` -> drops the env's captured values), keyed by the
-    /// env struct `TypeId`. Stored in the canonical fat envelope's `$drop`
-    /// field and called before the env block is freed.
     env_drop_cache: HashMap<TypeId, MirFunctionId>,
-
-    /// The shared no-op teardown function `fn(*void) void` stored in `$drop`
-    /// for fat values with nothing to tear down (zero captures, plain fn /
-    /// builtin-fn coercions, captures without `Drop`).
     env_drop_noop: Option<MirFunctionId>,
-
-    /// Synthesized env struct `TypeId`s, keyed by the closure `DefId` they
-    /// belong to. A heap-owning fat value's `$env` points at storage of this
-    /// type.
     closure_envs: HashMap<DefId, TypeId>,
-
-    /// Fat types of closures whose value is never used: no env is
-    /// materialized for them (`null`), so they must not get a drop function.
-    unused_fat_types: HashSet<TypeId>,
 
     mode: CompilationMode,
 
     globals: Vec<GlobalDecl>,
     globals_by_def: HashMap<DefId, MirGlobalVarId>,
-
-    /// Lazily resolved stdout writer: the `core.out` `OutStream` struct and
-    /// its zero-sized `TypeId` (used as the `out` sink of `Display`/`Debug`).
     outstream: Option<(TypeId, DefId)>,
-
-    /// Lazily resolved `std.string` `String` struct (the `@format` writer).
     format_string: Option<(TypeId, DefId)>,
 
-    /// Lazily resolved `std.alloc` `Allocator` struct and its `alloc` /
-    /// `dealloc` methods, used to grow and free heap env blocks.
     allocator_struct: Option<DefId>,
     allocator_alloc: Option<DefId>,
     allocator_dealloc: Option<DefId>,
 }
 
+#[allow(unused)]
 struct GlobalDecl {
     def_id: DefId,
     name: Spur,
@@ -216,8 +168,6 @@ struct GlobalDecl {
     is_pub: bool,
 }
 
-/// The enclosing function of the one being lowered, used to prefix nested
-/// function names with their parent.
 #[derive(Debug, Clone)]
 pub struct FnContext {
     pub def_id: DefId,
@@ -226,9 +176,6 @@ pub struct FnContext {
 
 #[derive(Default)]
 pub struct MonoCache {
-    /// Generic instantiations plus per-call-site fat (closure) parameter
-    /// bindings: the third key component is the concrete fat type bound to
-    /// each `Fn`/`FnOnce`-typed parameter, in parameter order.
     cache: HashMap<(DefId, Vec<TypeId>, Vec<TypeId>), MirFunctionId>,
     next_id: u32,
 }
@@ -253,16 +200,10 @@ struct LoopTargets {
 pub struct FnBuilder {
     func: MirFunction,
     locals_by_def: HashMap<DefId, LocalId>,
-    /// For closure bodies: captured variables referenced through the env
-    /// pointer. Maps the captured `DefId` to `env.deref().field(..)`. Looked up
-    /// after `locals_by_def` so ordinary locals still win.
     captured_places: HashMap<DefId, Place>,
     loop_stack: Vec<LoopTargets>,
     bindings: HashMap<DefId, TypeId>,
-    /// Concrete fat types bound to this function's `Fn`/`FnOnce` parameters
-    /// (param `DefId` → concrete fat type), filled in per monomorphized copy.
     fat_bindings: Vec<(DefId, TypeId)>,
-    /// Locals belonging to the current lexical scopes.
     scope_stack: Vec<Vec<LocalId>>,
 }
 
@@ -294,8 +235,6 @@ impl FnBuilder {
         }
     }
 
-    /// The place backing a `DefId` inside this frame: an ordinary local first,
-    /// then a captured variable exposed through the closure env pointer.
     fn place_for_def(&self, def_id: DefId) -> Option<Place> {
         if let Some(local) = self.locals_by_def.get(&def_id) {
             Some(Place::from_local(*local))
@@ -337,9 +276,6 @@ impl FnBuilder {
         self.func.block_mut(block).terminator = term;
     }
 
-    /// Appends a fallthrough `Goto` only when the block does not already end
-    /// with a terminator (e.g. `break`/`continue`/`return` inside an `if`
-    /// branch). Overwriting those would silently swallow the early exit.
     fn join_if_open(&mut self, block: BlockId, join: BlockId) {
         if self.block_is_open(block) {
             self.set_terminator(block, Terminator::Goto(join));
@@ -381,7 +317,6 @@ impl<'ctx> MirLowering<'ctx> {
             env_drop_cache: HashMap::new(),
             env_drop_noop: None,
             closure_envs: HashMap::new(),
-            unused_fat_types: HashSet::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             mode,
@@ -405,9 +340,6 @@ impl<'ctx> MirLowering<'ctx> {
         Ok(self.program)
     }
 
-    /// Registers layouts for struct types reachable through fields of
-    /// registered layouts (e.g. a core struct held by a user struct).
-    /// Runs to a fixpoint; already-present layouts stop the walk.
     fn register_reachable_struct_layouts(&mut self) {
         loop {
             let mut missing: Vec<(TypeId, DefId)> = Vec::new();
@@ -446,7 +378,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Queues a struct layout for registration unless present.
     fn collect_struct_layout(&self, ty: TypeId, missing: &mut Vec<(TypeId, DefId)>) {
         if let Type::Struct { def_id, .. } = self.typecheck.interner.get(ty).clone()
             && !self.program.struct_layouts.contains_key(&ty)
@@ -498,7 +429,10 @@ impl<'ctx> MirLowering<'ctx> {
 
         for decl in &self.module.decls {
             let HirDeclKind::ExternVar {
-                name, ty, is_pub, ..
+                name,
+                ty: _,
+                is_pub,
+                ..
             } = &decl.kind
             else {
                 continue;
@@ -745,10 +679,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Ensures a concrete `drop` MIR function exists for every struct type
-    /// that implements the `Drop` interface and shows up in the lowered
-    /// program. `drop(%x)` statements refer to that function, so it must be
-    /// registered even when nothing calls it explicitly.
     fn register_drop_functions(&mut self) {
         let Some(drop_iface) = self.find_interface_def("Drop") else {
             return;
@@ -768,9 +698,6 @@ impl<'ctx> MirLowering<'ctx> {
             })
             .collect();
 
-        // Drop-impl structs reachable only through a struct layout (e.g. an
-        // env capture field) never become locals of their own; pull every
-        // struct-typed field out of the registered layouts too.
         let mut candidate_types = candidate_types;
         let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
         for layout_ty in struct_keys {
@@ -821,10 +748,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Registers the drop function of every enum showing up among the lowered
-    /// locals and layouts. Enums with an explicit `Drop` impl reuse the user's
-    /// monomorphized method (like structs); the rest get a synthesized
-    /// tag-switch teardown when a payload transitively needs one.
     fn register_enum_drop_functions(&mut self) {
         let mut candidate_types: Vec<TypeId> = self
             .program
@@ -836,8 +759,6 @@ impl<'ctx> MirLowering<'ctx> {
             .into_iter()
             .collect();
 
-        // Enum-typed struct fields and enum payloads never become locals of
-        // their own; pull every enum out of the registered layouts too.
         let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
         for layout_ty in struct_keys {
             let fields: Vec<StructFieldLayout> =
@@ -869,10 +790,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Registers the drop function for one concrete enum type: the user's
-    /// `Drop` impl when present, otherwise a synthesized teardown when a
-    /// payload needs one. Nested enums reached while emitting a payload
-    /// teardown register on demand through the same entry point.
     fn ensure_enum_drop_registered(&mut self, ty: TypeId) {
         if self.program.drop_functions.contains_key(&ty) {
             return;
@@ -919,8 +836,6 @@ impl<'ctx> MirLowering<'ctx> {
         self.program.drop_functions.insert(ty, id);
     }
 
-    /// Returns (synthesizing on first use) the drop function of an enum type:
-    /// it reads the tag and tears down the current payload.
     fn enum_drop_function(&mut self, enum_ty: TypeId) -> MirFunctionId {
         if let Some(&id) = self.enum_drop_cache.get(&enum_ty) {
             return id;
@@ -930,9 +845,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Builds the drop function of an enum: the value is passed by value, the
-    /// tag selects the active variant, and the current payload is torn down
-    /// field by field (structs without `Drop`) or as a whole.
     fn synthesize_enum_drop_function(&mut self, enum_ty: TypeId) -> MirFunctionId {
         let Type::Enum {
             def_id: enum_def,
@@ -1026,9 +938,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Emits the teardown of a payload `place` into `block`: values with
-    /// their own drop function die as a whole, other structs expand
-    /// recursively field by field. Only called for types that need a drop.
     fn emit_payload_drops(
         &mut self,
         func: &mut MirFunction,
@@ -1093,9 +1002,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Whether a value of type `ty` must be dropped: enums with an explicit
-    /// `Drop` or a payload that transitively needs one, structs and arrays as
-    /// in flow's `type_needs_drop`, fat closures always.
     fn mir_type_needs_drop(&mut self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> bool {
         match self.typecheck.interner.get(ty).clone() {
             Type::Struct {
@@ -1148,8 +1054,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Extends `bindings` with the generic parameters of `struct_def`,
-    /// resolved to the concrete `generic_args` of this instantiation.
     fn bind_struct_generics(
         &self,
         struct_def: &DefId,
@@ -1174,13 +1078,6 @@ impl<'ctx> MirLowering<'ctx> {
         nested
     }
 
-    /// Registers the layout of every `FatFn` type showing up among the
-    /// lowered locals. A fat value is a static `{ $fn: *void, $env: *void }`
-    /// envelope shared by every fat type; the concrete captures live in a
-    /// heap-allocated env struct `$env` points at. Building a fat value
-    /// registers its own layout, but a value that merely flows through a
-    /// parameter or a call slot never gets one built, and field access (and
-    /// codegen's type emission) needs the layout too.
     fn register_reachable_fat_layouts(&mut self) {
         let mut fat_types: Vec<TypeId> = self
             .program
@@ -1192,9 +1089,6 @@ impl<'ctx> MirLowering<'ctx> {
             .into_iter()
             .collect();
 
-        // Fat-annotated struct fields (and nested fat payloads) never become
-        // locals of their own; pull every fat type out of the registered
-        // struct layouts so codegen can emit them.
         let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
         for layout_ty in struct_keys {
             let fields: Vec<TypeId> = self.program.struct_layouts[&layout_ty]
@@ -1219,10 +1113,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Registers the drop function of every fat type showing up among the
-    /// lowered locals. Every fat value owns the heap block `$env` points at
-    /// (wrapped bare fns store `null` there), so its death must `free` that
-    /// block back - `free` is a no-op on `null`, matching the null env mark.
     fn register_fat_drop_functions(&mut self) {
         let mut fat_types: Vec<TypeId> = self
             .program
@@ -1262,9 +1152,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Returns (synthesizing on first use) the drop function of a fat type:
-    /// it runs the envelope's capture teardown and frees the heap env block.
-    /// Used when a fat value dies without being called.
     fn fat_drop_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
         if let Some(&id) = self.fat_drop_cache.get(&fat_ty) {
             return id;
@@ -1274,10 +1161,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Returns (synthesizing on first use) the frees-only variant of a fat
-    /// type: it just releases the heap env block. Used after a consuming
-    /// `FnOnce` call, whose body already consumed (or dropped) every captured
-    /// value, so the env teardown must not touch them again.
     fn fat_free_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
         if let Some(&id) = self.fat_free_cache.get(&fat_ty) {
             return id;
@@ -1287,10 +1170,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Builds the drop function of a fat type: the value is passed by value,
-    /// `$env` is handed to the env's teardown function stored in `$drop` (a
-    /// no-op for zero-capture / non-owning envelopes), then the block is
-    /// released through `Allocator.dealloc`.
     fn synthesize_fat_drop_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
         self.register_fat_layout(fat_ty);
 
@@ -1342,9 +1221,6 @@ impl<'ctx> MirLowering<'ctx> {
         });
         func.blocks[0].terminator = Terminator::Goto(bb_drop_env);
 
-        // The envelope's `$drop` is never null: envelopes without a owning
-        // env carry the shared no-op. It receives `$env` straight - the no-op
-        // ignores it, per-env teardowns cast it to their env struct.
         func.blocks[bb_drop_env.0 as usize].terminator = Terminator::Call {
             func: CallTarget::Indirect(Operand::Copy(Place::from_local(drop_fn), None)),
             args: vec![Operand::Copy(
@@ -1385,10 +1261,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Builds the frees-only function of a fat type: the value is passed by
-    /// value and `$env` is handed straight to `Allocator.dealloc`. The env's
-    /// captures were consumed by the closure body on its single run, so no
-    /// teardown runs on them.
     fn synthesize_fat_free_function(&mut self, fat_ty: TypeId) -> MirFunctionId {
         self.register_fat_layout(fat_ty);
 
@@ -1445,10 +1317,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Returns (synthesizing on first use) the `fn(*void) void` teardown
-    /// function of a capturing closure's env struct: it casts its argument to
-    /// the env struct and drops the captured values that need it. Envs with
-    /// nothing to tear down share the no-op instead.
     fn env_drop_for_env(&mut self, env_ty: TypeId) -> MirFunctionId {
         if let Some(&id) = self.env_drop_cache.get(&env_ty) {
             return id;
@@ -1458,8 +1326,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// The shared `fn(*void) void` that does nothing, stored in `$drop` for
-    /// fat values whose env block holds nothing ownership-bearing.
     fn env_drop_noop(&mut self) -> MirFunctionId {
         if let Some(id) = self.env_drop_noop {
             return id;
@@ -1495,12 +1361,9 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Builds the `fn(*void) void` teardown of a capturing closure's env
-    /// struct, dropping each captured value that needs it in reverse order.
-    /// Explicit-drop and fat-value teardowns are deferred to codegen.
     fn env_drop_function(&mut self, env_ty: TypeId) -> MirFunctionId {
         let Type::Struct {
-            def_id: env_def, ..
+            def_id: _env_def, ..
         } = self.typecheck.interner.get(env_ty).clone()
         else {
             unreachable!("env teardown requires an env struct type");
@@ -1562,10 +1425,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// The captured value places of `env_ty` that are dropped when the env
-    /// dies, mirroring codegen's `emit_drop_ptr` recursion: explicit-drop
-    /// structs and fat values are leaves, structs without a drop recurse
-    /// through fields, arrays of drop-bearing elements drop as a whole.
     fn env_drop_leaf_places(&self, env_ty: TypeId, base: Place) -> Vec<(Place, TypeId)> {
         let mut leaves = Vec::new();
         self.env_drop_leaves_into(env_ty, base, &mut leaves);
@@ -1598,8 +1457,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// The `fn(*void) void` signature stored in the canonical fat envelope's
-    /// `$drop` field: takes the raw env pointer, tears the captures down.
     fn env_drop_fn_ty(&mut self) -> TypeId {
         let env_ptr_ty = self.void_ptr_ty();
         let void_ty = self.void_ty();
@@ -1609,10 +1466,6 @@ impl<'ctx> MirLowering<'ctx> {
         })
     }
 
-    /// Resolves (declaring on first use) the `std.alloc` `Allocator` method
-    /// with the given name. Allocates envs through `Allocator.alloc` and
-    /// releases them through `Allocator.dealloc` instead of raw libc
-    /// `malloc`/`free`.
     fn resolve_allocator_method(&mut self, method_name: &str) -> (DefId, DefId) {
         let allocator = if let Some(def) = self.allocator_struct {
             def
@@ -1699,10 +1552,6 @@ impl<'ctx> MirLowering<'ctx> {
         })
     }
 
-    /// Whether a value of this type needs teardown when its owner dies:
-    /// structs with a `Drop` implementation (or nested teardown-needing
-    /// fields), fat closure values, and arrays of such. Env structs are
-    /// never generic, so no substitution is needed here.
     fn type_needs_teardown(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
             Type::Struct { def_id, .. } => {
@@ -1754,7 +1603,6 @@ impl<'ctx> MirLowering<'ctx> {
         None
     }
 
-    /// Variant `DefId`s of core `Option` as `(None, Some)`.
     fn option_variants(&self, option_def: DefId) -> (DefId, DefId) {
         let info = self
             .typecheck
@@ -1776,9 +1624,6 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn expr_type(&mut self, fb: &FnBuilder, expr: &HirExpr) -> TypeId {
-        // A fat-annotated parameter is erased in the signature but stores a
-        // concrete closure type in this monomorphized copy: rewrite reads of
-        // it to the bound type.
         if let HirExprKind::VarRef(def_id) = &expr.kind
             && let Some((_, bound_ty)) = fb.fat_bindings.iter().find(|(d, _)| d == def_id)
         {
@@ -1812,8 +1657,6 @@ impl<'ctx> MirLowering<'ctx> {
         self.typecheck.struct_info.get(&def_id)
     }
 
-    /// The anonymous struct `DefId` behind a `VariantPayload::Struct`, i.e. the
-    /// synthetic `Foo.c` type, so its field machinery matches the payload.
     fn payload_struct_def(&self, payload_ty: TypeId) -> DefId {
         match self.typecheck.interner.get(payload_ty).clone() {
             Type::Struct { def_id, .. } => def_id,
@@ -1821,7 +1664,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// The runtime tag (variant ordinal) of `variant_def` within `enum_def`.
     fn enum_variant_tag(&self, enum_def: DefId, variant_def: DefId) -> i64 {
         self.typecheck
             .enum_variants
@@ -1834,8 +1676,6 @@ impl<'ctx> MirLowering<'ctx> {
         self.typecheck.enum_info.get(&enum_def)
     }
 
-    /// Variant info of the enum variant whose name (or field access) resolved
-    /// through `field_resolutions[expr_id]`.
     fn enum_variant_by_resolution(
         &self,
         enum_def: DefId,
@@ -1845,9 +1685,6 @@ impl<'ctx> MirLowering<'ctx> {
             .and_then(|info| info.variants.iter().find(|v| v.def_id == variant_def))
     }
 
-    /// Whether the enum carries at least one payload-bearing variant: such
-    /// enums always lower to a tagged `{ tag, union }` aggregate, while
-    /// empty-only enums can stay a bare tag constant.
     fn enum_has_payloads(&self, enum_def: DefId) -> bool {
         self.enum_info(enum_def)
             .map(|info| info.variants.iter().any(|v| v.payload.is_some()))
@@ -1886,8 +1723,6 @@ impl<'ctx> MirLowering<'ctx> {
             | Type::Never
             | Type::Error => true,
 
-            // `Fn` with all-Copy captures is Copy; owning a non-Copy
-            // capture makes `FnOnce` move-only.
             Type::FatFn { .. } => self.typecheck.is_copy(ty),
 
             Type::Struct { .. } | Type::Enum { .. } | Type::Array { .. } => {
@@ -1908,8 +1743,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Register layouts for every user-defined struct (skipping core files) so that
-    /// structs which are never referenced by any lowered function still get printed.
     fn register_user_struct_layouts(&mut self, resolution: &ResolutionResult) {
         let mut struct_defs: Vec<DefId> = resolution
             .defs
@@ -1998,8 +1831,6 @@ impl<'ctx> MirLowering<'ctx> {
         );
     }
 
-    /// Registers the monomorphized layout of an enum: its payload types are
-    /// substituted with the concrete generic arguments, exactly like structs.
     fn register_enum_layout(&mut self, ty: TypeId, enum_def: DefId) {
         if self.program.enum_layouts.contains_key(&ty) {
             return;
@@ -2064,10 +1895,6 @@ impl<'ctx> MirLowering<'ctx> {
         );
     }
 
-    /// Registers a monomorphized `Slice[T]` as a synthetic struct layout so the
-    /// MIR printer can show it and indexing/len projections have a home. The
-    /// reserved `DefId`s stand in for the (never-user-visible) `ptr`/`len`
-    /// fields.
     fn register_slice_layout(&mut self, ty: TypeId) {
         if self.program.struct_layouts.contains_key(&ty) {
             return;
@@ -2105,8 +1932,6 @@ impl<'ctx> MirLowering<'ctx> {
         );
     }
 
-    /// Registers the layout of a fat closure value: the static
-    /// `{ $fn: *void, $env: *void }` envelope, canonical for every fat type.
     fn register_fat_layout(&mut self, fat_ty: TypeId) {
         if self.program.struct_layouts.contains_key(&fat_ty) {
             return;
@@ -2138,8 +1963,6 @@ impl<'ctx> MirLowering<'ctx> {
         );
     }
 
-    /// Lowers `Foo.b(arg)` for an enum variant with a `Single` payload: the
-    /// value is a tagged aggregate with the payload as its single operand.
     fn lower_enum_single_construct(
         &mut self,
         fb: &mut FnBuilder,
@@ -2187,9 +2010,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Lowers `Enum.variant { ... }` (anonymous-struct payload): the anon
-    /// struct is built with the normal struct machinery, then wrapped as the
-    /// single operand of the enum aggregate.
     fn lower_enum_struct_construct(
         &mut self,
         fb: &mut FnBuilder,
@@ -2290,14 +2110,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Registers a struct layout under its own `ty`, looking up the struct's
-    /// declaration-order fields. `register_enum_layout` forwards the payload
-    /// struct type here.
-    fn register_struct_layout_type(&mut self, struct_def: DefId, ty: TypeId) {
-        self.register_struct_layout(ty, struct_def);
-    }
-
-    /// Generic-param -> concrete-arg bindings of an enum instantiation.
     fn bindings_from(&self, enum_def: DefId, generic_args: &[TypeId]) -> HashMap<DefId, TypeId> {
         self.typecheck
             .enum_generics
@@ -2310,9 +2122,6 @@ impl<'ctx> MirLowering<'ctx> {
             .collect()
     }
 
-    /// Lowers a payload extraction read `e.variant`: projects the union member
-    /// and, in Debug, first checks the tag against the variant's ordinal,
-    /// panicking on mismatch. Payloads are validated `Copy` by the typechecker.
     #[allow(clippy::too_many_arguments)]
     fn lower_enum_payload_read(
         &mut self,
@@ -2454,16 +2263,11 @@ impl<'ctx> MirLowering<'ctx> {
 
         let fn_ptr_ty = self.void_ptr_ty();
 
-        // Zero-capture: dispatch through a shared adapter that ignores the
-        // env and forwards straight into the plain body; env stays null.
         if captures.is_empty() {
             let adapter = self.fat_target_adapter(closure_fn, fat_ty);
             return self.fat_envelope_no_env(fb, block, fat_ty, adapter, source_expr);
         }
 
-        // Capturing: materialize each capture into the env struct's layout,
-        // malloc the env block, store the env into it, and hang the pair off
-        // the fat envelope.
         let env_ty = self.env_struct_type(closure_def);
         let Type::Struct {
             def_id: env_def, ..
@@ -2568,9 +2372,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Call `Allocator.alloc` for a heap block of `env_ty` and return the
-    /// raw `*void` pointer to it, as a moved operand. Panics on allocation
-    /// failure inside `Allocator.alloc`.
     fn heap_alloc_env(
         &mut self,
         fb: &mut FnBuilder,
@@ -2614,10 +2415,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Returns (synthesizing on first use) the env struct type of a closure:
-    /// `DefId`s derived deterministically from the closure's own, a
-    /// `StructTypeInfo` so field projections resolve, and a `StructLayout` so
-    /// codegen lays the captures out.
     fn env_struct_type(&mut self, closure_def: DefId) -> TypeId {
         if let Some(&ty) = self.closure_envs.get(&closure_def) {
             return ty;
@@ -2683,23 +2480,14 @@ impl<'ctx> MirLowering<'ctx> {
         env_ty
     }
 
-    /// The base `DefId` of a closure's synthetic env struct, derived
-    /// deterministically from the closure's own so real (small) defs never
-    /// collide with it.
     fn closure_env_def(&self, closure_def: DefId) -> DefId {
         DefId(CLOSURE_SYNTH_BASE + closure_def.0 * CLOSURE_SYNTH_STRIDE)
     }
 
-    /// The `DefId` of one field of a closure's synthetic env struct.
     fn closure_env_field_def(&self, closure_def: DefId, index: usize) -> DefId {
         DefId(CLOSURE_SYNTH_BASE + closure_def.0 * CLOSURE_SYNTH_STRIDE + index as u32 + 1)
     }
 
-    /// Returns (synthesizing on first use) the env-first adapter for a
-    /// plain-body function stored into a fat slot: it ignores its env and
-    /// forwards into the body with the plain arguments.
-    /// Builds a fat envelope with a null env around an already resolved
-    /// adapter function: `{ $fn: adapter, $env: null, $drop: noop }`.
     fn fat_envelope_no_env(
         &mut self,
         fb: &mut FnBuilder,
@@ -2754,8 +2542,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Adapter over a bodyless extern: forwards the env-first call to the
-    /// external symbol. The extern itself is never monomorphized.
     fn fat_extern_adapter(&mut self, extern_idx: usize, fat_ty: TypeId) -> MirFunctionId {
         let key = (extern_idx, fat_ty);
         if let Some(&id) = self.fat_extern_adapter_cache.get(&key) {
@@ -2839,10 +2625,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Returns (synthesizing on first use) the env-first adapter for a
-    /// runtime fn-pointer stored into a fat slot via a heap box: the box is a
-    /// fat envelope whose `$fn` field holds the pointer, env is `null`. The
-    /// adapter reads `(*env).$fn` and calls it indirectly.
     fn fat_pointer_adapter(&mut self, fn_ty: TypeId) -> MirFunctionId {
         if let Some(&id) = self.fat_pointer_adapter_cache.get(&fn_ty) {
             return id;
@@ -2982,9 +2764,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Registers layouts for slices reachable through struct fields.
-    /// Codegen otherwise misses slice fields and cannot emit their
-    /// `{ ptr, len }` representation.
     fn register_reachable_slice_layouts(&mut self) {
         let mut visited: HashSet<TypeId> = HashSet::new();
         let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
@@ -2999,9 +2778,6 @@ impl<'ctx> MirLowering<'ctx> {
             }
         }
 
-        // Array-typed locals (e.g. `[N][]const char`) never hit
-        // `register_slice_layout` directly, but their element slices need a
-        // layout all the same.
         let local_tys: Vec<TypeId> = self
             .program
             .functions
@@ -3106,9 +2882,6 @@ impl<'ctx> MirLowering<'ctx> {
                     )
                 {
                     let hir_fn = self.hir_fns_by_def[def_id].clone();
-                    // A bodyless extern has no MIR body to point at: reference
-                    // the external symbol instead of monomorphizing, which
-                    // would emit an empty local definition shadowing it.
                     if hir_fn.is_extern && hir_fn.body.is_none() {
                         let idx = self.register_extern_fn(*def_id, &hir_fn);
                         if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
@@ -3121,7 +2894,6 @@ impl<'ctx> MirLowering<'ctx> {
                         );
                     }
 
-                    // A static function in a fat slot gets an empty env.
                     if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. }) {
                         let mir_f = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
                         return self.build_fat_envelope(fb, block, expr_ty, *def_id, mir_f, expr);
@@ -3139,8 +2911,6 @@ impl<'ctx> MirLowering<'ctx> {
                 });
                 let ty = self.place_type(fb, &place);
 
-                // A basic fn value in a fat slot is boxed into a heap
-                // envelope with a null env.
                 if matches!(self.typecheck.interner.get(expr_ty), Type::FatFn { .. })
                     && !matches!(self.typecheck.interner.get(ty), Type::FatFn { .. })
                 {
@@ -3254,7 +3024,6 @@ impl<'ctx> MirLowering<'ctx> {
                 if let Some(cmp) = op_res.ordering_cmp {
                     let mut op_res = op_res;
 
-                    // Builtin instantiations have no `Ord` impl: compare directly.
                     if self
                         .typecheck
                         .interface_method_owners
@@ -3313,7 +3082,6 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let mut op_res = op_res;
 
-                // Builtin and non-struct receivers fall back to raw operators.
                 let dispatch = !self
                     .typecheck
                     .interface_method_owners
@@ -3336,7 +3104,6 @@ impl<'ctx> MirLowering<'ctx> {
                     result_ty,
                 );
 
-                // `!=` dispatches to `Eq.eq` and negates the result.
                 if matches!(op, BinaryOp::Ne) {
                     let temp = fb.new_temp(result_ty);
                     fb.push_stmt(
@@ -3370,14 +3137,11 @@ impl<'ctx> MirLowering<'ctx> {
                     _ => false,
                 };
 
-                // Pin literals to the pointer's inner type (`&123` in a
-                // `*i64` context makes an `i64` temp).
                 let inner_ty = match self.typecheck.interner.get(result_ty).clone() {
                     Type::Pointer { inner, .. } => inner,
                     _ => self.expr_type(fb, inner),
                 };
 
-                // Non-lvalue operands materialize into a temp first.
                 let (block, inner_place) = if self.expr_is_place(inner) {
                     self.lower_expr_to_place(fb, inner, block)
                 } else {
@@ -3416,7 +3180,6 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Unary { expr: inner, op } => {
                 if let Some(mut op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned()
                 {
-                    // Builtin and non-struct receivers use the raw operator.
                     let dispatch = !self
                         .typecheck
                         .interface_method_owners
@@ -3547,34 +3310,33 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let (none_variant, some_variant) = self.option_variants(option_def);
 
-                let mut build_option =
-                    |fb: &mut FnBuilder,
-                     block: BlockId,
-                     value: Operand,
-                     is_some: bool,
-                     source: Option<Source>| {
-                        let temp = fb.new_temp(option_ty);
-                        let (variant_def, operands) = if is_some {
-                            (some_variant, vec![value])
-                        } else {
-                            (none_variant, vec![])
-                        };
-                        fb.push_stmt(
-                            block,
-                            MirStatement::Assign {
-                                place: Place::from_local(temp),
-                                rvalue: Rvalue::Aggregate {
-                                    kind: AggregateKind::Enum {
-                                        enum_def: option_def,
-                                        variant_def,
-                                    },
-                                    operands,
-                                },
-                                source,
-                            },
-                        );
-                        (block, Operand::Move(Place::from_local(temp), None))
+                let build_option = |fb: &mut FnBuilder,
+                                    block: BlockId,
+                                    value: Operand,
+                                    is_some: bool,
+                                    source: Option<Source>| {
+                    let temp = fb.new_temp(option_ty);
+                    let (variant_def, operands) = if is_some {
+                        (some_variant, vec![value])
+                    } else {
+                        (none_variant, vec![])
                     };
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Aggregate {
+                                kind: AggregateKind::Enum {
+                                    enum_def: option_def,
+                                    variant_def,
+                                },
+                                operands,
+                            },
+                            source,
+                        },
+                    );
+                    (block, Operand::Move(Place::from_local(temp), None))
+                };
 
                 let (block, start_operand) = match start {
                     Some(s) => {
@@ -3602,9 +3364,6 @@ impl<'ctx> MirLowering<'ctx> {
                 };
 
                 if *inclusive {
-                    // Materialize the end into a usize local first: codegen
-                    // widens a const+const add to 32-bit, which would corrupt
-                    // the upper half of the 64-bit usize place.
                     let end_local = self.operand_to_local(fb, end_value, usize_ty, block);
                     let end_plus_one = fb.new_temp(usize_ty);
                     fb.push_stmt(
@@ -3650,14 +3409,12 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::FieldAccess { object, field, .. } => {
-                // Enum variant access (`Color.Red`) is a constant, not a place.
                 if let HirExprKind::VarRef(enum_def) = &object.kind
                     && matches!(
                         self.resolution.defs.get(enum_def).map(|info| &info.kind),
                         Some(DefKind::Enum)
                     )
                 {
-                    // Empty-only enums stay a bare tag constant.
                     let variant_def = self.field_resolution(expr.id);
                     let index = self
                         .typecheck
@@ -3708,8 +3465,6 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
-                // Payload extraction `e.variant`: a union read with a
-                // Debug-only tag check. Pointers deref inside the reader.
                 let obj_ty = self.expr_type(fb, object);
                 let enum_target = match self.typecheck.interner.get(obj_ty).clone() {
                     Type::Enum {
@@ -3740,7 +3495,6 @@ impl<'ctx> MirLowering<'ctx> {
                     );
                 }
 
-                // `arr.len` on a fixed array is a compile-time constant.
                 if let Type::Array { len: Some(len), .. } =
                     self.typecheck.interner.get(obj_ty).clone()
                     && self.rodeo.borrow().resolve(&field.0) == "len"
@@ -3951,8 +3705,6 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Call { callee, args, .. } => {
                 let call_id = expr.id;
 
-                // Enum single-value construction `Foo.b(123)` routes through
-                // `field_resolutions`.
                 if let HirExprKind::FieldAccess { object, .. } = &callee.kind
                     && let HirExprKind::VarRef(enum_def) = &object.kind
                     && matches!(
@@ -3980,8 +3732,6 @@ impl<'ctx> MirLowering<'ctx> {
                 let raw_args = resolution.generic_args.clone();
                 let generic_args = self.substitute_generic_args(fb, &raw_args);
 
-                // Calls on bounded generics resolve to the concrete impl
-                // once the receiver is monomorphized.
                 let (fn_def, generic_args) = if self
                     .typecheck
                     .interface_method_owners
@@ -4051,8 +3801,6 @@ impl<'ctx> MirLowering<'ctx> {
                 };
                 let has_self_param = param_count == args.len() + 1;
 
-                // Erased `Fn`/`FnOnce` params instantiate per concrete
-                // fat argument, in parameter order.
                 let declared_params: Vec<TypeId> = match self.typecheck.interner.get(method_ty) {
                     Type::Fn { params, .. } => params.clone(),
                     _ => Vec::new(),
@@ -4211,7 +3959,6 @@ impl<'ctx> MirLowering<'ctx> {
                 HirMacroKind::EnumTag => {
                     let (block, value_operand) = self.lower_expr_to_operand(fb, &args[0], block);
 
-                    // An empty-variant constant already is its tag.
                     if matches!(value_operand, Operand::Constant(_, _)) {
                         return (block, value_operand);
                     }
@@ -5080,8 +4827,6 @@ impl<'ctx> MirLowering<'ctx> {
         fb.set_terminator(inc_bb, Terminator::Goto(header));
     }
 
-    /// Whether `expr` can be lowered to a place by [`Self::lower_expr_to_place`].
-    /// Mirrors the dispatch in that method.
     fn expr_is_place(&self, expr: &HirExpr) -> bool {
         match &expr.kind {
             HirExprKind::VarRef(_) | HirExprKind::SelfValue(_) => true,
@@ -5095,8 +4840,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Lowers `expr` to a place, materializing non-lvalues (e.g.
-    /// `get_obj().field`) into a temporary local first.
     fn lower_expr_to_place_or_temp(
         &mut self,
         fb: &mut FnBuilder,
@@ -5139,9 +4882,6 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::FieldAccess { object, .. } => {
-                // Enum variant construction (`Foo.a`) is a value, not a
-                // place: materialize it into a temp (e.g. a method receiver
-                // on a constant).
                 if let HirExprKind::VarRef(enum_def) = &object.kind
                     && matches!(
                         self.resolution.defs.get(enum_def).map(|info| &info.kind),
@@ -5170,8 +4910,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let obj_ty = self.expr_type(fb, object);
                 let (block, obj_place) = self.lower_expr_to_place_or_temp(fb, object, block);
 
-                // Enum payload as an lvalue base (`e.c.inner`).
-                if let Type::Enum { def_id, .. } = self.typecheck.interner.get(obj_ty).clone() {
+                if let Type::Enum { .. } = self.typecheck.interner.get(obj_ty).clone() {
                     return (block, obj_place.enum_payload(field_def));
                 }
                 if let Type::Pointer { inner, .. } = self.typecheck.interner.get(obj_ty).clone()
@@ -5180,7 +4919,6 @@ impl<'ctx> MirLowering<'ctx> {
                     return (block, obj_place.deref().enum_payload(field_def));
                 }
 
-                // Pointer field access inserts an explicit deref.
                 let place = if matches!(self.typecheck.interner.get(obj_ty), Type::Pointer { .. }) {
                     obj_place.deref().field(field_def)
                 } else {
@@ -5191,7 +4929,6 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::SliceAccess { object, index } => {
-                // A native range slice materializes into a temp.
                 if let HirExprKind::Range {
                     start,
                     end,
@@ -5213,8 +4950,6 @@ impl<'ctx> MirLowering<'ctx> {
                     return (block, Place::from_local(temp));
                 }
 
-                // `Index`/`IndexPtr` access dispatches to the method.
-                // `IndexPtr` results keep dereferencing; `Index` is the value.
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let result_ty = self.expr_type(fb, expr);
                     let is_pointer = self
@@ -5315,17 +5050,7 @@ impl<'ctx> MirLowering<'ctx> {
                 expr: inner,
                 op: UnaryOp::Deref,
             } => {
-                // A deref through a struct's `Deref`/`DerefPtr` interface
-                // dispatches to the method; the result is materialized into a
-                // temp local. A `DerefPtr` result is a pointer into the
-                // struct, so the place keeps dereferencing it (writes through
-                // it reach the struct); a `Deref` result is the value itself.
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
-                    // A `DerefPtr`-resolved deref (`*ref = v` in an assign)
-                    // returns a pointer into the struct, so the place keeps
-                    // dereferencing it; a `Deref`-resolved one yields the value
-                    // itself. Decided from the method's own return type, since
-                    // the recorded expr type is already unwrapped to the pointee.
                     let result_ty = self.expr_type(fb, expr);
                     let is_pointer = self
                         .typecheck
@@ -5342,8 +5067,6 @@ impl<'ctx> MirLowering<'ctx> {
                             )
                         });
 
-                    // The deref pointer is a pointer to the unwrapped pointee,
-                    // rebuilt concretely so generics resolve to the right size.
                     let call_ty = if is_pointer {
                         self.typecheck.interner.intern(Type::Pointer {
                             inner: result_ty,
@@ -5373,7 +5096,7 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    fn lower_literal(&mut self, lit: &Literal, ty: TypeId) -> ConstValue {
+    fn lower_literal(&mut self, lit: &Literal, _ty: TypeId) -> ConstValue {
         match lit {
             Literal::Int(n) => ConstValue::Int(*n as i128),
             Literal::Float(f) => ConstValue::Float(*f),
@@ -5415,8 +5138,6 @@ impl<'ctx> MirLowering<'ctx> {
         ty
     }
 
-    /// Resolves the payload type of an enum variant projection, substituting
-    /// the enum's concrete generic arguments.
     fn enum_payload_ty(&mut self, ty: TypeId, variant_def: DefId) -> TypeId {
         let Type::Enum {
             def_id: enum_def,
@@ -5448,16 +5169,12 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Resolves the type of a struct field (potentially through generic
-    /// arguments) from the typechecker's recorded layout.
     fn struct_field_ty(&mut self, ty: TypeId, field_def: DefId) -> TypeId {
         let Type::Struct {
             def_id,
             generic_args,
         } = self.typecheck.interner.get(ty).clone()
         else {
-            // Fat closure values and their canonical fields resolve through the
-            // registered fat layout.
             match self.typecheck.interner.get(ty).clone() {
                 Type::FatFn { .. } => {
                     return self.program.struct_layouts[&ty]
@@ -5602,11 +5319,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Inserts a Debug-mode `index < len` guard before array/slice access.
-    /// Out-of-bounds access panics; raw pointers are unchecked.
-    ///
-    /// `index_local` must be a Copy local because the value is reused by
-    /// the subsequent element projection.
     fn lower_bounds_check(
         &mut self,
         fb: &mut FnBuilder,
@@ -5672,7 +5384,6 @@ impl<'ctx> MirLowering<'ctx> {
         let dest = fb.new_temp(void_ty);
         let panic_next = fb.new_block();
 
-        // Header first, message (builtin args only) inside the panic printf.
         let header_block = self.emit_panic_header_segment(fb, panic_block, source.as_ref());
 
         fb.set_terminator(
@@ -5700,11 +5411,6 @@ impl<'ctx> MirLowering<'ctx> {
         ok_block
     }
 
-    /// Lowers `arr[start..end]` on a fixed array or a slice into a fresh
-    /// slice value. Missing bounds default to `0` and the object's length;
-    /// an inclusive range adds `1` to the upper bound. Debug mode inserts
-    /// the `start <= end <= len` guard. Structs with a `Sliceable` impl are
-    /// dispatched through `operator_resolutions`, never here.
     #[allow(clippy::too_many_arguments)]
     fn lower_range_slice(
         &mut self,
@@ -5774,8 +5480,6 @@ impl<'ctx> MirLowering<'ctx> {
             }
         };
 
-        // The length of a many pointer is unknown, so no bounds guard can be
-        // built: bounds checks apply to sized objects (arrays and slices).
         let block = if matches!(
             self.typecheck.interner.get(obj_ty),
             Type::ManyPointer { .. }
@@ -5874,7 +5578,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Creates a fresh local holding a constant.
     fn const_to_local(
         &mut self,
         fb: &mut FnBuilder,
@@ -5895,7 +5598,6 @@ impl<'ctx> MirLowering<'ctx> {
         temp
     }
 
-    /// Writes `local + 1` into a fresh local.
     fn add_one_to_local(
         &mut self,
         fb: &mut FnBuilder,
@@ -5920,8 +5622,6 @@ impl<'ctx> MirLowering<'ctx> {
         plus_one
     }
 
-    /// Inserts the `start <= end <= len` guard before a range slice in Debug
-    /// mode. A violation diverges into a `@panic` that formats the bounds.
     #[allow(clippy::too_many_arguments)]
     fn lower_range_slice_bounds_check(
         &mut self,
@@ -6041,9 +5741,6 @@ impl<'ctx> MirLowering<'ctx> {
         ok_block
     }
 
-    /// Lowers a builtin binary operation that has no interface dispatch:
-    /// literals on numeric types, and generic receivers whose concrete
-    /// instantiation has no struct implementation.
     fn lower_raw_binary(
         &mut self,
         fb: &mut FnBuilder,
@@ -6060,10 +5757,6 @@ impl<'ctx> MirLowering<'ctx> {
         let rhs_ty = self.expr_type(fb, rhs);
         let is_float_div = self.is_float_ty(rhs_ty);
 
-        // `/` and `%` panic on a zero divisor in Debug builds; the
-        // divisor is materialized into a local so the guard can read it
-        // without moving the value the division itself uses. Floats are
-        // excluded: IEEE-754 division by zero yields inf/nan.
         let (block, rhs_op) = if matches!(op, BinaryOp::Div | BinaryOp::Mod) && !is_float_div {
             let rhs_local = self.operand_to_local(fb, rhs_op, rhs_ty, block);
             let block =
@@ -6097,16 +5790,12 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Inserts a Debug-mode `divisor != 0` guard before `/` and `%` on
-    /// builtin numerics; a zero divisor diverges into a `@panic` call.
-    ///
-    /// `rhs_local` must hold the divisor and be readable by Copy.
     fn lower_div_zero_check(
         &mut self,
         fb: &mut FnBuilder,
         block: BlockId,
         rhs_local: LocalId,
-        rhs_ty: TypeId,
+        _rhs_ty: TypeId,
         source: Option<Source>,
     ) -> BlockId {
         if self.mode != CompilationMode::Debug {
@@ -6150,7 +5839,6 @@ impl<'ctx> MirLowering<'ctx> {
         let dest = fb.new_temp(void_ty);
         let panic_next = fb.new_block();
 
-        // Header first, message inside the panic printf.
         let header_block = self.emit_panic_header_segment(fb, panic_block, source.as_ref());
 
         fb.set_terminator(
@@ -6212,7 +5900,6 @@ impl<'ctx> MirLowering<'ctx> {
 
         match format_chunks.as_deref() {
             None => {
-                // No format spec (e.g. `@dbg`): all args pass through.
                 for arg in value_exprs {
                     let ty = self.expr_type(fb, arg);
                     let (b, op) = self.lower_expr_to_operand(fb, arg, block);
@@ -6225,9 +5912,6 @@ impl<'ctx> MirLowering<'ctx> {
                 let is_panic = matches!(kind, HirMacroKind::Panic);
 
                 if is_panic {
-                    // The header prints first; message parts follow as print
-                    // segments with struct content written at its position,
-                    // then the panic terminator dumps the call stack.
                     block = self.emit_panic_header_segment(fb, block, Some(&source));
                 }
 
@@ -6235,10 +5919,6 @@ impl<'ctx> MirLowering<'ctx> {
                 let mut seg_operands: Vec<Operand> = Vec::new();
                 let mut seg_types: Vec<TypeId> = Vec::new();
 
-                // Struct args with a `{}` / `{:?}` spec write their
-                // representation through their `display`/`debug` method
-                // directly to stdout; the panicking format keeps only the
-                // non-struct parts.
                 for chunk in chunks {
                     match chunk {
                         FormatChunk::Literal(text) => {
@@ -6311,9 +5991,6 @@ impl<'ctx> MirLowering<'ctx> {
                 }
 
                 if is_panic {
-                    // Flush the remaining message parts, then let the panic
-                    // terminator carry only the trailing newline and the call
-                    // stack dump.
                     if !seg_chunks.is_empty() {
                         block = self.emit_print_segment(
                             fb,
@@ -6330,8 +6007,6 @@ impl<'ctx> MirLowering<'ctx> {
                     arg_types.clear();
                 }
 
-                // Extra args (checked but not formatted) are lowered for side
-                // effects.
                 for arg in value_exprs.iter().skip(value_idx) {
                     let (b, _) = self.lower_expr_to_operand(fb, arg, block);
                     block = b;
@@ -6375,10 +6050,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Lowers `@print`/`@println` by splitting the format into segments:
-    /// struct args become `display`/`debug` calls writing to the stdout
-    /// writer, literal and builtin parts stay in plain print macros between
-    /// them so the output order matches the format string.
     #[allow(clippy::too_many_arguments)]
     fn lower_print_macro(
         &mut self,
@@ -6451,7 +6122,6 @@ impl<'ctx> MirLowering<'ctx> {
             }
         }
 
-        // Extra args (checked but not formatted) are lowered for side effects.
         for arg in value_exprs.iter().skip(value_idx) {
             let (b, _) = self.lower_expr_to_operand(fb, arg, block);
             block = b;
@@ -6486,8 +6156,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Emits one plain print segment (literal text plus builtin args) with no
-    /// struct formatting, returning the continuation block.
     fn emit_print_segment(
         &mut self,
         fb: &mut FnBuilder,
@@ -6517,9 +6185,6 @@ impl<'ctx> MirLowering<'ctx> {
         next
     }
 
-    /// Builds the panic header line printed before the message. Mirrors the
-    /// codegen format: function name plus (in Release) the definition
-    /// location of the panicking function.
     fn panic_header(&self, fb: &FnBuilder) -> String {
         let fn_name = self
             .fn_stack
@@ -6551,8 +6216,6 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
-    /// Emits the panic header as a print segment; message parts follow as
-    /// separate segments so struct content lands at its position.
     fn emit_panic_header_segment(
         &mut self,
         fb: &mut FnBuilder,
@@ -6570,23 +6233,18 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Lowers `@format`: builds a heap `String` by writing literal and builtin
-    /// segments (each rendered with a `Format` macro into a stack slice, then
-    /// appended via `StrWriter::write_str`) and struct args (rendered through
-    /// their `display`/`debug` method straight into the same `String`).
     #[allow(clippy::too_many_arguments)]
     fn lower_format_macro(
         &mut self,
         fb: &mut FnBuilder,
         format_chunks: Option<Vec<FormatChunk>>,
         value_exprs: &[Rc<HirExpr>],
-        hir_id: HirId,
+        _hir_id: HirId,
         block: BlockId,
         source: Source,
     ) -> (BlockId, Operand) {
         let mut block = block;
 
-        // The accumulated output lives in a freshly allocated `String`.
         let (block_w, writer_place, writer_ty) = self.string_writer_place(fb, block);
         block = block_w;
 
@@ -6649,7 +6307,6 @@ impl<'ctx> MirLowering<'ctx> {
             }
         }
 
-        // Extra args (checked but not formatted) are lowered for side effects.
         for arg in value_exprs.iter().skip(value_idx) {
             let (b, _) = self.lower_expr_to_operand(fb, arg, block);
             block = b;
@@ -6671,8 +6328,6 @@ impl<'ctx> MirLowering<'ctx> {
         (block, self.place_to_operand(writer_place, writer_ty, None))
     }
 
-    /// Renders literal/builtin segments with a `Format` macro into a stack
-    /// slice, then appends it to the writer `String` via `write_str`.
     #[allow(clippy::too_many_arguments)]
     fn emit_string_segment(
         &mut self,
@@ -6741,8 +6396,6 @@ impl<'ctx> MirLowering<'ctx> {
         next
     }
 
-    /// Creates a fresh empty `String` (`{ nullptr, 0, 0 }`) as the writer and
-    /// returns its temp local together with its `TypeId`.
     fn string_writer_place(
         &mut self,
         fb: &mut FnBuilder,
@@ -6772,7 +6425,6 @@ impl<'ctx> MirLowering<'ctx> {
         (block, Place::from_local(temp), ty)
     }
 
-    /// Builds `&place` as a monomorphic pointer operand.
     fn addr_of_operand(
         &mut self,
         fb: &mut FnBuilder,
@@ -6803,8 +6455,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Lowers builtin `debug`/`display` calls into `Format` + `write_str`,
-    /// so output lands in the provided writer rather than on stdout.
     #[allow(clippy::too_many_arguments)]
     fn try_lower_builtin_display(
         &mut self,
@@ -7074,7 +6724,6 @@ impl<'ctx> MirLowering<'ctx> {
         Some((block, Operand::Move(Place::from_local(dest), source)))
     }
 
-    /// Resolves the `std.string` `String` struct (the heap string writer).
     fn resolve_string_struct(&mut self) -> Option<(TypeId, DefId)> {
         if self.format_string.is_some() {
             return self.format_string;
@@ -7098,8 +6747,6 @@ impl<'ctx> MirLowering<'ctx> {
         self.format_string
     }
 
-    /// Resolves the implementing `DefId` of an interface method for the
-    /// struct type `ty` by its interface and method names.
     fn resolve_interface_method_by_def(
         &mut self,
         ty: TypeId,
@@ -7127,9 +6774,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Lowers a struct `{}`/`{:?}` format argument into a call to the
-    /// struct's `display`/`debug` interface method, passing a pointer to the
-    /// given writer so the method writes its representation into it.
     #[allow(clippy::too_many_arguments)]
     fn lower_struct_display_call(
         &mut self,
@@ -7141,8 +6785,6 @@ impl<'ctx> MirLowering<'ctx> {
         writer_ty: TypeId,
         writer_place: Place,
     ) -> BlockId {
-        // `display[T: StrWriter](*const self, out: *T)` takes the writer by
-        // pointer; build `&writer` as the second argument.
         let writer_ptr_ty = self.typecheck.interner.intern(Type::ManyPointer {
             inner: writer_ty,
             is_const: false,
@@ -7174,8 +6816,6 @@ impl<'ctx> MirLowering<'ctx> {
             return block;
         };
 
-        // The checker records which implementation it picked for this
-        // argument; fall back to resolving here for unrecorded cases.
         let method_def = self
             .typecheck
             .format_arg_resolutions
@@ -7199,8 +6839,6 @@ impl<'ctx> MirLowering<'ctx> {
             block,
         );
 
-        // The writer is the `display`/`debug` method's generic parameter:
-        // bind it explicitly so `W` is substituted at codegen.
         let method_has_generics = !self.hir_fns_by_def[&method_def].generics.is_empty();
         let mut mono_args = self.substitute_generic_args(fb, &generic_args);
         if method_has_generics {
@@ -7234,7 +6872,6 @@ impl<'ctx> MirLowering<'ctx> {
         next
     }
 
-    /// Resolves the `core.out` `OutStream` struct (the stdout writer type).
     fn resolve_outstream(&mut self) -> Option<(TypeId, DefId)> {
         if self.outstream.is_some() {
             return self.outstream;
@@ -7252,16 +6889,12 @@ impl<'ctx> MirLowering<'ctx> {
             generic_args: Vec::new(),
         });
 
-        // Core structs are skipped by eager layout registration; the writer
-        // aggregate is synthesized here, so register its layout on demand.
         self.register_struct_layout(ty, struct_def);
 
         self.outstream = Some((ty, struct_def));
         self.outstream
     }
 
-    /// Builds the stdout writer value (a zero-sized `OutStream` struct),
-    /// returning its temp local so callers can take its address.
     fn outstream_writer_operand(
         &mut self,
         fb: &mut FnBuilder,
@@ -7287,10 +6920,6 @@ impl<'ctx> MirLowering<'ctx> {
         (block, Place::from_local(temp), ty)
     }
 
-    /// Resolves the `DefId` of the method with `method_name` that implements
-    /// `iface_name` for `struct_def`, mirroring the typechecker's
-    /// interface-call resolution. A concrete specialization for the given
-    /// `generic_args` wins over the generic implementation.
     fn resolve_interface_method(
         &self,
         struct_def: DefId,
@@ -7338,10 +6967,6 @@ impl<'ctx> MirLowering<'ctx> {
         })
     }
 
-    /// Resolves the interface method a bounded generic operator records to
-    /// the concrete implementation, given the receiver type in this
-    /// monomorphized copy. Returns `false` when the receiver is not a struct
-    /// so the caller falls back to the raw operator.
     fn resolve_generic_interface_impl(
         &mut self,
         op_res: &mut OperatorResolution,
@@ -7385,14 +7010,6 @@ impl<'ctx> MirLowering<'ctx> {
             }
             None => false,
         }
-    }
-
-    /// Only the monomorphized operator method knows the concrete pointee/element type.
-    fn operator_call_ret_type(&mut self, fb: &FnBuilder, op_res: &OperatorResolution) -> TypeId {
-        let mono_args = self.substitute_generic_args(fb, &op_res.generic_args);
-        let owner = self.typecheck.method_owner.get(&op_res.method_def).copied();
-        let mir_fn_id = self.monomorphize_fn(op_res.method_def, mono_args, owner, &[]);
-        self.program.functions[&mir_fn_id].ret_ty
     }
 
     fn lower_diverging_macro(
@@ -7481,8 +7098,6 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
         result_ty: TypeId,
     ) -> (BlockId, Operand) {
-        // The method's non-self parameters drive whether each operator RHS is
-        // passed by value or by address (`Eq.eq` takes `other: *const Self`).
         let arg_params: Vec<TypeId> = self
             .typecheck
             .def_types
@@ -7535,7 +7150,6 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> (BlockId, Vec<Operand>) {
         let mut out = Vec::with_capacity(extra_args.len());
-        let mut block = block;
 
         for (operand, arg_ty) in extra_args {
             let expected = arg_params.get(out.len()).copied();
@@ -7609,9 +7223,6 @@ impl<'ctx> MirLowering<'ctx> {
                     .get(&stmt.id)
                     .copied()
                     .unwrap_or_else(|| panic!("let statement missing recorded type"));
-                // A `Fn`/`FnOnce`-bound recorded on the statement itself is
-                // not a storage type: the variable holds the concrete closure
-                // type resolved into its def during finalization.
                 let ty = if matches!(
                     self.typecheck.interner.get(ty),
                     Type::FatFn { erased: true, .. }
@@ -7621,13 +7232,8 @@ impl<'ctx> MirLowering<'ctx> {
                     ty
                 };
 
-                // Locals of a monomorphized copy store concrete types, like
-                // parameters do: a raw `GenericParam` would reach codegen.
                 let ty = self.substitute_fn_type(fb, ty);
 
-                // `let _ = expr` evaluates `expr` for side effects without
-                // creating storage; user-variable operands are still consumed
-                // via `Discard`.
                 if self.rodeo.borrow().resolve(name) == "_" {
                     return match value {
                         Some(v) => {
@@ -7696,13 +7302,6 @@ impl<'ctx> MirLowering<'ctx> {
                 let (block, place) = self.lower_expr_to_place(fb, object, block);
                 let place_ty = self.place_type(fb, &place);
 
-                // A deref target (`*ref += v`) is not a compound-assign on a
-                // struct interface: `operator_resolutions[object.id]` holds the
-                // `DerefPtr` resolution that produced the place, so routing it
-                // through the interface path would call `deref_ptr` with the
-                // RHS as a bogus argument. Fall through to the builtin flow,
-                // which reads the pointee, applies the binary op and writes it
-                // back through the same deref place.
                 let is_deref_target = matches!(place.projection.last(), Some(PlaceElem::Deref));
 
                 if !is_deref_target
@@ -7840,10 +7439,6 @@ impl<'ctx> MirLowering<'ctx> {
                     Some(v) => {
                         let (b, op) = self.lower_expr_to_operand(fb, v, block);
                         let block = b;
-                        // A `return` inside a block scope reads its value after
-                        // the scope teardown emits `StorageDead` for the scope's
-                        // locals. Re-home a place owned by the innermost scope
-                        // into a fresh temp so the teardown can't poison it.
                         let op = match &op {
                             Operand::Copy(place, _) | Operand::Move(place, _) => {
                                 if fb
@@ -7901,9 +7496,6 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirStmtKind::Expr(expr) => {
-                // A statement-position expression whose value is discarded
-                // (`foo();`): warn unless the value is void/never (`@println`,
-                // `@panic`, ...).
                 if !matches!(
                     self.typecheck
                         .expr_types
@@ -7937,8 +7529,6 @@ impl<'ctx> MirLowering<'ctx> {
                 block
             }
 
-            // Nested function declarations produce no runtime code at their
-            // site; the function is lowered on demand when it is called.
             HirStmtKind::FnDecl(_) => block,
 
             HirStmtKind::Error => panic!("Error Statement kind passed in MIR lowering stage"),
@@ -7960,10 +7550,6 @@ impl<'ctx> MirLowering<'ctx> {
             .interner
             .intern(Type::Builtin(zeen_ast::types::BuiltinType::usize));
 
-        // The counter must share the loop variable's type (which always
-        // matches the count's type): a `usize`-typed counter compared against
-        // an `i32` bound (or copied into an `i32` loop var) would emit
-        // mismatched IR and corrupt the stack slot via an oversized store.
         let loop_var_ty = self
             .typecheck
             .def_types
@@ -8038,8 +7624,6 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        // `continue` must run the increment before re-checking the condition,
-        // so it targets the dedicated increment block instead of the header.
         fb.loop_stack.push(LoopTargets {
             break_target: exit_bb,
             continue_target: continue_bb,
@@ -8250,7 +7834,7 @@ impl<'ctx> MirLowering<'ctx> {
         stmt_id: HirId,
     ) -> BlockId {
         let Type::Struct {
-            def_id: struct_def,
+            def_id: _struct_def,
             generic_args,
         } = self.typecheck.interner.get(iter_ty).clone()
         else {
@@ -8271,8 +7855,6 @@ impl<'ctx> MirLowering<'ctx> {
             .copied()
             .expect("for-loop over an Iterator must record its next method");
 
-        // The iterator is evaluated once into a mutable slot the loop advances
-        // through `next(*self)`; the user's expression is never touched again.
         let iter_local = fb.new_local(
             iter_ty,
             LocalKind::Temporary,
@@ -8307,8 +7889,6 @@ impl<'ctx> MirLowering<'ctx> {
         let header = fb.new_block();
         fb.set_terminator(block, Terminator::Goto(header));
 
-        // `next(&iter_local)` advances the iterator and yields a fresh
-        // `Option[T]` every iteration.
         let (call_block, self_operand) = self.lower_place_receiver_operand(
             fb,
             Place::from_local(iter_local),
@@ -8396,7 +7976,6 @@ impl<'ctx> MirLowering<'ctx> {
 }
 
 impl<'ctx> MirLowering<'ctx> {
-    /// Generic parameters of a method owner, whether struct or enum.
     fn owner_generics(&self, owner: DefId) -> Vec<DefId> {
         if matches!(
             self.resolution.defs.get(&owner).map(|i| &i.kind),
@@ -8471,9 +8050,6 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
-    /// Computes the readable MIR name of a function. Methods are
-    /// `Struct.method`, nested functions are `<parent>-><name>`, everything
-    /// else is the plain name (with generic args where present).
     fn compute_fn_readable_name(
         &self,
         hir_fn: &HirFn,
@@ -8531,8 +8107,6 @@ impl<'ctx> MirLowering<'ctx> {
         base
     }
 
-    /// Replaces a void-typed place operand with a plain `void` constant so
-    /// codegen never tries to load an un-allocated void temporary.
     fn normalize_return_operand(&mut self, fb: &FnBuilder, operand: Operand) -> Operand {
         match &operand {
             Operand::Copy(place, _) | Operand::Move(place, _) => {
@@ -8561,9 +8135,6 @@ impl<'ctx> MirLowering<'ctx> {
         let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
         let bindings: HashMap<DefId, TypeId> = if !generic_defs.is_empty() {
             if let Some(owner) = owner_struct {
-                // Generic methods are called with their owner's generics
-                // first, then the method's own (`[T, W]` for
-                // `Option[T].debug[W]`); split and bind both.
                 let owner_generics = self.owner_generics(owner);
                 let owner_count = owner_generics.len();
                 let struct_args: Vec<TypeId> =
@@ -8577,9 +8148,6 @@ impl<'ctx> MirLowering<'ctx> {
                     .zip(struct_args.iter().copied())
                     .collect();
 
-                // An implement block's methods may be written with the block's
-                // own generic parameters (`implement[T] Deref : Holder[T]`):
-                // substitute them through the owner's generic slots.
                 for entries in self.typecheck.impl_registry.values() {
                     for entry in entries {
                         if !entry.methods.contains(&def_id) {
@@ -8619,9 +8187,6 @@ impl<'ctx> MirLowering<'ctx> {
                 .zip(generic_args.iter().copied())
                 .collect();
 
-            // An implement block's methods may be written with the block's
-            // own generic parameters (`implement[T] Deref : Holder[T]`):
-            // substitute them through the owner's generic slots.
             for entries in self.typecheck.impl_registry.values() {
                 for entry in entries {
                     if !entry.methods.contains(&def_id) {
@@ -8658,9 +8223,6 @@ impl<'ctx> MirLowering<'ctx> {
         let ret_ty =
             zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ret_ty, &bindings);
 
-        // A `Fn`/`FnOnce` return annotation is a bound, not a storage type:
-        // the function actually returns the concrete closure type derived
-        // from its body during the typecheck finalization.
         let ret_ty = if matches!(
             self.typecheck.interner.get(ret_ty),
             Type::FatFn { erased: true, .. }
@@ -8679,10 +8241,6 @@ impl<'ctx> MirLowering<'ctx> {
         fb.new_block();
         let mut fat_bound_count = 0usize;
 
-        // Closure functions receive their captured environment as a leading
-        // `*const` pointer parameter. Captured variables are read through it
-        // (`env->$env0`, `env->$env1`, ...), so captured binds keep their
-        // enclosing-frame `DefId`s and resolve to projections of this pointer.
         let captures = self
             .resolution
             .closure_captures
@@ -8724,9 +8282,6 @@ impl<'ctx> MirLowering<'ctx> {
             let concrete_ty =
                 zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ty, &bindings);
 
-            // A `Fn`/`FnOnce`-annotated parameter is erased in the signature;
-            // this monomorphized copy stores the concrete closure type of the
-            // actual call-site argument.
             let param_is_fat_bound = matches!(
                 self.typecheck.interner.get(concrete_ty),
                 Type::FatFn { erased: true, .. }
@@ -8775,10 +8330,6 @@ impl<'ctx> MirLowering<'ctx> {
                         Some(t) => {
                             let (block, operand) = self.lower_expr_to_operand(&mut fb, t, cur);
 
-                            // A diverging trailing expression (`@todo()`, `@panic`)
-                            // closes `cur` with a `target: None` terminator and the
-                            // returned block is dead. Fusing a `Return` into it would
-                            // produce a type-incorrect `ret void` for non-void returns.
                             let cur_diverges = matches!(
                                 fb.func.block(cur).terminator,
                                 Terminator::MacroCall { target: None, .. }
@@ -8846,17 +8397,12 @@ impl<'ctx> MirLowering<'ctx> {
     ) -> (BlockId, Operand) {
         let callee_ty = self.expr_type(fb, callee);
 
-        // Fat closure/coerced function: dispatch through the `{ $fn, $env }`
-        // envelope with the uniform env-first ABI.
         if matches!(self.typecheck.interner.get(callee_ty), Type::FatFn { .. }) {
             return self.lower_fat_call(fb, callee, args, block, ret_ty);
         }
 
         let (mut block, callee_operand) = self.lower_expr_to_operand(fb, callee, block);
 
-        // A bare fn-ptr constant (e.g. an immediate zero-capture closure
-        // literal) is materialized into a local so codegen can type the
-        // indirect call from the place.
         let callee_operand = match &callee_operand {
             Operand::Constant(ConstValue::Fn(_), _)
             | Operand::Constant(ConstValue::ExternFn(_), _) => {
@@ -8891,17 +8437,6 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    /// Calls a fat closure value through the `{ $fn, $env }` envelope: both
-    /// fields are copied out and the call goes through the fn pointer with
-    /// the uniform env-first ABI (`fn(*const void, params...) ret`), so the
-    /// value's provenance does not matter.
-    ///
-    /// A `!once` value is read but never consumed: both fields are copied and
-    /// the value stays live at its place, so the same `Fn` value can be
-    /// called any number of times and its env is freed exactly once by its
-    /// scope-end drop. An `FnOnce` value is consumed by the call - the whole
-    /// value moves into a slot so dataflow rejects a second call - and `$env`
-    /// is handed to the fat drop right after the call returns.
     fn lower_fat_call(
         &mut self,
         fb: &mut FnBuilder,
@@ -8925,10 +8460,6 @@ impl<'ctx> MirLowering<'ctx> {
 
         let mut block = block;
 
-        // Consuming call: move the whole value into a dedicated slot so
-        // dataflow rejects a second call; the slot is handed to the post-call
-        // drop and freed there. Otherwise read the fields straight off the
-        // value's place (a plain literal gets materialized into a temp first).
         let closure_place: Place = if once {
             let (b, closure_operand) = self.lower_expr_to_operand(fb, callee, block);
             block = b;
@@ -8989,10 +8520,6 @@ impl<'ctx> MirLowering<'ctx> {
             callee,
         );
 
-        // A consuming call ends the value's life here: its body consumed the
-        // captures on its single run, so free the env block right after the
-        // call returns without tearing the captures down again. Diverging
-        // calls never return.
         if !once || diverging {
             return (block, result);
         }

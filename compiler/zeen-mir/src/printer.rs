@@ -2,14 +2,13 @@
 // WARNING: Used only for MIR debug purposes, doesn't affect on compilation pipeline and context.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
 use lasso::Rodeo;
 use zeen_resolve::{DefId, ResolutionResult};
 use zeen_typecheck::result::TypeCheckResult;
-use zeen_types::{ARRAY_LEN_FIELD, SLICE_LEN_FIELD, SLICE_PTR_FIELD, Type, TypeId, TypeInterner};
+use zeen_types::{ARRAY_LEN_FIELD, SLICE_LEN_FIELD, SLICE_PTR_FIELD, Type, TypeId};
 
 use crate::{
     AggregateKind, BasicBlock, BlockId, CallTarget, ConstValue, LocalDecl, LocalId, LocalKind,

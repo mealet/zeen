@@ -485,7 +485,7 @@ fn compile(args: cli::Args) {
         CompilationOutput::Object => {
             let output_path = with_default_extension(
                 &output,
-                zeen_linker::linker::ObjectLinker::object_extension_for(&target_triple),
+                zeen_linker::ObjectLinker::object_extension_for(&target_triple),
             );
 
             if let Err(err) = codegen.emit_object(&output_path) {
@@ -502,8 +502,8 @@ fn compile(args: cli::Args) {
         }
 
         CompilationOutput::Binary => {
-            let mut linker = zeen_linker::linker::ObjectLinker::detect(&target_triple)
-                .unwrap_or_else(|err| {
+            let mut linker =
+                zeen_linker::ObjectLinker::detect(&target_triple).unwrap_or_else(|err| {
                     cli::println_error(err);
                     exit(1);
                 });

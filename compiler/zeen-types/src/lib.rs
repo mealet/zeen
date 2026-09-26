@@ -9,15 +9,11 @@ use zeen_resolve::DefId;
 pub const DEFAULT_INT_LITERAL: BuiltinType = BuiltinType::i32;
 pub const DEFAULT_FLOAT_LITERAL: BuiltinType = BuiltinType::f64;
 
-/// Synthetic `DefId`s for the builtin slice's `{ ptr, len }` view and for a
-/// fixed array's compile-time `.len`.
 pub const SLICE_STRUCT_DEF: DefId = DefId(u32::MAX - 3);
 pub const SLICE_PTR_FIELD: DefId = DefId(u32::MAX - 2);
 pub const SLICE_LEN_FIELD: DefId = DefId(u32::MAX - 1);
 pub const ARRAY_LEN_FIELD: DefId = DefId(u32::MAX - 4);
 
-/// Synthetic `DefId`s for the canonical fat closure-value struct
-/// `{ fn, env, drop }` (type `Type::FatFn`), shared by every fat value.
 pub const CLOSURE_FAT_DEF: DefId = DefId(u32::MAX - 5);
 pub const CLOSURE_FAT_FN_FIELD: DefId = DefId(u32::MAX - 6);
 pub const CLOSURE_FAT_ENV_FIELD: DefId = DefId(u32::MAX - 7);
@@ -72,7 +68,6 @@ pub enum Type {
         ret: TypeId,
     },
 
-    /// Fat closure value. Both `Fn` and `FnOnce` are move-only.
     FatFn {
         params: Vec<TypeId>,
         ret: TypeId,
@@ -345,7 +340,6 @@ pub struct StructFieldInfo {
 #[derive(Debug, Clone)]
 pub struct EnumTypeInfo {
     pub def_id: DefId,
-    /// Variants in declaration order; the ordinal is the runtime tag value.
     pub variants: Vec<EnumVariantInfo>,
     pub capabalities: Capabilities,
 }
@@ -354,24 +348,17 @@ pub struct EnumTypeInfo {
 pub struct EnumVariantInfo {
     pub def_id: DefId,
     pub name: Spur,
-    /// The variant payload; `None` for empty variants.
     pub payload: Option<VariantPayload>,
 }
 
 #[derive(Debug, Clone)]
 pub enum VariantPayload {
-    /// `b: i32` - a single typed value.
     Single(TypeId),
-    /// `c: { fields }` - an anonymous struct, stored as a synthetic
-    /// `Type::Struct` that reuses the regular struct machinery.
     Struct(TypeId),
 }
 
-/// Representation of a method's `self` receiver:
 /// - `self` / `const self` - owned value
 /// - `*self` / `*const self` - pointer receiver
-///
-/// Pointer receivers themselves cannot be reassigned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelfMode {
     Value,
@@ -391,7 +378,6 @@ impl SelfMode {
     }
 }
 
-/// Extracts `SelfMode` representation from TypeKind
 pub fn self_mode_of(ty: &HirTypeKind) -> Option<SelfMode> {
     match ty {
         HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_) => Some(SelfMode::Value),
@@ -416,7 +402,6 @@ pub fn self_mode_of(ty: &HirTypeKind) -> Option<SelfMode> {
     }
 }
 
-/// Representation how the caller is accessing a struct instance when invoking interface method on it
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(unused)]
 pub enum ReceiverAccess {

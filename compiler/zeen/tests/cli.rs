@@ -88,7 +88,7 @@ fn unsupported_target_is_rejected_even_with_targets_list() {
 #[test]
 fn explicit_host_target_compiles_and_runs() {
     let triple = host_triple();
-    if zeen_linker::linker::ObjectLinker::detect(&triple).is_err() {
+    if zeen_linker::ObjectLinker::detect(&triple).is_err() {
         eprintln!("skipping: no host toolchain found for `{triple}`");
         return;
     }
