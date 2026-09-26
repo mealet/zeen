@@ -862,6 +862,197 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
+    fn size_of(&self, ty: TypeId) -> BasicValueEnum<'ctx> {
+        let size = self.map_basic_type(ty).size_of().expect("sized type");
+        self.bitcast_to_usize(size)
+    }
+
+    fn align_of(&self, ty: TypeId) -> BasicValueEnum<'ctx> {
+        let align = self.target_data.get_abi_alignment(&self.map_type(ty));
+        self.context
+            .ptr_sized_int_type(&self.target_data, None)
+            .const_int(align as u64, false)
+            .into()
+    }
+
+    fn bitcast_to_usize(&self, value: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let usize_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+        let src_w = value.get_type().get_bit_width();
+        let dst_w = usize_ty.get_bit_width();
+        if src_w == dst_w {
+            value.into()
+        } else if src_w < dst_w {
+            self.builder
+                .build_int_z_extend(value, usize_ty, "")
+                .unwrap()
+                .into()
+        } else {
+            self.builder
+                .build_int_truncate(value, usize_ty, "")
+                .unwrap()
+                .into()
+        }
+    }
+
+    fn cast_op(
+        &mut self,
+        operand: &Operand,
+        target: TypeId,
+        func: &MirFunction,
+    ) -> BasicValueEnum<'ctx> {
+        match operand {
+            Operand::Constant(c, _) => {
+                let src_ty = match c {
+                    ConstValue::Int(_) => Type::Builtin(BuiltinType::i32),
+                    ConstValue::Float(_) => Type::Builtin(BuiltinType::f64),
+                    ConstValue::Bool(_) => Type::Builtin(BuiltinType::bool),
+                    ConstValue::Char(_) => Type::Builtin(BuiltinType::char),
+                    ConstValue::NullPtr => Type::Pointer {
+                        inner: TypeId(0),
+                        is_const: false,
+                    },
+                    _ => unimplemented!("cast of an unsupported constant"),
+                };
+                let value = self.const_value(c, None, func);
+                self.cast_value(value, &src_ty, target)
+            }
+            _ => {
+                let src_ty = self
+                    .operand_type(operand, func)
+                    .expect("typed cast operand");
+                let value = self.operand_value(operand, Some(src_ty), func);
+                let src = self.typecheck.interner.get(src_ty).clone();
+                self.cast_value(value, &src, target)
+            }
+        }
+    }
+
+    fn cast_value(
+        &self,
+        value: BasicValueEnum<'ctx>,
+        src: &Type,
+        dst: TypeId,
+    ) -> BasicValueEnum<'ctx> {
+        use Type::*;
+
+        let src_ty = src.clone();
+        let dst_ty = self.typecheck.interner.get(dst).clone();
+
+        match (src_ty, dst_ty.clone()) {
+            (Builtin(a), Builtin(b)) if builtin_is_integer(a) && builtin_is_integer(b) => {
+                let int = value.into_int_value();
+                let dst_int = self.map_basic_type(dst).into_int_type();
+                let src_w = int.get_type().get_bit_width();
+                let dst_w = dst_int.get_bit_width();
+                if src_w == dst_w {
+                    self.builder.build_bit_cast(int, dst_int, "").unwrap()
+                } else if src_w < dst_w {
+                    if self.is_signed_type(src) {
+                        self.builder
+                            .build_int_s_extend(int, dst_int, "")
+                            .unwrap()
+                            .into()
+                    } else {
+                        self.builder
+                            .build_int_z_extend(int, dst_int, "")
+                            .unwrap()
+                            .into()
+                    }
+                } else {
+                    self.builder
+                        .build_int_truncate(int, dst_int, "")
+                        .unwrap()
+                        .into()
+                }
+            }
+
+            (Builtin(a), Builtin(b)) if builtin_is_float(a) && builtin_is_float(b) => {
+                let float = value.into_float_value();
+                let dst_float = self.map_basic_type(dst).into_float_type();
+                if float.get_type().get_bit_width() > dst_float.get_bit_width() {
+                    self.builder
+                        .build_float_trunc(float, dst_float, "")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_float_ext(float, dst_float, "")
+                        .unwrap()
+                        .into()
+                }
+            }
+
+            (Builtin(a), Builtin(b)) if builtin_is_float(a) && builtin_is_integer(b) => {
+                let float = value.into_float_value();
+                let dst_int = self.map_basic_type(dst).into_int_type();
+                if self.is_signed_type(&dst_ty) {
+                    self.builder
+                        .build_float_to_signed_int(float, dst_int, "")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_float_to_unsigned_int(float, dst_int, "")
+                        .unwrap()
+                        .into()
+                }
+            }
+
+            (Builtin(a), Builtin(b)) if builtin_is_integer(a) && builtin_is_float(b) => {
+                let int = value.into_int_value();
+                let dst_float = self.map_basic_type(dst).into_float_type();
+                if self.is_signed_type(src) {
+                    self.builder
+                        .build_signed_int_to_float(int, dst_float, "")
+                        .unwrap()
+                        .into()
+                } else {
+                    self.builder
+                        .build_unsigned_int_to_float(int, dst_float, "")
+                        .unwrap()
+                        .into()
+                }
+            }
+
+            (Pointer { .. } | ManyPointer { .. }, Builtin(b)) if builtin_is_integer(b) => {
+                let dst_int = self.map_basic_type(dst).into_int_type();
+                self.builder
+                    .build_ptr_to_int(value.into_pointer_value(), dst_int, "")
+                    .unwrap()
+                    .into()
+            }
+
+            (Builtin(b), Pointer { .. } | ManyPointer { .. }) if builtin_is_integer(b) => {
+                let dst_ptr = self.context.ptr_type(AddressSpace::default());
+                self.builder
+                    .build_int_to_ptr(value.into_int_value(), dst_ptr, "")
+                    .unwrap()
+                    .into()
+            }
+
+            (Pointer { .. } | ManyPointer { .. }, Pointer { .. } | ManyPointer { .. }) => {
+                let dst_ptr = self.context.ptr_type(AddressSpace::default());
+                self.builder
+                    .build_pointer_cast(value.into_pointer_value(), dst_ptr, "")
+                    .unwrap()
+                    .into()
+            }
+
+            (Builtin(b), Builtin(bb)) if builtin_is_integer(b) && bb == BuiltinType::bool => {
+                let int = value.into_int_value();
+                let zero = int.get_type().const_zero();
+                self.builder
+                    .build_int_compare(IntPredicate::NE, int, zero, "")
+                    .unwrap()
+                    .into()
+            }
+
+            _ => {
+                unimplemented!("cast from {src:?} to {dst_ty:?} is not implemented in codegen yet")
+            }
+        }
+    }
+
     fn emit_terminator(&mut self, term: &Terminator, func: &MirFunction, fn_id: MirFunctionId) {
         let _ = fn_id;
         match term {
@@ -993,6 +1184,103 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 self.make_fn_type(self.map_ret_type(ret), &params, false)
             }
             _ => unimplemented!("indirect call through a non-fn value"),
+        }
+    }
+
+    fn store_place(&mut self, place: &Place, value: BasicValueEnum<'ctx>, func: &MirFunction) {
+        let ptr = self.place_ptr(place, func);
+        self.builder.build_store(ptr, value).unwrap();
+    }
+
+    fn load_place(&self, place: &Place, func: &MirFunction) -> BasicValueEnum<'ctx> {
+        let ptr = self.place_ptr(place, func);
+        let ty = self.place_type(place, func);
+        self.builder
+            .build_load(self.map_basic_type(ty), ptr, "")
+            .unwrap()
+    }
+
+    fn place_ptr(&self, place: &Place, func: &MirFunction) -> PointerValue<'ctx> {
+        let mut ptr = self.locals[&place.local];
+        let mut cur_ty = func.local(place.local).ty;
+
+        for elem in &place.projection {
+            match elem {
+                PlaceElem::Field(field_def) => {
+                    let struct_ty = self.map_basic_type(cur_ty);
+                    let (index, field_ty) = self.field_index_and_type(cur_ty, *field_def);
+                    ptr = self
+                        .builder
+                        .build_struct_gep(struct_ty, ptr, index, "")
+                        .unwrap();
+                    cur_ty = field_ty;
+                }
+
+                PlaceElem::Index(index_local) => {
+                    let usize_ty = self.context.ptr_sized_int_type(&self.target_data, None);
+                    let index = self
+                        .builder
+                        .build_load(usize_ty, self.locals[index_local], "")
+                        .unwrap()
+                        .into_int_value();
+                    let elem_ty = self.map_basic_type(self.index_element_type(cur_ty));
+                    ptr = unsafe {
+                        self.builder
+                            .build_in_bounds_gep(elem_ty, ptr, &[index], "")
+                            .unwrap()
+                    };
+                    cur_ty = self.index_element_type(cur_ty);
+                }
+
+                PlaceElem::Deref => {
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    ptr = self
+                        .builder
+                        .build_load(ptr_ty, ptr, "")
+                        .unwrap()
+                        .into_pointer_value();
+                    cur_ty = self.deref_target_type(cur_ty);
+                }
+            }
+        }
+
+        ptr
+    }
+
+    fn place_type(&self, place: &Place, func: &MirFunction) -> TypeId {
+        let mut ty = func.local(place.local).ty;
+        for elem in &place.projection {
+            match elem {
+                PlaceElem::Field(field_def) => ty = self.field_index_and_type(ty, *field_def).1,
+                PlaceElem::Index(_) => ty = self.index_element_type(ty),
+                PlaceElem::Deref => ty = self.deref_target_type(ty),
+            }
+        }
+        ty
+    }
+
+    fn field_index_and_type(&self, base: TypeId, field_def: DefId) -> (u32, TypeId) {
+        let layout = &self.program.struct_layouts[&base];
+        let index = layout
+            .fields
+            .iter()
+            .position(|field| field.def_id == field_def)
+            .expect("field must be present in struct layout");
+        (index as u32, layout.fields[index].ty)
+    }
+
+    fn index_element_type(&self, ty: TypeId) -> TypeId {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Array { element, .. } | Type::Slice { element, .. } => element,
+            Type::ManyPointer { inner, .. } => inner,
+            _ => panic!("indexing a non-indexable type"),
+        }
+    }
+
+    fn deref_target_type(&self, ty: TypeId) -> TypeId {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+            _ => panic!("dereferencing a non-pointer type"),
         }
     }
 
