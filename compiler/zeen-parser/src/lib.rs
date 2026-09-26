@@ -58,6 +58,17 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
             errors: Vec::new(),
             panic_mode: false,
         };
+
+        while parser.current.kind == TokenKind::Comment {
+            match parser.next_significant() {
+                Some(token) => parser.current = token,
+                None => {
+                    parser.current = parser.eof_token();
+                    break;
+                }
+            }
+        }
+
         parser.check_special_token();
         parser
     }
@@ -213,15 +224,20 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
         Token::new(TokenKind::Eof, span)
     }
 
+    fn next_significant(&mut self) -> Option<Token> {
+        loop {
+            let token = self.peeked.take().or_else(|| self.tokens.next())?;
+            if token.kind != TokenKind::Comment {
+                return Some(token);
+            }
+        }
+    }
+
     pub fn advance(&mut self) -> Option<Token> {
-        let next = self
-            .peeked
-            .take()
-            .or_else(|| self.tokens.next())
-            .or_else(|| {
-                self.current = self.eof_token();
-                None
-            })?;
+        let next = self.next_significant().or_else(|| {
+            self.current = self.eof_token();
+            None
+        })?;
 
         let prev = self.current;
 
@@ -247,7 +263,7 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
 
     pub fn peek(&mut self) -> Option<&Token> {
         if self.peeked.is_none() {
-            self.peeked = self.tokens.next();
+            self.peeked = self.next_significant();
         }
         self.peeked.as_ref()
     }
