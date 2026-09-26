@@ -1111,6 +1111,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeen-flow"
+version = "0.1.0"
+dependencies = [
+ "lasso",
+ "miette",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-mir",
+ "zeen-resolve",
+ "zeen-typecheck",
+ "zeen-types",
+]
+
+[[package]]
+name = "zeen-hir"
+version = "0.1.0"
+dependencies = [
+ "lasso",
+ "miette",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-resolve",
+]
+
+[[package]]
 name = "zeen-lexer"
 version = "0.1.0"
 dependencies = [
@@ -1129,8 +1157,30 @@ dependencies = [
  "tokio",
  "tower-lsp-server",
  "zeen-driver",
+ "zeen-flow",
+ "zeen-hir",
  "zeen-lexer",
+ "zeen-mir",
  "zeen-parser",
+ "zeen-preprocessor",
+ "zeen-resolve",
+ "zeen-typecheck",
+]
+
+[[package]]
+name = "zeen-mir"
+version = "0.1.0"
+dependencies = [
+ "lasso",
+ "miette",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-hir",
+ "zeen-resolve",
+ "zeen-typecheck",
+ "zeen-types",
 ]
 
 [[package]]
@@ -1146,6 +1196,61 @@ dependencies = [
  "thiserror",
  "zeen-ast",
  "zeen-lexer",
+]
+
+[[package]]
+name = "zeen-preprocessor"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "miette",
+ "smallvec",
+ "smol_str",
+ "zeen-ast",
+ "zeen-driver",
+]
+
+[[package]]
+name = "zeen-resolve"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "miette",
+ "smallvec",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-lexer",
+ "zeen-parser",
+ "zeen-preprocessor",
+]
+
+[[package]]
+name = "zeen-typecheck"
+version = "0.1.0"
+dependencies = [
+ "lasso",
+ "miette",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-hir",
+ "zeen-resolve",
+ "zeen-types",
+]
+
+[[package]]
+name = "zeen-types"
+version = "0.1.0"
+dependencies = [
+ "lasso",
+ "zeen-ast",
+ "zeen-hir",
+ "zeen-resolve",
 ]
 
 [[package]]
