@@ -58,6 +58,47 @@ fn ident_after_line_comment() {
 }
 
 #[test]
+fn comment_emitted_when_requested() {
+    const SOURCE: &str = "// hi\nabc /* there */";
+
+    let mut tokens = tokenize_with_comments(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Comment, SourceSpan::new(0.into(), 5)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(6.into(), 3)))
+    );
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(
+            TokenKind::Comment,
+            SourceSpan::new(10.into(), 11)
+        ))
+    );
+
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
+fn comment_skipped_by_default() {
+    const SOURCE: &str = "// hi\nabc /* there */";
+
+    let mut tokens = tokenize(SOURCE);
+
+    assert_eq!(
+        tokens.next(),
+        Some(Token::new(TokenKind::Ident, SourceSpan::new(6.into(), 3)))
+    );
+
+    assert_eq!(tokens.next(), None);
+}
+
+#[test]
 fn macro_ident() {
     const SOURCE: &str = "@print";
 
