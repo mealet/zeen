@@ -1187,6 +1187,140 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
+    fn emit_macro_call(
+        &mut self,
+        kind: HirMacroKind,
+        chunks: Option<&[FormatChunk]>,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<BlockId>,
+        func: &MirFunction,
+    ) {
+        let _ = destination;
+        match kind {
+            HirMacroKind::Print | HirMacroKind::Println => {
+                let (format, values) = self.build_format(chunks.unwrap_or(&[]), args, func);
+                let format = if kind == HirMacroKind::Println {
+                    format!("{format}\n")
+                } else {
+                    format
+                };
+
+                let printf = self.get_or_declare_runtime_fn(
+                    "printf",
+                    self.context.i32_type().into(),
+                    &[self.context.ptr_type(AddressSpace::default()).into()],
+                    true,
+                );
+
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                    vec![self.get_str_global(&format).as_pointer_value().into()];
+                call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
+
+                self.builder.build_call(printf, &call_args, "").unwrap();
+
+                if let Some(next) = target {
+                    let block = self.blocks[&next];
+                    self.builder.build_unconditional_branch(block).unwrap();
+                }
+            }
+
+            HirMacroKind::Panic => {
+                let default_chunks = [FormatChunk::Literal("panic".to_string())];
+                let chunks = chunks.unwrap_or(&default_chunks);
+                let (format, values) = self.build_format(chunks, args, func);
+
+                let panic_fn = self.get_or_declare_runtime_fn(
+                    "zeen.panic_message",
+                    self.context.void_type().into(),
+                    &[self.context.ptr_type(AddressSpace::default()).into()],
+                    true,
+                );
+
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                    vec![self.get_str_global(&format).as_pointer_value().into()];
+                call_args.extend(values.into_iter().map(BasicMetadataValueEnum::from));
+
+                self.builder.build_call(panic_fn, &call_args, "").unwrap();
+                self.builder.build_unreachable().unwrap();
+            }
+
+            _ => unimplemented!("macro {kind:?} is not implemented in codegen yet"),
+        }
+    }
+
+    /// Builds a printf-style format string and the converted argument values
+    /// from `format_chunks` + operands.
+    fn build_format(
+        &mut self,
+        chunks: &[FormatChunk],
+        args: &[Operand],
+        func: &MirFunction,
+    ) -> (String, Vec<BasicValueEnum<'ctx>>) {
+        let mut format = String::new();
+        let mut values: Vec<BasicValueEnum<'ctx>> = Vec::new();
+        let mut arg_iter = args.iter();
+
+        for chunk in chunks {
+            match chunk {
+                FormatChunk::Literal(text) => format.push_str(&text.replace('%', "%%")),
+                FormatChunk::Arg(spec) => {
+                    let Some(operand) = arg_iter.next() else {
+                        break;
+                    };
+
+                    let (specifier, value) = match (operand, spec) {
+                        (Operand::Constant(c, _), _) => {
+                            let value = self.const_value(c, None, func);
+                            let specifier = match (c, spec) {
+                                (ConstValue::Float(_), FormatSpec::Float { precision }) => {
+                                    format!("%.{precision}f")
+                                }
+                                (ConstValue::Float(_), _) => "%f".to_string(),
+                                (ConstValue::Str(_), _) => "%s".to_string(),
+                                (ConstValue::Char(_), _) => "%c".to_string(),
+                                (ConstValue::Bool(_), _) => "%d".to_string(),
+                                (ConstValue::Int(_), FormatSpec::Hex) => "%x".to_string(),
+                                (ConstValue::Int(_), FormatSpec::Oct) => "%o".to_string(),
+                                (ConstValue::Int(_), FormatSpec::Bin) => "%x".to_string(),
+                                _ => "%d".to_string(),
+                            };
+                            (specifier, value)
+                        }
+                        _ => {
+                            let ty = self.operand_type(operand, func).expect("typed format arg");
+                            let value = self.operand_value(operand, Some(ty), func);
+                            let specifier = match spec {
+                                FormatSpec::Display | FormatSpec::Debug => {
+                                    self.display_specifier(ty)
+                                }
+                                FormatSpec::Hex => "%x".to_string(),
+                                FormatSpec::Oct => "%o".to_string(),
+                                FormatSpec::Bin => "%x".to_string(),
+                                FormatSpec::Float { precision } => format!("%.{precision}f"),
+                            };
+                            (specifier, value)
+                        }
+                    };
+
+                    format.push_str(&specifier);
+                    values.push(value);
+                }
+            }
+        }
+
+        (format, values)
+    }
+
+    fn display_specifier(&self, ty: TypeId) -> String {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Builtin(BuiltinType::f32 | BuiltinType::f64) | Type::FloatLiteral => "%f".into(),
+            Type::Builtin(b) if builtin_is_integer(b) => "%d".into(),
+            Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Slice { .. } => "%s".into(),
+            _ => "%d".into(),
+        }
+    }
+
     fn store_place(&mut self, place: &Place, value: BasicValueEnum<'ctx>, func: &MirFunction) {
         let ptr = self.place_ptr(place, func);
         self.builder.build_store(ptr, value).unwrap();
@@ -1282,6 +1416,39 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
             _ => panic!("dereferencing a non-pointer type"),
         }
+    }
+
+    fn get_or_declare_runtime_fn(
+        &mut self,
+        name: &str,
+        ret: AnyTypeEnum<'ctx>,
+        params: &[BasicMetadataTypeEnum<'ctx>],
+        is_var_args: bool,
+    ) -> FunctionValue<'ctx> {
+        if let Some(function) = self.module.get_function(name) {
+            return function;
+        }
+        let fn_type = self.make_fn_type(ret, params, is_var_args);
+        self.module
+            .add_function(name, fn_type, Some(inkwell::module::Linkage::External))
+    }
+
+    fn get_str_global(&mut self, content: &str) -> GlobalValue<'ctx> {
+        if let Some(global) = self.strings.get(content) {
+            return *global;
+        }
+        let name = format!("str.{}", self.str_counter);
+        self.str_counter += 1;
+        let global = self
+            .builder
+            .build_global_string_ptr(content, &name)
+            .unwrap();
+        self.strings.insert(content.to_string(), global);
+        global
+    }
+
+    fn resolve_spur(&self, spur: Spur) -> String {
+        self.rodeo.borrow().resolve(&spur).to_string()
     }
 
     fn function_symbol_name(&self, id: MirFunctionId, func: &MirFunction) -> String {
