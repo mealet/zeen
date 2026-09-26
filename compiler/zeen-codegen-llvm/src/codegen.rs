@@ -321,6 +321,161 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
+    fn map_type(&self, ty: TypeId) -> AnyTypeEnum<'ctx> {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Builtin(BuiltinType::void) => self.context.void_type().into(),
+            Type::Builtin(b) => self.any_from_basic(self.map_builtin(b)),
+
+            Type::IntLiteral => self.context.i32_type().into(),
+            Type::FloatLiteral => self.context.f64_type().into(),
+
+            Type::Struct { .. } | Type::Slice { .. } => self.struct_types[&ty].into(),
+
+            Type::Enum { .. } => self.context.i32_type().into(),
+            // Never reach codegen on a valid program.
+            Type::Interface { .. } | Type::InterfaceSelfPlaceholder(_) | Type::GenericParam(_) => {
+                self.context.i32_type().into()
+            }
+
+            Type::Pointer { .. } | Type::ManyPointer { .. } => {
+                self.context.ptr_type(AddressSpace::default()).into()
+            }
+
+            Type::Array { element, len } => self
+                .map_basic_type(element)
+                .array_type(len.unwrap_or(0) as u32)
+                .into(),
+
+            Type::Fn { .. } => self.context.ptr_type(AddressSpace::default()).into(),
+
+            Type::Void | Type::Never => self.context.void_type().into(),
+            Type::Error => self.context.i32_type().into(),
+        }
+    }
+
+    fn map_builtin(&self, b: BuiltinType) -> BasicTypeEnum<'ctx> {
+        use BuiltinType::*;
+        match b {
+            i8 | u8 | char => self.context.i8_type().into(),
+            i16 | u16 => self.context.i16_type().into(),
+            i32 | u32 => self.context.i32_type().into(),
+            i64 | u64 => self.context.i64_type().into(),
+            isize | usize => self
+                .context
+                .ptr_sized_int_type(&self.target_data, None)
+                .into(),
+            f32 => self.context.f32_type().into(),
+            f64 => self.context.f64_type().into(),
+            bool => self.context.bool_type().into(),
+            void => panic!("void is not a basic value type"),
+        }
+    }
+
+    fn map_ret_type(&self, ty: TypeId) -> AnyTypeEnum<'ctx> {
+        match self.typecheck.interner.get(ty) {
+            Type::Void | Type::Never => self.context.void_type().into(),
+            _ => self.map_type(ty),
+        }
+    }
+
+    fn map_basic_type(&self, ty: TypeId) -> BasicTypeEnum<'ctx> {
+        match self.map_type(ty) {
+            AnyTypeEnum::ArrayType(t) => t.into(),
+            AnyTypeEnum::FloatType(t) => t.into(),
+            AnyTypeEnum::FunctionType(_) => panic!("function type used as a value type"),
+            AnyTypeEnum::IntType(t) => t.into(),
+            AnyTypeEnum::PointerType(t) => t.into(),
+            AnyTypeEnum::StructType(t) => t.into(),
+            AnyTypeEnum::VectorType(t) => t.into(),
+            AnyTypeEnum::ScalableVectorType(t) => t.into(),
+            AnyTypeEnum::VoidType(_) => panic!("void used as a value type"),
+        }
+    }
+
+    fn any_from_basic(&self, basic: BasicTypeEnum<'ctx>) -> AnyTypeEnum<'ctx> {
+        match basic {
+            BasicTypeEnum::ArrayType(t) => t.into(),
+            BasicTypeEnum::FloatType(t) => t.into(),
+            BasicTypeEnum::IntType(t) => t.into(),
+            BasicTypeEnum::PointerType(t) => t.into(),
+            BasicTypeEnum::StructType(t) => t.into(),
+            BasicTypeEnum::VectorType(t) => t.into(),
+            BasicTypeEnum::ScalableVectorType(t) => t.into(),
+        }
+    }
+
+    fn make_fn_type(
+        &self,
+        ret: AnyTypeEnum<'ctx>,
+        params: &[BasicMetadataTypeEnum<'ctx>],
+        is_var_args: bool,
+    ) -> FunctionType<'ctx> {
+        use AnyTypeEnum::*;
+        match ret {
+            ArrayType(t) => t.fn_type(params, is_var_args),
+            FloatType(t) => t.fn_type(params, is_var_args),
+            FunctionType(_) => panic!("function type used as a return type"),
+            IntType(t) => t.fn_type(params, is_var_args),
+            PointerType(t) => t.fn_type(params, is_var_args),
+            StructType(t) => t.fn_type(params, is_var_args),
+            VectorType(t) => t.fn_type(params, is_var_args),
+            ScalableVectorType(t) => t.fn_type(params, is_var_args),
+            VoidType(t) => t.fn_type(params, is_var_args),
+        }
+    }
+
+    fn is_signed(&self, ty: TypeId) -> bool {
+        matches!(
+            self.typecheck.interner.get(ty),
+            Type::Builtin(b)
+                if matches!(b, BuiltinType::i8 | BuiltinType::i16 | BuiltinType::i32 | BuiltinType::i64 | BuiltinType::isize)
+        )
+    }
+
+    fn is_void_ty(&self, ty: TypeId) -> bool {
+        matches!(self.typecheck.interner.get(ty), Type::Void | Type::Never)
+    }
+
+    fn is_signed_type(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Builtin(b)
+                if matches!(b, BuiltinType::i8 | BuiltinType::i16 | BuiltinType::i32 | BuiltinType::i64 | BuiltinType::isize)
+        )
+    }
+
+    fn is_integer_return(&self, ty: TypeId) -> bool {
+        matches!(self.typecheck.interner.get(ty).clone(), Type::Builtin(b) if builtin_is_integer(b))
+    }
+
+    fn coerce_to_i32(&self, value: BasicValueEnum<'ctx>, ty: TypeId) -> BasicValueEnum<'ctx> {
+        let int = value.into_int_value();
+        let i32_ty = self.context.i32_type();
+        let src_w = int.get_type().get_bit_width();
+        let dst_w = i32_ty.get_bit_width();
+
+        if src_w > dst_w {
+            self.builder
+                .build_int_truncate(int, i32_ty, "")
+                .unwrap()
+                .into()
+        } else if src_w < dst_w {
+            if self.is_signed(ty) {
+                self.builder
+                    .build_int_s_extend(int, i32_ty, "")
+                    .unwrap()
+                    .into()
+            } else {
+                self.builder
+                    .build_int_z_extend(int, i32_ty, "")
+                    .unwrap()
+                    .into()
+            }
+        } else {
+            int.into()
+        }
+    }
+
     fn function_symbol_name(&self, id: MirFunctionId, func: &MirFunction) -> String {
         if let Some(symbol) = self.program.extern_exports.get(&id) {
             return symbol.clone();
