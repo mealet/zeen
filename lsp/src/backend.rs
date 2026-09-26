@@ -1,16 +1,25 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::Arc, time::Duration,
 };
 
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
+use tokio::sync::RwLock;
 
 use crate::{diagnostics, semantic};
+
+const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(120);
 
 #[derive(Debug)]
 pub struct Backend {
     client: Client,
-    documents: Arc<RwLock<HashMap<Uri, String>>>,
+    documents: Arc<RwLock<HashMap<Uri, Document>>>,
+}
+
+#[derive(Debug, Clone)]
+struct Document {
+    version: i32,
+    text: String,
 }
 
 impl Backend {
@@ -71,9 +80,9 @@ impl LanguageServer for Backend {
         let text = self
             .documents
             .read()
-            .expect("RwLock guard error")
+            .await
             .get(&params.text_document.uri)
-            .cloned();
+            .map(|document| document.text.clone());
 
         let Some(text) = text else {
             return Ok(None);
@@ -90,14 +99,17 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
-        let text = params.text_document.text;
+        let document = Document {
+            version: params.text_document.version,
+            text: params.text_document.text,
+        };
 
         self.documents
             .write()
-            .expect("RwLock guard error")
-            .insert(uri.clone(), text.clone());
+            .await
+            .insert(uri.clone(), document.clone());
 
-        self.publish(uri, text).await;
+        self.publish(uri, document.text).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -106,19 +118,42 @@ impl LanguageServer for Backend {
         };
 
         let uri = params.text_document.uri;
+        let document = Document {
+            version: params.text_document.version,
+            text: change.text,
+        };
 
         self.documents
             .write()
-            .expect("RwLock guard error")
-            .insert(uri.clone(), change.text.clone());
+            .await
+            .insert(uri.clone(), document);
 
-        self.publish(uri, change.text).await;
+        let client = self.client.clone();
+        let documents = Arc::clone(&self.documents);
+        let version = params.text_document.version;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(DIAGNOSTIC_DEBOUNCE).await;
+
+            let current = documents.read().await.get(&uri).cloned();
+
+            let Some(current) = current else {
+                return;
+            };
+
+            if current.version != version {
+                return;
+            }
+
+            let diagnostics = diagnostics::check(&current.text);
+            client.publish_diagnostics(uri, diagnostics, None).await;
+        });
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         self.documents
             .write()
-            .expect("RwLock guard error")
+            .await
             .remove(&params.text_document.uri);
 
         self.client

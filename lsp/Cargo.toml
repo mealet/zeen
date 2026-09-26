@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 tower-lsp-server = "0.23.0"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "io-std", "sync"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "io-std", "sync", "time"] }
 miette = { version = "7.6.0" }
 bumpalo = { version = "3.20.2", features = ["boxed"] }
 lasso = "0.7.3"
