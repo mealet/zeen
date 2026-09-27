@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::sync::RwLock;
@@ -26,6 +27,16 @@ impl Backend {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    async fn resolve_sibling_text(&self, uri: &Uri, name: &str) -> Option<(Uri, String)> {
+        let sibling = diagnostics::file_uri_to_path(uri)?.parent()?.join(name);
+        let sibling_uri = Uri::from_str(&format!("file://{}", sibling.display())).ok()?;
+        if let Some(document) = self.documents.read().await.get(&sibling_uri) {
+            return Some((sibling_uri, document.text.clone()));
+        }
+        let text = std::fs::read_to_string(&sibling).ok()?;
+        Some((sibling_uri, text))
     }
 }
 
@@ -148,9 +159,19 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
+        let (target_uri, target_text) = match &occurence.target_file {
+            Some(target_name) => {
+                let Some(resolved) = self.resolve_sibling_text(&uri, target_name).await else {
+                    return Ok(None);
+                };
+                resolved
+            }
+            None => (uri.clone(), document.text.clone()),
+        };
+
         Ok(Some(GotoDefinitionResponse::Array(vec![Location {
-            uri,
-            range: position::span_to_range(&document.text, target_offset, target_len),
+            uri: target_uri,
+            range: position::span_to_range(&target_text, target_offset, target_len),
         }])))
     }
 
@@ -183,10 +204,21 @@ impl LanguageServer for Backend {
 
         let mut detail = format!("{} - defined", occurrence.role.label());
 
-        if let Some(target_offset) = occurrence.target_offset {
-            let target = position::offset_to_position(&document.text, target_offset);
-            let preview = position::line_text(&document.text, target.line).trim();
-            let file = diagnostics::uri_filename(&uri);
+        let target_text: Option<String> = match &occurrence.target_file {
+            Some(target_name) => self
+                .resolve_sibling_text(&uri, target_name)
+                .await
+                .map(|(_, text)| text),
+            None => Some(document.text.clone()),
+        };
+
+        if let (Some(target_text), Some(target_offset)) = (target_text, occurrence.target_offset) {
+            let target = position::offset_to_position(&target_text, target_offset);
+            let preview = position::line_text(&target_text, target.line).trim();
+            let file = match &occurrence.target_file {
+                Some(target_name) => target_name.clone(),
+                None => diagnostics::uri_filename(&uri),
+            };
 
             detail.push_str(&format!(
                 " at {}:{}\n----\n```zn\n{}\n```",

@@ -369,7 +369,7 @@ pub fn uri_filename(uri: &Uri) -> String {
         .unwrap_or_else(|| "in-memory.zn".to_string())
 }
 
-fn file_uri_to_path(uri: &Uri) -> Option<PathBuf> {
+pub(crate) fn file_uri_to_path(uri: &Uri) -> Option<PathBuf> {
     let stripped = uri.as_str().strip_prefix("file://")?;
 
     Some(PathBuf::from(decode_uri_path(stripped)))

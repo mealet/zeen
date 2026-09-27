@@ -36,13 +36,14 @@ impl Role {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Occurrence {
     pub offset: usize,
     pub len: usize,
     pub role: Role,
     pub target_offset: Option<usize>,
     pub target_len: Option<usize>,
+    pub target_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -113,7 +114,7 @@ impl<'ctx> Walker<'ctx> {
         offset: usize,
         len: usize,
         role: Role,
-        target: (Option<usize>, Option<usize>),
+        target: (Option<usize>, Option<usize>, Option<String>),
     ) {
         let offset = offset.min(self.text.len());
         let len = len.min(self.text.len().saturating_sub(offset));
@@ -128,6 +129,7 @@ impl<'ctx> Walker<'ctx> {
             role,
             target_offset: target.0,
             target_len: target.1,
+            target_file: target.2,
         });
     }
 
@@ -165,20 +167,30 @@ impl<'ctx> Walker<'ctx> {
         Some(self.role_of_kind(&info.kind, def_id))
     }
 
-    fn def_target_span(&self, def_id: DefId) -> (Option<usize>, Option<usize>) {
+    fn def_target_span(&self, def_id: DefId) -> (Option<usize>, Option<usize>, Option<String>) {
         let Some(info) = self.resolution.defs.get(&def_id) else {
-            return (None, None);
+            return (None, None, None);
         };
 
-        if info.span.src.name() != self.filename {
-            return (None, None);
+        let name = info.span.src.name();
+
+        if name == self.filename {
+            return (
+                Some(info.span.span.offset()),
+                Some(info.span.span.len()),
+                None,
+            );
         }
 
-        (Some(info.span.span.offset()), Some(info.span.span.len()))
+        (
+            Some(info.span.span.offset()),
+            Some(info.span.span.len()),
+            Some(name.to_string()),
+        )
     }
 
     fn emit_def(&mut self, offset: usize, len: usize, role: Role) {
-        self.push(offset, len, role, (None, None));
+        self.push(offset, len, role, (None, None, None));
     }
 
     fn emit_target(&mut self, offset: usize, len: usize, role: Role, target: DefId) {
@@ -199,7 +211,7 @@ impl<'ctx> Walker<'ctx> {
 
         let target_span = target
             .map(|def_id| self.def_target_span(def_id))
-            .unwrap_or((None, None));
+            .unwrap_or((None, None, None));
 
         self.push(offset, len, role, target_span);
     }
@@ -743,6 +755,7 @@ fn push_syntax(occurrences: &mut Vec<Occurrence>, offset: usize, len: usize, rol
         role,
         target_offset: None,
         target_len: None,
+        target_file: None,
     });
 }
 
