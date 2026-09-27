@@ -285,7 +285,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
     }
 }
 
-fn resolve_std_root() -> Option<PathBuf> {
+pub(crate) fn resolve_std_root() -> Option<PathBuf> {
     if let Some(env_path) = std::env::var_os("ZEEN_STD") {
         let path = PathBuf::from(env_path);
         if path.is_dir() {

@@ -230,6 +230,61 @@ pub fn core_modules() -> Vec<String> {
         .collect()
 }
 
+pub fn std_modules(root: &std::path::Path) -> Vec<String> {
+    let mut modules = Vec::new();
+
+    collect_std_modules(root, root, &mut modules);
+    modules.sort();
+    modules
+}
+
+fn collect_std_modules(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with('.'))
+        {
+            continue;
+        }
+
+        if path.is_dir() {
+            collect_std_modules(root, &path, out);
+            continue;
+        }
+
+        if path.extension().and_then(|ext| ext.to_str()) != Some("zn") {
+            continue;
+        }
+
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+
+        let mut name = String::from("std");
+
+        for component in relative.components() {
+            let Some(text) = component.as_os_str().to_str() else {
+                continue;
+            };
+
+            name.push('.');
+            name.push_str(text);
+        }
+
+        if let Some(dotted) = name.strip_suffix(".zn") {
+            out.push(dotted.to_string());
+        }
+    }
+}
+
 pub fn sibling_modules(dir: &std::path::Path, open_name: &str) -> Vec<String> {
     let mut modules = Vec::new();
 

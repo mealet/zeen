@@ -350,6 +350,10 @@ impl LanguageServer for Backend {
         let items = if let Some(prefix) = completion::use_path_prefix(&document.text, offset) {
             let mut modules = completion::core_modules();
 
+            if let Some(root) = diagnostics::resolve_std_root() {
+                modules.extend(completion::std_modules(&root));
+            }
+
             if let Some(path) = diagnostics::file_uri_to_path(&uri) {
                 if let (Some(dir), Some(stem)) = (
                     path.parent(),
