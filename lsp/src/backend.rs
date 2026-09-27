@@ -63,6 +63,10 @@ impl LanguageServer for Backend {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..Default::default()
                 }),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -350,6 +354,65 @@ impl LanguageServer for Backend {
         };
 
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let position = params.text_document_position_params.position;
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(&document.text, position);
+
+        for call in &document.analysis.calls {
+            let end = call
+                .args
+                .last()
+                .map(|(start, len)| start + len)
+                .unwrap_or(call.callee_offset + call.callee_len);
+
+            if offset < call.callee_offset || offset > end {
+                continue;
+            }
+
+            let active = if call.params.is_empty() {
+                None
+            } else {
+                call.args
+                    .iter()
+                    .position(|(start, len)| offset >= *start && offset <= start + len)
+                    .map(|index| index.min(call.params.len() - 1) as u32)
+            };
+
+            let parameters = call
+                .params
+                .iter()
+                .map(|param| ParameterInformation {
+                    label: ParameterLabel::Simple(param.clone().unwrap_or_else(|| "_".to_string())),
+                    documentation: None,
+                })
+                .collect();
+
+            return Ok(Some(SignatureHelp {
+                signatures: vec![SignatureInformation {
+                    label: call.signature.clone(),
+                    documentation: None,
+                    parameters: Some(parameters),
+                    active_parameter: None,
+                }],
+                active_signature: Some(0),
+                active_parameter: active,
+            }));
+        }
+
+        Ok(None)
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {

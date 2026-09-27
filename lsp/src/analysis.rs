@@ -70,6 +70,8 @@ pub struct Analysis {
 pub struct CallSite {
     pub callee_offset: usize,
     pub callee_len: usize,
+    pub callee: String,
+    pub signature: String,
     pub args: Vec<(usize, usize)>,
     pub params: Vec<Option<String>>,
 }
@@ -98,6 +100,7 @@ pub struct FieldHint {
 pub(crate) struct RawCall {
     pub call: HirId,
     pub callee: (usize, usize),
+    pub callee_name: String,
     pub args: Vec<(usize, usize)>,
 }
 
@@ -198,6 +201,16 @@ impl Analysis {
             calls.push(CallSite {
                 callee_offset: raw.callee.0,
                 callee_len: raw.callee.1,
+                callee: raw.callee_name.clone(),
+                signature: format!(
+                    "{}({})",
+                    raw.callee_name,
+                    params
+                        .iter()
+                        .map(|param| param.as_deref().unwrap_or("_"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 args: raw.args.clone(),
                 params: params.clone(),
             });
@@ -815,6 +828,14 @@ impl<'ctx> Walker<'ctx> {
                 self.analysis.raw_calls.push(RawCall {
                     call: expr.id,
                     callee: (callee.source.span.offset(), callee.source.span.len()),
+                    callee_name: self
+                        .text
+                        .get(
+                            callee.source.span.offset()
+                                ..callee.source.span.offset() + callee.source.span.len(),
+                        )
+                        .unwrap_or("")
+                        .to_string(),
                     args: args
                         .iter()
                         .map(|arg| (arg.source.span.offset(), arg.source.span.len()))
