@@ -923,3 +923,23 @@ fn single_dot_still_lone_token() {
     );
     assert_eq!(tokens.next(), None);
 }
+
+#[test]
+fn keyword_spellings_round_trip() {
+    use crate::token::CompilerKeyword;
+    use strum::IntoEnumIterator;
+
+    for keyword in CompilerKeyword::iter() {
+        assert_eq!(CompilerKeyword::try_str(keyword.as_str()), Some(keyword));
+    }
+}
+
+#[test]
+fn type_spellings_round_trip() {
+    use crate::token::CompilerType;
+    use strum::IntoEnumIterator;
+
+    for ty in CompilerType::iter() {
+        assert_eq!(CompilerType::try_str(ty.to_string()), Some(ty));
+    }
+}
