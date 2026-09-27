@@ -411,10 +411,14 @@ fn discover_entry(open_path: &Path, open_text: &str) -> PathBuf {
         }
     }
     candidates.sort();
-    candidates
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| open_path.to_path_buf())
+    if let Some(entry) = candidates.into_iter().next() {
+        return entry;
+    }
+    let main_file = dir.join("main.zn");
+    if main_file.is_file() {
+        return main_file;
+    }
+    open_path.to_path_buf()
 }
 
 fn contains_main(text: &str) -> bool {
@@ -499,6 +503,17 @@ mod tests {
         let open = dir.join("lib.zn");
         std::fs::write(&open, "fn helper() {}\n").unwrap();
         assert_eq!(discover_entry(&open, "fn helper() {}\n"), open);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discover_entry_falls_back_to_main_zn() {
+        let dir = test_dir("mainname");
+        let open = dir.join("lib.zn");
+        std::fs::write(&open, "fn helper() {}\n").unwrap();
+        let main = dir.join("main.zn");
+        std::fs::write(&main, "fn helper() {}\n").unwrap();
+        assert_eq!(discover_entry(&open, "fn helper() {}\n"), main);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
