@@ -204,6 +204,10 @@ impl LanguageServer for Backend {
 
         let mut detail = format!("{} - defined", occurrence.role.label());
 
+        if let Some(ty) = &occurrence.ty {
+            detail.push_str(&format!("\ntype: `{ty}`"));
+        }
+
         let target_text: Option<String> = match &occurrence.target_file {
             Some(target_name) => self
                 .resolve_sibling_text(&uri, target_name)
