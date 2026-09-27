@@ -10,6 +10,7 @@ license.workspace = true
 [dependencies]
 lasso = "0.7.3"
 miette = "7.6.0"
+strum = { version = "0.28.0", features = ["derive"] }
 thiserror = "2.0.18"
 smol_str = "0.3.6"
 zeen-ast = {path = "../zeen-ast"}

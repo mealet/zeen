@@ -143,7 +143,7 @@ pub struct HirPatternBinding {
     pub is_ref: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumIter)]
 pub enum HirMacroKind {
     As,       // @as(T, expr) -> T
     SizeOf,   // @sizeof(T) -> usize
@@ -164,4 +164,34 @@ pub enum HirMacroKind {
     Void,    // @void() -> void
 
     Unknown, // Unknown macro fallback
+}
+
+impl HirMacroKind {
+    pub fn as_str(self) -> Option<&'static str> {
+        match self {
+            HirMacroKind::As => Some("as"),
+            HirMacroKind::SizeOf => Some("sizeof"),
+            HirMacroKind::AlignOf => Some("alignof"),
+            HirMacroKind::TypeName => Some("typename"),
+
+            HirMacroKind::Print => Some("print"),
+            HirMacroKind::Println => Some("println"),
+            HirMacroKind::Format => Some("format"),
+
+            HirMacroKind::Panic => Some("panic"),
+            HirMacroKind::Unreachable => Some("unreachable"),
+            HirMacroKind::Todo => Some("todo"),
+
+            HirMacroKind::Dbg => Some("dbg"),
+            HirMacroKind::Uninit => Some("uninit"),
+            HirMacroKind::EnumTag => Some("enumTag"),
+            HirMacroKind::Void => Some("void"),
+
+            HirMacroKind::Unknown => None,
+        }
+    }
+
+    pub fn all_names() -> impl Iterator<Item = &'static str> {
+        <Self as strum::IntoEnumIterator>::iter().filter_map(Self::as_str)
+    }
 }
