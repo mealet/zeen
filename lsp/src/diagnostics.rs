@@ -193,7 +193,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
 
     drop(bump);
 
-    let analysis = Analysis::build(
+    let mut analysis = Analysis::build(
         &hir_module,
         &resolution_result,
         &interner,
@@ -219,6 +219,12 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
             };
         }
     };
+
+    analysis.apply_types(
+        &typechecker_result,
+        Rc::clone(&interner),
+        &resolution_result,
+    );
 
     let mut lowered = match zeen_mir::lowering::lower_program(
         Rc::clone(&interner),

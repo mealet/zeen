@@ -1,5 +1,4 @@
-use std::cell::RefCell;
-use std::collections::HashSet;
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 use lasso::{Rodeo, Spur};
 use miette::SourceSpan;
@@ -7,9 +6,11 @@ use miette::SourceSpan;
 use zeen_ast::{Declaration, DeclarationKind};
 use zeen_hir::{
     HirDecl, HirDeclKind, HirEnumVariantPayload, HirExpr, HirExprKind, HirFn, HirGenericParam,
-    HirModule, HirPattern, HirPatternBinding, HirStmt, HirStmtKind, HirTypeExpr, HirTypeKind,
+    HirId, HirModule, HirPattern, HirPatternBinding, HirStmt, HirStmtKind, HirTypeExpr,
+    HirTypeKind,
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
+use zeen_typecheck::result::TypeCheckResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -44,6 +45,9 @@ pub struct Occurrence {
     pub target_offset: Option<usize>,
     pub target_len: Option<usize>,
     pub target_file: Option<String>,
+    pub hir: Option<HirId>,
+    pub def: Option<DefId>,
+    pub ty: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -95,6 +99,31 @@ impl Analysis {
             None
         }
     }
+
+    pub fn apply_types(
+        &mut self,
+        types: &TypeCheckResult,
+        interner: Rc<RefCell<Rodeo>>,
+        resolution: &ResolutionResult,
+    ) {
+        for occurrence in &mut self.occurrences {
+            let type_id = occurrence
+                .hir
+                .and_then(|id| types.expr_types.get(&id).copied())
+                .or_else(|| {
+                    occurrence
+                        .def
+                        .and_then(|def| types.def_types.get(&def).copied())
+                });
+            if let Some(id) = type_id {
+                occurrence.ty = Some(
+                    types
+                        .interner
+                        .display_type(id, interner.clone(), resolution),
+                );
+            }
+        }
+    }
 }
 
 fn is_ident_byte(byte: u8) -> bool {
@@ -133,6 +162,9 @@ impl<'ctx> Walker<'ctx> {
             target_offset: target.0,
             target_len: target.1,
             target_file: target.2,
+            hir: None,
+            def: None,
+            ty: None,
         });
     }
 
@@ -763,6 +795,9 @@ fn push_syntax(occurrences: &mut Vec<Occurrence>, offset: usize, len: usize, rol
         target_offset: None,
         target_len: None,
         target_file: None,
+        hir: None,
+        def: None,
+        ty: None,
     });
 }
 
