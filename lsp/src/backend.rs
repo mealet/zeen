@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
-use crate::{analysis, diagnostics, semantic};
+use crate::{analysis, diagnostics, position, semantic};
 
 const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(100);
 
@@ -45,6 +45,7 @@ impl LanguageServer for Backend {
                     }
                     .into(),
                 ),
+                definition_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -116,6 +117,38 @@ impl LanguageServer for Backend {
             }
             .into(),
         ))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(
+            &document.text,
+            params.text_document_position_params.position,
+        );
+
+        let Some(occurence) = document.analysis.at(offset) else {
+            return Ok(None);
+        };
+
+        let (Some(target_offset), Some(target_len)) =
+            (occurence.target_offset, occurence.target_len)
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(GotoDefinitionResponse::Array(vec![Location {
+            uri,
+            range: position::span_to_range(&document.text, target_offset, target_len),
+        }])))
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
