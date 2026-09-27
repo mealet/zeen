@@ -310,7 +310,7 @@ fn push_diagnostic(
     });
 }
 
-fn uri_filename(uri: &Uri) -> String {
+pub fn uri_filename(uri: &Uri) -> String {
     file_uri_to_path(uri)
         .and_then(|path| {
             path.file_name()

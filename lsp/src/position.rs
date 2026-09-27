@@ -53,3 +53,25 @@ pub fn span_to_range(text: &str, offset: usize, len: usize) -> Range {
 
     Range::new(start, end)
 }
+
+pub fn line_text(text: &str, line: u32) -> &str {
+    let mut current = 0;
+    let mut start = 0;
+    for (index, byte) in text.bytes().enumerate() {
+        if current == line {
+            let end = text[index..]
+                .find('\n')
+                .map(|position| index + position)
+                .unwrap_or(text.len());
+            return text.get(start..end).unwrap_or("");
+        }
+        if byte == b'\n' {
+            current += 1;
+            start = index + 1;
+        }
+    }
+    if current == line {
+        return text.get(start..).unwrap_or("");
+    }
+    ""
+}

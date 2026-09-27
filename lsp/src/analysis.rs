@@ -4,12 +4,12 @@ use std::collections::HashSet;
 use lasso::{Rodeo, Spur};
 use miette::SourceSpan;
 
+use zeen_ast::{Declaration, DeclarationKind};
 use zeen_hir::{
     HirDecl, HirDeclKind, HirEnumVariantPayload, HirExpr, HirExprKind, HirFn, HirGenericParam,
     HirModule, HirPattern, HirPatternBinding, HirStmt, HirStmtKind, HirTypeExpr, HirTypeKind,
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
-use zeen_ast::{Declaration, DeclarationKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -20,6 +20,20 @@ pub enum Role {
     Parameter,
     Property,
     EnumMember,
+}
+
+impl Role {
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::Function => "function",
+            Role::Method => "method",
+            Role::Type => "type",
+            Role::Variable => "variable",
+            Role::Parameter => "parameter",
+            Role::Property => "property",
+            Role::EnumMember => "enum member",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

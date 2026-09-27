@@ -46,6 +46,7 @@ impl LanguageServer for Backend {
                     .into(),
                 ),
                 definition_provider: Some(OneOf::Left(true)),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -153,6 +154,60 @@ impl LanguageServer for Backend {
         }])))
     }
 
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(
+            &document.text,
+            params.text_document_position_params.position,
+        );
+
+        let Some(occurrence) = document.analysis.at(offset) else {
+            return Ok(None);
+        };
+
+        let name = document
+            .text
+            .get(occurrence.offset..occurrence.offset + occurrence.len)
+            .unwrap_or("");
+
+        let mut contents = vec![MarkedString::from_language_code(
+            "zeen".to_string(),
+            name.to_string(),
+        )];
+
+        let mut detail = format!("{} - defined", occurrence.role.label());
+
+        if let Some(target_offset) = occurrence.target_offset {
+            let target = position::offset_to_position(&document.text, target_offset);
+            let preview = position::line_text(&document.text, target.line).trim();
+            let file = diagnostics::uri_filename(&uri);
+
+            detail.push_str(&format!(
+                " at {}:{}\n----\n```zn\n{}\n```",
+                file,
+                target.line + 1,
+                preview
+            ));
+        }
+
+        contents.push(MarkedString::from_markdown(detail));
+
+        Ok(Some(Hover {
+            contents: HoverContents::Array(contents),
+            range: Some(position::span_to_range(
+                &document.text,
+                occurrence.offset,
+                occurrence.len,
+            )),
+        }))
+    }
+
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         let version = params.text_document.version;
@@ -184,7 +239,9 @@ impl LanguageServer for Backend {
 
         {
             let mut documents = self.documents.write().await;
-            let previous = documents.get(&uri).map(|document| document.analysis.clone());
+            let previous = documents
+                .get(&uri)
+                .map(|document| document.analysis.clone());
 
             documents.insert(
                 uri.clone(),
