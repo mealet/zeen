@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::{
     cell::RefCell,
     collections::HashSet,
@@ -44,14 +45,29 @@ fn severity_of(err: &dyn miette::Diagnostic) -> DiagnosticSeverity {
 }
 
 pub fn check(uri: &Uri, text: &str) -> CheckOutput {
-    let Some(entry_path) = file_uri_to_path(uri) else {
+    let Some(open_path) = file_uri_to_path(uri) else {
         return CheckOutput {
             diagnostics: check_syntax(uri, text),
             analysis: Analysis::default(),
         };
     };
 
-    check_full(&entry_path, uri, text)
+    let filename = uri_filename(uri);
+    let open = OpenFile {
+        uri,
+        filename: &filename,
+        text,
+    };
+    let entry_path = discover_entry(&open_path, text);
+    if entry_path == open_path {
+        return check_full(&entry_path, uri, text, open, true);
+    }
+    let Ok(entry_text) = std::fs::read_to_string(&entry_path) else {
+        return check_full(&open_path, uri, text, open, true);
+    };
+    let entry_uri =
+        Uri::from_str(&format!("file://{}", entry_path.display())).unwrap_or_else(|_| uri.clone());
+    check_full(&entry_path, &entry_uri, &entry_text, open, false)
 }
 
 fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
@@ -84,7 +100,13 @@ fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
     }
 }
 
-fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
+fn check_full(
+    entry_path: &Path,
+    uri: &Uri,
+    text: &str,
+    open: OpenFile<'_>,
+    with_index: bool,
+) -> CheckOutput {
     let filename = Rc::new(uri_filename(uri));
     let content = Arc::new(text.to_string());
     let interner = Rc::new(RefCell::new(Rodeo::default()));
@@ -100,12 +122,6 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
         &bump,
         Rc::clone(&interner),
     );
-
-    let open = OpenFile {
-        uri,
-        filename: filename.as_str(),
-        text,
-    };
 
     let program = match parser.parse_program() {
         Ok(program) => program,
@@ -177,7 +193,17 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
 
     drop(bump);
 
-    let analysis = Analysis::build(&hir_module, &resolution_result, &interner, text, &filename);
+    let analysis = if with_index {
+        Analysis::build(
+            &hir_module,
+            &resolution_result,
+            &interner,
+            text,
+            filename.as_str(),
+        )
+    } else {
+        Analysis::default()
+    };
 
     let mut typechecker =
         zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&interner));
@@ -357,6 +383,42 @@ fn file_uri_to_path(uri: &Uri) -> Option<PathBuf> {
     let stripped = uri.as_str().strip_prefix("file://")?;
 
     Some(PathBuf::from(decode_uri_path(stripped)))
+}
+
+fn discover_entry(open_path: &Path, open_text: &str) -> PathBuf {
+    if contains_main(open_text) {
+        return open_path.to_path_buf();
+    }
+    let Some(dir) = open_path.parent() else {
+        return open_path.to_path_buf();
+    };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("zn") {
+                continue;
+            }
+            if path == open_path {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if contains_main(&content) {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.sort();
+    candidates
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| open_path.to_path_buf())
+}
+
+fn contains_main(text: &str) -> bool {
+    text.contains("fn main(")
 }
 
 fn decode_uri_path(input: &str) -> String {
