@@ -1,10 +1,19 @@
 use std::collections::HashSet;
 
-use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind};
+use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
 use crate::analysis::{Analysis, MemberKind, Role};
+
+const SNIPPETS: &[(&str, &str)] = &[
+    ("fn", "fn ${1:name}(${2:params}) ${3:Ret} {\n\t$0\n}"),
+    ("struct", "struct ${1:Name} {\n\t$0\n}"),
+    ("if", "if (${1:cond}) {\n\t$0\n}"),
+    ("while", "while (${1:cond}) {\n\t$0\n}"),
+    ("for", "for (${1:item} : ${2:iter}) {\n\t$0\n}"),
+    ("let", "let ${1:name} = $0;"),
+];
 
 fn role_kind(role: Role) -> CompletionItemKind {
     match role {
@@ -34,6 +43,18 @@ pub fn complete(text: &str, analysis: &Analysis, offset: usize) -> Vec<Completio
     let prefix = ident_prefix(text, offset);
     let mut seen: HashSet<String> = HashSet::new();
     let mut items = Vec::new();
+
+    for (trigger, body) in SNIPPETS {
+        if trigger.starts_with(prefix) {
+            items.push(CompletionItem {
+                label: trigger.to_string(),
+                kind: Some(CompletionItemKind::SNIPPET),
+                insert_text: Some(body.to_string()),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                ..Default::default()
+            });
+        }
+    }
 
     for keyword in CompilerKeyword::all_names() {
         if keyword.starts_with(prefix) && seen.insert(keyword.to_string()) {
