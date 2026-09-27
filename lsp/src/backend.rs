@@ -58,6 +58,7 @@ impl LanguageServer for Backend {
                 ),
                 definition_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -242,6 +243,45 @@ impl LanguageServer for Backend {
                 occurrence.len,
             )),
         }))
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri.clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let start = position::position_to_offset(&document.text, params.range.start);
+        let end = position::position_to_offset(&document.text, params.range.end);
+
+        let mut hints = Vec::new();
+
+        for call in &document.analysis.calls {
+            if call.callee_offset < start || call.callee_offset > end {
+                continue;
+            }
+
+            for (arg, param) in call.args.iter().zip(call.params.iter()) {
+                let Some(name) = param else {
+                    continue;
+                };
+
+                hints.push(InlayHint {
+                    position: position::offset_to_position(&document.text, arg.0),
+                    label: InlayHintLabel::String(format!("{name}:")),
+                    kind: Some(InlayHintKind::PARAMETER),
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: None,
+                    padding_right: Some(true),
+                    data: None,
+                });
+            }
+        }
+
+        Ok(Some(hints))
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
