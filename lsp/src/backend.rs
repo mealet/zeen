@@ -69,21 +69,21 @@ impl LanguageServer for Backend {
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        let text = self
+        let document = self
             .documents
             .read()
             .await
             .get(&params.text_document.uri)
-            .map(|document| document.text.clone());
+            .cloned();
 
-        let Some(text) = text else {
+        let Some(document) = document else {
             return Ok(None);
         };
 
         Ok(Some(
             SemanticTokens {
                 result_id: None,
-                data: semantic::tokens_for(&text),
+                data: semantic::tokens_for(&document.text, &document.analysis),
             }
             .into(),
         ))
@@ -93,14 +93,14 @@ impl LanguageServer for Backend {
         &self,
         params: SemanticTokensRangeParams,
     ) -> Result<Option<SemanticTokensRangeResult>> {
-        let text = self
+        let document = self
             .documents
             .read()
             .await
             .get(&params.text_document.uri)
-            .map(|document| document.text.clone());
+            .cloned();
 
-        let Some(text) = text else {
+        let Some(document) = document else {
             return Ok(None);
         };
 
@@ -108,7 +108,8 @@ impl LanguageServer for Backend {
             SemanticTokens {
                 result_id: None,
                 data: semantic::tokens_in_range(
-                    &text,
+                    &document.text,
+                    &document.analysis,
                     params.range.start.line,
                     params.range.end.line,
                 ),

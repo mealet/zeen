@@ -1,3 +1,4 @@
+use crate::analysis::{Analysis, Role};
 use tower_lsp_server::ls_types::{SemanticToken, SemanticTokenType, SemanticTokensLegend};
 use zeen_lexer::TokenKind;
 
@@ -13,6 +14,11 @@ enum TokenType {
     Decorator,
     Variable,
     Operator,
+    Function,
+    Method,
+    Parameter,
+    Property,
+    EnumMember,
 }
 
 struct RawToken {
@@ -35,22 +41,87 @@ pub fn legend() -> SemanticTokensLegend {
             SemanticTokenType::DECORATOR,
             SemanticTokenType::VARIABLE,
             SemanticTokenType::OPERATOR,
+            SemanticTokenType::FUNCTION,
+            SemanticTokenType::METHOD,
+            SemanticTokenType::PARAMETER,
+            SemanticTokenType::PROPERTY,
+            SemanticTokenType::ENUM_MEMBER,
         ],
         token_modifiers: Vec::new(),
     }
 }
 
-pub fn tokens_for(text: &str) -> Vec<SemanticToken> {
-    encode(collect(text))
+pub fn tokens_for(text: &str, analysis: &Analysis) -> Vec<SemanticToken> {
+    encode(collect_with(text, analysis))
 }
 
-pub fn tokens_in_range(text: &str, start_line: u32, end_line: u32) -> Vec<SemanticToken> {
+pub fn tokens_in_range(
+    text: &str,
+    analysis: &Analysis,
+    start_line: u32,
+    end_line: u32,
+) -> Vec<SemanticToken> {
     encode(
-        collect(text)
+        collect_with(text, analysis)
             .into_iter()
             .filter(|item| item.line >= start_line && item.line <= end_line)
             .collect(),
     )
+}
+
+fn collect_with(text: &str, analysis: &Analysis) -> Vec<RawToken> {
+    let starts = line_starts(text);
+    let mut overlay: Vec<RawToken> = Vec::new();
+
+    for occurrence in &analysis.occurrences {
+        let start = occurrence.offset.min(text.len());
+        let end = start.saturating_add(occurrence.len).min(text.len());
+
+        if start >= end {
+            continue;
+        }
+
+        let (start_line, start_col) = offset_to_line_col(&starts, start);
+        let (end_line, _) = offset_to_line_col(&starts, end.saturating_sub(1));
+
+        if start_line != end_line {
+            continue;
+        }
+
+        overlay.push(RawToken {
+            line: start_line,
+            start: start_col,
+            length: (end - start) as u32,
+            ty: role_token_type(occurrence.role),
+        });
+    }
+
+    let mut items = collect(text);
+
+    items.retain(|item| {
+        !overlay.iter().any(|cover| {
+            cover.line == item.line
+                && item.start < cover.start + cover.length
+                && cover.start < item.start + item.length
+        })
+    });
+
+    items.extend(overlay);
+    items.sort_by_key(|item| (item.line, item.start));
+
+    items
+}
+
+fn role_token_type(role: Role) -> TokenType {
+    match role {
+        Role::Function => TokenType::Function,
+        Role::Method => TokenType::Method,
+        Role::Type => TokenType::Type,
+        Role::Variable => TokenType::Variable,
+        Role::Parameter => TokenType::Parameter,
+        Role::Property => TokenType::Property,
+        Role::EnumMember => TokenType::EnumMember,
+    }
 }
 
 fn collect(text: &str) -> Vec<RawToken> {
