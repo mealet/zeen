@@ -885,6 +885,7 @@ name = "zeen-lexer"
 version = "0.1.0"
 dependencies = [
  "miette",
+ "strum",
  "thiserror",
  "zeen-driver",
 ]
