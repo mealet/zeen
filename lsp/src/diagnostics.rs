@@ -452,3 +452,92 @@ fn hex_value(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn contains_main_detects_entry() {
+        assert!(contains_main("fn main() {}"));
+        assert!(contains_main("fn main() i32 {\nreturn 0;\n}"));
+        assert!(!contains_main("fn helper() {}"));
+        assert!(!contains_main(""));
+    }
+
+    #[test]
+    fn discover_entry_prefers_open_file_with_main() {
+        let dir = test_dir("prefer");
+        let open = dir.join("lib.zn");
+        std::fs::write(&open, "fn main() {}\n").unwrap();
+        std::fs::write(dir.join("other.zn"), "fn main() {}\n").unwrap();
+        assert_eq!(discover_entry(&open, "fn main() {}\n"), open);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discover_entry_finds_sibling_main() {
+        let dir = test_dir("sibling");
+        let open = dir.join("lib.zn");
+        std::fs::write(&open, "fn helper() {}\n").unwrap();
+        let main = dir.join("main.zn");
+        std::fs::write(&main, "fn main() {}\n").unwrap();
+        assert_eq!(discover_entry(&open, "fn helper() {}\n"), main);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discover_entry_falls_back_without_main() {
+        let dir = test_dir("fallback");
+        let open = dir.join("lib.zn");
+        std::fs::write(&open, "fn helper() {}\n").unwrap();
+        assert_eq!(discover_entry(&open, "fn helper() {}\n"), open);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_uri_to_path_decodes() {
+        let uri = Uri::from_str("file:///tmp/zeen_test/test.zn").unwrap();
+        assert_eq!(
+            file_uri_to_path(&uri),
+            Some(PathBuf::from("/tmp/zeen_test/test.zn"))
+        );
+    }
+
+    #[test]
+    fn file_uri_to_path_rejects_non_file() {
+        let uri = Uri::from_str("untitled:Untitled-1").unwrap();
+        assert_eq!(file_uri_to_path(&uri), None);
+    }
+
+    #[test]
+    fn uri_filename_falls_back() {
+        let uri = Uri::from_str("untitled:Untitled-1").unwrap();
+        assert_eq!(uri_filename(&uri), "in-memory.zn");
+        let uri = Uri::from_str("file:///tmp/a.zn").unwrap();
+        assert_eq!(uri_filename(&uri), "a.zn");
+    }
+
+    #[test]
+    fn error_source_name_reads_named_source() {
+        use miette::NamedSource;
+        use zeen_parser::error::ParserError;
+
+        let err = ParserError::UnknownToken {
+            src: NamedSource::new("sample.zn", Arc::new("?!?".to_string())),
+            span: (0, 1).into(),
+        };
+        let probe = miette::SourceSpan::new(0.into(), 1);
+        assert_eq!(
+            error_source_name(&err, &probe),
+            Some("sample.zn".to_string())
+        );
+    }
+}
