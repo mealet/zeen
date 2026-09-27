@@ -60,14 +60,14 @@ pub fn check(uri: &Uri, text: &str) -> CheckOutput {
     };
     let entry_path = discover_entry(&open_path, text);
     if entry_path == open_path {
-        return check_full(&entry_path, uri, text, open, true);
+        return check_full(&entry_path, uri, text, open);
     }
     let Ok(entry_text) = std::fs::read_to_string(&entry_path) else {
-        return check_full(&open_path, uri, text, open, true);
+        return check_full(&open_path, uri, text, open);
     };
     let entry_uri =
         Uri::from_str(&format!("file://{}", entry_path.display())).unwrap_or_else(|_| uri.clone());
-    check_full(&entry_path, &entry_uri, &entry_text, open, false)
+    check_full(&entry_path, &entry_uri, &entry_text, open)
 }
 
 fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
@@ -100,13 +100,7 @@ fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
     }
 }
 
-fn check_full(
-    entry_path: &Path,
-    uri: &Uri,
-    text: &str,
-    open: OpenFile<'_>,
-    with_index: bool,
-) -> CheckOutput {
+fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> CheckOutput {
     let filename = Rc::new(uri_filename(uri));
     let content = Arc::new(text.to_string());
     let interner = Rc::new(RefCell::new(Rodeo::default()));
@@ -193,17 +187,13 @@ fn check_full(
 
     drop(bump);
 
-    let analysis = if with_index {
-        Analysis::build(
-            &hir_module,
-            &resolution_result,
-            &interner,
-            text,
-            filename.as_str(),
-        )
-    } else {
-        Analysis::default()
-    };
+    let analysis = Analysis::build(
+        &hir_module,
+        &resolution_result,
+        &interner,
+        open.text,
+        open.filename,
+    );
 
     let mut typechecker =
         zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&interner));
