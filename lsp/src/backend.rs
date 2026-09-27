@@ -180,14 +180,19 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let version = params.text_document.version;
 
-        self.documents.write().await.insert(
-            uri.clone(),
-            Document {
-                version,
-                text: change.text,
-                analysis: crate::analysis::Analysis::default(),
-            },
-        );
+        {
+            let mut documents = self.documents.write().await;
+            let previous = documents.get(&uri).map(|document| document.analysis.clone());
+
+            documents.insert(
+                uri.clone(),
+                Document {
+                    version,
+                    text: change.text,
+                    analysis: previous.unwrap_or_default(),
+                },
+            );
+        }
 
         let client = self.client.clone();
         let documents = Arc::clone(&self.documents);
