@@ -202,7 +202,7 @@ impl LanguageServer for Backend {
             name.to_string(),
         )];
 
-        let mut detail = format!("{} - defined", occurrence.role.label());
+        let mut detail = occurrence.role.label().to_string();
 
         if let Some(ty) = &occurrence.ty {
             detail.push_str(&format!("\ntype: `{ty}`"));
@@ -225,7 +225,7 @@ impl LanguageServer for Backend {
             };
 
             detail.push_str(&format!(
-                " at {}:{}\n----\n```zn\n{}\n```",
+                "\ndefined at {}:{}\n----\n```zn\n{}\n```",
                 file,
                 target.line + 1,
                 preview
