@@ -60,6 +60,7 @@ pub struct Analysis {
     pub occurrences: Vec<Occurrence>,
     pub calls: Vec<CallSite>,
     pub field_hints: Vec<FieldHint>,
+    pub members: HashMap<DefId, Vec<Member>>,
     pub(crate) fn_params: HashMap<DefId, Vec<Option<String>>>,
     pub(crate) raw_calls: Vec<RawCall>,
     pub(crate) raw_fields: Vec<RawFieldInit>,
@@ -71,6 +72,19 @@ pub struct CallSite {
     pub callee_len: usize,
     pub args: Vec<(usize, usize)>,
     pub params: Vec<Option<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemberKind {
+    Method,
+    Field,
+    Variant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    pub name: String,
+    pub kind: MemberKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,6 +463,28 @@ impl<'ctx> Walker<'ctx> {
         }
     }
 
+    fn collect_method(&mut self, owner: DefId, method: &HirDecl) {
+        let HirDeclKind::Fn(func) = &method.kind else {
+            return;
+        };
+
+        let start = func.name.1.offset().min(self.text.len());
+        let end = start.saturating_add(func.name.1.len()).min(self.text.len());
+
+        let Some(name) = self.text.get(start..end) else {
+            return;
+        };
+
+        self.analysis
+            .members
+            .entry(owner)
+            .or_default()
+            .push(Member {
+                name: name.to_string(),
+                kind: MemberKind::Method,
+            });
+    }
+
     fn walk_decl(&mut self, decl: &HirDecl) {
         if !self.file_matches(decl.source.src.name()) {
             return;
@@ -488,10 +524,20 @@ impl<'ctx> Walker<'ctx> {
                         self.push(offset, len, role, target, None, Some(field.def_id));
                     }
 
+                    self.analysis
+                        .members
+                        .entry(decl.def_id)
+                        .or_default()
+                        .push(Member {
+                            name: self.interner.resolve(&field.name).to_string(),
+                            kind: MemberKind::Field,
+                        });
+
                     self.walk_type(&field.ty);
                 }
 
                 for method in &strukt.methods {
+                    self.collect_method(decl.def_id, method);
                     self.walk_decl(method);
                 }
             }
@@ -525,6 +571,10 @@ impl<'ctx> Walker<'ctx> {
                 }
 
                 for method in &implement.methods {
+                    if let Some(owner) = implement.object {
+                        self.collect_method(owner, method);
+                    }
+
                     self.walk_decl(method);
                 }
             }
@@ -551,6 +601,15 @@ impl<'ctx> Walker<'ctx> {
                         Some(variant.def_id),
                     );
 
+                    self.analysis
+                        .members
+                        .entry(decl.def_id)
+                        .or_default()
+                        .push(Member {
+                            name: self.interner.resolve(&variant.name).to_string(),
+                            kind: MemberKind::Variant,
+                        });
+
                     match &variant.payload {
                         Some(HirEnumVariantPayload::Single(ty)) => self.walk_type(ty),
                         Some(HirEnumVariantPayload::Anonymous { .. }) | None => {}
@@ -558,6 +617,7 @@ impl<'ctx> Walker<'ctx> {
                 }
 
                 for method in &enumeration.methods {
+                    self.collect_method(decl.def_id, method);
                     self.walk_decl(method);
                 }
             }

@@ -60,6 +60,7 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec![".".to_string()]),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -342,7 +343,11 @@ impl LanguageServer for Backend {
         };
 
         let offset = position::position_to_offset(&document.text, position);
-        let items = completion::complete(&document.text, &document.analysis, offset);
+        let items = if offset > 0 && document.text.as_bytes().get(offset - 1) == Some(&b'.') {
+            completion::dot_complete(&document.text, &document.analysis, offset - 1)
+        } else {
+            completion::complete(&document.text, &document.analysis, offset)
+        };
 
         Ok(Some(CompletionResponse::Array(items)))
     }

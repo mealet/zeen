@@ -4,7 +4,7 @@ use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind};
 use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
-use crate::analysis::{Analysis, Role};
+use crate::analysis::{Analysis, MemberKind, Role};
 
 fn role_kind(role: Role) -> CompletionItemKind {
     match role {
@@ -86,4 +86,80 @@ pub fn complete(text: &str, analysis: &Analysis, offset: usize) -> Vec<Completio
     }
 
     items
+}
+
+fn member_kind(kind: &MemberKind) -> CompletionItemKind {
+    match kind {
+        MemberKind::Method => CompletionItemKind::METHOD,
+        MemberKind::Field => CompletionItemKind::FIELD,
+        MemberKind::Variant => CompletionItemKind::ENUM_MEMBER,
+    }
+}
+
+fn normalize_type_name(ty: &str) -> Option<&str> {
+    let mut name = ty.trim();
+
+    while let Some(rest) = name.strip_prefix('*') {
+        name = rest.trim_start();
+    }
+
+    if let Some(bracket) = name.find(['[', '(']) {
+        name = &name[..bracket];
+    }
+
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(name)
+}
+
+pub fn dot_complete(text: &str, analysis: &Analysis, dot_offset: usize) -> Vec<CompletionItem> {
+    let bytes = text.as_bytes();
+    let mut start = dot_offset;
+
+    while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+        start -= 1;
+    }
+
+    if start == dot_offset {
+        return Vec::new();
+    }
+
+    let Some(receiver) = analysis.at(start) else {
+        return Vec::new();
+    };
+
+    let Some(ty) = &receiver.ty else {
+        return Vec::new();
+    };
+
+    let Some(name) = normalize_type_name(ty) else {
+        return Vec::new();
+    };
+
+    let Some(def) = analysis.occurrences.iter().find_map(|occurrence| {
+        if occurrence.role == Role::Type
+            && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
+        {
+            occurrence.def
+        } else {
+            None
+        }
+    }) else {
+        return Vec::new();
+    };
+
+    let Some(members) = analysis.members.get(&def) else {
+        return Vec::new();
+    };
+
+    members
+        .iter()
+        .map(|member| CompletionItem {
+            label: member.name.clone(),
+            kind: Some(member_kind(&member.kind)),
+            ..Default::default()
+        })
+        .collect()
 }
