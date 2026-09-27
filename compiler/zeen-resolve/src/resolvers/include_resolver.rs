@@ -717,11 +717,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
             });
 
-            let target_name = target_canonical
-                .file_name()
-                .unwrap_or(std::ffi::OsStr::new("unknown"))
-                .to_string_lossy()
-                .to_string();
+            let target_name = target_canonical.to_string_lossy().to_string();
 
             let named_src = NamedSource::new(&target_name, Arc::clone(&source));
 

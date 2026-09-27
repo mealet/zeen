@@ -27,6 +27,7 @@ pub struct CheckOutput {
 struct OpenFile<'a> {
     uri: &'a Uri,
     filename: &'a str,
+    canonical: String,
     text: &'a str,
 }
 
@@ -53,9 +54,13 @@ pub fn check(uri: &Uri, text: &str) -> CheckOutput {
     };
 
     let filename = uri_filename(uri);
+    let canonical = std::fs::canonicalize(&open_path)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| filename.clone());
     let open = OpenFile {
         uri,
         filename: &filename,
+        canonical,
         text,
     };
     let entry_path = discover_entry(&open_path, text);
@@ -83,6 +88,7 @@ fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
     let open = OpenFile {
         uri,
         filename: filename.as_str(),
+        canonical: filename.to_string(),
         text,
     };
 
@@ -193,6 +199,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
         &interner,
         open.text,
         open.filename,
+        &open.canonical,
     );
 
     let mut typechecker =
@@ -300,8 +307,10 @@ fn push_diagnostic(diags: &mut Vec<Diagnostic>, open: &OpenFile<'_>, err: &dyn m
             if let Some(labels) = related_error.labels() {
                 for label in labels {
                     let span = miette::SourceSpan::new(label.offset().into(), label.len());
-                    let matches = error_source_name(related_error, &span)
-                        .is_none_or(|name| name == open.filename);
+                    let matches = error_source_name(related_error, &span).is_none_or(|name| {
+                        name == open.filename
+                            || Some(name.as_str()) == Some(open.canonical.as_str())
+                    });
                     if matches {
                         related.push((related_message.clone(), label.offset(), label.len()));
                     }
@@ -320,6 +329,7 @@ fn push_diagnostic(diags: &mut Vec<Diagnostic>, open: &OpenFile<'_>, err: &dyn m
     let probe = miette::SourceSpan::new(main.0.into(), main.1);
     if let Some(name) = error_source_name(err, &probe)
         && name != open.filename
+        && Some(name.as_str()) != Some(open.canonical.as_str())
     {
         return;
     }

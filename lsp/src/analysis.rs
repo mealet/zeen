@@ -58,6 +58,7 @@ impl Analysis {
         interner: &RefCell<Rodeo>,
         text: &str,
         filename: &str,
+        canonical: &str,
     ) -> Self {
         let interner = interner.borrow();
         let mut walker = Walker {
@@ -65,6 +66,7 @@ impl Analysis {
             interner,
             text,
             filename,
+            canonical,
             methods: resolution.impls.values().flatten().copied().collect(),
             occurrences: Vec::new(),
         };
@@ -104,6 +106,7 @@ struct Walker<'ctx> {
     interner: std::cell::Ref<'ctx, Rodeo>,
     text: &'ctx str,
     filename: &'ctx str,
+    canonical: &'ctx str,
     methods: HashSet<DefId>,
     occurrences: Vec<Occurrence>,
 }
@@ -167,6 +170,10 @@ impl<'ctx> Walker<'ctx> {
         Some(self.role_of_kind(&info.kind, def_id))
     }
 
+    fn file_matches(&self, name: &str) -> bool {
+        name == self.filename || name == self.canonical
+    }
+
     fn def_target_span(&self, def_id: DefId) -> (Option<usize>, Option<usize>, Option<String>) {
         let Some(info) = self.resolution.defs.get(&def_id) else {
             return (None, None, None);
@@ -174,7 +181,7 @@ impl<'ctx> Walker<'ctx> {
 
         let name = info.span.src.name();
 
-        if name == self.filename {
+        if name == self.filename || name == self.canonical {
             return (
                 Some(info.span.span.offset()),
                 Some(info.span.span.len()),
@@ -277,7 +284,7 @@ impl<'ctx> Walker<'ctx> {
     }
 
     fn walk_decl(&mut self, decl: &HirDecl) {
-        if decl.source.src.name() != self.filename {
+        if !self.file_matches(decl.source.src.name()) {
             return;
         }
 
