@@ -872,6 +872,7 @@ dependencies = [
  "lasso",
  "miette",
  "smol_str",
+ "strum",
  "thiserror",
  "zeen-ast",
  "zeen-driver",
