@@ -5,7 +5,7 @@ use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
 use crate::{analysis, diagnostics, position, semantic};
 
-const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(100);
+const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(30);
 
 #[derive(Debug)]
 pub struct Backend {
@@ -208,12 +208,18 @@ impl LanguageServer for Backend {
 
             let output = diagnostics::check(&uri, &current.text);
 
+            let analysis = if output.analysis.occurrences.is_empty() {
+                current.analysis.clone()
+            } else {
+                output.analysis
+            };
+
             documents.write().await.insert(
                 uri.clone(),
                 Document {
                     version,
                     text: current.text,
-                    analysis: output.analysis,
+                    analysis,
                 },
             );
 
