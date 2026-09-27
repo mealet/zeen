@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use lasso::{Rodeo, Spur};
 use miette::SourceSpan;
@@ -53,6 +57,24 @@ pub struct Occurrence {
 #[derive(Debug, Clone, Default)]
 pub struct Analysis {
     pub occurrences: Vec<Occurrence>,
+    pub calls: Vec<CallSite>,
+    pub(crate) fn_params: HashMap<DefId, Vec<Option<String>>>,
+    pub(crate) raw_calls: Vec<RawCall>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallSite {
+    pub callee_offset: usize,
+    pub callee_len: usize,
+    pub args: Vec<(usize, usize)>,
+    pub params: Vec<Option<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RawCall {
+    pub call: HirId,
+    pub callee: (usize, usize),
+    pub args: Vec<(usize, usize)>,
 }
 
 impl Analysis {
@@ -72,17 +94,16 @@ impl Analysis {
             filename,
             canonical,
             methods: resolution.impls.values().flatten().copied().collect(),
-            occurrences: Vec::new(),
+            analysis: Analysis::default(),
         };
         for decl in &module.decls {
             walker.walk_decl(decl);
         }
         walker
+            .analysis
             .occurrences
             .sort_by_key(|item| (item.offset, item.len));
-        Self {
-            occurrences: walker.occurrences,
-        }
+        walker.analysis
     }
 
     pub fn at(&self, offset: usize) -> Option<&Occurrence> {
@@ -124,6 +145,25 @@ impl Analysis {
             }
         }
     }
+
+    pub fn resolve_calls(&mut self, types: &TypeCheckResult) {
+        let mut calls = Vec::with_capacity(self.raw_calls.len());
+        for raw in &self.raw_calls {
+            let Some(resolution) = types.call_resolutions.get(&raw.call) else {
+                continue;
+            };
+            let Some(params) = self.fn_params.get(&resolution.fn_def) else {
+                continue;
+            };
+            calls.push(CallSite {
+                callee_offset: raw.callee.0,
+                callee_len: raw.callee.1,
+                args: raw.args.clone(),
+                params: params.clone(),
+            });
+        }
+        self.calls = calls;
+    }
 }
 
 fn is_ident_byte(byte: u8) -> bool {
@@ -137,7 +177,7 @@ struct Walker<'ctx> {
     filename: &'ctx str,
     canonical: &'ctx str,
     methods: HashSet<DefId>,
-    occurrences: Vec<Occurrence>,
+    analysis: Analysis,
 }
 
 impl<'ctx> Walker<'ctx> {
@@ -157,7 +197,7 @@ impl<'ctx> Walker<'ctx> {
             return;
         }
 
-        self.occurrences.push(Occurrence {
+        self.analysis.occurrences.push(Occurrence {
             offset,
             len,
             role,
@@ -352,7 +392,7 @@ impl<'ctx> Walker<'ctx> {
                     Some(decl.def_id),
                 );
 
-                self.walk_fn(func);
+                self.walk_fn(func, decl.def_id);
             }
 
             HirDeclKind::Struct(strukt) => {
@@ -489,7 +529,17 @@ impl<'ctx> Walker<'ctx> {
         }
     }
 
-    fn walk_fn(&mut self, func: &HirFn) {
+    fn walk_fn(&mut self, func: &HirFn, def_id: DefId) {
+        let mut params = Vec::with_capacity(func.params.len());
+        for param in &func.params {
+            params.push(
+                param
+                    .name
+                    .map(|name| self.interner.resolve(&name).to_string()),
+            );
+        }
+        self.analysis.fn_params.insert(def_id, params);
+
         for generic in &func.generics {
             self.walk_generic(generic);
         }
@@ -613,6 +663,14 @@ impl<'ctx> Walker<'ctx> {
                 generic_args,
                 ..
             } => {
+                self.analysis.raw_calls.push(RawCall {
+                    call: expr.id,
+                    callee: (callee.source.span.offset(), callee.source.span.len()),
+                    args: args
+                        .iter()
+                        .map(|arg| (arg.source.span.offset(), arg.source.span.len()))
+                        .collect(),
+                });
                 self.walk_expr(callee);
 
                 for arg in args {
@@ -719,7 +777,7 @@ impl<'ctx> Walker<'ctx> {
 
             HirExprKind::Type(ty) => self.walk_type(ty),
 
-            HirExprKind::Closure { def, .. } => self.walk_fn(def),
+            HirExprKind::Closure { def_id, def, .. } => self.walk_fn(def, *def_id),
 
             HirExprKind::Range { start, end, .. } => {
                 if let Some(start) = start {
@@ -855,7 +913,10 @@ pub fn build_syntax_fallback(program: &[&Declaration<'_>]) -> Analysis {
 
     occurrences.sort_by_key(|item| (item.offset, item.len));
 
-    Analysis { occurrences }
+    Analysis {
+        occurrences,
+        ..Default::default()
+    }
 }
 
 fn push_syntax(occurrences: &mut Vec<Occurrence>, offset: usize, len: usize, role: Role) {
