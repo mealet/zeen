@@ -9,5 +9,6 @@ license.workspace = true
 
 [dependencies]
 miette = { version = "7.6.0", features = ["fancy"] }
+strum = { version = "0.28.0", features = ["derive"] }
 thiserror = "2.0.18"
 zeen-driver = { path = "../zeen-driver" }
