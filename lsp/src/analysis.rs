@@ -147,6 +147,8 @@ impl<'ctx> Walker<'ctx> {
         len: usize,
         role: Role,
         target: (Option<usize>, Option<usize>, Option<String>),
+        hir: Option<HirId>,
+        def: Option<DefId>,
     ) {
         let offset = offset.min(self.text.len());
         let len = len.min(self.text.len().saturating_sub(offset));
@@ -162,8 +164,8 @@ impl<'ctx> Walker<'ctx> {
             target_offset: target.0,
             target_len: target.1,
             target_file: target.2,
-            hir: None,
-            def: None,
+            hir,
+            def,
             ty: None,
         });
     }
@@ -228,22 +230,43 @@ impl<'ctx> Walker<'ctx> {
         )
     }
 
-    fn emit_def(&mut self, offset: usize, len: usize, role: Role) {
-        self.push(offset, len, role, (None, None, None));
+    fn emit_def(&mut self, offset: usize, len: usize, role: Role, def: Option<DefId>) {
+        self.push(offset, len, role, (None, None, None), None, def);
     }
 
-    fn emit_target(&mut self, offset: usize, len: usize, role: Role, target: DefId) {
-        self.push(offset, len, role, self.def_target_span(target));
+    fn emit_target(
+        &mut self,
+        offset: usize,
+        len: usize,
+        role: Role,
+        target: DefId,
+        hir: Option<HirId>,
+    ) {
+        self.push(
+            offset,
+            len,
+            role,
+            self.def_target_span(target),
+            hir,
+            Some(target),
+        );
     }
 
-    fn emit_ref(&mut self, offset: usize, len: usize, target: DefId) {
+    fn emit_ref(&mut self, offset: usize, len: usize, target: DefId, hir: Option<HirId>) {
         let Some(role) = self.role_of_def(target) else {
             return;
         };
-        self.emit_target(offset, len, role, target);
+        self.emit_target(offset, len, role, target, hir);
     }
 
-    fn emit_named(&mut self, span: SourceSpan, name: Spur, role: Role, target: Option<DefId>) {
+    fn emit_named(
+        &mut self,
+        span: SourceSpan,
+        name: Spur,
+        role: Role,
+        target: Option<DefId>,
+        hir: Option<HirId>,
+    ) {
         let (offset, len) = self
             .find_name(span, name)
             .unwrap_or((span.offset(), span.len()));
@@ -252,7 +275,7 @@ impl<'ctx> Walker<'ctx> {
             .map(|def_id| self.def_target_span(def_id))
             .unwrap_or((None, None, None));
 
-        self.push(offset, len, role, target_span);
+        self.push(offset, len, role, target_span, hir, target);
     }
 
     fn scope_text(&self, span: SourceSpan) -> Option<(&str, usize)> {
@@ -326,6 +349,7 @@ impl<'ctx> Walker<'ctx> {
                     func.name.1.offset(),
                     func.name.1.len(),
                     self.fn_role(decl.def_id),
+                    Some(decl.def_id),
                 );
 
                 self.walk_fn(func);
@@ -334,7 +358,12 @@ impl<'ctx> Walker<'ctx> {
             HirDeclKind::Struct(strukt) => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Type);
 
-                self.emit_def(strukt.name.1.offset(), strukt.name.1.len(), role);
+                self.emit_def(
+                    strukt.name.1.offset(),
+                    strukt.name.1.len(),
+                    role,
+                    Some(decl.def_id),
+                );
 
                 for generic in &strukt.generics {
                     self.walk_generic(generic);
@@ -345,7 +374,7 @@ impl<'ctx> Walker<'ctx> {
 
                     if let Some((offset, len)) = self.find_field(decl.source.span, field.name) {
                         let target = self.def_target_span(field.def_id);
-                        self.push(offset, len, role, target);
+                        self.push(offset, len, role, target, None, Some(field.def_id));
                     }
 
                     self.walk_type(&field.ty);
@@ -359,7 +388,12 @@ impl<'ctx> Walker<'ctx> {
             HirDeclKind::Interface(interface) => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Type);
 
-                self.emit_def(interface.name.1.offset(), interface.name.1.len(), role);
+                self.emit_def(
+                    interface.name.1.offset(),
+                    interface.name.1.len(),
+                    role,
+                    Some(decl.def_id),
+                );
 
                 for generic in &interface.generics {
                     self.walk_generic(generic);
@@ -387,14 +421,24 @@ impl<'ctx> Walker<'ctx> {
             HirDeclKind::Enum(enumeration) => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Type);
 
-                self.emit_def(enumeration.name.1.offset(), enumeration.name.1.len(), role);
+                self.emit_def(
+                    enumeration.name.1.offset(),
+                    enumeration.name.1.len(),
+                    role,
+                    Some(decl.def_id),
+                );
 
                 for generic in &enumeration.generics {
                     self.walk_generic(generic);
                 }
 
                 for variant in &enumeration.variants {
-                    self.emit_def(variant.span.offset(), variant.span.len(), Role::EnumMember);
+                    self.emit_def(
+                        variant.span.offset(),
+                        variant.span.len(),
+                        Role::EnumMember,
+                        Some(variant.def_id),
+                    );
 
                     match &variant.payload {
                         Some(HirEnumVariantPayload::Single(ty)) => self.walk_type(ty),
@@ -410,7 +454,12 @@ impl<'ctx> Walker<'ctx> {
             HirDeclKind::Alias(alias) => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Type);
 
-                self.emit_def(alias.name.1.offset(), alias.name.1.len(), role);
+                self.emit_def(
+                    alias.name.1.offset(),
+                    alias.name.1.len(),
+                    role,
+                    Some(decl.def_id),
+                );
 
                 for generic in &alias.generics {
                     self.walk_generic(generic);
@@ -422,7 +471,7 @@ impl<'ctx> Walker<'ctx> {
             HirDeclKind::ExternVar { name, ty, .. } => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Variable);
 
-                self.emit_def(name.1.offset(), name.1.len(), role);
+                self.emit_def(name.1.offset(), name.1.len(), role, Some(decl.def_id));
                 self.walk_type(ty);
             }
 
@@ -431,7 +480,7 @@ impl<'ctx> Walker<'ctx> {
             } => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Variable);
 
-                self.emit_def(name.1.offset(), name.1.len(), role);
+                self.emit_def(name.1.offset(), name.1.len(), role, Some(decl.def_id));
                 self.walk_type(ty);
                 self.walk_expr(value);
             }
@@ -452,7 +501,7 @@ impl<'ctx> Walker<'ctx> {
                     .and_then(|def_id| self.role_of_def(def_id))
                     .unwrap_or(Role::Parameter);
 
-                self.emit_named(param.span, name, role, param.def_id);
+                self.emit_named(param.span, name, role, param.def_id, None);
             }
 
             self.walk_type(&param.ty);
@@ -468,7 +517,12 @@ impl<'ctx> Walker<'ctx> {
     }
 
     fn walk_generic(&mut self, generic: &HirGenericParam) {
-        self.emit_def(generic.name.1.offset(), generic.name.1.len(), Role::Type);
+        self.emit_def(
+            generic.name.1.offset(),
+            generic.name.1.len(),
+            Role::Type,
+            Some(generic.def_id),
+        );
     }
 
     fn walk_stmt(&mut self, stmt: &HirStmt) {
@@ -482,7 +536,7 @@ impl<'ctx> Walker<'ctx> {
             } => {
                 let role = self.role_of_def(*def_id).unwrap_or(Role::Variable);
 
-                self.emit_named(stmt.source.span, *name, role, Some(*def_id));
+                self.emit_named(stmt.source.span, *name, role, Some(*def_id), None);
 
                 if let Some(ty) = explicit_type {
                     self.walk_type(ty);
@@ -521,7 +575,7 @@ impl<'ctx> Walker<'ctx> {
             } => {
                 let role = self.role_of_def(*def_id).unwrap_or(Role::Variable);
 
-                self.emit_target(varname.1.offset(), varname.1.len(), role, *def_id);
+                self.emit_target(varname.1.offset(), varname.1.len(), role, *def_id, None);
                 self.walk_expr(iterator);
                 self.walk_stmt(block);
             }
@@ -538,7 +592,12 @@ impl<'ctx> Walker<'ctx> {
             HirExprKind::VarRef(target)
             | HirExprKind::GenericParamRef(target)
             | HirExprKind::SelfValue(target) => {
-                self.emit_ref(expr.source.span.offset(), expr.source.span.len(), *target);
+                self.emit_ref(
+                    expr.source.span.offset(),
+                    expr.source.span.len(),
+                    *target,
+                    Some(expr.id),
+                );
             }
 
             HirExprKind::Binary { lhs, rhs, .. } => {
@@ -604,7 +663,7 @@ impl<'ctx> Walker<'ctx> {
                 object_generic_args,
             } => {
                 self.walk_expr(object);
-                self.emit_def(field.1.offset(), field.1.len(), Role::Property);
+                self.emit_def(field.1.offset(), field.1.len(), Role::Property, None);
 
                 for ty in object_generic_args {
                     self.walk_type(ty);
@@ -624,7 +683,7 @@ impl<'ctx> Walker<'ctx> {
                 if let Some(def_id) = ty.0 {
                     let role = self.role_of_def(def_id).unwrap_or(Role::Type);
 
-                    self.emit_target(ty.2.offset(), ty.2.len(), role, def_id);
+                    self.emit_target(ty.2.offset(), ty.2.len(), role, def_id, None);
                 }
 
                 for arg in generic_args {
@@ -632,7 +691,7 @@ impl<'ctx> Walker<'ctx> {
                 }
 
                 for init in fields {
-                    self.emit_def(init.span.offset(), init.span.len(), Role::Property);
+                    self.emit_def(init.span.offset(), init.span.len(), Role::Property, None);
                     self.walk_expr(&init.value);
                 }
             }
@@ -685,7 +744,12 @@ impl<'ctx> Walker<'ctx> {
                 binding,
                 ..
             } => {
-                self.emit_def(variant_span.offset(), variant_span.len(), Role::EnumMember);
+                self.emit_def(
+                    variant_span.offset(),
+                    variant_span.len(),
+                    Role::EnumMember,
+                    None,
+                );
 
                 if let Some(binding) = binding {
                     self.walk_binding(binding);
@@ -708,6 +772,7 @@ impl<'ctx> Walker<'ctx> {
             binding.span.len(),
             role,
             binding.def_id,
+            None,
         );
     }
 
@@ -716,14 +781,24 @@ impl<'ctx> Walker<'ctx> {
             HirTypeKind::Builtin(_) | HirTypeKind::VaArgs | HirTypeKind::Error => {}
 
             HirTypeKind::SelfType(target) | HirTypeKind::SelfAlias(target) => {
-                self.emit_ref(ty.source.span.offset(), ty.source.span.len(), *target);
+                self.emit_ref(
+                    ty.source.span.offset(),
+                    ty.source.span.len(),
+                    *target,
+                    Some(ty.id),
+                );
             }
 
             HirTypeKind::Named {
                 def_id,
                 generic_args,
             } => {
-                self.emit_ref(ty.source.span.offset(), ty.source.span.len(), *def_id);
+                self.emit_ref(
+                    ty.source.span.offset(),
+                    ty.source.span.len(),
+                    *def_id,
+                    Some(ty.id),
+                );
 
                 for arg in generic_args {
                     self.walk_type(arg);
