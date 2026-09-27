@@ -225,6 +225,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
         Rc::clone(&interner),
         &resolution_result,
     );
+
     analysis.resolve_calls(&typechecker_result);
 
     let mut lowered = match zeen_mir::lowering::lower_program(

@@ -87,6 +87,7 @@ impl Analysis {
         canonical: &str,
     ) -> Self {
         let interner = interner.borrow();
+
         let mut walker = Walker {
             resolution,
             interner,
@@ -96,13 +97,16 @@ impl Analysis {
             methods: resolution.impls.values().flatten().copied().collect(),
             analysis: Analysis::default(),
         };
+
         for decl in &module.decls {
             walker.walk_decl(decl);
         }
+
         walker
             .analysis
             .occurrences
             .sort_by_key(|item| (item.offset, item.len));
+
         walker.analysis
     }
 
@@ -136,6 +140,7 @@ impl Analysis {
                         .def
                         .and_then(|def| types.def_types.get(&def).copied())
                 });
+
             if let Some(id) = type_id {
                 occurrence.ty = Some(
                     types
@@ -148,13 +153,16 @@ impl Analysis {
 
     pub fn resolve_calls(&mut self, types: &TypeCheckResult) {
         let mut calls = Vec::with_capacity(self.raw_calls.len());
+
         for raw in &self.raw_calls {
             let Some(resolution) = types.call_resolutions.get(&raw.call) else {
                 continue;
             };
+
             let Some(params) = self.fn_params.get(&resolution.fn_def) else {
                 continue;
             };
+
             calls.push(CallSite {
                 callee_offset: raw.callee.0,
                 callee_len: raw.callee.1,
@@ -162,6 +170,7 @@ impl Analysis {
                 params: params.clone(),
             });
         }
+
         self.calls = calls;
     }
 }
@@ -531,6 +540,7 @@ impl<'ctx> Walker<'ctx> {
 
     fn walk_fn(&mut self, func: &HirFn, def_id: DefId) {
         let mut params = Vec::with_capacity(func.params.len());
+
         for param in &func.params {
             params.push(
                 param
@@ -538,6 +548,7 @@ impl<'ctx> Walker<'ctx> {
                     .map(|name| self.interner.resolve(&name).to_string()),
             );
         }
+
         self.analysis.fn_params.insert(def_id, params);
 
         for generic in &func.generics {
@@ -671,6 +682,7 @@ impl<'ctx> Walker<'ctx> {
                         .map(|arg| (arg.source.span.offset(), arg.source.span.len()))
                         .collect(),
                 });
+
                 self.walk_expr(callee);
 
                 for arg in args {
