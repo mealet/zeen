@@ -281,6 +281,34 @@ impl LanguageServer for Backend {
             }
         }
 
+        for occurrence in &document.analysis.occurrences {
+            if !occurrence.type_hint {
+                continue;
+            }
+
+            if occurrence.offset < start || occurrence.offset > end {
+                continue;
+            }
+
+            let Some(ty) = &occurrence.ty else {
+                continue;
+            };
+
+            hints.push(InlayHint {
+                position: position::offset_to_position(
+                    &document.text,
+                    occurrence.offset + occurrence.len,
+                ),
+                label: InlayHintLabel::String(format!(": {ty}")),
+                kind: Some(InlayHintKind::TYPE),
+                text_edits: None,
+                tooltip: None,
+                padding_left: None,
+                padding_right: None,
+                data: None,
+            });
+        }
+
         Ok(Some(hints))
     }
 

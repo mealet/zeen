@@ -52,6 +52,7 @@ pub struct Occurrence {
     pub hir: Option<HirId>,
     pub def: Option<DefId>,
     pub ty: Option<String>,
+    pub type_hint: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -198,12 +199,12 @@ impl<'ctx> Walker<'ctx> {
         target: (Option<usize>, Option<usize>, Option<String>),
         hir: Option<HirId>,
         def: Option<DefId>,
-    ) {
+    ) -> Option<(usize, usize)> {
         let offset = offset.min(self.text.len());
         let len = len.min(self.text.len().saturating_sub(offset));
 
         if len == 0 {
-            return;
+            return None;
         }
 
         self.analysis.occurrences.push(Occurrence {
@@ -216,7 +217,10 @@ impl<'ctx> Walker<'ctx> {
             hir,
             def,
             ty: None,
+            type_hint: false,
         });
+
+        Some((offset, len))
     }
 
     fn role_of_kind(&self, kind: &DefKind, def_id: DefId) -> Role {
@@ -279,8 +283,14 @@ impl<'ctx> Walker<'ctx> {
         )
     }
 
-    fn emit_def(&mut self, offset: usize, len: usize, role: Role, def: Option<DefId>) {
-        self.push(offset, len, role, (None, None, None), None, def);
+    fn emit_def(
+        &mut self,
+        offset: usize,
+        len: usize,
+        role: Role,
+        def: Option<DefId>,
+    ) -> Option<(usize, usize)> {
+        self.push(offset, len, role, (None, None, None), None, def)
     }
 
     fn emit_target(
@@ -290,7 +300,7 @@ impl<'ctx> Walker<'ctx> {
         role: Role,
         target: DefId,
         hir: Option<HirId>,
-    ) {
+    ) -> Option<(usize, usize)> {
         self.push(
             offset,
             len,
@@ -298,14 +308,20 @@ impl<'ctx> Walker<'ctx> {
             self.def_target_span(target),
             hir,
             Some(target),
-        );
+        )
     }
 
-    fn emit_ref(&mut self, offset: usize, len: usize, target: DefId, hir: Option<HirId>) {
+    fn emit_ref(
+        &mut self,
+        offset: usize,
+        len: usize,
+        target: DefId,
+        hir: Option<HirId>,
+    ) -> Option<(usize, usize)> {
         let Some(role) = self.role_of_def(target) else {
-            return;
+            return None;
         };
-        self.emit_target(offset, len, role, target, hir);
+        self.emit_target(offset, len, role, target, hir)
     }
 
     fn emit_named(
@@ -315,7 +331,7 @@ impl<'ctx> Walker<'ctx> {
         role: Role,
         target: Option<DefId>,
         hir: Option<HirId>,
-    ) {
+    ) -> Option<(usize, usize)> {
         let (offset, len) = self
             .find_name(span, name)
             .unwrap_or((span.offset(), span.len()));
@@ -324,7 +340,7 @@ impl<'ctx> Walker<'ctx> {
             .map(|def_id| self.def_target_span(def_id))
             .unwrap_or((None, None, None));
 
-        self.push(offset, len, role, target_span, hir, target);
+        self.push(offset, len, role, target_span, hir, target)
     }
 
     fn scope_text(&self, span: SourceSpan) -> Option<(&str, usize)> {
@@ -597,7 +613,15 @@ impl<'ctx> Walker<'ctx> {
             } => {
                 let role = self.role_of_def(*def_id).unwrap_or(Role::Variable);
 
-                self.emit_named(stmt.source.span, *name, role, Some(*def_id), None);
+                if self
+                    .emit_named(stmt.source.span, *name, role, Some(*def_id), None)
+                    .is_some()
+                    && explicit_type.is_none()
+                {
+                    if let Some(last) = self.analysis.occurrences.last_mut() {
+                        last.type_hint = true;
+                    }
+                }
 
                 if let Some(ty) = explicit_type {
                     self.walk_type(ty);
@@ -636,7 +660,15 @@ impl<'ctx> Walker<'ctx> {
             } => {
                 let role = self.role_of_def(*def_id).unwrap_or(Role::Variable);
 
-                self.emit_target(varname.1.offset(), varname.1.len(), role, *def_id, None);
+                if self
+                    .emit_target(varname.1.offset(), varname.1.len(), role, *def_id, None)
+                    .is_some()
+                {
+                    if let Some(last) = self.analysis.occurrences.last_mut() {
+                        last.type_hint = true;
+                    }
+                }
+
                 self.walk_expr(iterator);
                 self.walk_stmt(block);
             }
@@ -837,13 +869,20 @@ impl<'ctx> Walker<'ctx> {
     fn walk_binding(&mut self, binding: &HirPatternBinding) {
         let role = self.role_of_def(binding.def_id).unwrap_or(Role::Variable);
 
-        self.emit_target(
-            binding.span.offset(),
-            binding.span.len(),
-            role,
-            binding.def_id,
-            None,
-        );
+        if self
+            .emit_target(
+                binding.span.offset(),
+                binding.span.len(),
+                role,
+                binding.def_id,
+                None,
+            )
+            .is_some()
+        {
+            if let Some(last) = self.analysis.occurrences.last_mut() {
+                last.type_hint = true;
+            }
+        }
     }
 
     fn walk_type(&mut self, ty: &HirTypeExpr) {
@@ -946,6 +985,7 @@ fn push_syntax(occurrences: &mut Vec<Occurrence>, offset: usize, len: usize, rol
         hir: None,
         def: None,
         ty: None,
+        type_hint: false,
     });
 }
 
