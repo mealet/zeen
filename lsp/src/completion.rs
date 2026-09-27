@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind};
+use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
 use crate::analysis::{Analysis, Role};
@@ -49,6 +50,19 @@ pub fn complete(text: &str, analysis: &Analysis, offset: usize) -> Vec<Completio
             items.push(CompletionItem {
                 label: builtin,
                 kind: Some(CompletionItemKind::STRUCT),
+                ..Default::default()
+            });
+        }
+    }
+
+    for name in HirMacroKind::all_names() {
+        let label = format!("@{name}");
+        let trimmed = label.trim_start_matches('@');
+
+        if trimmed.starts_with(prefix) && seen.insert(label.clone()) {
+            items.push(CompletionItem {
+                label,
+                kind: Some(CompletionItemKind::FUNCTION),
                 ..Default::default()
             });
         }
