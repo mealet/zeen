@@ -141,6 +141,8 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
 
     drop(bump);
 
+    let analysis = Analysis::build(&hir_module, &resolution_result, &interner, text, &filename);
+
     let mut typechecker =
         zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&interner));
 
@@ -154,7 +156,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
             }
             return CheckOutput {
                 diagnostics: diags,
-                analysis: Analysis::default(),
+                analysis: analysis.clone(),
             };
         }
     };
@@ -173,7 +175,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
             }
             return CheckOutput {
                 diagnostics: diags,
-                analysis: Analysis::default(),
+                analysis: analysis.clone(),
             };
         }
     };
@@ -195,7 +197,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
 
             CheckOutput {
                 diagnostics: diags,
-                analysis: Analysis::default(),
+                analysis,
             }
         }
         Err(errors) => {
@@ -205,7 +207,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
 
             CheckOutput {
                 diagnostics: diags,
-                analysis: Analysis::default(),
+                analysis,
             }
         }
     }
