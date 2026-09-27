@@ -1156,6 +1156,7 @@ dependencies = [
  "miette",
  "tokio",
  "tower-lsp-server",
+ "zeen-ast",
  "zeen-driver",
  "zeen-flow",
  "zeen-hir",

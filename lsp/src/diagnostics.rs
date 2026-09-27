@@ -6,7 +6,10 @@ use std::{
     sync::Arc,
 };
 
-use crate::{analysis::Analysis, position};
+use crate::{
+    analysis::{self, Analysis},
+    position,
+};
 
 use bumpalo::Bump;
 use lasso::Rodeo;
@@ -131,7 +134,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
             }
             return CheckOutput {
                 diagnostics: diags,
-                analysis: Analysis::default(),
+                analysis: analysis::build_syntax_fallback(program),
             };
         }
     };

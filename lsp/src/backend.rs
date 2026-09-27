@@ -81,10 +81,12 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
+        let tokens = semantic::tokens_for(&document.text, &document.analysis);
+
         Ok(Some(
             SemanticTokens {
                 result_id: None,
-                data: semantic::tokens_for(&document.text, &document.analysis),
+                data: tokens,
             }
             .into(),
         ))

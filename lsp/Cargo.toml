@@ -11,6 +11,7 @@ bumpalo = { version = "3.20.2", features = ["boxed"] }
 lasso = "0.7.3"
 
 zeen-lexer = { path = "../compiler/zeen-lexer" }
+zeen-ast = { path = "../compiler/zeen-ast" }
 zeen-parser = { path = "../compiler/zeen-parser" }
 zeen-driver = { path = "../compiler/zeen-driver" }
 zeen-preprocessor = { path = "../compiler/zeen-preprocessor" }

@@ -3,11 +3,13 @@ use std::collections::HashSet;
 
 use lasso::{Rodeo, Spur};
 use miette::SourceSpan;
+
 use zeen_hir::{
     HirDecl, HirDeclKind, HirEnumVariantPayload, HirExpr, HirExprKind, HirFn, HirGenericParam,
     HirModule, HirPattern, HirPatternBinding, HirStmt, HirStmtKind, HirTypeExpr, HirTypeKind,
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
+use zeen_ast::{Declaration, DeclarationKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -701,5 +703,99 @@ impl<'ctx> Walker<'ctx> {
                 self.walk_type(ret);
             }
         }
+    }
+}
+
+pub fn build_syntax_fallback(program: &[&Declaration<'_>]) -> Analysis {
+    let mut occurrences = Vec::new();
+
+    for decl in program {
+        walk_syntax_decl(decl, false, &mut occurrences);
+    }
+
+    occurrences.sort_by_key(|item| (item.offset, item.len));
+
+    Analysis { occurrences }
+}
+
+fn push_syntax(occurrences: &mut Vec<Occurrence>, offset: usize, len: usize, role: Role) {
+    if len == 0 {
+        return;
+    }
+
+    occurrences.push(Occurrence {
+        offset,
+        len,
+        role,
+        target_offset: None,
+        target_len: None,
+    });
+}
+
+fn walk_syntax_decl(decl: &Declaration<'_>, method: bool, occurrences: &mut Vec<Occurrence>) {
+    match &decl.kind {
+        DeclarationKind::FnDecl { name, .. } => {
+            push_syntax(
+                occurrences,
+                name.1.offset(),
+                name.1.len(),
+                if method { Role::Method } else { Role::Function },
+            );
+        }
+
+        DeclarationKind::StructDecl { name, methods, .. }
+        | DeclarationKind::InterfaceDecl { name, methods, .. } => {
+            push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type);
+
+            for method in *methods {
+                walk_syntax_decl(method, true, occurrences);
+            }
+        }
+
+        DeclarationKind::EnumDecl {
+            name,
+            variants,
+            methods,
+            ..
+        } => {
+            push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type);
+
+            for variant in *variants {
+                push_syntax(
+                    occurrences,
+                    variant.span.offset(),
+                    variant.span.len(),
+                    Role::EnumMember,
+                );
+            }
+
+            for method in *methods {
+                walk_syntax_decl(method, true, occurrences);
+            }
+        }
+
+        DeclarationKind::ImplementDecl { methods, .. } => {
+            for method in *methods {
+                walk_syntax_decl(method, true, occurrences);
+            }
+        }
+
+        DeclarationKind::ExternVar { name, .. } | DeclarationKind::GlobalVar { name, .. } => {
+            push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Variable);
+        }
+
+        DeclarationKind::Alias(alias) => {
+            push_syntax(
+                occurrences,
+                alias.name.1.offset(),
+                alias.name.1.len(),
+                Role::Type,
+            );
+        }
+
+        DeclarationKind::Use { .. }
+        | DeclarationKind::ExternLink { .. }
+        | DeclarationKind::ExternInclude { .. }
+        | DeclarationKind::ConditionalBlock(_) => {}
     }
 }
