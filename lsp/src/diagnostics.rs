@@ -23,6 +23,26 @@ pub struct CheckOutput {
     pub analysis: Analysis,
 }
 
+struct OpenFile<'a> {
+    uri: &'a Uri,
+    filename: &'a str,
+    text: &'a str,
+}
+
+fn error_source_name(err: &dyn miette::Diagnostic, span: &miette::SourceSpan) -> Option<String> {
+    let source = err.source_code()?;
+    let contents = source.read_span(span, 0, 0).ok()?;
+    contents.name().map(str::to_string)
+}
+
+fn severity_of(err: &dyn miette::Diagnostic) -> DiagnosticSeverity {
+    match err.severity().unwrap_or(Severity::Error) {
+        Severity::Error => DiagnosticSeverity::ERROR,
+        Severity::Warning => DiagnosticSeverity::WARNING,
+        Severity::Advice => DiagnosticSeverity::HINT,
+    }
+}
+
 pub fn check(uri: &Uri, text: &str) -> CheckOutput {
     let Some(entry_path) = file_uri_to_path(uri) else {
         return CheckOutput {
@@ -41,7 +61,14 @@ fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
     let bump = Bump::new();
 
     let mut tokens = zeen_lexer::tokenize(text);
-    let mut parser = zeen_parser::Parser::new(filename, content, &mut tokens, &bump, interner);
+    let mut parser =
+        zeen_parser::Parser::new(Rc::clone(&filename), content, &mut tokens, &bump, interner);
+
+    let open = OpenFile {
+        uri,
+        filename: filename.as_str(),
+        text,
+    };
 
     match parser.parse_program() {
         Ok(_) => Vec::new(),
@@ -49,7 +76,7 @@ fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
             let mut diags = Vec::with_capacity(errors.len());
 
             for err in errors.iter() {
-                push_diagnostic(&mut diags, uri, text, err);
+                push_diagnostic(&mut diags, &open, err);
             }
 
             diags
@@ -74,11 +101,17 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
         Rc::clone(&interner),
     );
 
+    let open = OpenFile {
+        uri,
+        filename: filename.as_str(),
+        text,
+    };
+
     let program = match parser.parse_program() {
         Ok(program) => program,
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, uri, text, err);
+                push_diagnostic(&mut diags, &open, err);
             }
 
             return CheckOutput {
@@ -130,7 +163,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
         Ok(resolved) => resolved,
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, uri, text, err);
+                push_diagnostic(&mut diags, &open, err);
             }
             return CheckOutput {
                 diagnostics: diags,
@@ -155,7 +188,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
         Ok(result) => result,
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, uri, text, err);
+                push_diagnostic(&mut diags, &open, err);
             }
             return CheckOutput {
                 diagnostics: diags,
@@ -174,7 +207,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
         Ok(lowered) => lowered,
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, uri, text, err);
+                push_diagnostic(&mut diags, &open, err);
             }
             return CheckOutput {
                 diagnostics: diags,
@@ -184,7 +217,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
     };
 
     for warning in lowered.warnings.iter() {
-        push_diagnostic(&mut diags, uri, text, warning);
+        push_diagnostic(&mut diags, &open, warning);
     }
 
     match zeen_flow::run_dataflow(
@@ -195,7 +228,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
     ) {
         Ok(flow_result) => {
             for warning in flow_result.warnings.iter() {
-                push_diagnostic(&mut diags, uri, text, warning);
+                push_diagnostic(&mut diags, &open, warning);
             }
 
             CheckOutput {
@@ -205,7 +238,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str) -> CheckOutput {
         }
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, uri, text, err);
+                push_diagnostic(&mut diags, &open, err);
             }
 
             CheckOutput {
@@ -233,12 +266,7 @@ fn resolve_std_root() -> Option<PathBuf> {
     None
 }
 
-fn push_diagnostic(
-    diags: &mut Vec<Diagnostic>,
-    uri: &Uri,
-    text: &str,
-    err: &dyn miette::Diagnostic,
-) {
+fn push_diagnostic(diags: &mut Vec<Diagnostic>, open: &OpenFile<'_>, err: &dyn miette::Diagnostic) {
     let mut message = err.to_string();
     if let Some(help) = err.help() {
         message.push('\n');
@@ -255,7 +283,12 @@ fn push_diagnostic(
             let related_message = related_error.to_string();
             if let Some(labels) = related_error.labels() {
                 for label in labels {
-                    related.push((related_message.clone(), label.offset(), label.len()));
+                    let span = miette::SourceSpan::new(label.offset().into(), label.len());
+                    let matches = error_source_name(related_error, &span)
+                        .is_none_or(|name| name == open.filename);
+                    if matches {
+                        related.push((related_message.clone(), label.offset(), label.len()));
+                    }
                 }
             }
         }
@@ -268,6 +301,12 @@ fn push_diagnostic(
             .map(|(_, offset, len)| (*offset, *len))
             .unwrap_or((0, 0)),
     };
+    let probe = miette::SourceSpan::new(main.0.into(), main.1);
+    if let Some(name) = error_source_name(err, &probe)
+        && name != open.filename
+    {
+        return;
+    }
     let main_from_related = primary.is_empty() && !related.is_empty();
 
     let mut related_information = Vec::new();
@@ -280,22 +319,16 @@ fn push_diagnostic(
         }
         related_information.push(DiagnosticRelatedInformation {
             location: Location {
-                uri: uri.clone(),
-                range: position::span_to_range(text, *offset, *len),
+                uri: open.uri.clone(),
+                range: position::span_to_range(open.text, *offset, *len),
             },
             message: related_message.clone(),
         });
     }
 
-    let severity = match err.severity().unwrap_or(Severity::Error) {
-        Severity::Error => DiagnosticSeverity::ERROR,
-        Severity::Warning => DiagnosticSeverity::WARNING,
-        Severity::Advice => DiagnosticSeverity::HINT,
-    };
-
     diags.push(Diagnostic {
-        range: position::span_to_range(text, main.0, main.1),
-        severity: Some(severity),
+        range: position::span_to_range(open.text, main.0, main.1),
+        severity: Some(severity_of(err)),
         code: err
             .code()
             .map(|code| NumberOrString::String(code.to_string())),
