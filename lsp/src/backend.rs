@@ -202,7 +202,7 @@ impl LanguageServer for Backend {
             name.to_string(),
         )];
 
-        let mut detail = occurrence.role.label().to_string();
+        let mut detail = format!("----\n{}", occurrence.role.label());
 
         if let Some(ty) = &occurrence.ty {
             detail.push_str(&format!("\ntype: `{ty}`"));
