@@ -184,3 +184,73 @@ pub fn dot_complete(text: &str, analysis: &Analysis, dot_offset: usize) -> Vec<C
         })
         .collect()
 }
+
+pub fn use_path_prefix(text: &str, offset: usize) -> Option<String> {
+    let position = crate::position::offset_to_position(text, offset.min(text.len()));
+    let line = crate::position::line_text(text, position.line);
+    let upto = (position.character as usize).min(line.len());
+    let before: String = line.chars().take(upto).collect();
+    let trimmed = before.trim_start();
+
+    let rest = trimmed
+        .strip_prefix("use ")
+        .or_else(|| trimmed.strip_prefix("use\t"))?;
+
+    Some(rest.trim_start().to_string())
+}
+
+pub fn complete_use(prefix: &str, modules: &[String]) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+
+    for module in modules {
+        let matches = module.starts_with(prefix)
+            || (!prefix.contains('.')
+                && module
+                    .rsplit('.')
+                    .next()
+                    .is_some_and(|last| last.starts_with(prefix)));
+
+        if matches {
+            items.push(CompletionItem {
+                label: module.clone(),
+                kind: Some(CompletionItemKind::MODULE),
+                ..Default::default()
+            });
+        }
+    }
+
+    items.sort_by(|a, b| a.label.cmp(&b.label));
+    items
+}
+
+pub fn core_modules() -> Vec<String> {
+    zeen_driver::CORE_FILES
+        .iter()
+        .map(|file| file.name.to_string())
+        .collect()
+}
+
+pub fn sibling_modules(dir: &std::path::Path, open_name: &str) -> Vec<String> {
+    let mut modules = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            if path.extension().and_then(|ext| ext.to_str()) != Some("zn") {
+                continue;
+            }
+
+            if let Some(stem) = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .filter(|stem| *stem != open_name)
+            {
+                modules.push(stem.to_string());
+            }
+        }
+    }
+
+    modules.sort();
+    modules
+}

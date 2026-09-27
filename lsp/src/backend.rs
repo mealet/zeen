@@ -347,7 +347,20 @@ impl LanguageServer for Backend {
         };
 
         let offset = position::position_to_offset(&document.text, position);
-        let items = if offset > 0 && document.text.as_bytes().get(offset - 1) == Some(&b'.') {
+        let items = if let Some(prefix) = completion::use_path_prefix(&document.text, offset) {
+            let mut modules = completion::core_modules();
+
+            if let Some(path) = diagnostics::file_uri_to_path(&uri) {
+                if let (Some(dir), Some(stem)) = (
+                    path.parent(),
+                    path.file_stem().and_then(|stem| stem.to_str()),
+                ) {
+                    modules.extend(completion::sibling_modules(dir, stem));
+                }
+            }
+
+            completion::complete_use(&prefix, &modules)
+        } else if offset > 0 && document.text.as_bytes().get(offset - 1) == Some(&b'.') {
             completion::dot_complete(&document.text, &document.analysis, offset - 1)
         } else {
             completion::complete(&document.text, &document.analysis, offset)
