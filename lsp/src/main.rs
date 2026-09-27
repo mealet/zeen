@@ -2,6 +2,7 @@
 
 mod analysis;
 mod backend;
+mod completion;
 mod diagnostics;
 mod position;
 mod semantic;

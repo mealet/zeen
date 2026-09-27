@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
-use crate::{analysis, diagnostics, position, semantic};
+use crate::{analysis, completion, diagnostics, position, semantic};
 
 const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(30);
 
@@ -59,6 +59,9 @@ impl LanguageServer for Backend {
                 definition_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions {
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -327,6 +330,21 @@ impl LanguageServer for Backend {
         }
 
         Ok(Some(hints))
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let position = params.text_document_position.position;
+        let uri = params.text_document_position.text_document.uri.clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(&document.text, position);
+        let items = completion::complete(&document.text, &document.analysis, offset);
+
+        Ok(Some(CompletionResponse::Array(items)))
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
