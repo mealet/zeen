@@ -59,8 +59,10 @@ pub struct Occurrence {
 pub struct Analysis {
     pub occurrences: Vec<Occurrence>,
     pub calls: Vec<CallSite>,
+    pub field_hints: Vec<FieldHint>,
     pub(crate) fn_params: HashMap<DefId, Vec<Option<String>>>,
     pub(crate) raw_calls: Vec<RawCall>,
+    pub(crate) raw_fields: Vec<RawFieldInit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,10 +74,25 @@ pub struct CallSite {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldHint {
+    pub offset: usize,
+    pub len: usize,
+    pub ty: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawCall {
     pub call: HirId,
     pub callee: (usize, usize),
     pub args: Vec<(usize, usize)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RawFieldInit {
+    pub struct_def: DefId,
+    pub name: Spur,
+    pub offset: usize,
+    pub len: usize,
 }
 
 impl Analysis {
@@ -173,6 +190,35 @@ impl Analysis {
         }
 
         self.calls = calls;
+    }
+
+    pub fn resolve_fields(
+        &mut self,
+        types: &TypeCheckResult,
+        interner: Rc<RefCell<Rodeo>>,
+        resolution: &ResolutionResult,
+    ) {
+        let mut hints = Vec::with_capacity(self.raw_fields.len());
+
+        for raw in &self.raw_fields {
+            let Some(info) = types.struct_info.get(&raw.struct_def) else {
+                continue;
+            };
+
+            let Some(field) = info.fields.iter().find(|field| field.name == raw.name) else {
+                continue;
+            };
+
+            hints.push(FieldHint {
+                offset: raw.offset,
+                len: raw.len,
+                ty: types
+                    .interner
+                    .display_type(field.field_ty, interner.clone(), resolution),
+            });
+        }
+
+        self.field_hints = hints;
     }
 }
 
@@ -794,6 +840,16 @@ impl<'ctx> Walker<'ctx> {
 
                 for init in fields {
                     self.emit_def(init.span.offset(), init.span.len(), Role::Property, None);
+
+                    if let Some(def_id) = ty.0 {
+                        self.analysis.raw_fields.push(RawFieldInit {
+                            struct_def: def_id,
+                            name: init.name,
+                            offset: init.span.offset(),
+                            len: init.span.len(),
+                        });
+                    }
+
                     self.walk_expr(&init.value);
                 }
             }

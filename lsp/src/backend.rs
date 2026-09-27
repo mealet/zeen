@@ -309,6 +309,23 @@ impl LanguageServer for Backend {
             });
         }
 
+        for hint in &document.analysis.field_hints {
+            if hint.offset < start || hint.offset > end {
+                continue;
+            }
+
+            hints.push(InlayHint {
+                position: position::offset_to_position(&document.text, hint.offset + hint.len),
+                label: InlayHintLabel::String(format!(": {}", hint.ty)),
+                kind: Some(InlayHintKind::TYPE),
+                text_edits: None,
+                tooltip: None,
+                padding_left: None,
+                padding_right: None,
+                data: None,
+            });
+        }
+
         Ok(Some(hints))
     }
 
@@ -331,6 +348,9 @@ impl LanguageServer for Backend {
         self.client
             .publish_diagnostics(uri, output.diagnostics, None)
             .await;
+
+        let _ = self.client.semantic_tokens_refresh().await;
+        let _ = self.client.inlay_hint_refresh().await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -394,6 +414,9 @@ impl LanguageServer for Backend {
             client
                 .publish_diagnostics(uri, output.diagnostics, None)
                 .await;
+
+            let _ = client.semantic_tokens_refresh().await;
+            let _ = client.inlay_hint_refresh().await;
         });
     }
 
