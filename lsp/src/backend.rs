@@ -347,6 +347,9 @@ impl LanguageServer for Backend {
         };
 
         let offset = position::position_to_offset(&document.text, position);
+        let open_dir = diagnostics::file_uri_to_path(&uri)
+            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+        let std_root = diagnostics::resolve_std_root();
         let items = if let Some(prefix) = completion::use_path_prefix(&document.text, offset) {
             let mut modules = completion::core_modules();
 
@@ -367,7 +370,13 @@ impl LanguageServer for Backend {
         } else if offset > 0 && document.text.as_bytes().get(offset - 1) == Some(&b'.') {
             completion::dot_complete(&document.text, &document.analysis, offset - 1)
         } else {
-            completion::complete(&document.text, &document.analysis, offset)
+            completion::complete(
+                &document.text,
+                &document.analysis,
+                offset,
+                open_dir.as_deref(),
+                std_root.as_deref(),
+            )
         };
 
         Ok(Some(CompletionResponse::Array(items)))

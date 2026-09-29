@@ -5,6 +5,7 @@ use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
 use crate::analysis::{Analysis, MemberKind, Role};
+use crate::modules::ModuleKind;
 
 const SNIPPETS: &[(&str, &str)] = &[
     ("fn", "fn ${1:name}(${2:params}) ${3:Ret} {\n\t$0\n}"),
@@ -39,7 +40,13 @@ fn ident_prefix(text: &str, offset: usize) -> &str {
     &text[start..offset]
 }
 
-pub fn complete(text: &str, analysis: &Analysis, offset: usize) -> Vec<CompletionItem> {
+pub fn complete(
+    text: &str,
+    analysis: &Analysis,
+    offset: usize,
+    open_dir: Option<&std::path::Path>,
+    std_root: Option<&std::path::Path>,
+) -> Vec<CompletionItem> {
     let prefix = ident_prefix(text, offset);
     let mut seen: HashSet<String> = HashSet::new();
     let mut items = Vec::new();
@@ -106,7 +113,35 @@ pub fn complete(text: &str, analysis: &Analysis, offset: usize) -> Vec<Completio
         });
     }
 
+    if let Some(dir) = open_dir {
+        for import in crate::modules::use_imports(text) {
+            for member in crate::modules::members_of_use(dir, std_root, &import) {
+                if !member.name.starts_with(prefix) || !seen.insert(member.name.clone()) {
+                    continue;
+                }
+
+                items.push(CompletionItem {
+                    label: member.name.clone(),
+                    kind: Some(module_kind(&member.kind)),
+                    detail: Some(member.module.clone()),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
     items
+}
+
+fn module_kind(kind: &ModuleKind) -> CompletionItemKind {
+    match kind {
+        ModuleKind::Function => CompletionItemKind::FUNCTION,
+        ModuleKind::Struct => CompletionItemKind::STRUCT,
+        ModuleKind::Enum => CompletionItemKind::ENUM,
+        ModuleKind::Interface => CompletionItemKind::INTERFACE,
+        ModuleKind::Const => CompletionItemKind::CONSTANT,
+        ModuleKind::Alias => CompletionItemKind::STRUCT,
+    }
 }
 
 fn member_kind(kind: &MemberKind) -> CompletionItemKind {
