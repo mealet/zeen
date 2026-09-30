@@ -101,6 +101,10 @@ try {
     New-Item -ItemType Directory -Path $ShareDir -Force | Out-Null
 
     Copy-Item -Path (Join-Path $Root.FullName 'bin\zeen.exe') -Destination $BinDir -Force
+    $LspExe = Join-Path $Root.FullName 'bin\zeen-lsp.exe'
+    if (Test-Path $LspExe) {
+        Copy-Item -Path $LspExe -Destination $BinDir -Force
+    }
     Copy-Item -Path (Join-Path $Root.FullName 'share\zeen\std') -Destination $StdDir -Recurse -Force
 
     if (Test-Path (Join-Path $Root.FullName 'lib\zeen')) {

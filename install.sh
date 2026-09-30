@@ -191,7 +191,17 @@ ROOT="$(find "$TMP/unpack" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 echo "installing into $PREFIX"
 
 mkdir -p "$PREFIX/bin" "$PREFIX/share/zeen"
-cp "$ROOT"/bin/zeen* "$PREFIX/bin/"
+if [ -e "$ROOT/bin/zeen.exe" ]; then
+    cp "$ROOT/bin/zeen.exe" "$PREFIX/bin/"
+else
+    cp "$ROOT/bin/zeen" "$PREFIX/bin/"
+fi
+
+if [ -e "$ROOT/bin/zeen-lsp.exe" ]; then
+    cp "$ROOT/bin/zeen-lsp.exe" "$PREFIX/bin/"
+elif [ -e "$ROOT/bin/zeen-lsp" ]; then
+    cp "$ROOT/bin/zeen-lsp" "$PREFIX/bin/"
+fi
 
 rm -rf "$PREFIX/share/zeen/std"
 cp -R "$ROOT/share/zeen/std" "$PREFIX/share/zeen/std"
