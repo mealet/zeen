@@ -1,3 +1,5 @@
+// @zeen-core
+
 /// Main Iterator interface
 interface[T] Iterator {
   pub fn next(*self) Option[T];

@@ -1,3 +1,5 @@
+// @zeen-core
+
 /// String slice writer interface for the buffers
 pub interface StrWriter {
   pub fn write_str(*self, value: []const char) void;

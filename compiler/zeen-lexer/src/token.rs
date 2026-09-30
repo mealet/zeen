@@ -83,6 +83,7 @@ pub enum TokenKind {
     OpenBracket,  // [
     CloseBracket, // ]
 
+    Comment, // `//` - line, `/* */` - block
     Unknown,
     LexError, // reserved for lexer-level diagnostics (e.g. unterminated block comment)
     Eof,
@@ -108,7 +109,7 @@ pub enum IntBase {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, strum::EnumIter)]
 pub enum CompilerType {
     // signed integers
     i8,
@@ -161,6 +162,10 @@ impl CompilerType {
             _ => None,
         }
     }
+
+    pub fn all_names() -> impl Iterator<Item = String> {
+        <Self as strum::IntoEnumIterator>::iter().map(|ty| ty.to_string())
+    }
 }
 
 impl std::fmt::Display for CompilerType {
@@ -169,7 +174,7 @@ impl std::fmt::Display for CompilerType {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, strum::EnumIter)]
 pub enum CompilerKeyword {
     If,
     Else,
@@ -247,5 +252,48 @@ impl CompilerKeyword {
 
             _ => None,
         }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CompilerKeyword::If => "if",
+            CompilerKeyword::Else => "else",
+            CompilerKeyword::While => "while",
+            CompilerKeyword::For => "for",
+            CompilerKeyword::Break => "break",
+            CompilerKeyword::Continue => "continue",
+
+            CompilerKeyword::Let => "let",
+            CompilerKeyword::Const => "const",
+            CompilerKeyword::Switch => "switch",
+            CompilerKeyword::Return => "return",
+
+            CompilerKeyword::Public => "pub",
+            CompilerKeyword::Fn => "fn",
+            CompilerKeyword::Extern => "extern",
+            CompilerKeyword::Include => "include",
+            CompilerKeyword::Link => "link",
+            CompilerKeyword::Use => "use",
+            CompilerKeyword::Struct => "struct",
+            CompilerKeyword::Enum => "enum",
+            CompilerKeyword::Alias => "alias",
+
+            CompilerKeyword::Interface => "interface",
+            CompilerKeyword::Implement => "implement",
+            CompilerKeyword::Type => "type",
+
+            CompilerKeyword::TypeOf => "typeof",
+
+            CompilerKeyword::True => "true",
+            CompilerKeyword::False => "false",
+            CompilerKeyword::Null => "nullptr",
+
+            CompilerKeyword::SelfLower => "self",
+            CompilerKeyword::SelfUpper => "Self",
+        }
+    }
+
+    pub fn all_names() -> impl Iterator<Item = &'static str> {
+        <Self as strum::IntoEnumIterator>::iter().map(Self::as_str)
     }
 }

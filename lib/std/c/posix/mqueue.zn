@@ -21,7 +21,7 @@ use std.c.time;
     pub mq_maxmsg: c_long,
     pub mq_msgsize: c_long,
     pub mq_curmsgs: c_long,
-    pub __reserved: [c_long; 4],
+    pub __reserved: [4]c_long,
   }
 }
 

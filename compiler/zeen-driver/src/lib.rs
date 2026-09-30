@@ -4,6 +4,8 @@ mod target;
 
 pub use target::Target;
 
+include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
+
 pub struct MietteDriver {
     reporter: miette::GraphicalReportHandler,
 }

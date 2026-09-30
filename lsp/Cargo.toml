@@ -1,0 +1,22 @@
+[package]
+name = "zeen-lsp"
+version = "0.2.0"
+edition = "2024"
+
+[dependencies]
+tower-lsp-server = "0.23.0"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "io-std", "sync", "time"] }
+miette = { version = "7.6.0" }
+bumpalo = { version = "3.20.2", features = ["boxed"] }
+lasso = "0.7.3"
+
+zeen-lexer = { path = "../compiler/zeen-lexer" }
+zeen-ast = { path = "../compiler/zeen-ast" }
+zeen-parser = { path = "../compiler/zeen-parser" }
+zeen-driver = { path = "../compiler/zeen-driver" }
+zeen-preprocessor = { path = "../compiler/zeen-preprocessor" }
+zeen-resolve = { path = "../compiler/zeen-resolve" }
+zeen-hir = { path = "../compiler/zeen-hir" }
+zeen-typecheck = { path = "../compiler/zeen-typecheck" }
+zeen-mir = { path = "../compiler/zeen-mir" }
+zeen-flow = { path = "../compiler/zeen-flow" }

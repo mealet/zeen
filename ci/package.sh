@@ -3,10 +3,11 @@ set -eu
 
 # Assembles the release archive for one asset.
 #
-# usage: ci/package.sh <asset> <path to binary>
+# usage: ci/package.sh <asset> <path to binary> [path to lsp binary]
 
-ASSET="${1:?usage: ci/package.sh <asset> <binary>}"
-BIN="${2:?usage: ci/package.sh <asset> <binary>}"
+ASSET="${1:?usage: ci/package.sh <asset> <binary> [lsp binary]}"
+BIN="${2:?usage: ci/package.sh <asset> <binary> [lsp binary]}"
+LSP_BIN="${3:-}"
 
 cd "$(dirname "$0")/.."
 
@@ -40,6 +41,27 @@ case "$BIN" in
         ;;
 esac
 cp "$BIN" "$BIN_DEST"
+
+if [ -n "$LSP_BIN" ]; then
+    if [ ! -f "$LSP_BIN" ]; then
+        echo "lsp binary not found: $LSP_BIN" >&2
+        exit 1
+    fi
+
+    LSP_DEST="$OUT/$ROOT/bin/zeen-lsp"
+    case "$LSP_BIN" in
+        (*.exe)
+            LSP_DEST="$OUT/$ROOT/bin/zeen-lsp.exe"
+            ;;
+    esac
+    cp "$LSP_BIN" "$LSP_DEST"
+
+    if command -v ldd >/dev/null 2>&1 && ldd "$LSP_DEST" | grep -q "not found"; then
+        ldd "$LSP_DEST" | grep "not found" >&2
+        echo "the packaged lsp binary has unresolved shared libraries" >&2
+        exit 1
+    fi
+fi
 
 # resolve shared library dependencies, a statically linked binary reports none
 OS="$(uname -s)"

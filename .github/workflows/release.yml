@@ -76,8 +76,11 @@ jobs:
       - name: Build
         run: ci/build.sh
 
+      - name: Build LSP
+        run: ci/build-lsp.sh
+
       - name: Package
-        run: ci/package.sh "${{ matrix.asset }}" compiler/target/release/zeen
+        run: ci/package.sh "${{ matrix.asset }}" compiler/target/release/zeen lsp/target/release/zeen-lsp
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -111,7 +114,8 @@ jobs:
                 llvm22-dev llvm22-static \
                 zlib-dev zstd-dev libffi-dev libxml2-dev libedit-dev ncurses-dev z3-dev
               sh ci/build.sh
-              sh ci/package.sh linux-x86_64-musl compiler/target/release/zeen
+              sh ci/build-lsp.sh
+              sh ci/package.sh linux-x86_64-musl compiler/target/release/zeen lsp/target/release/zeen-lsp
             '
 
       - name: Upload
@@ -151,8 +155,11 @@ jobs:
       - name: Build
         run: ci/build.sh
 
+      - name: Build LSP
+        run: ci/build-lsp.sh
+
       - name: Package
-        run: ci/package.sh darwin-aarch64 compiler/target/release/zeen
+        run: ci/package.sh darwin-aarch64 compiler/target/release/zeen lsp/target/release/zeen-lsp
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -173,7 +180,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      # Homebrew has no x86_64 bottle for llvm@22, building LLVM from source takes hours
       - name: Install LLVM 22
         shell: bash
         run: |
@@ -196,8 +202,11 @@ jobs:
       - name: Build
         run: ci/build.sh
 
+      - name: Build LSP
+        run: ci/build-lsp.sh
+
       - name: Package
-        run: ci/package.sh darwin-x86_64 compiler/target/release/zeen
+        run: ci/package.sh darwin-x86_64 compiler/target/release/zeen lsp/target/release/zeen-lsp
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -233,7 +242,6 @@ jobs:
         with:
           key: windows-x86_64
 
-      # llvm-sys passes xml2s.lib to link.exe and the runner has no such file
       - name: Provide xml2s.lib
         shell: bash
         run: cp compiler/xml2s.lib "$(llvm-config --libdir)/xml2s.lib"
@@ -242,9 +250,13 @@ jobs:
         shell: bash
         run: ci/build.sh
 
+      - name: Build LSP
+        shell: bash
+        run: ci/build-lsp.sh
+
       - name: Package
         shell: bash
-        run: ci/package.sh windows-x86_64 compiler/target/release/zeen.exe
+        run: ci/package.sh windows-x86_64 compiler/target/release/zeen.exe lsp/target/release/zeen-lsp.exe
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -274,7 +286,8 @@ jobs:
           prepare: pkg install -y rust llvm22
           run: |
             sh ci/build.sh
-            sh ci/package.sh freebsd-x86_64 compiler/target/release/zeen
+            sh ci/build-lsp.sh
+            sh ci/package.sh freebsd-x86_64 compiler/target/release/zeen lsp/target/release/zeen-lsp
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

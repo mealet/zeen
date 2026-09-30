@@ -1,0 +1,551 @@
+use std::str::FromStr;
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
+use tokio::sync::RwLock;
+use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
+
+use crate::{analysis, completion, diagnostics, position, semantic};
+
+const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(30);
+
+#[derive(Debug)]
+pub struct Backend {
+    client: Client,
+    documents: Arc<RwLock<HashMap<Uri, Document>>>,
+}
+
+#[derive(Debug, Clone)]
+struct Document {
+    version: i32,
+    text: String,
+    analysis: analysis::Analysis,
+}
+
+impl Backend {
+    pub fn new(client: Client) -> Self {
+        Self {
+            client,
+            documents: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    async fn resolve_sibling_text(&self, uri: &Uri, name: &str) -> Option<(Uri, String)> {
+        let sibling = diagnostics::file_uri_to_path(uri)?.parent()?.join(name);
+        let sibling_uri = Uri::from_str(&format!("file://{}", sibling.display())).ok()?;
+        if let Some(document) = self.documents.read().await.get(&sibling_uri) {
+            return Some((sibling_uri, document.text.clone()));
+        }
+        let text = std::fs::read_to_string(&sibling).ok()?;
+        Some((sibling_uri, text))
+    }
+}
+
+impl LanguageServer for Backend {
+    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+        Ok(InitializeResult {
+            capabilities: ServerCapabilities {
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
+                semantic_tokens_provider: Some(
+                    SemanticTokensOptions {
+                        legend: semantic::legend(),
+                        full: Some(SemanticTokensFullOptions::Bool(true)),
+                        range: Some(true),
+                        ..Default::default()
+                    }
+                    .into(),
+                ),
+                definition_provider: Some(OneOf::Left(true)),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec![".".to_string()]),
+                    ..Default::default()
+                }),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            server_info: Some(ServerInfo {
+                name: env!("CARGO_PKG_NAME").to_string(),
+                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            }),
+            ..Default::default()
+        })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        self.client
+            .log_message(MessageType::INFO, "zeen-lsp ready")
+            .await;
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let document = self
+            .documents
+            .read()
+            .await
+            .get(&params.text_document.uri)
+            .cloned();
+
+        let Some(document) = document else {
+            return Ok(None);
+        };
+
+        let tokens = semantic::tokens_for(&document.text, &document.analysis);
+
+        Ok(Some(
+            SemanticTokens {
+                result_id: None,
+                data: tokens,
+            }
+            .into(),
+        ))
+    }
+
+    async fn semantic_tokens_range(
+        &self,
+        params: SemanticTokensRangeParams,
+    ) -> Result<Option<SemanticTokensRangeResult>> {
+        let document = self
+            .documents
+            .read()
+            .await
+            .get(&params.text_document.uri)
+            .cloned();
+
+        let Some(document) = document else {
+            return Ok(None);
+        };
+
+        Ok(Some(
+            SemanticTokens {
+                result_id: None,
+                data: semantic::tokens_in_range(
+                    &document.text,
+                    &document.analysis,
+                    params.range.start.line,
+                    params.range.end.line,
+                ),
+            }
+            .into(),
+        ))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(
+            &document.text,
+            params.text_document_position_params.position,
+        );
+
+        let Some(occurence) = document.analysis.at(offset) else {
+            return Ok(None);
+        };
+
+        let (Some(target_offset), Some(target_len)) =
+            (occurence.target_offset, occurence.target_len)
+        else {
+            return Ok(None);
+        };
+
+        let (target_uri, target_text) = match &occurence.target_file {
+            Some(target_name) => {
+                let Some(resolved) = self.resolve_sibling_text(&uri, target_name).await else {
+                    return Ok(None);
+                };
+                resolved
+            }
+            None => (uri.clone(), document.text.clone()),
+        };
+
+        Ok(Some(GotoDefinitionResponse::Array(vec![Location {
+            uri: target_uri,
+            range: position::span_to_range(&target_text, target_offset, target_len),
+        }])))
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(
+            &document.text,
+            params.text_document_position_params.position,
+        );
+
+        let Some(occurrence) = document.analysis.at(offset) else {
+            return Ok(None);
+        };
+
+        let name = document
+            .text
+            .get(occurrence.offset..occurrence.offset + occurrence.len)
+            .unwrap_or("");
+
+        let mut contents = vec![MarkedString::from_language_code(
+            "zeen".to_string(),
+            name.to_string(),
+        )];
+
+        let mut detail = format!("----\n{}", occurrence.role.label());
+
+        if let Some(ty) = &occurrence.ty {
+            detail.push_str(&format!("\ntype: `{ty}`"));
+        }
+
+        let target_text: Option<String> = match &occurrence.target_file {
+            Some(target_name) => self
+                .resolve_sibling_text(&uri, target_name)
+                .await
+                .map(|(_, text)| text),
+            None => Some(document.text.clone()),
+        };
+
+        if let (Some(target_text), Some(target_offset)) = (target_text, occurrence.target_offset) {
+            let target = position::offset_to_position(&target_text, target_offset);
+            let preview = position::line_text(&target_text, target.line).trim();
+            let file = match &occurrence.target_file {
+                Some(target_name) => target_name.clone(),
+                None => diagnostics::uri_filename(&uri),
+            };
+
+            detail.push_str(&format!(
+                "\ndefined at {}:{}\n----\n```zn\n{}\n```",
+                file,
+                target.line + 1,
+                preview
+            ));
+        }
+
+        contents.push(MarkedString::from_markdown(detail));
+
+        Ok(Some(Hover {
+            contents: HoverContents::Array(contents),
+            range: Some(position::span_to_range(
+                &document.text,
+                occurrence.offset,
+                occurrence.len,
+            )),
+        }))
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri.clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let start = position::position_to_offset(&document.text, params.range.start);
+        let end = position::position_to_offset(&document.text, params.range.end);
+
+        let mut hints = Vec::new();
+
+        for call in &document.analysis.calls {
+            if call.callee_offset < start || call.callee_offset > end {
+                continue;
+            }
+
+            for (arg, param) in call.args.iter().zip(call.params.iter()) {
+                let Some(name) = param else {
+                    continue;
+                };
+
+                hints.push(InlayHint {
+                    position: position::offset_to_position(&document.text, arg.0),
+                    label: InlayHintLabel::String(format!("{name}:")),
+                    kind: Some(InlayHintKind::PARAMETER),
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: None,
+                    padding_right: Some(true),
+                    data: None,
+                });
+            }
+        }
+
+        for occurrence in &document.analysis.occurrences {
+            if !occurrence.type_hint {
+                continue;
+            }
+
+            if occurrence.offset < start || occurrence.offset > end {
+                continue;
+            }
+
+            let Some(ty) = &occurrence.ty else {
+                continue;
+            };
+
+            hints.push(InlayHint {
+                position: position::offset_to_position(
+                    &document.text,
+                    occurrence.offset + occurrence.len,
+                ),
+                label: InlayHintLabel::String(format!(": {ty}")),
+                kind: Some(InlayHintKind::TYPE),
+                text_edits: None,
+                tooltip: None,
+                padding_left: None,
+                padding_right: None,
+                data: None,
+            });
+        }
+
+        for hint in &document.analysis.field_hints {
+            if hint.offset < start || hint.offset > end {
+                continue;
+            }
+
+            hints.push(InlayHint {
+                position: position::offset_to_position(&document.text, hint.offset + hint.len),
+                label: InlayHintLabel::String(format!(": {}", hint.ty)),
+                kind: Some(InlayHintKind::TYPE),
+                text_edits: None,
+                tooltip: None,
+                padding_left: None,
+                padding_right: None,
+                data: None,
+            });
+        }
+
+        Ok(Some(hints))
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let position = params.text_document_position.position;
+        let uri = params.text_document_position.text_document.uri.clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(&document.text, position);
+        let open_dir = diagnostics::file_uri_to_path(&uri)
+            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+        let std_root = diagnostics::resolve_std_root();
+        let items = if let Some(prefix) = completion::use_path_prefix(&document.text, offset) {
+            let mut modules = completion::core_modules();
+
+            if let Some(root) = diagnostics::resolve_std_root() {
+                modules.extend(completion::std_modules(&root));
+            }
+
+            if let Some(path) = diagnostics::file_uri_to_path(&uri) {
+                if let (Some(dir), Some(stem)) = (
+                    path.parent(),
+                    path.file_stem().and_then(|stem| stem.to_str()),
+                ) {
+                    modules.extend(completion::sibling_modules(dir, stem));
+                }
+            }
+
+            completion::complete_use(&prefix, &modules)
+        } else if offset > 0 && document.text.as_bytes().get(offset - 1) == Some(&b'.') {
+            completion::dot_complete(
+                &document.text,
+                &document.analysis,
+                offset - 1,
+                open_dir.as_deref(),
+                std_root.as_deref(),
+            )
+        } else {
+            completion::complete(
+                &document.text,
+                &document.analysis,
+                offset,
+                open_dir.as_deref(),
+                std_root.as_deref(),
+            )
+        };
+
+        Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let position = params.text_document_position_params.position;
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(&document.text, position);
+
+        for call in &document.analysis.calls {
+            let end = call
+                .args
+                .last()
+                .map(|(start, len)| start + len)
+                .unwrap_or(call.callee_offset + call.callee_len);
+
+            if offset < call.callee_offset || offset > end {
+                continue;
+            }
+
+            let active = if call.params.is_empty() {
+                None
+            } else {
+                call.args
+                    .iter()
+                    .position(|(start, len)| offset >= *start && offset <= start + len)
+                    .map(|index| index.min(call.params.len() - 1) as u32)
+            };
+
+            let parameters = call
+                .params
+                .iter()
+                .map(|param| ParameterInformation {
+                    label: ParameterLabel::Simple(param.clone().unwrap_or_else(|| "_".to_string())),
+                    documentation: None,
+                })
+                .collect();
+
+            return Ok(Some(SignatureHelp {
+                signatures: vec![SignatureInformation {
+                    label: call.signature.clone(),
+                    documentation: None,
+                    parameters: Some(parameters),
+                    active_parameter: None,
+                }],
+                active_signature: Some(0),
+                active_parameter: active,
+            }));
+        }
+
+        Ok(None)
+    }
+
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let uri = params.text_document.uri;
+        let version = params.text_document.version;
+        let text = params.text_document.text;
+
+        let output = diagnostics::check(&uri, &text);
+
+        self.documents.write().await.insert(
+            uri.clone(),
+            Document {
+                version,
+                text,
+                analysis: output.analysis,
+            },
+        );
+
+        self.client
+            .publish_diagnostics(uri, output.diagnostics, None)
+            .await;
+
+        let _ = self.client.semantic_tokens_refresh().await;
+        let _ = self.client.inlay_hint_refresh().await;
+    }
+
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let Some(change) = params.content_changes.into_iter().last() else {
+            return;
+        };
+
+        let uri = params.text_document.uri;
+        let version = params.text_document.version;
+
+        {
+            let mut documents = self.documents.write().await;
+            let previous = documents
+                .get(&uri)
+                .map(|document| document.analysis.clone());
+
+            documents.insert(
+                uri.clone(),
+                Document {
+                    version,
+                    text: change.text,
+                    analysis: previous.unwrap_or_default(),
+                },
+            );
+        }
+
+        let client = self.client.clone();
+        let documents = Arc::clone(&self.documents);
+        let version = params.text_document.version;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(DIAGNOSTIC_DEBOUNCE).await;
+
+            let current = documents.read().await.get(&uri).cloned();
+
+            let Some(current) = current else {
+                return;
+            };
+
+            if current.version != version {
+                return;
+            }
+
+            let output = diagnostics::check(&uri, &current.text);
+
+            let analysis = if output.analysis.occurrences.is_empty() {
+                current.analysis.clone()
+            } else {
+                output.analysis
+            };
+
+            documents.write().await.insert(
+                uri.clone(),
+                Document {
+                    version,
+                    text: current.text,
+                    analysis,
+                },
+            );
+
+            client
+                .publish_diagnostics(uri, output.diagnostics, None)
+                .await;
+
+            let _ = client.semantic_tokens_refresh().await;
+            let _ = client.inlay_hint_refresh().await;
+        });
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        self.documents
+            .write()
+            .await
+            .remove(&params.text_document.uri);
+
+        self.client
+            .publish_diagnostics(params.text_document.uri, Vec::new(), None)
+            .await
+    }
+}

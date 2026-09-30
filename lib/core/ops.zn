@@ -1,3 +1,5 @@
+// @zeen-core
+
 /// Empty marker to tell compiler that structure can be copied (simple load instructions).
 pub interface Copy {}
 

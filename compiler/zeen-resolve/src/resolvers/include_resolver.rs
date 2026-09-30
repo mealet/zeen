@@ -439,6 +439,15 @@ impl<'ctx> IncludeResolver<'ctx> {
         core_files: &[(&'static str, &'static str)],
     ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
         let root_canonical = canonicalize_best_effort(&root_path);
+        let entry_is_core = root_named_src.inner().contains("@zeen-core");
+        let entry_core_module = if entry_is_core {
+            root_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| format!("core.{stem}"))
+        } else {
+            None
+        };
 
         self.modules.insert(
             root_canonical.clone(),
@@ -453,6 +462,9 @@ impl<'ctx> IncludeResolver<'ctx> {
         let mut out: Vec<&'ctx Declaration<'ctx>> = Vec::new();
 
         for (name, content) in core_files {
+            if entry_core_module.as_deref() == Some(*name) {
+                continue;
+            }
             let source = Arc::new(content.to_string());
             let filename = Rc::new(name.to_string());
 
@@ -705,11 +717,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
             });
 
-            let target_name = target_canonical
-                .file_name()
-                .unwrap_or(std::ffi::OsStr::new("unknown"))
-                .to_string_lossy()
-                .to_string();
+            let target_name = target_canonical.to_string_lossy().to_string();
 
             let named_src = NamedSource::new(&target_name, Arc::clone(&source));
 
