@@ -141,6 +141,9 @@ fn module_kind(kind: &ModuleKind) -> CompletionItemKind {
         ModuleKind::Interface => CompletionItemKind::INTERFACE,
         ModuleKind::Const => CompletionItemKind::CONSTANT,
         ModuleKind::Alias => CompletionItemKind::STRUCT,
+        ModuleKind::Method => CompletionItemKind::METHOD,
+        ModuleKind::Field => CompletionItemKind::FIELD,
+        ModuleKind::Variant => CompletionItemKind::ENUM_MEMBER,
     }
 }
 
@@ -170,7 +173,13 @@ fn normalize_type_name(ty: &str) -> Option<&str> {
     Some(name)
 }
 
-pub fn dot_complete(text: &str, analysis: &Analysis, dot_offset: usize) -> Vec<CompletionItem> {
+pub fn dot_complete(
+    text: &str,
+    analysis: &Analysis,
+    dot_offset: usize,
+    open_dir: Option<&std::path::Path>,
+    std_root: Option<&std::path::Path>,
+) -> Vec<CompletionItem> {
     let bytes = text.as_bytes();
     let mut start = dot_offset;
 
@@ -182,49 +191,64 @@ pub fn dot_complete(text: &str, analysis: &Analysis, dot_offset: usize) -> Vec<C
         return Vec::new();
     }
 
-    let Some(receiver) = analysis.at(start) else {
+    let Some(receiver_name) = text.get(start..dot_offset) else {
         return Vec::new();
     };
 
-    let name: &str = if receiver.role == Role::Type {
-        let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) else {
-            return Vec::new();
-        };
-        name
-    } else {
-        let Some(ty) = &receiver.ty else {
-            return Vec::new();
-        };
-        let Some(name) = normalize_type_name(ty) else {
-            return Vec::new();
-        };
-        name
-    };
+    let mut items = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let Some(def) = analysis.occurrences.iter().find_map(|occurrence| {
-        if occurrence.role == Role::Type
-            && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
-        {
-            occurrence.def
+    if let Some(receiver) = analysis.at(start) {
+        let name: Option<&str> = if receiver.role == Role::Type {
+            text.get(receiver.offset..receiver.offset + receiver.len)
         } else {
-            None
+            receiver.ty.as_deref().and_then(normalize_type_name)
+        };
+
+        if let Some(name) = name {
+            if let Some(def) = analysis.occurrences.iter().find_map(|occurrence| {
+                if occurrence.role == Role::Type
+                    && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
+                {
+                    occurrence.def
+                } else {
+                    None
+                }
+            }) {
+                if let Some(members) = analysis.members.get(&def) {
+                    for member in members {
+                        if seen.insert(member.name.clone()) {
+                            items.push(CompletionItem {
+                                label: member.name.clone(),
+                                kind: Some(member_kind(&member.kind)),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
         }
-    }) else {
-        return Vec::new();
-    };
+    }
 
-    let Some(members) = analysis.members.get(&def) else {
-        return Vec::new();
-    };
+    if let Some(dir) = open_dir {
+        for member in crate::modules::type_members(
+            dir,
+            std_root,
+            &crate::modules::use_imports(text),
+            receiver_name,
+        ) {
+            if seen.insert(member.name.clone()) {
+                items.push(CompletionItem {
+                    label: member.name.clone(),
+                    kind: Some(module_kind(&member.kind)),
+                    detail: Some(member.module.clone()),
+                    ..Default::default()
+                });
+            }
+        }
+    }
 
-    members
-        .iter()
-        .map(|member| CompletionItem {
-            label: member.name.clone(),
-            kind: Some(member_kind(&member.kind)),
-            ..Default::default()
-        })
-        .collect()
+    items
 }
 
 pub fn use_path_prefix(text: &str, offset: usize) -> Option<String> {

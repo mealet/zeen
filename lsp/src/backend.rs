@@ -368,7 +368,13 @@ impl LanguageServer for Backend {
 
             completion::complete_use(&prefix, &modules)
         } else if offset > 0 && document.text.as_bytes().get(offset - 1) == Some(&b'.') {
-            completion::dot_complete(&document.text, &document.analysis, offset - 1)
+            completion::dot_complete(
+                &document.text,
+                &document.analysis,
+                offset - 1,
+                open_dir.as_deref(),
+                std_root.as_deref(),
+            )
         } else {
             completion::complete(
                 &document.text,
