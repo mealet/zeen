@@ -87,6 +87,8 @@ pub enum MemberKind {
 pub struct Member {
     pub name: String,
     pub kind: MemberKind,
+    pub def: DefId,
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,6 +248,27 @@ impl Analysis {
         }
 
         self.field_hints = hints;
+    }
+
+    pub fn resolve_member_types(
+        &mut self,
+        types: &TypeCheckResult,
+        interner: Rc<RefCell<Rodeo>>,
+        resolution: &ResolutionResult,
+    ) {
+        for members in self.members.values_mut() {
+            for member in members {
+                let Some(id) = types.def_types.get(&member.def).copied() else {
+                    continue;
+                };
+
+                member.signature = Some(types.interner.display_type(
+                    id,
+                    interner.clone(),
+                    resolution,
+                ));
+            }
+        }
     }
 }
 
@@ -495,6 +518,8 @@ impl<'ctx> Walker<'ctx> {
             .push(Member {
                 name: name.to_string(),
                 kind: MemberKind::Method,
+                def: method.def_id,
+                signature: None,
             });
     }
 
@@ -544,6 +569,8 @@ impl<'ctx> Walker<'ctx> {
                         .push(Member {
                             name: self.interner.resolve(&field.name).to_string(),
                             kind: MemberKind::Field,
+                            def: field.def_id,
+                            signature: None,
                         });
 
                     self.walk_type(&field.ty);
@@ -621,6 +648,8 @@ impl<'ctx> Walker<'ctx> {
                         .push(Member {
                             name: self.interner.resolve(&variant.name).to_string(),
                             kind: MemberKind::Variant,
+                            def: variant.def_id,
+                            signature: None,
                         });
 
                     match &variant.payload {

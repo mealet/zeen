@@ -221,6 +221,7 @@ pub fn dot_complete(
                             items.push(CompletionItem {
                                 label: member.name.clone(),
                                 kind: Some(member_kind(&member.kind)),
+                                detail: member.signature.clone(),
                                 ..Default::default()
                             });
                         }

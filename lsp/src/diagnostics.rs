@@ -227,6 +227,11 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
     );
 
     analysis.resolve_calls(&typechecker_result);
+    analysis.resolve_member_types(
+        &typechecker_result,
+        Rc::clone(&interner),
+        &resolution_result,
+    );
     analysis.resolve_fields(
         &typechecker_result,
         Rc::clone(&interner),
