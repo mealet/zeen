@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-ast"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lasso",
  "miette",
@@ -1104,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-driver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "miette",
@@ -1112,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-flow"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lasso",
  "miette",
@@ -1127,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-hir"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lasso",
  "miette",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-lexer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "miette",
  "strum",
@@ -1151,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-lsp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bumpalo",
  "lasso",
@@ -1172,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-mir"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lasso",
  "miette",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-parser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bumpalo",
  "lasso",
@@ -1203,7 +1203,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-preprocessor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bumpalo",
  "lasso",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-resolve"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bumpalo",
  "lasso",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-typecheck"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lasso",
  "miette",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "zeen-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lasso",
  "zeen-ast",
