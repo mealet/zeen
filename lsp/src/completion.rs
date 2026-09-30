@@ -186,12 +186,19 @@ pub fn dot_complete(text: &str, analysis: &Analysis, dot_offset: usize) -> Vec<C
         return Vec::new();
     };
 
-    let Some(ty) = &receiver.ty else {
-        return Vec::new();
-    };
-
-    let Some(name) = normalize_type_name(ty) else {
-        return Vec::new();
+    let name: &str = if receiver.role == Role::Type {
+        let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) else {
+            return Vec::new();
+        };
+        name
+    } else {
+        let Some(ty) = &receiver.ty else {
+            return Vec::new();
+        };
+        let Some(name) = normalize_type_name(ty) else {
+            return Vec::new();
+        };
+        name
     };
 
     let Some(def) = analysis.occurrences.iter().find_map(|occurrence| {
