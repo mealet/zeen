@@ -625,14 +625,29 @@ impl ObjectLinker {
             return None;
         }
 
-        let kits = install.join("Windows Kits").join("10").join("Lib");
-        let sdk_version = Self::newest_version_dir(&kits)?;
+        let kits_lib = [
+            install.join("Windows Kits").join("10").join("Lib"),
+            Self::shared_kits_lib(),
+        ]
+        .into_iter()
+        .find(|path| path.is_dir())?;
+        let sdk_version = Self::newest_version_dir(&kits_lib)?;
 
         let mut lib_paths = vec![msvc.join("lib").join(lib_arch)];
-        lib_paths.push(kits.join(&sdk_version).join("ucrt").join(lib_arch));
-        lib_paths.push(kits.join(&sdk_version).join("um").join(lib_arch));
+        lib_paths.push(kits_lib.join(&sdk_version).join("ucrt").join(lib_arch));
+        lib_paths.push(kits_lib.join(&sdk_version).join("um").join(lib_arch));
 
         Some((link, lib_paths))
+    }
+
+    fn shared_kits_lib() -> PathBuf {
+        let program_files = std::env::var("ProgramFiles(x86)")
+            .or_else(|_| std::env::var("ProgramFiles"))
+            .unwrap_or_else(|_| "C:\\Program Files (x86)".to_owned());
+        PathBuf::from(program_files)
+            .join("Windows Kits")
+            .join("10")
+            .join("Lib")
     }
 
     fn msvc_install_dir() -> Option<PathBuf> {

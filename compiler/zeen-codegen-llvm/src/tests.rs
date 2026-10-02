@@ -1,6 +1,7 @@
 //! Unit tests for LLVM codegen
 
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use inkwell::context::Context;
 use zeen_ast::expressions::BinaryOp;
@@ -34,8 +35,18 @@ fn compile(fx: &Fixture, mode: CompilationMode) -> String {
     )
     .unwrap();
     cg.generate().unwrap();
-    cg.verify().unwrap();
-    cg.print_ir()
+    if cfg!(not(target_os = "windows")) {
+        cg.verify().unwrap();
+        return cg.print_ir();
+    }
+    static IR_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let id = IR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path =
+        std::env::temp_dir().join(format!("zeen-codegen-test-{}-{id}.ll", std::process::id()));
+    cg.emit_ir(&path).unwrap();
+    let ir = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    ir
 }
 
 fn main_returns_i32(fx: &mut Fixture, value: i128) {

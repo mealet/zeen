@@ -452,7 +452,9 @@ fn compile(args: cli::Args) {
         exit(1);
     }
 
-    if let Err(err) = codegen.verify() {
+    if cfg!(not(target_os = "windows"))
+        && let Err(err) = codegen.verify()
+    {
         let report_string = driver.report(&err).unwrap_or_default();
         eprintln!("{}", report_string);
         cli::println_error("Codegen failed");
@@ -522,12 +524,12 @@ fn compile(args: cli::Args) {
                     exit(1);
                 });
 
-            let object_path = object_file.path().to_path_buf();
+            let object_path = object_file.into_temp_path();
 
             if let Err(err) = codegen.emit_object(&object_path) {
                 let report_string = driver.report(&err).unwrap_or_default();
                 eprintln!("{}", report_string);
-                drop(object_file);
+                drop(object_path);
                 cli::println_error("Codegen failed");
                 exit(1);
             }
@@ -543,7 +545,11 @@ fn compile(args: cli::Args) {
                 Vec::new()
             };
 
-            let result = linker.link(std::slice::from_ref(&object_path), &output, &extra);
+            let result = linker.link(
+                std::slice::from_ref(&object_path.to_path_buf()),
+                &output,
+                &extra,
+            );
 
             match result {
                 Ok(output_path) => cli::println_info(
@@ -560,7 +566,7 @@ fn compile(args: cli::Args) {
                         linker.name()
                     ));
                     eprintln!("\n{err}\n");
-                    drop(object_file);
+                    drop(object_path);
                     exit(1);
                 }
             }

@@ -6090,10 +6090,8 @@ impl<'res> TypeChecker<'res> {
         out: &mut Vec<DefId>,
     ) {
         match self.result.interner.get(ty).clone() {
-            Type::GenericParam(g) => {
-                if !bindings.contains_key(&g) {
-                    out.push(g);
-                }
+            Type::GenericParam(g) if !bindings.contains_key(&g) => {
+                out.push(g);
             }
 
             Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {

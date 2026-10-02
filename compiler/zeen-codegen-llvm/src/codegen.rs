@@ -114,10 +114,14 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         Target::initialize_aarch64(&initialization);
         Target::initialize_webassembly(&initialization);
 
-        let triple = match &options.target {
-            Some(user) => TargetMachine::normalize_triple(&TargetTriple::create(user)),
+        let user_triple = options.target.as_deref().map(TargetTriple::create);
+        let triple = match &user_triple {
+            Some(user) => TargetMachine::normalize_triple(user),
             None => TargetMachine::get_default_triple(),
         };
+        if cfg!(target_os = "windows") {
+            std::mem::forget(user_triple);
+        }
 
         let target =
             Target::from_triple(&triple).map_err(|err| CodegenError::UnsupportedTriple {
@@ -151,6 +155,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         module.set_triple(&triple);
         module.set_data_layout(&data_layout);
         module.set_source_file_name(&options.source_file_name);
+        if cfg!(target_os = "windows") {
+            std::mem::forget(triple);
+            std::mem::forget(data_layout);
+        }
 
         let builder = context.create_builder();
 
