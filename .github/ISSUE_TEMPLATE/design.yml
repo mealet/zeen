@@ -1,0 +1,30 @@
+name: Design / RFC
+description: Large proposal needing a spec before implementation.
+title: "[DESIGN]: "
+labels: ["design", "discussion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Discussion first, code later. Describe the problem and how it should work.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is broken or missing and why it needs a design, not just a patch.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it should work.
+    validations:
+      required: true
+  - type: textarea
+    id: questions
+    attributes:
+      label: Open questions
+      description: Decisions left for discussion.
+    validations:
+      required: false

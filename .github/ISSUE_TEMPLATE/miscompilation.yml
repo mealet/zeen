@@ -1,0 +1,73 @@
+name: Miscompilation
+description: Valid code compiles but silently behaves wrong at runtime (often Debug vs Release divergence).
+title: "[MISCOMPILATION]: "
+labels: ["miscompilation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when the compiler accepts the program but the binary does the wrong thing.
+        Crashes with an error message or ICEs belong in Bug report.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `zeen --version` or the release tag.
+      placeholder: "v1.2.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: debug-behavior
+    attributes:
+      label: Debug behavior
+      options:
+        - Correct
+        - Also wrong
+        - Did not try
+    validations:
+      required: true
+  - type: dropdown
+    id: release-behavior
+    attributes:
+      label: Release behavior
+      options:
+        - Wrong
+        - Correct
+        - Did not try
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target triple
+      description: Value of `--target`, or `host` if none was passed.
+      placeholder: "host"
+    validations:
+      required: false
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro
+      description: Minimal complete program plus its arguments and actual vs expected output.
+      placeholder: |
+        ```zn
+        fn main() {
+        }
+        ```
+
+        Run: `zeen repro.zn out && ./out`
+
+        **Expected output:**
+
+        **Actual output:**
+
+    validations:
+      required: true
+  - type: textarea
+    id: mir
+    attributes:
+      label: MIR / IR notes
+      description: Produced MIR (`--emit MIR`) / IR (`--emit IR`) and etc.
+      render: text
+    validations:
+      required: false

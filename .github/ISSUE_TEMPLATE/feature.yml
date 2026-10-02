@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose a language feature, std addition, CLI flag, or ecosystem tool.
+title: "[FEAT]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Small scoped proposals go here. Large work belongs in Design / RFC.
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: What hurts today, with a short example.
+      placeholder: |
+        ```zn
+        fn main() {
+        }
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Proposed syntax or API with an example.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other syntax or approaches considered.
+    validations:
+      required: false
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Breaking change
+      options:
+        - "No"
+        - "Yes"
+        - "Not sure"
+    validations:
+      required: true

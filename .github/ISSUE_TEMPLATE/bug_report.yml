@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a crash, ICE, wrong diagnostic, or broken behavior with a repro.
+title: "[BUG]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A minimal `.zn` repro is the fastest way to a fix.
+        For silent wrong behavior at runtime (valid code, Debug ok / Release broken) use the Miscompilation form instead.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `zeen --version` or the release tag.
+      placeholder: "v1.2.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Debug
+        - Release
+        - Both
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target triple
+      description: Value of `--target`, or `host` if none was passed.
+      placeholder: "host"
+    validations:
+      required: false
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro
+      description: Minimal complete program that triggers the bug.
+      placeholder: |
+        ```zn
+        fn main() {
+        }
+        ```
+      render: zeen
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What should happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happens instead (error text, panic, exit code).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Compiler output, produced MIR (--emit MIR) / IR (--emit IR) and etc.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirm
+      options:
+        - label: The repro is minimal and self-contained
+          required: true

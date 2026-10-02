@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Discussions / Q&A
+    url: https://github.com/mealet/zeen/discussions
+    about: Questions, free-form ideas, and help that do not need a tracked issue yet.
