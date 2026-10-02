@@ -108,7 +108,11 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         rodeo: Rc<RefCell<Rodeo>>,
         options: CodegenOptions,
     ) -> Result<Self, CodegenError> {
-        Target::initialize_all(&InitializationConfig::default());
+        let initialization = InitializationConfig::default();
+        Target::initialize_x86(&initialization);
+        Target::initialize_arm(&initialization);
+        Target::initialize_aarch64(&initialization);
+        Target::initialize_webassembly(&initialization);
 
         let triple = match &options.target {
             Some(user) => TargetMachine::normalize_triple(&TargetTriple::create(user)),
