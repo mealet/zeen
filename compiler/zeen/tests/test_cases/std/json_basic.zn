@@ -58,6 +58,9 @@ fn main() i32 {
   @println("at={} oob={}", root.get("a").unwrap().at(1).unwrap().as_i64().unwrap(), root.get("a").unwrap().at(9).is_none());
   @println("wrongtype={}", root.get("n").unwrap().as_str().is_none());
   @println("isarr={} isobj={}", root.get("a").unwrap().is_array(), root.is_object());
+  let sv = JsonValue.parse("\"hi\"").unwrap();
+  @println("is={} {} {} {}", sv.is_str(), sv.is_num(), root.get("n").unwrap().is_num(), root.get("b").unwrap().is_bool());
+  @println("alive={} {}", sv.as_str().unwrap().len(), root.get("a").unwrap().len());
   @println("roundtrip={}", root.stringify());
   return 0;
 }

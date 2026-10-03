@@ -31,4 +31,6 @@ len=5 arrlen=2
 at=20 oob=true
 wrongtype=true
 isarr=true isobj=true
+is=true false true true
+alive=2 2
 roundtrip={"n":-42,"f":2.5,"b":false,"z":null,"a":[10,20]}

@@ -4,6 +4,10 @@ use std.collections.map;
 
 const MaxJsonDepth: usize = 128;
 
+const SurrogateMin: u32 = 55296;
+const SurrogateMax: u32 = 57343;
+const Latin1Max: u32 = 255;
+
 /// JSON parse error.
 pub struct JsonError {
   pub kind: JsonErrorKind,
@@ -88,6 +92,7 @@ pub enum JsonValue {
     };
   }
 
+  /// True for null values.
   pub fn is_null(*const self) bool {
     return switch (*self) {
       .Null => true,
@@ -95,32 +100,47 @@ pub enum JsonValue {
     };
   }
 
+  /// True for booleans.
   pub fn is_bool(*const self) bool {
-    return self.as_bool().is_some();
+    return switch (*self) {
+      .Bool(&_) => true,
+      _ => false,
+    };
   }
 
+  /// True for numbers.
   pub fn is_num(*const self) bool {
-    return self.as_num().is_some();
+    return switch (*self) {
+      .Num(&_) => true,
+      _ => false,
+    };
   }
 
+  /// True for strings.
   pub fn is_str(*const self) bool {
-    return self.as_str().is_some();
+    return switch (*self) {
+      .Str(&_) => true,
+      _ => false,
+    };
   }
 
+  /// True for arrays.
   pub fn is_array(*const self) bool {
     return switch (*self) {
-      .Array(&items) => true,
+      .Array(&_) => true,
       _ => false,
     };
   }
 
+  /// True for objects.
   pub fn is_object(*const self) bool {
     return switch (*self) {
-      .Object(&obj) => true,
+      .Object(&_) => true,
       _ => false,
     };
   }
 
+  /// Boolean payload, `None` outside booleans.
   pub fn as_bool(*const self) Option[bool] {
     return switch (*self) {
       .Bool(value) => Option.Some(value),
@@ -128,6 +148,7 @@ pub enum JsonValue {
     };
   }
 
+  /// Number text, `None` outside numbers.
   pub fn as_num(*const self) Option[String] {
     return switch (*self) {
       .Num(&text) => Option.Some(text.clone()),
@@ -135,6 +156,7 @@ pub enum JsonValue {
     };
   }
 
+  /// Number parsed as `i64`, `None` outside numbers or on overflow.
   pub fn as_i64(*const self) Option[i64] {
     let text = self.as_num();
     if (text.is_none()) {
@@ -143,6 +165,7 @@ pub enum JsonValue {
     return text.unwrap().parse_i64();
   }
 
+  /// Number parsed as `f64`, `None` outside numbers or on overflow.
   pub fn as_f64(*const self) Option[f64] {
     let text = self.as_num();
     if (text.is_none()) {
@@ -151,6 +174,7 @@ pub enum JsonValue {
     return text.unwrap().parse_f64();
   }
 
+  /// String payload, cloned. `None` outside strings.
   pub fn as_str(*const self) Option[String] {
     return switch (*self) {
       .Str(&text) => Option.Some(text.clone()),
@@ -158,6 +182,7 @@ pub enum JsonValue {
     };
   }
 
+  /// Append compact JSON to `out`.
   pub fn write_into(*const self, out: *String) {
     switch (*self) {
       .Null => {
@@ -195,36 +220,38 @@ pub enum JsonValue {
     };
   }
 
+  /// Append a quoted, escaped string to `out`.
   pub fn write_string(out: *String, text: *String) {
     let hex: []const char = "0123456789abcdef";
+    let backslash = @as(char, 92);
     out.push('"');
 
     let i: usize = 0;
     while (i < text.len()) {
       let c = text.get(i).unwrap();
       if (c == '"') {
-        out.push(@as(char, 92));
+        out.push(backslash);
         out.push('"');
-      } else if (c == @as(char, 92)) {
-        out.push(@as(char, 92));
-        out.push(@as(char, 92));
+      } else if (c == backslash) {
+        out.push(backslash);
+        out.push(backslash);
       } else if (c == @as(char, 8)) {
-        out.push(@as(char, 92));
+        out.push(backslash);
         out.push('b');
       } else if (c == @as(char, 12)) {
-        out.push(@as(char, 92));
+        out.push(backslash);
         out.push('f');
       } else if (c == @as(char, 10)) {
-        out.push(@as(char, 92));
+        out.push(backslash);
         out.push('n');
       } else if (c == @as(char, 13)) {
-        out.push(@as(char, 92));
+        out.push(backslash);
         out.push('r');
       } else if (c == @as(char, 9)) {
-        out.push(@as(char, 92));
+        out.push(backslash);
         out.push('t');
       } else if (@as(u32, c) < 32) {
-        out.push(@as(char, 92));
+        out.push(backslash);
         out.push('u');
         out.push('0');
         out.push('0');
@@ -245,10 +272,12 @@ struct JsonObject {
   map: HashMap[String, JsonValue],
   keys: List[String],
 
+  /// Empty object.
   pub fn new() Self {
     return JsonObject { .map = HashMap#[String, JsonValue].new(), .keys = List#[String].new() };
   }
 
+  /// Insert or replace a member, keeping first-insertion order.
   pub fn insert(*self, key: String, value: JsonValue) {
     if (!self.map.contains_key(&key)) {
       self.keys.push(key.clone());
@@ -256,24 +285,29 @@ struct JsonObject {
     let _ = self.map.insert(key, value);
   }
 
+  /// Member by key, `None` when absent.
   pub fn get(*const self, key: []const char) Option[*const JsonValue] {
     let owned = String.from(key);
     return self.map.get(&owned);
   }
 
+  /// Key at insertion index.
   pub fn key_at(*const self, index: usize) *String {
     return self.keys.get_ptr(index).unwrap();
   }
 
+  /// Value at insertion index.
   pub fn get_at(*const self, index: usize) *const JsonValue {
     let key = self.key_at(index);
     return self.map.get(key).unwrap();
   }
 
+  /// Member count.
   pub fn len(*const self) usize {
     return self.keys.len();
   }
 
+  /// Append `{...}` to `out`.
   pub fn write_into(*const self, out: *String) {
     out.push('{');
     let i: usize = 0;
@@ -311,11 +345,23 @@ struct JsonParser {
     return c.unwrap() == want;
   }
 
+  fn bump(*self) {
+    self.pos += 1;
+  }
+
+  fn bump_if(*self, want: char) bool {
+    if (self.peek_is(want)) {
+      self.pos += 1;
+      return true;
+    };
+    return false;
+  }
+
   pub fn skip_ws(*self) {
     while (self.pos < self.text.len) {
       let ch = self.text[self.pos];
       if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
-        self.pos += 1;
+        self.bump();
       } else {
         return;
       };
@@ -370,19 +416,18 @@ struct JsonParser {
       if (c.is_none() || c.unwrap() != word[i]) {
         return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedChar, .pos = self.pos });
       };
-      self.pos += 1;
+      self.bump();
       i += 1;
     }
     return Result.Ok(value);
   }
 
   fn parse_array(*self, depth: usize) Result[JsonValue, JsonError] {
-    self.pos += 1;
+    self.bump();
     let out = List#[JsonValue].new();
 
     self.skip_ws();
-    if (self.peek_is(']')) {
-      self.pos += 1;
+    if (self.bump_if(']')) {
       return Result.Ok(JsonValue.Array(out));
     };
 
@@ -394,17 +439,14 @@ struct JsonParser {
       out.push(item.unwrap());
 
       self.skip_ws();
-      if (self.peek_is(',')) {
-        self.pos += 1;
+      if (self.bump_if(',')) {
         self.skip_ws();
-        if (self.peek_is(']')) {
-          self.pos += 1;
+        if (self.bump_if(']')) {
           return Result.Ok(JsonValue.Array(out));
         };
         continue;
       };
-      if (self.peek_is(']')) {
-        self.pos += 1;
+      if (self.bump_if(']')) {
         return Result.Ok(JsonValue.Array(out));
       };
       return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedChar, .pos = self.pos });
@@ -414,12 +456,11 @@ struct JsonParser {
   }
 
   fn parse_object(*self, depth: usize) Result[JsonValue, JsonError] {
-    self.pos += 1;
+    self.bump();
     let out = JsonObject.new();
 
     self.skip_ws();
-    if (self.peek_is('}')) {
-      self.pos += 1;
+    if (self.bump_if('}')) {
       return Result.Ok(JsonValue.Object(out));
     };
 
@@ -437,7 +478,7 @@ struct JsonParser {
       if (!self.peek_is(':')) {
         return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedChar, .pos = self.pos });
       };
-      self.pos += 1;
+      self.bump();
       self.skip_ws();
 
       let value = self.parse_value(depth + 1);
@@ -447,17 +488,14 @@ struct JsonParser {
       out.insert(key.unwrap(), value.unwrap());
 
       self.skip_ws();
-      if (self.peek_is(',')) {
-        self.pos += 1;
+      if (self.bump_if(',')) {
         self.skip_ws();
-        if (self.peek_is('}')) {
-          self.pos += 1;
+        if (self.bump_if('}')) {
           return Result.Ok(JsonValue.Object(out));
         };
         continue;
       };
-      if (self.peek_is('}')) {
-        self.pos += 1;
+      if (self.bump_if('}')) {
         return Result.Ok(JsonValue.Object(out));
       };
       return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedChar, .pos = self.pos });
@@ -467,18 +505,18 @@ struct JsonParser {
   }
 
   fn parse_string(*self) Result[String, JsonError] {
-    self.pos += 1;
+    self.bump();
     let out = String.new();
 
     while (self.pos < self.text.len) {
       let ch = self.text[self.pos];
       if (ch == '"') {
-        self.pos += 1;
+        self.bump();
         return Result.Ok(out);
       };
 
       if (@as(u32, ch) == 92) {
-        self.pos += 1;
+        self.bump();
         let esc = self.parse_escape();
         if (esc.is_err()) {
           return Result.Err(esc.unwrap_err());
@@ -492,7 +530,7 @@ struct JsonParser {
       };
 
       out.push(ch);
-      self.pos += 1;
+      self.bump();
     }
 
     return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedEnd, .pos = self.pos });
@@ -505,7 +543,7 @@ struct JsonParser {
     };
 
     let ch = head.unwrap();
-    self.pos += 1;
+    self.bump();
 
     if (ch == '"') {
       return Result.Ok('"');
@@ -544,10 +582,10 @@ struct JsonParser {
     };
     let high = hi.unwrap();
 
-    if (high >= 55296 && high <= 57343) {
+    if (high >= SurrogateMin && high <= SurrogateMax) {
       return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
     };
-    if (high > 255) {
+    if (high > Latin1Max) {
       return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
     };
 
@@ -567,7 +605,7 @@ struct JsonParser {
         return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
       };
       value = value * 16 + digit.unwrap();
-      self.pos += 1;
+      self.bump();
       i += 1;
     }
     return Result.Ok(value);
@@ -591,15 +629,14 @@ struct JsonParser {
     let start = self.pos;
 
     if (self.peek_is('-')) {
-      self.pos += 1;
+      self.bump();
     };
 
     if (!self.take_int_part()) {
       return Result.Err(JsonError { .kind = JsonErrorKind.InvalidNumber, .pos = start });
     };
 
-    if (self.peek_is('.')) {
-      self.pos += 1;
+    if (self.bump_if('.')) {
       if (!self.take_digits()) {
         return Result.Err(JsonError { .kind = JsonErrorKind.InvalidNumber, .pos = start });
       };
@@ -607,9 +644,9 @@ struct JsonParser {
 
     let mark = self.peek();
     if (mark.is_some() && (mark.unwrap() == 'e' || mark.unwrap() == 'E')) {
-      self.pos += 1;
+      self.bump();
       if (self.peek_is('-') || self.peek_is('+')) {
-        self.pos += 1;
+        self.bump();
       };
       if (!self.take_digits()) {
         return Result.Err(JsonError { .kind = JsonErrorKind.InvalidNumber, .pos = start });
@@ -625,7 +662,7 @@ struct JsonParser {
       return false;
     };
     if (c.unwrap() == '0') {
-      self.pos += 1;
+      self.bump();
       return true;
     };
     return self.take_digits();
@@ -638,7 +675,7 @@ struct JsonParser {
       if (!JsonParser.is_digit(c)) {
         break;
       };
-      self.pos += 1;
+      self.bump();
     }
     return self.pos > start;
   }
