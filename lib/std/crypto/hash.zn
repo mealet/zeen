@@ -4,29 +4,29 @@ pub struct Hasher {
   pub fn fnv1a64(data: []const char) u64 {
     let hi: u64 = 0xCBF29CE4;
     let lo: u64 = 0x84222325;
-    let h = (hi << 32) | lo;
+    let hash = (hi << 32) | lo;
     let i: usize = 0;
 
     while (i < data.len) {
-      h ^= @as(u64, data[i]);
-      h *= 0x100000001B3;
+      hash ^= @as(u64, data[i]);
+      hash *= 0x100000001B3;
       i += 1;
     }
 
-    return h;
+    return hash;
   }
 
   /// 32-bit FNV-1a.
   pub fn fnv1a32(data: []const char) u32 {
-    let h: u32 = 0x811C9DC5;
+    let hash: u32 = 0x811C9DC5;
     let i: usize = 0;
 
     while (i < data.len) {
-      h ^= @as(u32, data[i]);
-      h *= 0x01000193;
+      hash ^= @as(u32, data[i]);
+      hash *= 0x01000193;
       i += 1;
     }
 
-    return h;
+    return hash;
   }
 }

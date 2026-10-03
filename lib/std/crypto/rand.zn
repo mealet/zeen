@@ -4,8 +4,8 @@ use std.c.stdlib;
 /// Simple deterministic random numbers over C rand.
 pub struct Rand {
   /// Seed the generator, same seed repeats the sequence.
-  pub fn seed(s: u32) {
-    srand(@as(c_uint, s));
+  pub fn seed(seed: u32) {
+    srand(@as(c_uint, seed));
   }
 
   /// Next unsigned value.

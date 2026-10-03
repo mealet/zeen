@@ -21,41 +21,41 @@ pub struct Sha256 {
     }
 
     let bits = @as(u64, data.len) * 8;
-    let s: u64 = 56;
+    let shift: u64 = 56;
     while (true) {
-      buf.push(@as(u8, bits >> s));
-      if (s == 0) {
+      buf.push(@as(u8, bits >> shift));
+      if (shift == 0) {
         break;
       };
-      s -= 8;
+      shift -= 8;
     }
 
     let blocks = buf.len() / 64;
-    let b: usize = 0;
-    while (b < blocks) {
+    let block: usize = 0;
+    while (block < blocks) {
       let w: [64]u32 = [0; 64];
 
-      let t: usize = 0;
-      while (t < 16) {
-        let o = b * 64 + t * 4;
-        let b0 = @as(u32, buf[o]) << 24;
-        let b1 = @as(u32, buf[o + 1]) << 16;
-        let b2 = @as(u32, buf[o + 2]) << 8;
-        let b3 = @as(u32, buf[o + 3]);
-        w[t] = (b0 | b1) | (b2 | b3);
-        t += 1;
+      let word: usize = 0;
+      while (word < 16) {
+        let offset = block * 64 + word * 4;
+        let byte0 = @as(u32, buf[offset]) << 24;
+        let byte1 = @as(u32, buf[offset + 1]) << 16;
+        let byte2 = @as(u32, buf[offset + 2]) << 8;
+        let byte3 = @as(u32, buf[offset + 3]);
+        w[word] = (byte0 | byte1) | (byte2 | byte3);
+        word += 1;
       }
 
-      let t2: usize = 16;
-      while (t2 < 64) {
-        let s0 = Sha256.rotr(w[t2 - 15], 7) ^ Sha256.rotr(w[t2 - 15], 18) ^ (w[t2 - 15] >> 3);
-        let s1 = Sha256.rotr(w[t2 - 2], 17) ^ Sha256.rotr(w[t2 - 2], 19) ^ (w[t2 - 2] >> 10);
-        w[t2] = w[t2 - 16] + s0 + w[t2 - 7] + s1;
-        t2 += 1;
+      let sched: usize = 16;
+      while (sched < 64) {
+        let s0 = Sha256.rotr(w[sched - 15], 7) ^ Sha256.rotr(w[sched - 15], 18) ^ (w[sched - 15] >> 3);
+        let s1 = Sha256.rotr(w[sched - 2], 17) ^ Sha256.rotr(w[sched - 2], 19) ^ (w[sched - 2] >> 10);
+        w[sched] = w[sched - 16] + s0 + w[sched - 7] + s1;
+        sched += 1;
       }
 
       let a = h[0];
-      let bb = h[1];
+      let b = h[1];
       let c = h[2];
       let d = h[3];
       let e = h[4];
@@ -69,44 +69,44 @@ pub struct Sha256 {
         let ch = (e & f) ^ ((e ^ 0xFFFFFFFF) & g);
         let t1 = (hh + s1 + ch + k[r]) + w[r];
         let s0 = Sha256.rotr(a, 2) ^ Sha256.rotr(a, 13) ^ Sha256.rotr(a, 22);
-        let maj = ((a & bb) ^ (a & c)) ^ (bb & c);
+        let maj = ((a & b) ^ (a & c)) ^ (b & c);
         let t2 = s0 + maj;
         hh = g;
         g = f;
         f = e;
         e = d + t1;
         d = c;
-        c = bb;
-        bb = a;
+        c = b;
+        b = a;
         a = t1 + t2;
         r += 1;
       }
 
       h[0] += a;
-      h[1] += bb;
+      h[1] += b;
       h[2] += c;
       h[3] += d;
       h[4] += e;
       h[5] += f;
       h[6] += g;
       h[7] += hh;
-      b += 1;
+      block += 1;
     }
 
     let digits: []const char = "0123456789abcdef";
     let out = String.new();
-    let j: usize = 0;
-    while (j < 8) {
-      let v = h[j];
-      let n: u32 = 28;
+    let word: usize = 0;
+    while (word < 8) {
+      let value = h[word];
+      let shift: u32 = 28;
       while (true) {
-        out.push(digits[@as(usize, (v >> n) & 15)]);
-        if (n == 0) {
+        out.push(digits[@as(usize, (value >> shift) & 15)]);
+        if (shift == 0) {
           break;
         };
-        n -= 4;
+        shift -= 4;
       }
-      j += 1;
+      word += 1;
     }
 
     return out;
