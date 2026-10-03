@@ -7473,7 +7473,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
                 fb.loop_stack.pop();
 
-                fb.set_terminator(body_end, Terminator::Goto(header));
+                fb.join_if_open(body_end, header);
 
                 exit_bb
             }
