@@ -58,8 +58,11 @@ pub struct Mutex[T] {
       };
     } else {
       let rc = pthread_mutex_trylock(&self.os);
-      if (rc != 0) {
+      if (rc == EBUSY) {
         return Option.None;
+      };
+      if (rc != 0) {
+        @panic("mutex try_lock failed");
       };
     }
 
