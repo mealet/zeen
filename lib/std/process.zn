@@ -2,9 +2,9 @@ use std.alloc;
 use std.string;
 use std.collections.list;
 use std.io;
-
 use std.c.types;
 use std.c.stdlib;
+use std.c.string;
 
 @os[windows] {
   use std.c.windows.winbase;
@@ -15,27 +15,42 @@ use std.c.stdlib;
 extern let __zeen_argc: i32;
 extern let __zeen_argv: [*][*]char;
 
+/// OS process: arguments, working directory and exit.
 pub struct Process {
+  /// Number of process arguments, including the executable path.
   pub fn args_count() i32 {
     return __zeen_argc;
   }
 
+  /// Owned copy of the process arguments.
   pub fn args() List[String] {
     let out = List#[String].new();
-    let i: usize = 0;
 
-    while (i < @as(usize, __zeen_argc)) {
-      out.push(String.from_cstr(__zeen_argv[i]));
-      i = i + 1;
+    let i: i32 = 0;
+    while (i < __zeen_argc) {
+      out.push(String.from_cstr(__zeen_argv[@as(usize, i)]));
+      i += 1;
     }
 
     return out;
   }
 
+  /// Zero-copy iterator over the arguments. Yields immutable slices
+  /// borrowed from the OS, do not modify them.
+  pub fn args_iter() ArgsIter {
+    return ArgsIter.new();
+  }
+
+  /// Terminate the process with the given exit code.
   pub fn exit(code: i32) never {
     return exit(@as(c_int, code));
   }
 
+  /// Current working directory.
+  ///
+  /// Possible IoError variants:
+  /// * IoErrorKind.NotFound
+  /// * IoErrorKind.Uncategorized
   pub fn cwd() Result[String, IoError] {
     @os[windows] {
       let buf = Allocator.alloc(4096);
@@ -48,7 +63,6 @@ pub struct Process {
 
       let out = String.from_cstr(@as([*]const char, buf));
       Allocator.dealloc(buf);
-
       return Result.Ok(out);
     } else {
       let buf = Allocator.alloc(4096);
@@ -61,8 +75,31 @@ pub struct Process {
 
       let out = String.from_cstr(@as([*]const char, buf));
       Allocator.dealloc(buf);
-
       return Result.Ok(out);
     }
+  }
+}
+
+/// Borrowed view over the process arguments, no allocation.
+pub struct ArgsIter {
+  index: i32,
+
+  pub fn new() Self {
+    return ArgsIter { .index = 0 };
+  }
+}
+
+implement Iterator : ArgsIter {
+  pub fn next(*self) Option[[]const char] {
+    let at = @as(usize, self.index);
+
+    if (self.index >= __zeen_argc) {
+      return Option.None;
+    };
+
+    self.index += 1;
+
+    let len = strlen(@as([*]const char, __zeen_argv[at]));
+    return Option.Some(__zeen_argv[at][0..@as(usize, len)]);
   }
 }
