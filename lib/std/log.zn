@@ -1,0 +1,43 @@
+/// Severity level, ordered from verbose to critical.
+pub enum Level {
+  Debug,
+  Info,
+  Warn,
+  Error,
+}
+
+let level: Level = Level.Info;
+
+/// Leveled logging to stdout.
+pub struct Log {
+  /// Messages below the level are skipped.
+  pub fn set_level(l: Level) {
+    level = l;
+  }
+
+  pub fn level() Level {
+    return level;
+  }
+
+  pub fn log(l: Level, msg: []const char) {
+    if (@enumTag(l) >= @enumTag(level)) {
+      @println("[{}] {}", l, msg);
+    };
+  }
+
+  pub fn debug(msg: []const char) {
+    Log.log(Level.Debug, msg);
+  }
+
+  pub fn info(msg: []const char) {
+    Log.log(Level.Info, msg);
+  }
+
+  pub fn warn(msg: []const char) {
+    Log.log(Level.Warn, msg);
+  }
+
+  pub fn error(msg: []const char) {
+    Log.log(Level.Error, msg);
+  }
+}
