@@ -120,6 +120,9 @@ pub struct ResolutionResult {
     pub nested_fn_parents: HashMap<DefId, DefId>,
     pub closure_captures: HashMap<DefId, Vec<DefId>>,
     pub enum_payload_struct_defs: HashMap<DefId, DefId>,
+
+    pub def_modules: HashMap<DefId, String>,
+    pub root_module: String,
 }
 
 impl ResolutionResult {

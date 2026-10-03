@@ -407,7 +407,12 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 | Type::GenericParam(_) => self.context.i32_type().into(),
                 _ => self.map_basic_type(gv.ty),
             };
-            let global = self.module.add_global(llvm_ty, None, &gv.symbol_name);
+            let global = if gv.is_extern {
+                self.module.add_global(llvm_ty, None, &gv.symbol_name)
+            } else {
+                let symbol = self.prefixed_name(gv.def_id, gv.symbol_name.clone());
+                self.module.add_global(llvm_ty, None, &symbol)
+            };
             if gv.is_extern {
                 global.set_linkage(inkwell::module::Linkage::External);
             } else {
@@ -3980,10 +3985,30 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             return "zeen_main".to_string();
         }
 
-        self.mangle_function_name(&readable, id)
+        self.mangle_function_name(&readable, id, func.source_def)
     }
 
-    fn mangle_function_name(&self, readable: &str, id: MirFunctionId) -> String {
+    fn module_prefix(&self, def: DefId) -> Option<String> {
+        let display = self.resolution.def_modules.get(&def)?;
+        let mut out = String::new();
+        for ch in display.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '$' {
+                out.push(ch);
+            } else {
+                out.push('$');
+            }
+        }
+        Some(out)
+    }
+
+    fn prefixed_name(&self, def: DefId, base: String) -> String {
+        match self.module_prefix(def) {
+            Some(prefix) => format!("{prefix}.{base}"),
+            None => base,
+        }
+    }
+
+    fn mangle_function_name(&self, readable: &str, id: MirFunctionId, source: DefId) -> String {
         let mut mangled = String::new();
         for ch in readable.chars() {
             match ch {
@@ -3995,6 +4020,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 c => mangled.push(c),
             }
         }
+        let mut mangled = self.prefixed_name(source, mangled);
         if self.module.get_function(&mangled).is_some() {
             mangled.push_str(&format!("${}", id.0));
         }
@@ -4008,7 +4034,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 generic_args,
             } => {
                 let base = self.resolve_def_name(*def_id);
-                if generic_args.is_empty() {
+                let base = if generic_args.is_empty() {
                     base
                 } else {
                     let args: Vec<String> = generic_args
@@ -4016,7 +4042,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .map(|&arg| self.mangle_type_name(arg))
                         .collect();
                     format!("{base}${}", args.join("$"))
-                }
+                };
+                self.prefixed_name(*def_id, base)
             }
             Type::Slice { element, .. } => format!("slice.{}", self.mangle_type_name(*element)),
             Type::Enum {
@@ -4024,7 +4051,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 generic_args,
             } => {
                 let base = self.resolve_def_name(*def_id);
-                if generic_args.is_empty() {
+                let base = if generic_args.is_empty() {
                     format!("enum.{base}")
                 } else {
                     let args: Vec<String> = generic_args
@@ -4032,7 +4059,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .map(|&arg| self.mangle_type_name(arg))
                         .collect();
                     format!("enum.{base}${}", args.join("$"))
-                }
+                };
+                self.prefixed_name(*def_id, base)
             }
             _ => format!("struct.{}", ty.0),
         }
@@ -4046,7 +4074,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 generic_args,
             } => {
                 let base = self.resolve_def_name(*def_id);
-                if generic_args.is_empty() {
+                let base = if generic_args.is_empty() {
                     base
                 } else {
                     let args: Vec<String> = generic_args
@@ -4054,7 +4082,8 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         .map(|&arg| self.mangle_type_name(arg))
                         .collect();
                     format!("{base}${}", args.join("$"))
-                }
+                };
+                self.prefixed_name(*def_id, base)
             }
             Type::Pointer { inner, .. } => format!("ptr.{}", self.mangle_type_name(*inner)),
             Type::ManyPointer { inner, .. } => format!("many.{}", self.mangle_type_name(*inner)),
@@ -4066,7 +4095,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 )
             }
             Type::Slice { element, .. } => format!("slice.{}", self.mangle_type_name(*element)),
-            Type::Enum { def_id, .. } => self.resolve_def_name(*def_id),
+            Type::Enum { def_id, .. } => {
+                self.prefixed_name(*def_id, self.resolve_def_name(*def_id))
+            }
             Type::Fn { .. } => "fn".to_string(),
             Type::IntLiteral => "i32".to_string(),
             Type::FloatLiteral => "f64".to_string(),

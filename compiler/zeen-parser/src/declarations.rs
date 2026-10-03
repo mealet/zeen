@@ -80,7 +80,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Alias) => self.parse_alias(start_span, is_pub),
-            TokenKind::Keyword(CompilerKeyword::Use) => self.parse_use(),
+            TokenKind::Keyword(CompilerKeyword::Use) => self.parse_use(is_pub),
             TokenKind::Keyword(CompilerKeyword::Interface) => {
                 self.parse_interface(start_span, is_pub)
             }
@@ -641,7 +641,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         Some(decl)
     }
 
-    fn parse_use(&mut self) -> Option<&'ctx Declaration<'ctx>> {
+    fn parse_use(&mut self, is_pub: IsPub) -> Option<&'ctx Declaration<'ctx>> {
         let use_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Use), "use")?;
@@ -692,7 +692,10 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let _ = self.p.expect(TokenKind::Semicolon, ";")?;
 
         let decl = self.p.arena.alloc(Declaration {
-            kind: DeclarationKind::Use { module },
+            kind: DeclarationKind::Use {
+                module,
+                is_pub: is_pub.0,
+            },
             source: (use_kw.merge_span(end), self.p.named_src()).into(),
         });
 
@@ -1593,7 +1596,7 @@ mod tests {
         assert_matches!(
             parser.parse_program(),
             Ok([Declaration {
-                kind: DeclarationKind::Use { module: _ },
+                kind: DeclarationKind::Use { .. },
                 ..
             }])
         );
@@ -1608,7 +1611,37 @@ mod tests {
         assert_matches!(
             parser.parse_program(),
             Ok([Declaration {
-                kind: DeclarationKind::Use { module: _ },
+                kind: DeclarationKind::Use { .. },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn pub_use_marks_reexport() {
+        const SRC: &str = "pub use std.io;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Use { is_pub: true, .. },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn plain_use_is_private() {
+        const SRC: &str = "use std.io;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Use { is_pub: false, .. },
                 ..
             }])
         );

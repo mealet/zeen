@@ -197,6 +197,12 @@ impl<'res> TypeChecker<'res> {
 
     // --> Helpers
 
+    fn is_root_def(&self, def: zeen_resolve::DefId) -> bool {
+        self.resolution
+            .def_modules
+            .get(&def)
+            .is_some_and(|module| *module == self.resolution.root_module)
+    }
     fn def_kind(&self, def_id: DefId) -> Option<&DefKind> {
         self.resolution.defs.get(&def_id).map(|info| &info.kind)
     }
@@ -291,7 +297,8 @@ impl<'res> TypeChecker<'res> {
     fn declare_signature(&mut self, decl: &HirDecl) {
         match &decl.kind {
             HirDeclKind::Fn(hir_fn) => {
-                if hir_fn.name.0 == self.interner.borrow_mut().get_or_intern("main") {
+                let main_name = self.interner.borrow_mut().get_or_intern("main");
+                if hir_fn.name.0 == main_name && self.is_root_def(decl.def_id) {
                     self.found_main_fn = true;
                     self.result.main_fn_def = Some(decl.def_id);
 

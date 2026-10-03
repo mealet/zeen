@@ -69,6 +69,25 @@ impl SymbolTable {
         &mut self.scopes.last_mut().expect("something wrong wtf").content
     }
 
+    pub fn set_module_scope(&mut self, content: ScopeContent) {
+        debug_assert!(!self.scopes.is_empty());
+        self.scopes[0].content = content;
+    }
+
+    pub fn shadowed_value_above_module(&self, name: Spur) -> bool {
+        self.scopes
+            .iter()
+            .skip(1)
+            .any(|scope| scope.content.values.contains_key(&name))
+    }
+
+    pub fn shadowed_type_above_module(&self, name: Spur) -> bool {
+        self.scopes
+            .iter()
+            .skip(1)
+            .any(|scope| scope.content.types.contains_key(&name))
+    }
+
     pub fn enclosing_method_or_interface(&self) -> Option<SelfDefs> {
         for scope in self.scopes.iter().rev() {
             match scope.kind {

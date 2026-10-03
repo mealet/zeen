@@ -1,0 +1,19 @@
+use lib;
+
+struct Wrap {
+  pub a: i32,
+}
+
+let slot: i32 = 10;
+
+fn pick() i32 {
+  return 1;
+}
+
+fn main() i32 {
+  let w = Wrap { .a = 100 };
+  let mine = pick() + w.a + slot;
+  @println("{}", mine);
+  @println("{}", run());
+  return 0;
+}

@@ -1,0 +1,5 @@
+pub use a;
+
+pub fn face() i32 {
+  return 1;
+}

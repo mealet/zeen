@@ -153,6 +153,21 @@ pub enum ResolveError {
         span: SourceSpan,
     },
 
+    #[error("name `{name}` is ambiguous: imported from multiple modules")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::resolver::ambiguous_import),
+        help("import only one of the modules, or move one of the items")
+    )]
+    AmbiguousImport {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("nested function cannot capture `{name}` from the enclosing function")]
     #[diagnostic(
         severity(Error),
