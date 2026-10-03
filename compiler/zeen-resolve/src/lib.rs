@@ -64,10 +64,9 @@ pub fn resolve<'ctx>(
         miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
     )?;
 
-    let module_display = include_resolver.module_display_index();
+    let graph = include_resolver.module_graph();
 
-    let mut name_resolver =
-        name_resolver::NameResolver::new(filename, src, interner, module_display);
+    let mut name_resolver = name_resolver::NameResolver::new(filename, src, interner, graph);
     name_resolver.resolve_module(resolved_program);
 
     let resolution_result = name_resolver.finish()?;
@@ -467,7 +466,10 @@ mod tests {
     fn same_file_duplicate_fn_still_collides() {
         let errs = resolve_files(
             "multi-collision-same",
-            &[("main.zn", "fn foo() i32 { return 1; } fn foo() i32 { return 2; }")],
+            &[(
+                "main.zn",
+                "fn foo() i32 { return 1; } fn foo() i32 { return 2; }",
+            )],
             "main.zn",
         )
         .unwrap_err();

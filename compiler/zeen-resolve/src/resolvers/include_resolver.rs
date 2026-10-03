@@ -30,6 +30,21 @@ struct RawModule<'arena> {
     is_core: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ModuleUseEdge {
+    pub target: PathBuf,
+    pub is_pub: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ModuleGraph {
+    pub root: PathBuf,
+    pub display: HashMap<PathBuf, String>,
+    pub display_by_src: HashMap<String, PathBuf>,
+    pub core: HashSet<PathBuf>,
+    pub uses: HashMap<PathBuf, Vec<ModuleUseEdge>>,
+}
+
 /// Which std modules a program needs injected: `@format(...)` pulls in
 /// `std.string`, closure/fat usage pulls in `std.fn`. On top of that the
 /// prelude (`std.string`, `std.collections.list`) is injected when the
@@ -51,6 +66,8 @@ pub struct IncludeResolver<'ctx> {
     mode: CompilationMode,
 
     modules: HashMap<PathBuf, RawModule<'ctx>>,
+    root: Option<PathBuf>,
+    edges: HashMap<PathBuf, Vec<ModuleUseEdge>>,
 
     src: Arc<String>,
     filename: Rc<String>,
@@ -80,6 +97,8 @@ impl<'ctx> IncludeResolver<'ctx> {
             filename,
 
             modules: HashMap::new(),
+            root: None,
+            edges: HashMap::new(),
             errors: Vec::new(),
         }
     }
@@ -439,6 +458,7 @@ impl<'ctx> IncludeResolver<'ctx> {
         core_files: &[(&'static str, &'static str)],
     ) -> Result<&'ctx [&'ctx Declaration<'ctx>], Vec<ResolveError>> {
         let root_canonical = canonicalize_best_effort(&root_path);
+        self.root = Some(root_canonical.clone());
         let entry_is_core = root_named_src.inner().contains("@zeen-core");
         let entry_core_module = if entry_is_core {
             root_path
@@ -560,6 +580,89 @@ impl<'ctx> IncludeResolver<'ctx> {
         out.push(use_std);
     }
 
+    fn module_has_use(&self, decls: &[&'ctx Declaration<'ctx>], module: &str) -> bool {
+        decls.iter().any(|decl| match decl.kind {
+            DeclarationKind::Use {
+                module: (spur, _), ..
+            } => self.interner_resolve(&spur) == module,
+            _ => false,
+        })
+    }
+
+    fn synth_file_available(&self, module: &str, has_format: bool) -> bool {
+        let relative = module
+            .strip_prefix("std.")
+            .unwrap_or(module)
+            .replace('.', "/")
+            + ".zn";
+        let available = self
+            .context
+            .paths
+            .std_root
+            .as_deref()
+            .is_some_and(|root| root.join(&relative).is_file());
+        available || (module == "std.string" && has_format)
+    }
+
+    fn missing_synthetic_uses(&self, decls: &[&'ctx Declaration<'ctx>]) -> Vec<&'static str> {
+        let usage = self.usage_flags(decls);
+        let candidates = [
+            ("std.string", usage.has_string || usage.has_format),
+            ("std.collections.list", usage.has_list),
+            ("std.fn", usage.has_fat),
+        ];
+        candidates
+            .into_iter()
+            .filter(|(module, needed)| {
+                *needed
+                    && !self.module_has_use(decls, module)
+                    && self.synth_file_available(module, usage.has_format)
+            })
+            .map(|(module, _)| module)
+            .collect()
+    }
+
+    fn inject_prelude_uses(&mut self) {
+        loop {
+            let mut touched: Vec<PathBuf> = Vec::new();
+            let keys: Vec<PathBuf> = self.modules.keys().cloned().collect();
+            for key in &keys {
+                let module = &self.modules[key];
+                if module.is_core {
+                    continue;
+                }
+                let missing = self.missing_synthetic_uses(module.decls);
+                if missing.is_empty() {
+                    continue;
+                }
+                let span = SourceSpan::new(0.into(), 0);
+                let source = module
+                    .decls
+                    .first()
+                    .map(|decl| decl.source.clone())
+                    .unwrap_or_else(|| Source::from((span, module.named_src.clone())));
+                let mut grown: Vec<&'ctx Declaration<'ctx>> = module.decls.to_vec();
+                for synth in missing {
+                    self.push_synthetic_use(&mut grown, synth, span, source.clone());
+                }
+                self.modules.get_mut(key).expect("module present").decls =
+                    self.arena.alloc_slice_copy(&grown);
+                touched.push(key.clone());
+            }
+            if touched.is_empty() {
+                break;
+            }
+            let mut visiting = HashSet::new();
+            for key in &touched {
+                let decls = self.modules[key].decls;
+                self.load_uses(key, decls, &mut visiting);
+            }
+            if !self.errors.is_empty() {
+                break;
+            }
+        }
+    }
+
     pub fn resolve(
         &mut self,
         root_path: PathBuf,
@@ -568,6 +671,7 @@ impl<'ctx> IncludeResolver<'ctx> {
     ) -> Result<&'ctx [&'ctx Declaration<'ctx>], &[ResolveError]> {
         let root_canonical = canonicalize_best_effort(&root_path);
 
+        self.root = Some(root_canonical.clone());
         self.modules.insert(
             root_canonical.clone(),
             RawModule {
@@ -582,6 +686,12 @@ impl<'ctx> IncludeResolver<'ctx> {
         visiting.insert(root_canonical.clone());
         self.load_links(&root_canonical, root_decls);
         self.load_uses(&root_canonical, root_decls, &mut visiting);
+
+        if !self.errors.is_empty() {
+            return Err(&self.errors);
+        }
+
+        self.inject_prelude_uses();
 
         if !self.errors.is_empty() {
             return Err(&self.errors);
@@ -799,7 +909,7 @@ impl<'ctx> IncludeResolver<'ctx> {
 
         for decl in decls {
             match decl.kind {
-                DeclarationKind::Use { module, .. } => {
+                DeclarationKind::Use { module, is_pub } => {
                     let raw = self.interner_resolve(&module.0);
 
                     if self.is_builtin_module(&raw) {
@@ -818,6 +928,14 @@ impl<'ctx> IncludeResolver<'ctx> {
                     };
 
                     let target_canonical = canonicalize_best_effort(&target);
+                    let edge = ModuleUseEdge {
+                        target: target_canonical.clone(),
+                        is_pub,
+                    };
+                    let edges = self.edges.entry(canonical.to_path_buf()).or_default();
+                    if !edges.iter().any(|e| e.target == edge.target) {
+                        edges.push(edge);
+                    }
                     self.merge_module(&target_canonical, false, out, visited);
                 }
 
@@ -882,9 +1000,27 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
 
                 let (first_is_core, first_canonical, _) = self.module_source_of(first_decl);
-                let (second_is_core, second_canonical, _) = self.module_source_of(decl);
+                let (second_is_core, second_canonical, second_src) = self.module_source_of(decl);
 
-                if !first_is_core && !second_is_core && first_canonical != second_canonical {
+                if first_is_core != second_is_core {
+                    let name = self.interner_resolve(&entry.1);
+                    let (user_span, user_src) = if first_is_core {
+                        (span, second_src)
+                    } else {
+                        let (_, _, first_src) = self.module_source_of(first_decl);
+                        (*first_span, first_src)
+                    };
+
+                    self.errors.push(ResolveError::CoreReserved {
+                        name,
+                        src: user_src,
+                        span: user_span,
+                    });
+
+                    continue;
+                }
+
+                if first_canonical != second_canonical {
                     continue;
                 }
 
@@ -933,7 +1069,7 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
     }
 
-    pub(crate) fn module_display_index(&self) -> HashMap<String, String> {
+    pub(crate) fn module_graph(&self) -> ModuleGraph {
         let project_root = canonicalize_best_effort(&self.context.paths.project_root);
         let std_root = self
             .context
@@ -942,16 +1078,29 @@ impl<'ctx> IncludeResolver<'ctx> {
             .as_deref()
             .map(canonicalize_best_effort);
 
-        let mut out = HashMap::new();
+        let mut graph = ModuleGraph {
+            root: self.root.clone().unwrap_or_default(),
+            ..ModuleGraph::default()
+        };
         for (key, module) in &self.modules {
             let display = if module.is_core {
                 key.to_string_lossy().into_owned()
             } else {
                 display_for_path(&module.canonical_path, &project_root, std_root.as_deref())
             };
-            out.insert(module.named_src.name().to_string(), display);
+            graph.display_by_src.insert(
+                module.named_src.name().to_string(),
+                module.canonical_path.clone(),
+            );
+            graph.display.insert(key.clone(), display);
+            if module.is_core {
+                graph.core.insert(key.clone());
+            }
         }
-        out
+        for (from, edges) in &self.edges {
+            graph.uses.insert(from.clone(), edges.clone());
+        }
+        graph
     }
 
     fn module_source_of(
@@ -960,16 +1109,26 @@ impl<'ctx> IncludeResolver<'ctx> {
     ) -> (bool, PathBuf, NamedSource<Arc<String>>) {
         let target_ptr = decl as *const Declaration as usize;
 
-        for module in self.modules.values() {
-            for d in module.decls {
-                if (*d as *const Declaration as usize) == target_ptr {
-                    return (
-                        module.is_core,
-                        module.canonical_path.clone(),
-                        module.named_src.clone(),
-                    );
+        let find_in = |skip_root: bool| {
+            for module in self.modules.values() {
+                if skip_root && Some(&module.canonical_path) == self.root.as_ref() {
+                    continue;
+                }
+                for d in module.decls {
+                    if (*d as *const Declaration as usize) == target_ptr {
+                        return Some((
+                            module.is_core,
+                            module.canonical_path.clone(),
+                            module.named_src.clone(),
+                        ));
+                    }
                 }
             }
+            None
+        };
+
+        if let Some(found) = find_in(true).or_else(|| find_in(false)) {
+            return found;
         }
 
         (false, PathBuf::new(), self.named_src())

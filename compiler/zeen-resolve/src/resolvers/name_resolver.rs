@@ -5,6 +5,7 @@ use smol_str::SmolStr;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    path::PathBuf,
     rc::Rc,
     sync::Arc,
 };
@@ -19,8 +20,9 @@ use zeen_ast::{
 use crate::{
     error::ResolveError,
     resolution::{BindingSlotKey, DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult},
+    resolvers::include_resolver::ModuleGraph,
     same_source_file,
-    symbol_table::{ScopeKind, SymbolTable},
+    symbol_table::{ScopeContent, ScopeKind, SymbolTable},
 };
 
 /// One active function-like boundary that restricts or enables captures.
@@ -63,8 +65,14 @@ pub struct NameResolver {
     next_def_id: u32,
     current_src: NamedSource<Arc<String>>,
 
-    module_display: HashMap<String, String>,
+    graph: ModuleGraph,
     current_module: String,
+    current_canon: PathBuf,
+    def_canon: HashMap<DefId, PathBuf>,
+
+    visible: HashMap<PathBuf, ScopeContent>,
+    ambiguous_values: HashMap<PathBuf, HashSet<Spur>>,
+    ambiguous_types: HashMap<PathBuf, HashSet<Spur>>,
 }
 
 fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
@@ -85,7 +93,7 @@ impl<'ctx> NameResolver {
         filename: Rc<String>,
         src: Arc<String>,
         interner: Rc<RefCell<Rodeo>>,
-        module_display: HashMap<String, String>,
+        graph: ModuleGraph,
     ) -> Self {
         Self {
             interner,
@@ -102,14 +110,24 @@ impl<'ctx> NameResolver {
             next_def_id: 0,
             current_src: NamedSource::new(filename.as_str(), src.clone()),
 
-            module_display,
+            graph,
             current_module: String::new(),
+            current_canon: PathBuf::new(),
+            def_canon: HashMap::new(),
+
+            visible: HashMap::new(),
+            ambiguous_values: HashMap::new(),
+            ambiguous_types: HashMap::new(),
         }
     }
 
-    pub fn finish(self) -> Result<ResolutionResult, Vec<ResolveError>> {
+    pub fn finish(mut self) -> Result<ResolutionResult, Vec<ResolveError>> {
         if !self.errors.is_empty() {
             return Err(self.errors);
+        }
+
+        if let Some(display) = self.graph.display.get(&self.graph.root) {
+            self.result.root_module = display.clone();
         }
 
         Ok(self.result)
@@ -122,10 +140,25 @@ impl<'ctx> NameResolver {
     }
 
     fn display_of(&self, src_name: &str) -> String {
-        self.module_display
+        self.graph
+            .display_by_src
             .get(src_name)
+            .and_then(|canon| self.graph.display.get(canon))
             .cloned()
             .unwrap_or_else(|| src_name.to_string())
+    }
+
+    fn canon_of(&self, src_name: &str) -> PathBuf {
+        self.graph
+            .display_by_src
+            .get(src_name)
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from(src_name))
+    }
+
+    fn track_module(&mut self, src_name: &str) {
+        self.current_module = self.display_of(src_name);
+        self.current_canon = self.canon_of(src_name);
     }
 
     fn define(&mut self, info: DefInfo) -> DefId {
@@ -134,6 +167,7 @@ impl<'ctx> NameResolver {
         self.result
             .def_modules
             .insert(id, self.current_module.clone());
+        self.def_canon.insert(id, self.current_canon.clone());
         id
     }
 
@@ -291,6 +325,8 @@ impl<'ctx> NameResolver {
             return;
         }
 
+        self.build_module_tables();
+
         for decl in decls {
             self.resolve_decl(decl);
         }
@@ -298,8 +334,258 @@ impl<'ctx> NameResolver {
         self.check_global_var_cycles();
     }
 
+    fn is_value_kind(kind: &DefKind) -> bool {
+        matches!(
+            kind,
+            DefKind::Function | DefKind::GlobalVar { .. } | DefKind::ExternVar
+        )
+    }
+
+    fn is_type_kind(kind: &DefKind) -> bool {
+        matches!(
+            kind,
+            DefKind::Struct | DefKind::Interface | DefKind::Enum | DefKind::TypeAlias
+        )
+    }
+
+    fn own_pub_items(&self, canon: &PathBuf, value_ns: bool) -> Vec<(Spur, DefId)> {
+        self.result
+            .defs
+            .iter()
+            .filter(|(id, info)| {
+                self.def_canon.get(id) == Some(canon)
+                    && info.is_pub
+                    && if value_ns {
+                        Self::is_value_kind(&info.kind)
+                    } else {
+                        Self::is_type_kind(&info.kind)
+                    }
+            })
+            .map(|(id, info)| (info.name, *id))
+            .collect()
+    }
+
+    fn build_module_tables(&mut self) {
+        let mut own_values: HashMap<PathBuf, HashMap<Spur, DefId>> = HashMap::new();
+        let mut own_types: HashMap<PathBuf, HashMap<Spur, DefId>> = HashMap::new();
+        for (id, info) in &self.result.defs {
+            let Some(canon) = self.def_canon.get(id).cloned() else {
+                continue;
+            };
+            if Self::is_value_kind(&info.kind) {
+                own_values.entry(canon).or_default().insert(info.name, *id);
+            } else if Self::is_type_kind(&info.kind) {
+                own_types.entry(canon).or_default().insert(info.name, *id);
+            }
+        }
+
+        let mut core_values: HashMap<Spur, DefId> = HashMap::new();
+        let mut core_types: HashMap<Spur, DefId> = HashMap::new();
+        for (id, info) in &self.result.defs {
+            let Some(canon) = self.def_canon.get(id) else {
+                continue;
+            };
+            if !self.graph.core.contains(canon) {
+                continue;
+            }
+            if Self::is_value_kind(&info.kind) {
+                core_values.insert(info.name, *id);
+            } else if Self::is_type_kind(&info.kind) {
+                core_types.insert(info.name, *id);
+            }
+        }
+
+        let mut re_values: HashMap<PathBuf, HashSet<(Spur, DefId)>> = HashMap::new();
+        let mut re_types: HashMap<PathBuf, HashSet<(Spur, DefId)>> = HashMap::new();
+        for canon in self.graph.display.keys() {
+            re_values.insert(
+                canon.clone(),
+                self.own_pub_items(canon, true).into_iter().collect(),
+            );
+            re_types.insert(
+                canon.clone(),
+                self.own_pub_items(canon, false).into_iter().collect(),
+            );
+        }
+
+        loop {
+            let mut changed = false;
+            for (from, edges) in &self.graph.uses {
+                for edge in edges {
+                    if !edge.is_pub {
+                        continue;
+                    }
+                    let Some(target_values) = re_values.get(&edge.target).cloned() else {
+                        continue;
+                    };
+                    let Some(target_types) = re_types.get(&edge.target).cloned() else {
+                        continue;
+                    };
+                    if let Some(into) = re_values.get_mut(from) {
+                        for item in target_values {
+                            changed |= into.insert(item);
+                        }
+                    }
+                    if let Some(into) = re_types.get_mut(from) {
+                        for item in target_types {
+                            changed |= into.insert(item);
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut visible: HashMap<PathBuf, ScopeContent> = HashMap::new();
+        let mut ambiguous_values: HashMap<PathBuf, HashSet<Spur>> = HashMap::new();
+        let mut ambiguous_types: HashMap<PathBuf, HashSet<Spur>> = HashMap::new();
+        for canon in self.graph.display.keys() {
+            let mut content = ScopeContent::default();
+            content
+                .values
+                .extend(core_values.iter().map(|(k, v)| (*k, *v)));
+            content
+                .types
+                .extend(core_types.iter().map(|(k, v)| (*k, *v)));
+
+            let mut own_keys_values: HashSet<Spur> = HashSet::new();
+            let mut own_keys_types: HashSet<Spur> = HashSet::new();
+            if let Some(items) = own_values.get(canon) {
+                for (name, id) in items {
+                    content.values.insert(*name, *id);
+                    own_keys_values.insert(*name);
+                }
+            }
+            if let Some(items) = own_types.get(canon) {
+                for (name, id) in items {
+                    content.types.insert(*name, *id);
+                    own_keys_types.insert(*name);
+                }
+            }
+
+            if let Some(edges) = self.graph.uses.get(canon).cloned() {
+                for edge in edges {
+                    for (name, id) in self.own_pub_items(&edge.target, true) {
+                        Self::insert_import(
+                            &mut content.values,
+                            &mut ambiguous_values,
+                            canon,
+                            &own_keys_values,
+                            name,
+                            id,
+                        );
+                    }
+                    for (name, id) in self.own_pub_items(&edge.target, false) {
+                        Self::insert_import(
+                            &mut content.types,
+                            &mut ambiguous_types,
+                            canon,
+                            &own_keys_types,
+                            name,
+                            id,
+                        );
+                    }
+                    if edge.is_pub {
+                        if let Some(items) = re_values.get(&edge.target).cloned() {
+                            for (name, id) in items {
+                                Self::insert_import(
+                                    &mut content.values,
+                                    &mut ambiguous_values,
+                                    canon,
+                                    &own_keys_values,
+                                    name,
+                                    id,
+                                );
+                            }
+                        }
+                        if let Some(items) = re_types.get(&edge.target).cloned() {
+                            for (name, id) in items {
+                                Self::insert_import(
+                                    &mut content.types,
+                                    &mut ambiguous_types,
+                                    canon,
+                                    &own_keys_types,
+                                    name,
+                                    id,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            visible.insert(canon.clone(), content);
+        }
+
+        self.visible = visible;
+        self.ambiguous_values = ambiguous_values;
+        self.ambiguous_types = ambiguous_types;
+    }
+
+    fn insert_import(
+        table: &mut HashMap<Spur, DefId>,
+        ambiguous: &mut HashMap<PathBuf, HashSet<Spur>>,
+        canon: &PathBuf,
+        own_keys: &HashSet<Spur>,
+        name: Spur,
+        id: DefId,
+    ) {
+        if own_keys.contains(&name) {
+            return;
+        }
+        match table.get(&name) {
+            Some(existing) if *existing != id => {
+                ambiguous.entry(canon.clone()).or_default().insert(name);
+            }
+            Some(_) => {}
+            None => {
+                table.insert(name, id);
+            }
+        }
+    }
+
+    fn swap_module_scope(&mut self) {
+        if let Some(content) = self.visible.get(&self.current_canon).cloned() {
+            self.table.set_module_scope(content);
+        }
+    }
+
+    fn check_ambiguous_value(&mut self, name: Spur, span: SourceSpan) -> bool {
+        let hit = self
+            .ambiguous_values
+            .get(&self.current_canon)
+            .is_some_and(|names| names.contains(&name))
+            && !self.table.shadowed_value_above_module(name);
+        if hit {
+            self.report(ResolveError::AmbiguousImport {
+                name: self.interner_resolve(&name),
+                src: self.current_src.clone(),
+                span,
+            });
+        }
+        hit
+    }
+
+    fn check_ambiguous_type(&mut self, name: Spur, span: SourceSpan) -> bool {
+        let hit = self
+            .ambiguous_types
+            .get(&self.current_canon)
+            .is_some_and(|names| names.contains(&name))
+            && !self.table.shadowed_type_above_module(name);
+        if hit {
+            self.report(ResolveError::AmbiguousImport {
+                name: self.interner_resolve(&name),
+                src: self.current_src.clone(),
+                span,
+            });
+        }
+        hit
+    }
+
     fn declare_toplevel(&mut self, decl: &'ctx Declaration<'ctx>) {
-        self.current_module = self.display_of(decl.source.src().name());
+        self.track_module(decl.source.src().name());
         match decl.kind {
             DeclarationKind::FnDecl {
                 name,
@@ -512,7 +798,8 @@ impl<'ctx> NameResolver {
 
     fn resolve_decl(&mut self, decl: &'ctx Declaration<'ctx>) {
         self.current_src = decl.source.src();
-        self.current_module = self.display_of(decl.source.src().name());
+        self.track_module(decl.source.src().name());
+        self.swap_module_scope();
 
         match decl.kind {
             DeclarationKind::FnDecl { .. } => {
@@ -635,9 +922,14 @@ impl<'ctx> NameResolver {
                     .map(|gs| gs.iter().map(|g| g.name.0).collect())
                     .unwrap_or_default();
 
-                let interface_def = self.table.lookup_type(interface.0);
+                let interface_ambiguous = self.check_ambiguous_type(interface.0, interface.1);
+                let interface_def = if interface_ambiguous {
+                    None
+                } else {
+                    self.table.lookup_type(interface.0)
+                };
 
-                if interface_def.is_none() {
+                if interface_def.is_none() && !interface_ambiguous {
                     let interface_name = self.interner_resolve(&interface.0);
 
                     self.report(ResolveError::UnresolvedType {
@@ -648,9 +940,14 @@ impl<'ctx> NameResolver {
                 }
 
                 let (object_name, object_span, object_bindings) = object;
-                let object_def = self.table.lookup_type(object_name);
+                let object_ambiguous = self.check_ambiguous_type(object_name, object_span);
+                let object_def = if object_ambiguous {
+                    None
+                } else {
+                    self.table.lookup_type(object_name)
+                };
 
-                if object_def.is_none() {
+                if object_def.is_none() && !object_ambiguous {
                     let object_name = self.interner_resolve(&object_name);
 
                     self.report(ResolveError::UnresolvedType {
@@ -682,6 +979,7 @@ impl<'ctx> NameResolver {
                         generic_args: None,
                     } = slot.kind
                         && implement_generic_names.contains(&name)
+                        && !self.check_ambiguous_type(name, slot.span)
                         && let Some(def_id) = self.table.lookup_type(name)
                     {
                         self.result.implement_generic_bindings.insert(
@@ -1262,6 +1560,9 @@ impl<'ctx> NameResolver {
 
             if let Some(bounds) = generic.interfaces {
                 for bound in bounds {
+                    if self.check_ambiguous_type(bound.0, bound.1) {
+                        continue;
+                    }
                     if self.table.lookup_type(bound.0).is_none() {
                         let bound_str = self.interner_resolve(&bound.0);
 
@@ -1476,6 +1777,9 @@ impl<'ctx> NameResolver {
         name: Spur,
         span: SourceSpan,
     ) -> bool {
+        if self.check_ambiguous_value(name, span) {
+            return true;
+        }
         let Some(def_id) = self.table.lookup_value(name) else {
             return false;
         };
@@ -1829,6 +2133,10 @@ impl<'ctx> NameResolver {
             };
         }
 
+        if self.check_ambiguous_value(name, span) {
+            return Resolution::Error;
+        }
+
         if let Some(def_id) = self.table.lookup_value(name) {
             if !self.process_capture(def_id, span) {
                 return Resolution::Error;
@@ -1836,6 +2144,10 @@ impl<'ctx> NameResolver {
 
             self.check_visibility(def_id, &(self.current_src.clone(), span).into());
             return Resolution::Def(def_id);
+        }
+
+        if self.check_ambiguous_type(name, span) {
+            return Resolution::Error;
         }
 
         if let Some(def_id) = self.table.lookup_type(name) {
@@ -1900,9 +2212,10 @@ impl<'ctx> NameResolver {
             }
 
             TypeKind::Named { name, generic_args } => {
+                let ambiguous = self.check_ambiguous_type(name, ty.span);
                 let resolution = match self.table.lookup_type(name) {
                     Some(def_id) => {
-                        if !self.process_capture(def_id, ty.span) {
+                        if ambiguous || !self.process_capture(def_id, ty.span) {
                             Resolution::Error
                         } else {
                             Resolution::Def(def_id)

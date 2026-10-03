@@ -122,6 +122,7 @@ pub struct ResolutionResult {
     pub enum_payload_struct_defs: HashMap<DefId, DefId>,
 
     pub def_modules: HashMap<DefId, String>,
+    pub root_module: String,
 }
 
 impl ResolutionResult {
