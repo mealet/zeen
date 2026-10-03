@@ -5750,6 +5750,10 @@ impl<'ctx> MirLowering<'ctx> {
         expr: &HirExpr,
         block: BlockId,
     ) -> (BlockId, Operand) {
+        if matches!(op, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
+            return self.lower_short_circuit(fb, lhs, rhs, op, expr, block);
+        }
+
         let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
         let (block, rhs_op) = self.lower_expr_to_operand(fb, rhs, block);
 
@@ -5788,6 +5792,69 @@ impl<'ctx> MirLowering<'ctx> {
             block,
             Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
         )
+    }
+
+    fn lower_short_circuit(
+        &mut self,
+        fb: &mut FnBuilder,
+        lhs: &HirExpr,
+        rhs: &HirExpr,
+        op: BinaryOp,
+        expr: &HirExpr,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        let (block, lhs_op) = self.lower_expr_to_operand(fb, lhs, block);
+
+        let result_ty = self.expr_type(fb, expr);
+        let result = fb.new_temp(result_ty);
+        let source = Some(expr.source.clone());
+
+        let eval_bb = fb.new_block();
+        let short_bb = fb.new_block();
+        let join = fb.new_block();
+
+        let short_value = matches!(op, BinaryOp::LogicalOr);
+        let (on_true, on_false) = match op {
+            BinaryOp::LogicalAnd => (eval_bb, short_bb),
+            _ => (short_bb, eval_bb),
+        };
+
+        fb.set_terminator(
+            block,
+            Terminator::SwitchInt {
+                discriminant: lhs_op,
+                targets: vec![(1, on_true)],
+                otherwise: on_false,
+            },
+        );
+
+        fb.push_stmt(
+            short_bb,
+            MirStatement::Assign {
+                place: Place::from_local(result),
+                rvalue: Rvalue::Use(Operand::Constant(
+                    ConstValue::Bool(short_value),
+                    source.clone(),
+                )),
+                source: source.clone(),
+            },
+        );
+        fb.set_terminator(short_bb, Terminator::Goto(join));
+
+        let (rhs_end, rhs_op) = self.lower_expr_to_operand(fb, rhs, eval_bb);
+        if fb.block_is_open(rhs_end) {
+            fb.push_stmt(
+                rhs_end,
+                MirStatement::Assign {
+                    place: Place::from_local(result),
+                    rvalue: Rvalue::Use(rhs_op),
+                    source: source.clone(),
+                },
+            );
+            fb.set_terminator(rhs_end, Terminator::Goto(join));
+        }
+
+        (join, Operand::Move(Place::from_local(result), source))
     }
 
     fn lower_div_zero_check(
