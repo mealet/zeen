@@ -6272,6 +6272,24 @@ impl<'res> TypeChecker<'res> {
                 self.unify_for_inference(pr, ar, bindings, source);
             }
 
+            (
+                Type::FatFn {
+                    params: pp,
+                    ret: pr,
+                    ..
+                },
+                Type::FatFn {
+                    params: ap,
+                    ret: ar,
+                    ..
+                },
+            ) if pp.len() == ap.len() => {
+                for (p, a) in pp.iter().zip(ap.iter()) {
+                    self.unify_for_inference(*p, *a, bindings, source.clone());
+                }
+                self.unify_for_inference(pr, ar, bindings, source);
+            }
+
             _ => {}
         }
     }
