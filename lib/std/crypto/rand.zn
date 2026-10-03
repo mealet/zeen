@@ -1,0 +1,20 @@
+use std.c.types;
+use std.c.stdlib;
+
+/// Simple deterministic random numbers over C rand.
+pub struct Rand {
+  /// Seed the generator, same seed repeats the sequence.
+  pub fn seed(s: u32) {
+    srand(@as(c_uint, s));
+  }
+
+  /// Next unsigned value.
+  pub fn next_u32() u32 {
+    return @as(u32, rand());
+  }
+
+  /// Value below `upper`, slight modulo bias.
+  pub fn below(upper: u32) u32 {
+    return Rand.next_u32() % upper;
+  }
+}
