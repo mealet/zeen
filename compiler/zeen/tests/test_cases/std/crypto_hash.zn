@@ -1,0 +1,11 @@
+use std.crypto.hash;
+
+fn main() i32 {
+  let empty: []const char = "";
+  let a: []const char = "a";
+  let foobar: []const char = "foobar";
+  let hello: []const char = "hello world";
+  @println("{}|{}|{}|{}", Hasher.fnv1a64(empty), Hasher.fnv1a64(a), Hasher.fnv1a64(foobar), Hasher.fnv1a64(hello));
+  @println("{}|{}|{}|{}", Hasher.fnv1a32(empty), Hasher.fnv1a32(a), Hasher.fnv1a32(foobar), Hasher.fnv1a32(hello));
+  return 0;
+}
