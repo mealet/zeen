@@ -29,6 +29,9 @@ use std.c.types;
   pub extern fn getcwd(buf: [*]char, size: c_size_t) [*]char;
   pub extern fn unlink(path: [*]const char) c_int;
   pub extern fn rmdir(path: [*]const char) c_int;
+  pub extern fn readlink(path: [*]const char, buf: [*]char, size: c_size_t) c_ssize_t;
+
+  pub extern let environ: [*][*]char;
 
   pub extern fn fsync(fd: c_int) c_int;
   pub extern fn _exit(status: c_int) never;
