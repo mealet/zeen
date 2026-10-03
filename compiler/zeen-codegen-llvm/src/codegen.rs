@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    path::Path,
+    rc::Rc,
+};
 
 use inkwell::{
     AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel,
@@ -326,47 +331,101 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn fill_enum_layouts(&mut self) {
-        for &ty in self.program.enum_layouts.keys() {
-            let Some(opaque) = self.enum_types.get(&ty).copied() else {
-                continue;
-            };
+        let mut pending: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
+        pending.sort_by_key(|ty| ty.0);
 
-            let payloads: Vec<TypeId> = self.program.enum_layouts[&ty]
-                .variants
-                .iter()
-                .filter_map(|v| v.payload)
-                .collect();
-            if payloads.is_empty() {
-                continue;
-            }
-
-            let mut measured: Vec<(u64, u64, TypeId)> = Vec::new();
-            for payload in payloads {
-                if matches!(self.typecheck.interner.get(payload), Type::Void) {
-                    measured.push((0, 1, payload));
-                    continue;
+        let mut filled: HashSet<TypeId> = HashSet::new();
+        loop {
+            let mut progressed = false;
+            pending.retain(|&ty| {
+                if self.enum_layout_measurable(ty, &filled) {
+                    self.fill_one_enum_layout(ty);
+                    filled.insert(ty);
+                    progressed = true;
+                    false
+                } else {
+                    true
                 }
-                let llvm_ty = self.map_basic_type(payload);
-                measured.push((
-                    self.target_data.get_abi_size(&llvm_ty),
-                    u64::from(self.target_data.get_abi_alignment(&llvm_ty)),
-                    payload,
-                ));
+            });
+            if !progressed {
+                break;
             }
-            let max_size = measured.iter().map(|m| m.0).max().unwrap_or(0);
-            let max_align = measured.iter().map(|m| m.1).max().unwrap_or(1);
+        }
 
-            let union_ty: BasicTypeEnum<'ctx> = if max_size == 0 {
-                self.context.i8_type().into()
-            } else if measured.len() == 1 {
-                self.map_basic_type(measured[0].2)
-            } else {
-                self.opaque_union(max_size, max_align)
-            };
+        for ty in pending {
+            self.fill_one_enum_layout(ty);
+        }
+    }
 
+    fn enum_layout_measurable(&self, ty: TypeId, filled: &HashSet<TypeId>) -> bool {
+        let Some(layout) = self.program.enum_layouts.get(&ty) else {
+            return true;
+        };
+        layout
+            .variants
+            .iter()
+            .filter_map(|v| v.payload)
+            .all(|payload| {
+                if matches!(self.typecheck.interner.get(payload), Type::Void) {
+                    return true;
+                }
+                if !matches!(self.typecheck.interner.get(payload), Type::Enum { .. }) {
+                    return true;
+                }
+                filled.contains(&payload)
+            })
+    }
+
+    fn fill_one_enum_layout(&mut self, ty: TypeId) {
+        let Some(opaque) = self.enum_types.get(&ty).copied() else {
+            return;
+        };
+
+        let payloads: Vec<TypeId> = self.program.enum_layouts[&ty]
+            .variants
+            .iter()
+            .filter_map(|v| v.payload)
+            .collect();
+        if payloads.is_empty() {
+            return;
+        }
+
+        if payloads.len() == 1 {
+            let union_ty: BasicTypeEnum<'ctx> =
+                if matches!(self.typecheck.interner.get(payloads[0]), Type::Void) {
+                    self.context.i8_type().into()
+                } else {
+                    self.map_basic_type(payloads[0])
+                };
             let tag_ty = self.context.i8_type().into();
             opaque.set_body(&[tag_ty, union_ty], false);
+            return;
         }
+
+        let mut measured: Vec<(u64, u64, TypeId)> = Vec::new();
+        for payload in payloads {
+            if matches!(self.typecheck.interner.get(payload), Type::Void) {
+                measured.push((0, 1, payload));
+                continue;
+            }
+            let llvm_ty = self.map_basic_type(payload);
+            measured.push((
+                self.target_data.get_abi_size(&llvm_ty),
+                u64::from(self.target_data.get_abi_alignment(&llvm_ty)),
+                payload,
+            ));
+        }
+        let max_size = measured.iter().map(|m| m.0).max().unwrap_or(0);
+        let max_align = measured.iter().map(|m| m.1).max().unwrap_or(1);
+
+        let union_ty: BasicTypeEnum<'ctx> = if max_size == 0 {
+            self.context.i8_type().into()
+        } else {
+            self.opaque_union(max_size, max_align)
+        };
+
+        let tag_ty = self.context.i8_type().into();
+        opaque.set_body(&[tag_ty, union_ty], false);
     }
 
     fn opaque_union(&self, max_size: u64, max_align: u64) -> BasicTypeEnum<'ctx> {
