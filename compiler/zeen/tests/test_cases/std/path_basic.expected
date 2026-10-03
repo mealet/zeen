@@ -1,0 +1,11 @@
+true|false|false
+base1=b.txt
+base2=b.txt
+base3=a
+dir1=/a
+dir2=
+join1=a/b
+join2=a/b
+norm=/a/c
+ext=txt
+noext=false
