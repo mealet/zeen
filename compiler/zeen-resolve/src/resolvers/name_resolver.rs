@@ -487,30 +487,28 @@ impl<'ctx> NameResolver {
                             id,
                         );
                     }
-                    if edge.is_pub {
-                        if let Some(items) = re_values.get(&edge.target).cloned() {
-                            for (name, id) in items {
-                                Self::insert_import(
-                                    &mut content.values,
-                                    &mut ambiguous_values,
-                                    canon,
-                                    &own_keys_values,
-                                    name,
-                                    id,
-                                );
-                            }
+                    if let Some(items) = re_values.get(&edge.target).cloned() {
+                        for (name, id) in items {
+                            Self::insert_import(
+                                &mut content.values,
+                                &mut ambiguous_values,
+                                canon,
+                                &own_keys_values,
+                                name,
+                                id,
+                            );
                         }
-                        if let Some(items) = re_types.get(&edge.target).cloned() {
-                            for (name, id) in items {
-                                Self::insert_import(
-                                    &mut content.types,
-                                    &mut ambiguous_types,
-                                    canon,
-                                    &own_keys_types,
-                                    name,
-                                    id,
-                                );
-                            }
+                    }
+                    if let Some(items) = re_types.get(&edge.target).cloned() {
+                        for (name, id) in items {
+                            Self::insert_import(
+                                &mut content.types,
+                                &mut ambiguous_types,
+                                canon,
+                                &own_keys_types,
+                                name,
+                                id,
+                            );
                         }
                     }
                 }
@@ -582,6 +580,24 @@ impl<'ctx> NameResolver {
             });
         }
         hit
+    }
+
+    fn is_private_in_used_module(&self, name: Spur, value_ns: bool) -> bool {
+        let Some(edges) = self.graph.uses.get(&self.current_canon) else {
+            return false;
+        };
+        edges.iter().any(|edge| {
+            self.result.defs.iter().any(|(id, info)| {
+                self.def_canon.get(id) == Some(&edge.target)
+                    && !info.is_pub
+                    && info.name == name
+                    && if value_ns {
+                        Self::is_value_kind(&info.kind)
+                    } else {
+                        Self::is_type_kind(&info.kind)
+                    }
+            })
+        })
     }
 
     fn declare_toplevel(&mut self, decl: &'ctx Declaration<'ctx>) {
@@ -2166,10 +2182,20 @@ impl<'ctx> NameResolver {
             return resolution;
         }
 
-        let name = self.interner_resolve(&name);
+        let name_str = self.interner_resolve(&name);
+
+        if self.is_private_in_used_module(name, true) {
+            self.report(ResolveError::PrivateItemNotAccessible {
+                name: name_str,
+                src: self.named_src(),
+                span,
+            });
+
+            return Resolution::Error;
+        }
 
         self.report(ResolveError::UnresolvedIdent {
-            name,
+            name: name_str,
             src: self.named_src(),
             span,
         });
@@ -2222,13 +2248,21 @@ impl<'ctx> NameResolver {
                         }
                     }
                     None => {
-                        let name = self.interner_resolve(&name);
+                        let name_str = self.interner_resolve(&name);
 
-                        self.errors.push(ResolveError::UnresolvedType {
-                            name,
-                            src: self.named_src(),
-                            span: ty.span,
-                        });
+                        if self.is_private_in_used_module(name, false) {
+                            self.errors.push(ResolveError::PrivateItemNotAccessible {
+                                name: name_str,
+                                src: self.named_src(),
+                                span: ty.span,
+                            });
+                        } else {
+                            self.errors.push(ResolveError::UnresolvedType {
+                                name: name_str,
+                                src: self.named_src(),
+                                span: ty.span,
+                            });
+                        }
 
                         Resolution::Error
                     }
