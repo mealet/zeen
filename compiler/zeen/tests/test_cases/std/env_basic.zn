@@ -1,0 +1,40 @@
+use std.env;
+use std.collections.list;
+
+fn main() i32 {
+  let before = Env.vars().len();
+
+  Env.set_var("ZEEN_GOLDEN_ENV", "yes").unwrap();
+  let v = Env.var("ZEEN_GOLDEN_ENV");
+  if (v.is_none()) {
+    return 1;
+  };
+  if (v.unwrap().len() != 3) {
+    return 2;
+  };
+  if (Env.vars().len() != before + 1) {
+    return 3;
+  };
+
+  Env.unset_var("ZEEN_GOLDEN_ENV").unwrap();
+  if (Env.var("ZEEN_GOLDEN_ENV").is_some()) {
+    return 4;
+  };
+
+  if (Env.temp_dir().len() == 0) {
+    return 5;
+  };
+
+  if (Env.current_dir().is_err()) {
+    return 6;
+  };
+
+  if (Env.current_exe().is_err()) {
+    return 7;
+  };
+
+  Env.set_current_dir("/tmp").unwrap();
+
+  @println("env-ok");
+  return 0;
+}
