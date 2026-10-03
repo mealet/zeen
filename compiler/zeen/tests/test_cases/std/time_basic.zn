@@ -10,5 +10,6 @@ fn main() i32 {
   @println("slept={}", dt.as_millis() >= 50);
   @println("zero={}", Duration.from_secs(0).is_zero());
   @println("dur={}", Duration.from_millis(1500));
+  @println("ts={}", Time.now() > 1700000000);
   return 0;
 }
