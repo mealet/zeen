@@ -164,16 +164,20 @@ pub struct Arc[T] {
 fn arc_fetch_add(count: *i64, value: i64) i64 {
   @os[windows] {
     return InterlockedExchangeAdd64(count, value);
-  } else {
+  } else @os[linux | android | darwin | freebsd] {
     return __atomic_fetch_add_8(count, value, ArcSeqCst);
+  } else {
+    @panic("threads unsupported");
   }
 }
 
 fn arc_fetch_sub(count: *i64) i64 {
   @os[windows] {
     return InterlockedDecrement64(count);
-  } else {
+  } else @os[linux | android | darwin | freebsd] {
     return __atomic_fetch_sub_8(count, 1, ArcSeqCst);
+  } else {
+    @panic("threads unsupported");
   }
 }
 

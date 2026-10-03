@@ -88,16 +88,22 @@ pub struct Instant {
 
   fn wall() Self {
     @os[windows] {
-      let t = time(nullptr);
-      return Instant { .secs = @as(i64, t), .nanos = 0 };
-    } else {
+      return Instant.wall_secs();
+    } else @os[linux | android | darwin | freebsd] {
       let ts = c_Timespec { .tv_sec = 0, .tv_nsec = 0 };
       let rc = clock_gettime(CLOCK_MONOTONIC, &ts);
       if (rc != 0) {
         @panic("clock_gettime failed");
       };
       return Instant { .secs = @as(i64, ts.tv_sec), .nanos = @as(i64, ts.tv_nsec) };
+    } else {
+      return Instant.wall_secs();
     }
+  }
+
+  fn wall_secs() Self {
+    let t = time(nullptr);
+    return Instant { .secs = @as(i64, t), .nanos = 0 };
   }
 }
 
@@ -111,12 +117,14 @@ pub struct Time {
   pub fn sleep(d: Duration) {
     @os[windows] {
       Sleep(@as(WinDWORD, d.as_millis()));
-    } else {
+    } else @os[linux | android | darwin | freebsd] {
       let req = c_Timespec {
         .tv_sec = @as(c_time_t, d.as_secs()),
         .tv_nsec = @as(c_long, d.subsec_nanos()),
       };
       let _ = nanosleep(&req, nullptr);
+    } else {
+      @panic("sleep unsupported");
     }
   }
 }
