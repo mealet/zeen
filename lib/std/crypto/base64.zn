@@ -1,0 +1,101 @@
+/// RFC 4648 base64.
+pub struct Base64 {
+  /// Encode bytes as base64 text.
+  pub fn encode(data: []const char) String {
+    let abc: []const char = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let out = String.new();
+
+    let i: usize = 0;
+    while (i + 3 <= data.len) {
+      let n = ((@as(u32, data[i]) << 16) | (@as(u32, data[i + 1]) << 8)) | @as(u32, data[i + 2]);
+      out.push(abc[@as(usize, n >> 18)]);
+      out.push(abc[@as(usize, (n >> 12) & 63)]);
+      out.push(abc[@as(usize, (n >> 6) & 63)]);
+      out.push(abc[@as(usize, n & 63)]);
+      i += 3;
+    }
+
+    let rest = data.len - i;
+    if (rest == 1) {
+      let n = @as(u32, data[i]) << 16;
+      out.push(abc[@as(usize, n >> 18)]);
+      out.push(abc[@as(usize, (n >> 12) & 63)]);
+      out.push('=');
+      out.push('=');
+    } else if (rest == 2) {
+      let n = (@as(u32, data[i]) << 16) | (@as(u32, data[i + 1]) << 8);
+      out.push(abc[@as(usize, n >> 18)]);
+      out.push(abc[@as(usize, (n >> 12) & 63)]);
+      out.push(abc[@as(usize, (n >> 6) & 63)]);
+      out.push('=');
+    };
+
+    return out;
+  }
+
+  /// Decode base64 text, `None` on malformed input.
+  pub fn decode(data: []const char) Option[String] {
+    if (data.len % 4 != 0) {
+      return Option.None;
+    };
+
+    let out = String.new();
+    let quants = data.len / 4;
+    let q: usize = 0;
+
+    while (q < quants) {
+      let last = q + 1 == quants;
+      let vals: [4]u32 = [0; 4];
+      let pads: usize = 0;
+
+      let k: usize = 0;
+      while (k < 4) {
+        let c = data[q * 4 + k];
+        if (c == '=') {
+          pads += 1;
+        } else {
+          let v = Base64.sextet(c);
+          if (v.is_none()) {
+            return Option.None;
+          };
+          vals[k] = v.unwrap();
+        };
+        k += 1;
+      }
+
+      if (pads > 2) {
+        return Option.None;
+      };
+      if (pads > 0 && !last) {
+        return Option.None;
+      };
+
+      let n = ((vals[0] << 18) | (vals[1] << 12)) | ((vals[2] << 6) | vals[3]);
+      out.push(@as(char, n >> 16));
+      if (pads < 2) {
+        out.push(@as(char, (n >> 8) & 255));
+      };
+      if (pads < 1) {
+        out.push(@as(char, n & 255));
+      };
+
+      q += 1;
+    }
+
+    return Option.Some(out);
+  }
+
+  fn sextet(c: char) Option[u32] {
+    let abc: []const char = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let i: usize = 0;
+
+    while (i < abc.len) {
+      if (abc[i] == c) {
+        return Option.Some(@as(u32, i));
+      };
+      i += 1;
+    }
+
+    return Option.None;
+  }
+}
