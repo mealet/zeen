@@ -1,5 +1,6 @@
 use std.c.types;
 use std.c.time;
+use std.string;
 
 @os[windows] {
   use std.c.windows.winbase;
@@ -49,6 +50,13 @@ pub struct Duration {
     let zero_secs: u64 = 0;
     let zero_nanos: u32 = 0;
     return self.secs == zero_secs && self.nanos == zero_nanos;
+  }
+}
+
+implement Display : Duration {
+  fn display[W: StrWriter](*const self, out: *W) void {
+    let text = @format("{} ms", self.as_millis());
+    (*out).write_str(text.slice(..));
   }
 }
 

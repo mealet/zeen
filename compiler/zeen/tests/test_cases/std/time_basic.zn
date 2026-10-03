@@ -9,5 +9,6 @@ fn main() i32 {
   let dt = t0.elapsed();
   @println("slept={}", dt.as_millis() >= 50);
   @println("zero={}", Duration.from_secs(0).is_zero());
+  @println("dur={}", Duration.from_millis(1500));
   return 0;
 }
