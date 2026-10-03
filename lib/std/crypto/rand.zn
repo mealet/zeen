@@ -1,5 +1,6 @@
 use std.c.types;
 use std.c.stdlib;
+use std.time;
 
 /// Simple deterministic random numbers over C rand.
 pub struct Rand {
@@ -23,8 +24,13 @@ pub struct Rand {
 pub struct Rng {
   state: u64,
 
-  /// Create a generator, zero seed replaced with a fixed nonzero one.
-  pub fn new(seed: u64) Self {
+  /// Create a generator seeded from the system timestamp.
+  pub fn new() Self {
+    return Rng.from_seed(@as(u64, Time.now()));
+  }
+
+  /// Create a generator with an explicit seed, zero replaced.
+  pub fn from_seed(seed: u64) Self {
     if (seed == 0) {
       return Rng { .state = 2685821657736338717 };
     };
