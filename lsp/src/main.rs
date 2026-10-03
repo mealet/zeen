@@ -13,6 +13,14 @@ use tower_lsp_server::{LspService, Server};
 
 #[tokio::main]
 async fn main() {
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "-v" || arg == "--version")
+    {
+        println!("zeen-lsp {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
