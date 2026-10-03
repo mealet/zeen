@@ -19,7 +19,11 @@ fn main() i32 {
   show("dup", "{\"k\": 1, \"k\": 2}");
   show("ws", "  { \"a\" : 1 }  ");
   show("bad1", "{,}");
-  show("bad2", "[1,]");
+  show("bad2", "[1,,2]");
+  show("trail-arr", "[1, 2,]");
+  show("trail-obj", "{\"a\": 1,}");
+  show("trail-nested", "{\"a\": [1,],}");
+  show("trail-dbl", "[1,,]");
   show("bad3", "{\"a\"}");
   show("bad4", "{\"a\": 01}");
   show("bad5", "[1, 2");

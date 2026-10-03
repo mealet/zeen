@@ -397,6 +397,10 @@ struct JsonParser {
       if (self.peek_is(',')) {
         self.pos += 1;
         self.skip_ws();
+        if (self.peek_is(']')) {
+          self.pos += 1;
+          return Result.Ok(JsonValue.Array(out));
+        };
         continue;
       };
       if (self.peek_is(']')) {
@@ -445,6 +449,11 @@ struct JsonParser {
       self.skip_ws();
       if (self.peek_is(',')) {
         self.pos += 1;
+        self.skip_ws();
+        if (self.peek_is('}')) {
+          self.pos += 1;
+          return Result.Ok(JsonValue.Object(out));
+        };
         continue;
       };
       if (self.peek_is('}')) {
