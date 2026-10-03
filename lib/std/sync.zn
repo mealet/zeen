@@ -71,7 +71,7 @@ pub struct Mutex[T] {
     @os[windows] {
       DeleteCriticalSection(&self.os);
     } else {
-      pthread_mutex_destroy(&self.os);
+      let _ = pthread_mutex_destroy(&self.os);
     }
 
     self.open = false;
@@ -89,7 +89,7 @@ implement[T] Drop : Mutex[T] {
     @os[windows] {
       DeleteCriticalSection(&self.os);
     } else {
-      pthread_mutex_destroy(&self.os);
+      let _ = pthread_mutex_destroy(&self.os);
     }
 
     let _dead: T = self.data;
@@ -119,7 +119,7 @@ implement[T] Drop : MutexGuard[T] {
     @os[windows] {
       LeaveCriticalSection(self.lock);
     } else {
-      pthread_mutex_unlock(self.lock);
+      let _ = pthread_mutex_unlock(self.lock);
     }
   }
 }
@@ -186,7 +186,7 @@ const ArcSeqCst: i32 = 5;
 
 implement[T] Clone : Arc[T] {
   fn clone(*const self) Self {
-    arc_fetch_add(self.count, 1);
+    let _ = arc_fetch_add(self.count, 1);
 
     Self { .ptr = self.ptr, .count = self.count }
   }

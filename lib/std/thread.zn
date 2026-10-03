@@ -46,6 +46,7 @@ pub struct Thread {
     let slot = @as(*T, Allocator.alloc(@sizeof(T)));
     let boxed = SpawnPacket#[T] { .f = f, .slot = slot };
     let raw = Allocator.alloc(@sizeof(SpawnPacket[T]));
+
     *@as(*SpawnPacket[T], raw) = boxed;
 
     @os[windows] {
@@ -57,16 +58,20 @@ pub struct Thread {
         0,
         nullptr,
       );
+
       if (handle == nullptr) {
         @panic("spawn failed");
       };
+
       return JoinHandle { .native = handle, .slot = slot, .done = false };
     } else {
       let tid: NativeThread = @uninit();
       let rc = pthread_create(&tid, nullptr, spawn_trampoline#[T], raw);
+
       if (rc != 0) {
         @panic("spawn failed");
       };
+
       return JoinHandle { .native = tid, .slot = slot, .done = false };
     }
   }
@@ -76,7 +81,7 @@ pub struct Thread {
     @os[windows] {
       Sleep(0);
     } else {
-      sched_yield();
+      let _ = sched_yield();
     }
   }
 }
@@ -93,12 +98,14 @@ pub struct JoinHandle[T] {
       WaitForSingleObject(self.native, INFINITE);
       CloseHandle(self.native);
     } else {
-      pthread_join(self.native, nullptr);
+      let _ = pthread_join(self.native, nullptr);
     }
 
     self.done = true;
+
     let out = *self.slot;
     Allocator.dealloc(@as(*void, self.slot));
+
     return out;
   }
 }
@@ -112,7 +119,7 @@ implement[T] Drop : JoinHandle[T] {
     @os[windows] {
       CloseHandle(self.native);
     } else {
-      pthread_detach(self.native);
+      let _ = pthread_detach(self.native);
     }
 
     Allocator.dealloc(@as(*void, self.slot));

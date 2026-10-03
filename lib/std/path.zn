@@ -146,7 +146,7 @@ pub struct Path {
         let part = path[start..i];
         if (part == "..") {
           if (kept.len() > 0) {
-            kept.pop();
+            let _ = kept.pop();
           } else if (!rooted) {
             kept.push(part);
           };

@@ -111,7 +111,7 @@ pub struct Time {
         .tv_sec = @as(c_time_t, d.as_secs()),
         .tv_nsec = @as(c_long, d.subsec_nanos()),
       };
-      nanosleep(&req, nullptr);
+      let _ = nanosleep(&req, nullptr);
     }
   }
 }
