@@ -1,0 +1,12 @@
+echo-ok=true code=0
+echo-text=[hello]
+args=[a b]
+fail-ok=false code=1
+env-seen=true
+env-hidden=true
+cwd=[/]
+stdin-back=[piped-in]
+big-out=true big-err=true
+still-running=true
+kill-signal=15
+missing-err=true

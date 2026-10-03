@@ -1,0 +1,12 @@
+use std.c.types;
+
+// Process signals, shared across POSIX targets.
+pub const SIGHUP: c_int = 1;
+pub const SIGINT: c_int = 2;
+pub const SIGQUIT: c_int = 3;
+pub const SIGKILL: c_int = 9;
+pub const SIGTERM: c_int = 15;
+
+@os[linux | android | darwin | freebsd] {
+  pub extern fn kill(pid: c_pid_t, sig: c_int) c_int;
+}

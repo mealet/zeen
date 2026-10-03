@@ -1,0 +1,150 @@
+use std.string;
+use std.process;
+
+fn prog_echo() Command {
+  @os[windows] {
+    let cmd = Command.new("cmd");
+    cmd.arg("/c");
+    cmd.arg("echo");
+    return cmd;
+  } else {
+    return Command.new("echo");
+  }
+}
+
+fn main() i32 {
+  let hello = prog_echo();
+  hello.arg("hello");
+  let out = hello.output();
+  if (out.is_err()) {
+    @println("echo-err");
+    return 1;
+  };
+  let captured = out.unwrap();
+  @println("echo-ok={} code={}", captured.status.success(), captured.status.code().unwrap());
+  @println("echo-text=[{}]", captured.stdout.trim_end());
+
+  let multi = prog_echo();
+  multi.arg("a");
+  multi.arg("b");
+  let mout = multi.output().unwrap();
+  @println("args=[{}]", mout.stdout.trim_end());
+
+  @os[windows] {
+    let fail = Command.new("cmd");
+    fail.arg("/c");
+    fail.arg("exit");
+    fail.arg("1");
+    let st = fail.status().unwrap();
+    @println("fail-ok={} code={}", st.success(), st.code().unwrap());
+  } else {
+    let fail = Command.new("false");
+    let st = fail.status().unwrap();
+    @println("fail-ok={} code={}", st.success(), st.code().unwrap());
+  }
+
+  @os[windows] {
+    let seen = Command.new("cmd");
+    seen.arg("/c");
+    seen.arg("set");
+    seen.env("ZEEN_SPAWN_PROBE", "wibble");
+    let sout = seen.output().unwrap();
+    @println("env-seen={}", sout.stdout.contains_str("ZEEN_SPAWN_PROBE=wibble"));
+    let hidden = Command.new("cmd");
+    hidden.arg("/c");
+    hidden.arg("set");
+    hidden.env("ZEEN_SPAWN_PROBE", "wibble");
+    hidden.env_remove("ZEEN_SPAWN_PROBE");
+    let hout = hidden.output().unwrap();
+    @println("env-hidden={}", !hout.stdout.contains_str("ZEEN_SPAWN_PROBE=wibble"));
+  } else {
+    let seen = Command.new("env");
+    seen.env("ZEEN_SPAWN_PROBE", "wibble");
+    let sout = seen.output().unwrap();
+    @println("env-seen={}", sout.stdout.contains_str("ZEEN_SPAWN_PROBE=wibble"));
+    let hidden = Command.new("env");
+    hidden.env("ZEEN_SPAWN_PROBE", "wibble");
+    hidden.env_remove("ZEEN_SPAWN_PROBE");
+    let hout = hidden.output().unwrap();
+    @println("env-hidden={}", !hout.stdout.contains_str("ZEEN_SPAWN_PROBE=wibble"));
+  }
+
+  @os[windows] {
+    let at = Command.new("cmd");
+    at.arg("/c");
+    at.arg("cd");
+    at.current_dir("C:\\");
+    let aout = at.output().unwrap();
+    @println("cwd=[{}]", aout.stdout.trim_end());
+  } else {
+    let at = Command.new("pwd");
+    at.current_dir("/");
+    let aout = at.output().unwrap();
+    @println("cwd=[{}]", aout.stdout.trim_end());
+  }
+
+  @os[windows] {
+    let echo_in = Command.new("cmd");
+    echo_in.arg("/c");
+    echo_in.arg("sort");
+    echo_in.stdin(Stdio.Piped);
+    echo_in.stdout(Stdio.Piped);
+    let spawned = echo_in.spawn().unwrap();
+    {
+      let writer = spawned.take_stdin().unwrap();
+      if (writer.write_all("piped-in\n").is_err()) {
+        @println("stdin-back=ERR");
+        return 1;
+      };
+    };
+    let reader = spawned.take_stdout().unwrap();
+    let back = String.new();
+    reader.read_to_string(&back).unwrap();
+    spawned.wait().unwrap();
+    @println("stdin-back=[{}]", back.trim_end());
+  } else {
+    let echo_in = Command.new("cat");
+    echo_in.stdin(Stdio.Piped);
+    echo_in.stdout(Stdio.Piped);
+    let spawned = echo_in.spawn().unwrap();
+    {
+      let writer = spawned.take_stdin().unwrap();
+      if (writer.write_all("piped-in\n").is_err()) {
+        @println("stdin-back=ERR");
+        return 1;
+      };
+    };
+    let reader = spawned.take_stdout().unwrap();
+    let back = String.new();
+    reader.read_to_string(&back).unwrap();
+    spawned.wait().unwrap();
+    @println("stdin-back=[{}]", back.trim_end());
+  }
+
+  @os[windows] {
+    @println("big-out=skip big-err=skip");
+  } else {
+    let big = Command.new("sh");
+    big.arg("-c");
+    big.arg("seq 1 30000; seq 1 30000 >&2");
+    let bout = big.output().unwrap();
+    @println("big-out={} big-err={}", bout.stdout.len() > 100000, bout.stderr.len() > 100000);
+  }
+
+  @os[windows] {
+    @println("kill-signal=skip");
+  } else {
+    let sleeper = Command.new("sleep");
+    sleeper.arg("30");
+    let resting = sleeper.spawn().unwrap();
+    let polled = resting.try_wait().unwrap();
+    @println("still-running={}", polled.is_none());
+    resting.kill().unwrap();
+    let done = resting.wait().unwrap();
+    @println("kill-signal={}", done.signal().unwrap_or(0));
+  }
+
+  let missing = Command.new("zeen-no-such-program-xyz");
+  @println("missing-err={}", missing.status().is_err());
+  return 0;
+}

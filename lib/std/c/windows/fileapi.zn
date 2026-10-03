@@ -24,10 +24,26 @@ use std.c.windows.windef;
   pub const FILE_ATTRIBUTE_NORMAL: WinDWORD = 0x00000080;
   pub const FILE_FLAG_DELETE_ON_CLOSE: WinDWORD = 0x04000000;
 
+  // Handle inheritance (winbase.h).
+  pub const HANDLE_FLAG_INHERIT: WinDWORD = 0x00000001;
+  pub const HANDLE_FLAG_PROTECT_FROM_CLOSE: WinDWORD = 0x00000002;
+
   // Move method (fileapi.h).
   pub const FILE_BEGIN: WinDWORD = 0;
   pub const FILE_CURRENT: WinDWORD = 1;
   pub const FILE_END: WinDWORD = 2;
+
+  pub extern fn CreatePipe(
+    read_pipe: *WinHANDLE,
+    write_pipe: *WinHANDLE,
+    attrs: *void,
+    size: WinDWORD,
+  ) WinBOOL;
+  pub extern fn SetHandleInformation(
+    handle: WinHANDLE,
+    mask: WinDWORD,
+    flags: WinDWORD,
+  ) WinBOOL;
 
   const INVALID_HANDLE_VALUE_RAW: isize = -1;
   pub const INVALID_HANDLE_VALUE: WinHANDLE = @as(WinHANDLE, INVALID_HANDLE_VALUE_RAW);
