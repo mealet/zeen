@@ -1618,6 +1618,36 @@ mod tests {
     }
 
     #[test]
+    fn pub_use_marks_reexport() {
+        const SRC: &str = "pub use std.io;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Use { is_pub: true, .. },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn plain_use_is_private() {
+        const SRC: &str = "use std.io;";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::Use { is_pub: false, .. },
+                ..
+            }])
+        );
+    }
+
+    #[test]
     fn link_decl() {
         const SRC: &str = "extern link \"test.c\";";
 
