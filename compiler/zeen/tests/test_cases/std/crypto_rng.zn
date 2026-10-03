@@ -1,0 +1,28 @@
+use std.crypto.rand;
+
+fn main() i32 {
+  let r1 = Rng.new(42);
+  let a = r1.next_u64();
+  let b = r1.next_u32();
+  let c = r1.range(10, 20);
+
+  let r2 = Rng.new(42);
+  @println("{} {} {}", a == r2.next_u64(), b == r2.next_u32(), c == r2.range(10, 20));
+
+  let z = Rng.new(0);
+  @println("nonzero={}", z.next_u64() != 0);
+
+  let ok = true;
+  let i: i32 = 0;
+  let probe = Rng.new(7);
+  while (i < 500) {
+    let v = probe.range(10, 20);
+    if (v < 10 || v >= 20) {
+      ok = false;
+    };
+    i += 1;
+  }
+  @println("bounds={}", ok);
+  @println("sample={} {}", Rng.new(1).next_u64(), Rng.new(1).next_u32());
+  return 0;
+}
