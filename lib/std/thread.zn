@@ -1,0 +1,120 @@
+use std.alloc;
+use std.c.types;
+
+pub use std.sync;
+
+@os[windows] {
+  use std.c.windows.winbase;
+  use std.c.windows.processthreadsapi;
+  use std.c.windows.fileapi;
+  use std.c.windows.synchapi;
+
+  alias NativeThread = WinHANDLE;
+} else {
+  use std.c.posix.pthread;
+
+  alias NativeThread = c_pthread_t;
+}
+
+struct SpawnPacket[T] {
+  pub f: FnOnce() T,
+  pub slot: *T,
+}
+
+@os[windows] {
+  fn spawn_trampoline[T](arg: *void) u32 {
+    let packet = @as(*SpawnPacket[T], arg);
+    let out = (*packet).f();
+    *(*packet).slot = out;
+    Allocator.dealloc(arg);
+    return 0;
+  }
+} else {
+  fn spawn_trampoline[T](arg: *void) *void {
+    let packet = @as(*SpawnPacket[T], arg);
+    let out = (*packet).f();
+    *(*packet).slot = out;
+    Allocator.dealloc(arg);
+    return nullptr;
+  }
+}
+
+/// OS thread spawning and joining.
+pub struct Thread {
+  /// Spawn a thread running `f`, move it there.
+  pub fn spawn[T](f: FnOnce() T) JoinHandle[T] {
+    let slot = @as(*T, Allocator.alloc(@sizeof(T)));
+    let boxed = SpawnPacket#[T] { .f = f, .slot = slot };
+    let raw = Allocator.alloc(@sizeof(SpawnPacket[T]));
+    *@as(*SpawnPacket[T], raw) = boxed;
+
+    @os[windows] {
+      let handle = CreateThread(
+        nullptr,
+        0,
+        spawn_trampoline#[T],
+        raw,
+        0,
+        nullptr,
+      );
+      if (handle == nullptr) {
+        @panic("spawn failed");
+      };
+      return JoinHandle { .native = handle, .slot = slot, .done = false };
+    } else {
+      let tid: NativeThread = @uninit();
+      let rc = pthread_create(&tid, nullptr, spawn_trampoline#[T], raw);
+      if (rc != 0) {
+        @panic("spawn failed");
+      };
+      return JoinHandle { .native = tid, .slot = slot, .done = false };
+    }
+  }
+
+  /// Hint yielding the rest of the time slice.
+  pub fn yield_now() {
+    @os[windows] {
+      Sleep(0);
+    } else {
+      sched_yield();
+    }
+  }
+}
+
+/// Running thread handle, owns the result slot.
+pub struct JoinHandle[T] {
+  native: NativeThread,
+  slot: *T,
+  done: bool,
+
+  /// Wait for the thread, taking its return value.
+  pub fn join(self) T {
+    @os[windows] {
+      WaitForSingleObject(self.native, INFINITE);
+      CloseHandle(self.native);
+    } else {
+      pthread_join(self.native, nullptr);
+    }
+
+    self.done = true;
+    let out = *self.slot;
+    Allocator.dealloc(@as(*void, self.slot));
+    return out;
+  }
+}
+
+implement[T] Drop : JoinHandle[T] {
+  fn drop(self) {
+    if (self.done) {
+      return;
+    };
+
+    @os[windows] {
+      CloseHandle(self.native);
+    } else {
+      pthread_detach(self.native);
+    }
+
+    Allocator.dealloc(@as(*void, self.slot));
+  }
+}
