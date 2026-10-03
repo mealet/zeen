@@ -1,0 +1,68 @@
+use std.alloc;
+use std.string;
+use std.collections.list;
+use std.io;
+
+use std.c.types;
+use std.c.stdlib;
+
+@os[windows] {
+  use std.c.windows.winbase;
+} else {
+  use std.c.posix.unistd;
+}
+
+extern let __zeen_argc: i32;
+extern let __zeen_argv: [*][*]char;
+
+pub struct Process {
+  pub fn args_count() i32 {
+    return __zeen_argc;
+  }
+
+  pub fn args() List[String] {
+    let out = List#[String].new();
+    let i: usize = 0;
+
+    while (i < @as(usize, __zeen_argc)) {
+      out.push(String.from_cstr(__zeen_argv[i]));
+      i = i + 1;
+    }
+
+    return out;
+  }
+
+  pub fn exit(code: i32) never {
+    return exit(@as(c_int, code));
+  }
+
+  pub fn cwd() Result[String, IoError] {
+    @os[windows] {
+      let buf = Allocator.alloc(4096);
+      let n = GetCurrentDirectoryA(4096, @as([*]char, buf));
+
+      if (n == 0) {
+        Allocator.dealloc(buf);
+        return Result.Err(IoError.last_os_error());
+      };
+
+      let out = String.from_cstr(@as([*]const char, buf));
+      Allocator.dealloc(buf);
+
+      return Result.Ok(out);
+    } else {
+      let buf = Allocator.alloc(4096);
+      let res = getcwd(@as([*]char, buf), 4096);
+
+      if (@as(*void, res) == nullptr) {
+        Allocator.dealloc(buf);
+        return Result.Err(IoError.last_os_error());
+      };
+
+      let out = String.from_cstr(@as([*]const char, buf));
+      Allocator.dealloc(buf);
+
+      return Result.Ok(out);
+    }
+  }
+}

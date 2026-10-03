@@ -6,4 +6,5 @@ use std.c.windows.windef;
   pub extern fn SetLastError(err: WinDWORD) void;
   pub extern fn Sleep(ms: WinDWORD) void;
   pub extern fn ExitProcess(code: c_uint) never;
+  pub extern fn GetCurrentDirectoryA(len: WinDWORD, buf: [*]char) WinDWORD;
 }
