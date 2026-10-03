@@ -188,6 +188,88 @@ mod tests {
         })
     }
 
+    fn resolve_files(
+        tag: &str,
+        files: &[(&str, &str)],
+        entry: &str,
+    ) -> Result<Fixture, Vec<ResolveError>> {
+        let dir = std::env::temp_dir().join(format!("zeen-resolve-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir must be created");
+        for (name, content) in files {
+            std::fs::write(dir.join(name), content).expect("temp file must be written");
+        }
+
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let bump = Bump::default();
+        let entry_path = dir.join(entry);
+        let content = Arc::new(std::fs::read_to_string(&entry_path).expect("entry must exist"));
+        let filename = Rc::new(entry_path.to_string_lossy().to_string());
+
+        let mut context = CompilationContext {
+            paths: PathsConfig {
+                project_root: dir,
+                std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")),
+                linked: HashSet::new(),
+            },
+            core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
+            mode: CompilationMode::Debug,
+            output: CompilationOutput::EmitMIR,
+            target: None,
+            warnings: Vec::new(),
+        };
+
+        let mut tokens = zeen_lexer::tokenize(&content);
+        let mut parser = Parser::new(
+            Rc::clone(&filename),
+            Arc::clone(&content),
+            &mut tokens,
+            &bump,
+            Rc::clone(&rodeo),
+        );
+        let program = parser.parse_program().map_err(|errs| {
+            errs.iter()
+                .map(|e| ResolveError::ModuleParseError(e.clone()))
+                .collect::<Vec<_>>()
+        })?;
+
+        let target = context
+            .target
+            .as_deref()
+            .map(zeen_driver::Target::parse)
+            .unwrap_or_else(zeen_driver::Target::host);
+        let program = zeen_preprocessor::resolve(program, &bump, &rodeo, &target, context.mode);
+
+        let lookup_rodeo = Rc::clone(&rodeo);
+
+        resolve(
+            Rc::clone(&filename),
+            Arc::clone(&content),
+            &entry_path,
+            program,
+            &bump,
+            rodeo,
+            &mut context,
+        )
+        .map(|(_, resolution_result)| Fixture {
+            rodeo: lookup_rodeo,
+            resolution: resolution_result,
+        })
+    }
+
+    fn files_ok(tag: &str, files: &[(&str, &str)], entry: &str) -> Fixture {
+        resolve_files(tag, files, entry).unwrap_or_else(|errors| {
+            panic!(
+                "expected resolution to succeed, got errors:\n{}",
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        })
+    }
+
     #[test]
     fn registers_struct_field_and_function_and_param_defs() {
         let fx = resolve_ok("struct Foo { x: i32 } fn bar(a: i32) i32 { return a; }");
@@ -356,6 +438,105 @@ mod tests {
             errs.iter()
                 .any(|e| matches!(e, ResolveError::DuplicateDefinition { .. }))
         );
+    }
+
+    #[test]
+    fn private_fn_same_name_in_different_modules_is_allowed() {
+        let fx = files_ok(
+            "multi-collision-ok",
+            &[
+                (
+                    "main.zn",
+                    "use lib; fn foo() i32 { return 1; } fn main() i32 { return foo(); }",
+                ),
+                ("lib.zn", "fn foo() i32 { return 2; }"),
+            ],
+            "main.zn",
+        );
+
+        let foos: Vec<_> = fx
+            .resolution
+            .defs
+            .values()
+            .filter(|def| fx.name(def) == "foo" && matches!(def.kind, DefKind::Function))
+            .collect();
+        assert_eq!(foos.len(), 2);
+    }
+
+    #[test]
+    fn same_file_duplicate_fn_still_collides() {
+        let errs = resolve_files(
+            "multi-collision-same",
+            &[("main.zn", "fn foo() i32 { return 1; } fn foo() i32 { return 2; }")],
+            "main.zn",
+        )
+        .unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ResolveError::DuplicateDefinition { .. }))
+        );
+    }
+
+    #[test]
+    fn core_name_reserved_in_used_module() {
+        let errs = resolve_files(
+            "multi-collision-core",
+            &[
+                ("main.zn", "use lib; fn main() i32 { return 0; }"),
+                ("lib.zn", "struct Display {}"),
+            ],
+            "main.zn",
+        )
+        .unwrap_err();
+
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ResolveError::CoreReserved { .. }))
+        );
+    }
+
+    #[test]
+    fn bare_extern_fn_duplicated_across_modules_is_allowed() {
+        files_ok(
+            "multi-collision-extern",
+            &[
+                (
+                    "main.zn",
+                    "use lib; extern fn malloc(size: usize) *void; fn main() i32 { return 0; }",
+                ),
+                ("lib.zn", "extern fn malloc(size: usize) *void;"),
+            ],
+            "main.zn",
+        );
+    }
+
+    #[test]
+    fn def_modules_records_module_display() {
+        let fx = files_ok(
+            "multi-collision-display",
+            &[
+                (
+                    "main.zn",
+                    "use lib; fn foo() i32 { return 1; } fn main() i32 { return foo(); }",
+                ),
+                ("lib.zn", "fn foo() i32 { return 2; }"),
+            ],
+            "main.zn",
+        );
+
+        let mut displays: Vec<String> = fx
+            .resolution
+            .defs
+            .iter()
+            .filter(|(_, def)| fx.name(def) == "foo")
+            .map(|(id, _)| fx.resolution.def_modules[id].clone())
+            .collect();
+        displays.sort();
+        displays.dedup();
+        assert_eq!(displays.len(), 2);
+        assert!(displays.iter().any(|d| d.contains("main")));
+        assert!(displays.iter().any(|d| d.contains("lib")));
     }
 
     #[test]
