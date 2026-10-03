@@ -2212,6 +2212,9 @@ impl<'res> TypeChecker<'res> {
                 let lhs_ty = self.synth_expr(lhs);
                 let rhs_ty = self.synth_expr(rhs);
 
+                self.pin_binary_literal(lhs, lhs_ty, rhs_ty);
+                self.pin_binary_literal(rhs, rhs_ty, lhs_ty);
+
                 self.check_binary_op(*op, lhs_ty, rhs_ty, expr.id, expr.source.clone())
             }
 
@@ -7066,6 +7069,26 @@ impl<'res> TypeChecker<'res> {
             }
 
             _ => self.check_binary_op_builtin(op, lhs, rhs, &source),
+        }
+    }
+
+    fn pin_binary_literal(&mut self, operand: &HirExpr, operand_ty: TypeId, other_ty: TypeId) {
+        if !matches!(&operand.kind, HirExprKind::Literal(_)) {
+            return;
+        }
+
+        let pinned = match self.result.interner.get(operand_ty) {
+            Type::IntLiteral if matches!(self.result.interner.get(other_ty), Type::Builtin(b) if coerce::builtin_is_integer(*b)) => {
+                true
+            }
+            Type::FloatLiteral if matches!(self.result.interner.get(other_ty), Type::Builtin(b) if coerce::builtin_is_float(*b)) => {
+                true
+            }
+            _ => false,
+        };
+
+        if pinned {
+            self.check_expr(operand, other_ty, false);
         }
     }
 
