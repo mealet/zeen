@@ -16,15 +16,11 @@ pub struct Duration {
   }
 
   pub fn from_millis(ms: u64) Self {
-    let base: u64 = 1000;
-    let million: u32 = 1000000;
-    return Duration { .secs = ms / base, .nanos = @as(u32, ms % base) * million };
+    return Duration { .secs = ms / 1000, .nanos = @as(u32, ms % 1000) * 1000000 };
   }
 
   pub fn from_micros(us: u64) Self {
-    let base: u64 = 1000000;
-    let thousand: u32 = 1000;
-    return Duration { .secs = us / base, .nanos = @as(u32, us % base) * thousand };
+    return Duration { .secs = us / 1000000, .nanos = @as(u32, us % 1000000) * 1000 };
   }
 
   pub fn as_secs(*const self) u64 {
@@ -36,20 +32,15 @@ pub struct Duration {
   }
 
   pub fn as_millis(*const self) u64 {
-    let base: u64 = 1000;
-    let million: u64 = 1000000;
-    return self.secs * base + @as(u64, self.nanos) / million;
+    return self.secs * 1000 + @as(u64, self.nanos) / 1000000;
   }
 
   pub fn as_nanos(*const self) u64 {
-    let billion: u64 = 1000000000;
-    return self.secs * billion + @as(u64, self.nanos);
+    return self.secs * 1000000000 + @as(u64, self.nanos);
   }
 
   pub fn is_zero(*const self) bool {
-    let zero_secs: u64 = 0;
-    let zero_nanos: u32 = 0;
-    return self.secs == zero_secs && self.nanos == zero_nanos;
+    return self.secs == 0 && self.nanos == 0;
   }
 }
 
@@ -73,10 +64,9 @@ pub struct Instant {
       let cur: i64 = 0;
       QueryPerformanceCounter(&cur);
 
-      let billion: i64 = 1000000000;
       return Instant {
         .secs = cur / freq,
-        .nanos = cur % freq * billion / freq,
+        .nanos = cur % freq * 1000000000 / freq,
       };
     } else {
       return Instant.wall();
@@ -88,12 +78,9 @@ pub struct Instant {
 
     let secs = now.secs - self.secs;
     let nanos = now.nanos - self.nanos;
-    let billion: i64 = 1000000000;
-    let zero: i64 = 0;
-    let one: i64 = 1;
 
-    if (nanos < zero) {
-      return Duration { .secs = @as(u64, secs - one), .nanos = @as(u32, nanos + billion) };
+    if (nanos < 0) {
+      return Duration { .secs = @as(u64, secs - 1), .nanos = @as(u32, nanos + 1000000000) };
     };
 
     return Duration { .secs = @as(u64, secs), .nanos = @as(u32, nanos) };
