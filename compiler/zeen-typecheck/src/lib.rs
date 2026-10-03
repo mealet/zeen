@@ -7084,6 +7084,10 @@ impl<'res> TypeChecker<'res> {
             return result_ty;
         }
 
+        if matches!(op, Eq | Ne) && self.is_any_ptr(lhs) && self.is_any_ptr(rhs) {
+            return self.result.interner.builtin(BuiltinType::bool);
+        }
+
         let unified = if lhs == rhs {
             Some(lhs)
         } else if let Type::Pointer { .. } = self.result.interner.get(lhs)
@@ -7131,15 +7135,16 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn is_any_ptr(&self, ty: TypeId) -> bool {
+        matches!(
+            self.result.interner.get(ty),
+            Type::Pointer { .. } | Type::ManyPointer { .. }
+        )
+    }
+
     fn pointer_arith_operand(&mut self, op: BinaryOp, lhs: TypeId, rhs: TypeId) -> Option<TypeId> {
         let isize = self.result.interner.builtin(BuiltinType::isize);
 
-        let is_ptr = |ty: TypeId| {
-            matches!(
-                self.result.interner.get(ty),
-                Type::Pointer { .. } | Type::ManyPointer { .. }
-            )
-        };
         let is_int = |ty: TypeId| match self.result.interner.get(ty) {
             Type::IntLiteral => true,
             Type::Builtin(b) => coerce::builtin_is_integer(*b),
@@ -7148,18 +7153,18 @@ impl<'res> TypeChecker<'res> {
 
         match op {
             BinaryOp::Add => {
-                if is_ptr(lhs) && is_int(rhs) {
+                if self.is_any_ptr(lhs) && is_int(rhs) {
                     Some(lhs)
-                } else if is_int(lhs) && is_ptr(rhs) {
+                } else if is_int(lhs) && self.is_any_ptr(rhs) {
                     Some(rhs)
                 } else {
                     None
                 }
             }
             BinaryOp::Sub => {
-                if is_ptr(lhs) && is_int(rhs) {
+                if self.is_any_ptr(lhs) && is_int(rhs) {
                     Some(lhs)
-                } else if is_ptr(lhs) && is_ptr(rhs) {
+                } else if self.is_any_ptr(lhs) && self.is_any_ptr(rhs) {
                     Some(isize)
                 } else {
                     None
