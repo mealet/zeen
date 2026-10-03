@@ -1,0 +1,20 @@
+let hits: i32 = 0;
+
+fn poke(v: bool) bool {
+  hits = hits + 1;
+  return v;
+}
+
+fn main() i32 {
+  let p: *i32 = nullptr;
+  if (p != nullptr || true) {
+    @println("or-ok");
+  } else {
+    @println("bad");
+  };
+
+  let a = poke(true) || poke(true);
+  let b = poke(false) || poke(true);
+  @println("{} {} {}", a, b, hits);
+  return 0;
+}

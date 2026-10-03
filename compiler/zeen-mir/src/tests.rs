@@ -2048,3 +2048,39 @@ fn enum_method_call_on_variant_constant_lowres() {
         "a method call on an enum constant must lower to a direct call"
     );
 }
+
+#[test]
+fn logical_and_short_circuits_through_branch() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = true; let b = a && false; if (b) { return 1; } return 0; }",
+    );
+    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
+    let func = &mir.program.functions[&main_id];
+    let switches = func
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.terminator, crate::Terminator::SwitchInt { .. }))
+        .count();
+    assert!(
+        switches >= 2,
+        "expected SwitchInt for `&&` and for `if`, got {switches}"
+    );
+}
+
+#[test]
+fn logical_or_short_circuits_through_branch() {
+    let mir = compile_mir_ok(
+        "fn main() i32 { let a = false; let b = a || true; if (b) { return 1; } return 0; }",
+    );
+    let main_id = fn_id_by_name(&mir, "main").expect("main missing");
+    let func = &mir.program.functions[&main_id];
+    let switches = func
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.terminator, crate::Terminator::SwitchInt { .. }))
+        .count();
+    assert!(
+        switches >= 2,
+        "expected SwitchInt for `||` and for `if`, got {switches}"
+    );
+}
