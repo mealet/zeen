@@ -4,6 +4,7 @@ use std.c.types;
 pub use std.sync;
 
 @os[windows] {
+  use std.c.windows.windef;
   use std.c.windows.winbase;
   use std.c.windows.processthreadsapi;
   use std.c.windows.fileapi;

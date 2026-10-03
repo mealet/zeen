@@ -4,6 +4,8 @@ use std.c.types;
 use std.c.errno;
 
 @os[windows] {
+  use std.c.windows.windef;
+  use std.c.windows.winbase;
   use std.c.windows.synchapi;
 
   alias OsMutex = WinCriticalSection;
