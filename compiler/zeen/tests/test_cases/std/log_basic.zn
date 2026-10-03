@@ -1,0 +1,13 @@
+use std.log;
+
+fn main() i32 {
+  Log.debug("hidden1");
+  Log.info("shown1");
+  Log.set_level(Level.Warn);
+  Log.info("hidden2");
+  Log.warn("shown2");
+  Log.error("shown3");
+  Log.set_level(Level.Debug);
+  Log.debug("shown4");
+  return 0;
+}
