@@ -212,7 +212,7 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
 
             DeclarationKind::ExternLink { path } => DeclarationKind::ExternLink { path },
             DeclarationKind::ExternInclude { path } => DeclarationKind::ExternInclude { path },
-            DeclarationKind::Use { module } => DeclarationKind::Use { module },
+            DeclarationKind::Use { module, is_pub } => DeclarationKind::Use { module, is_pub },
 
             DeclarationKind::Alias(alias) => DeclarationKind::Alias(AliasDecl {
                 name: alias.name,

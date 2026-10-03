@@ -552,6 +552,7 @@ impl<'ctx> IncludeResolver<'ctx> {
         let use_std = self.arena.alloc(Declaration {
             kind: DeclarationKind::Use {
                 module: (self.get_or_intern(module), span),
+                is_pub: false,
             },
             source,
         });
@@ -659,7 +660,7 @@ impl<'ctx> IncludeResolver<'ctx> {
         visiting: &mut HashSet<PathBuf>,
     ) {
         for decl in decls {
-            let DeclarationKind::Use { module } = &decl.kind else {
+            let DeclarationKind::Use { module, .. } = &decl.kind else {
                 continue;
             };
 
@@ -798,7 +799,7 @@ impl<'ctx> IncludeResolver<'ctx> {
 
         for decl in decls {
             match decl.kind {
-                DeclarationKind::Use { module } => {
+                DeclarationKind::Use { module, .. } => {
                     let raw = self.interner_resolve(&module.0);
 
                     if self.is_builtin_module(&raw) {

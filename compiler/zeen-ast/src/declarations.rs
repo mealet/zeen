@@ -92,6 +92,7 @@ pub enum DeclarationKind<'arena> {
 
     Use {
         module: (Spur, SourceSpan),
+        is_pub: bool,
     },
 
     Alias(AliasDecl<'arena>),
