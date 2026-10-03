@@ -10,6 +10,16 @@ use std.c.windows.windef;
   pub const WAIT_IO_COMPLETION: WinDWORD = 0xC0;
   pub const INFINITE: WinDWORD = 0xFFFFFFFF;
 
+  pub struct WinCriticalSection {
+    pub storage: [5]u64,
+  }
+
+  pub extern fn InitializeCriticalSection(cs: *WinCriticalSection) void;
+  pub extern fn DeleteCriticalSection(cs: *WinCriticalSection) void;
+  pub extern fn EnterCriticalSection(cs: *WinCriticalSection) void;
+  pub extern fn TryEnterCriticalSection(cs: *WinCriticalSection) WinBOOL;
+  pub extern fn LeaveCriticalSection(cs: *WinCriticalSection) void;
+
   pub extern fn WaitForSingleObject(
     handle: WinHANDLE,
     ms: WinDWORD,

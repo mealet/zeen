@@ -1,0 +1,123 @@
+use std.c.types;
+use std.c.errno;
+
+@os[windows] {
+  use std.c.windows.synchapi;
+
+  alias OsMutex = WinCriticalSection;
+} else {
+  use std.c.posix.pthread;
+
+  alias OsMutex = c_pthread_mutex_t;
+}
+
+/// Mutual exclusion lock protecting shared data.
+pub struct Mutex[T] {
+  os: OsMutex,
+  data: T,
+  open: bool,
+
+  /// Create an unlocked mutex holding `value`.
+  pub fn new(value: T) Self {
+    let m = Mutex { .os = @uninit(), .data = value, .open = true };
+
+    @os[windows] {
+      InitializeCriticalSection(&m.os);
+    } else {
+      let rc = pthread_mutex_init(&m.os, nullptr);
+      if (rc != 0) {
+        @panic("mutex init failed");
+      };
+    }
+
+    return m;
+  }
+
+  /// Lock the mutex, blocking until acquired.
+  pub fn lock(*self) MutexGuard[T] {
+    @os[windows] {
+      EnterCriticalSection(&self.os);
+    } else {
+      let rc = pthread_mutex_lock(&self.os);
+      if (rc != 0) {
+        @panic("mutex lock failed");
+      };
+    }
+
+    return MutexGuard { .lock = &self.os, .got = &self.data };
+  }
+
+  /// Try to lock without blocking, `None` when held.
+  pub fn try_lock(*self) Option[MutexGuard[T]] {
+    @os[windows] {
+      let ok = TryEnterCriticalSection(&self.os);
+      if (ok == 0) {
+        return Option.None;
+      };
+    } else {
+      let rc = pthread_mutex_trylock(&self.os);
+      if (rc != 0) {
+        return Option.None;
+      };
+    }
+
+    return Option.Some(MutexGuard { .lock = &self.os, .got = &self.data });
+  }
+
+  /// Consume the mutex, returning the data.
+  pub fn into_inner(self) T {
+    @os[windows] {
+      DeleteCriticalSection(&self.os);
+    } else {
+      pthread_mutex_destroy(&self.os);
+    }
+
+    self.open = false;
+    let out = self.data;
+    return out;
+  }
+}
+
+implement[T] Drop : Mutex[T] {
+  fn drop(self) {
+    if (!self.open) {
+      return;
+    };
+
+    @os[windows] {
+      DeleteCriticalSection(&self.os);
+    } else {
+      pthread_mutex_destroy(&self.os);
+    }
+
+    let _dead: T = self.data;
+  }
+}
+
+/// Held mutex lock, unlocks on drop.
+pub struct MutexGuard[T] {
+  lock: *OsMutex,
+  got: *T,
+}
+
+implement[T: Copy] Deref : MutexGuard[T] {
+  fn deref(*const self) T {
+    return *self.got;
+  }
+}
+
+implement[T] DerefPtr : MutexGuard[T] {
+  fn deref_ptr(*self) *T {
+    return self.got;
+  }
+}
+
+implement[T] Drop : MutexGuard[T] {
+  fn drop(self) {
+    @os[windows] {
+      LeaveCriticalSection(self.lock);
+    } else {
+      pthread_mutex_unlock(self.lock);
+    }
+  }
+}
