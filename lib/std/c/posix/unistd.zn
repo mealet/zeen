@@ -33,6 +33,11 @@ use std.c.types;
 
   pub extern let environ: [*][*]char;
 
+  // macOS executable path.
+  @os[darwin] {
+    pub extern fn _NSGetExecutablePath(buf: [*]char, size: *u32) c_int;
+  }
+
   pub extern fn fsync(fd: c_int) c_int;
   pub extern fn _exit(status: c_int) never;
 
