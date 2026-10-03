@@ -1,0 +1,3 @@
+pub fn secret() i32 {
+  return 7;
+}

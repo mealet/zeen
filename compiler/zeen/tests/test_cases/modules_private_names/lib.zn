@@ -1,0 +1,14 @@
+struct Wrap {
+  pub b: i64,
+}
+
+let slot: i32 = 20;
+
+fn pick() i32 {
+  return 2;
+}
+
+pub fn run() i32 {
+  let w = Wrap { .b = 200 };
+  return pick() + @as(i32, w.b) + slot;
+}

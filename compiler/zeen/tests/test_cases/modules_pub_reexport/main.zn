@@ -1,0 +1,6 @@
+use mid;
+
+fn main() i32 {
+  @println("{}", secret() + face());
+  return 0;
+}

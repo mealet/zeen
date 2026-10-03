@@ -1,0 +1,6 @@
+use lib;
+
+fn main() i32 {
+  @println("root");
+  return 0;
+}
