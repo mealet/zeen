@@ -6745,9 +6745,6 @@ impl<'res> TypeChecker<'res> {
         };
 
         let mut generic_subst: HashMap<DefId, TypeId> = HashMap::new();
-        for (iface_g, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
-            generic_subst.insert(*iface_g, *struct_arg);
-        }
 
         let struct_generics: Vec<DefId> = match self.result.interner.get(self_struct_ty) {
             Type::Struct { def_id, .. } => self
@@ -6809,6 +6806,18 @@ impl<'res> TypeChecker<'res> {
             &all_iface_generics,
             &mut generic_subst,
         );
+        let mut instantiation_params: HashSet<DefId> = HashSet::new();
+        instantiation_params.extend(struct_generics.iter().copied());
+        instantiation_params.extend(sig_ctx.imp_generics.iter().copied());
+        for (iface_g, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
+            let inferred_varies = match generic_subst.get(iface_g) {
+                Some(&bound) => self.type_mentions_any(bound, &instantiation_params),
+                None => false,
+            };
+            if !inferred_varies {
+                generic_subst.insert(*iface_g, *struct_arg);
+            }
+        }
 
         let iface_params: Vec<TypeId> = iface_params_raw
             .iter()
@@ -6851,6 +6860,27 @@ impl<'res> TypeChecker<'res> {
                 src: sig_src,
                 span: sig_span,
             });
+        }
+    }
+
+    fn type_mentions_any(&self, ty: TypeId, params: &HashSet<DefId>) -> bool {
+        match self.result.interner.get(ty).clone() {
+            Type::GenericParam(g) => params.contains(&g),
+            Type::Pointer { inner, .. }
+            | Type::ManyPointer { inner, .. }
+            | Type::Array { element: inner, .. }
+            | Type::Slice { element: inner, .. } => self.type_mentions_any(inner, params),
+            Type::Struct { generic_args, .. } | Type::Enum { generic_args, .. } => generic_args
+                .iter()
+                .any(|&a| self.type_mentions_any(a, params)),
+            Type::Fn { params: ps, ret }
+            | Type::FatFn {
+                params: ps, ret, ..
+            } => {
+                ps.iter().any(|&p| self.type_mentions_any(p, params))
+                    || self.type_mentions_any(ret, params)
+            }
+            _ => false,
         }
     }
 
