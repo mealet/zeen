@@ -1519,6 +1519,35 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn fn_item_value_keeps_explicit_generic_args() {
+        let fx = lower_ok("fn id[T](x: T) T { return x; } fn main() { let f = id#[i32]; }");
+
+        let f = fx.fn_decl("main");
+        let body = f.body.as_ref().expect("body must be lowered");
+        let HirStmtKind::Expr(expr) = &body.kind else {
+            panic!("function body must be an expression block")
+        };
+        let HirExprKind::Block { stmts, .. } = &expr.kind else {
+            panic!("function body must be a block expression")
+        };
+
+        let value = stmts
+            .iter()
+            .find_map(|stmt| match &stmt.kind {
+                HirStmtKind::Let {
+                    value: Some(value), ..
+                } => Some(value.clone()),
+                _ => None,
+            })
+            .expect("block must contain a let binding");
+
+        let HirExprKind::VarRef { generic_args, .. } = &value.kind else {
+            panic!("value must lower to a VarRef")
+        };
+        assert_eq!(generic_args.len(), 1);
+    }
+
     // --> Switch
 
     fn switch_expr_of(fx: &Fixture, fn_name: &str) -> Rc<crate::expr::HirExpr> {

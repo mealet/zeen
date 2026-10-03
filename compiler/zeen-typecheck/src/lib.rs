@@ -2152,7 +2152,10 @@ impl<'res> TypeChecker<'res> {
                 }
             },
 
-            HirExprKind::VarRef { def: def_id, generic_args } => {
+            HirExprKind::VarRef {
+                def: def_id,
+                generic_args,
+            } => {
                 if !generic_args.is_empty() {
                     let monos: Vec<TypeId> = generic_args
                         .iter()
@@ -3198,7 +3201,10 @@ impl<'res> TypeChecker<'res> {
     ) -> TypeId {
         let (field_name, field_span) = *field;
 
-        if let HirExprKind::VarRef { def: referenced_def, .. } = &object.kind
+        if let HirExprKind::VarRef {
+            def: referenced_def,
+            ..
+        } = &object.kind
             && matches!(self.def_kind(*referenced_def), Some(DefKind::Enum))
         {
             return self.check_enum_variant_access(
@@ -4793,7 +4799,10 @@ impl<'res> TypeChecker<'res> {
     ) -> Option<TypeId> {
         let (field_name, field_span) = field;
 
-        if let HirExprKind::VarRef { def: referenced_def, .. } = &object.kind
+        if let HirExprKind::VarRef {
+            def: referenced_def,
+            ..
+        } = &object.kind
             && matches!(
                 self.def_kind(*referenced_def),
                 Some(DefKind::Struct | DefKind::Enum)
@@ -11311,5 +11320,15 @@ mod tests {
             "#,
         )
         .expect("or with a binding must typecheck");
+    }
+
+    #[test]
+    fn explicit_fn_item_args_are_recorded() {
+        let result = typecheck("fn id[T](x: T) T { return x; } fn main() { let f = id#[i32]; }")
+            .expect("must typecheck");
+
+        assert_eq!(result.fn_item_monos.len(), 1);
+        let args = result.fn_item_monos.values().next().expect("one entry");
+        assert_eq!(args.len(), 1);
     }
 }
