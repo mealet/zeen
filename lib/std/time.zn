@@ -103,6 +103,11 @@ pub struct Instant {
 
 /// Thread sleep.
 pub struct Time {
+  /// Current system timestamp in seconds.
+  pub fn now() i64 {
+    return @as(i64, time(nullptr));
+  }
+
   pub fn sleep(d: Duration) {
     @os[windows] {
       Sleep(@as(WinDWORD, d.as_millis()));
