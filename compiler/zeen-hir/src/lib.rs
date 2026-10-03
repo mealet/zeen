@@ -699,11 +699,14 @@ impl<'res> HirLowering<'res> {
         let kind = match expr.kind {
             ExpressionKind::Literal(lit) => HirExprKind::Literal(lit),
 
-            ExpressionKind::Ident { generic_args, .. } => {
+            ExpressionKind::Ident { .. } => {
                 let resolution = self.resolution.resolution_of_expr(expr);
 
                 let base = match resolution {
-                    Some(Resolution::Def(id)) => HirExprKind::VarRef(id),
+                    Some(Resolution::Def(id)) => HirExprKind::VarRef {
+                        def: id,
+                        generic_args: self.generic_args_of_expr(expr),
+                    },
                     Some(Resolution::GenericParam(id)) => HirExprKind::GenericParamRef(id),
                     Some(Resolution::SelfValue(id)) => HirExprKind::SelfValue(id),
                     Some(Resolution::SelfType(_)) => HirExprKind::Error,
@@ -711,8 +714,6 @@ impl<'res> HirLowering<'res> {
                         HirExprKind::Error
                     }
                 };
-
-                let _ = generic_args;
 
                 base
             }
@@ -844,7 +845,10 @@ impl<'res> HirLowering<'res> {
                         {
                             Rc::new(HirExpr {
                                 id: self.fresh_id(),
-                                kind: HirExprKind::VarRef(id),
+                                kind: HirExprKind::VarRef {
+                                    def: id,
+                                    generic_args: Vec::new(),
+                                },
                                 source: lowered_object.source.clone(),
                             })
                         }
@@ -1348,10 +1352,10 @@ mod tests {
 
         assert_eq!(*op, BinaryOp::Add);
 
-        let HirExprKind::VarRef(lhs_id) = lhs.kind else {
+        let HirExprKind::VarRef { def: lhs_id, .. } = lhs.kind else {
             panic!("add lhs must reference a parameter")
         };
-        let HirExprKind::VarRef(rhs_id) = rhs.kind else {
+        let HirExprKind::VarRef { def: rhs_id, .. } = rhs.kind else {
             panic!("add rhs must reference a parameter")
         };
 
@@ -1474,7 +1478,7 @@ mod tests {
 
         let (_, _, a_value, _, _) = fx.global_var("a");
 
-        let HirExprKind::VarRef(b_id) = a_value.kind else {
+        let HirExprKind::VarRef { def: b_id, .. } = a_value.kind else {
             panic!("global var initializer must lower to a VarRef")
         };
 
@@ -1567,7 +1571,7 @@ mod tests {
         assert_ne!(binding.def_id, DefId(u32::MAX));
         assert!(arms[1].guard.is_some());
 
-        let HirExprKind::VarRef(body_def) = &arms[1].body.kind else {
+        let HirExprKind::VarRef { def: body_def, .. } = &arms[1].body.kind else {
             panic!("binding use must lower to VarRef")
         };
         assert_eq!(*body_def, binding.def_id);

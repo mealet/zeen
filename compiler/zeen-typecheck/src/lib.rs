@@ -2152,7 +2152,14 @@ impl<'res> TypeChecker<'res> {
                 }
             },
 
-            HirExprKind::VarRef(def_id) => {
+            HirExprKind::VarRef { def: def_id, generic_args } => {
+                if !generic_args.is_empty() {
+                    let monos: Vec<TypeId> = generic_args
+                        .iter()
+                        .map(|ty| self.lower_hir_type(ty))
+                        .collect();
+                    self.result.fn_item_monos.insert(expr.id, monos);
+                }
                 if matches!(
                     self.def_kind(*def_id),
                     Some(DefKind::Struct | DefKind::Interface | DefKind::Enum | DefKind::TypeAlias)
@@ -3191,7 +3198,7 @@ impl<'res> TypeChecker<'res> {
     ) -> TypeId {
         let (field_name, field_span) = *field;
 
-        if let HirExprKind::VarRef(referenced_def) = &object.kind
+        if let HirExprKind::VarRef { def: referenced_def, .. } = &object.kind
             && matches!(self.def_kind(*referenced_def), Some(DefKind::Enum))
         {
             return self.check_enum_variant_access(
@@ -4339,7 +4346,7 @@ impl<'res> TypeChecker<'res> {
 
             HirExprKind::SliceAccess { object, .. } => self.find_const_violation(object),
 
-            HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => self
+            HirExprKind::VarRef { def: def_id, .. } | HirExprKind::SelfValue(def_id) => self
                 .result
                 .const_bindings
                 .get(def_id)
@@ -4492,7 +4499,7 @@ impl<'res> TypeChecker<'res> {
         expected: Option<TypeId>,
     ) -> TypeId {
         if let HirExprKind::FieldAccess { object, field, .. } = &callee.kind {
-            if let HirExprKind::VarRef(enum_def) = &object.kind
+            if let HirExprKind::VarRef { def: enum_def, .. } = &object.kind
                 && matches!(self.def_kind(*enum_def), Some(DefKind::Enum))
                 && self.enum_variants.get(enum_def).is_some_and(|defs| {
                     defs.iter().any(|&v| {
@@ -4529,7 +4536,7 @@ impl<'res> TypeChecker<'res> {
         }
 
         let callee_def = match &callee.kind {
-            HirExprKind::VarRef(def_id) => Some(*def_id),
+            HirExprKind::VarRef { def: def_id, .. } => Some(*def_id),
             _ => None,
         };
 
@@ -4786,7 +4793,7 @@ impl<'res> TypeChecker<'res> {
     ) -> Option<TypeId> {
         let (field_name, field_span) = field;
 
-        if let HirExprKind::VarRef(referenced_def) = &object.kind
+        if let HirExprKind::VarRef { def: referenced_def, .. } = &object.kind
             && matches!(
                 self.def_kind(*referenced_def),
                 Some(DefKind::Struct | DefKind::Enum)

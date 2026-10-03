@@ -201,7 +201,7 @@ fn collect_from_expr(expr: &zeen_hir::expr::HirExpr, map: &mut HashMap<DefId, Rc
         }
 
         HirExprKind::Literal(_)
-        | HirExprKind::VarRef(_)
+        | HirExprKind::VarRef { .. }
         | HirExprKind::GenericParamRef(_)
         | HirExprKind::SelfValue(_)
         | HirExprKind::Type(_)

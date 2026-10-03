@@ -18,7 +18,10 @@ pub struct HirExpr {
 pub enum HirExprKind {
     Literal(zeen_ast::expressions::Literal),
 
-    VarRef(DefId),
+    VarRef {
+        def: DefId,
+        generic_args: Vec<Rc<HirTypeExpr>>,
+    },
     GenericParamRef(DefId),
     SelfValue(DefId),
 

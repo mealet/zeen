@@ -217,7 +217,7 @@ impl<'a> Analyzer<'a> {
                 }
             }
 
-            HirExprKind::VarRef(def_id) => self.mark_ref(*def_id, matches!(fate, Fate::Callee)),
+            HirExprKind::VarRef { def: def_id, .. } => self.mark_ref(*def_id, matches!(fate, Fate::Callee)),
 
             HirExprKind::If {
                 condition,
