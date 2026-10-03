@@ -11,6 +11,8 @@ use std.c.windows.windef;
   pub extern fn SetEnvironmentVariableA(name: [*]const c_char, value: [*]const c_char) WinBOOL;
   pub extern fn GetEnvironmentStringsA() [*]c_char;
   pub extern fn FreeEnvironmentStringsA(block: [*]c_char) WinBOOL;
+  pub extern fn InterlockedDecrement64(addend: *i64) i64;
+  pub extern fn InterlockedExchangeAdd64(addend: *i64, value: i64) i64;
   pub extern fn QueryPerformanceCounter(out: *i64) WinBOOL;
   pub extern fn QueryPerformanceFrequency(out: *i64) WinBOOL;
 }

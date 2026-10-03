@@ -1,3 +1,5 @@
+use std.alloc;
+
 use std.c.types;
 use std.c.errno;
 
@@ -119,5 +121,107 @@ implement[T] Drop : MutexGuard[T] {
     } else {
       pthread_mutex_unlock(self.lock);
     }
+  }
+}
+
+/// Atomic reference count shared ownership, thread safe version of `Shared`.
+pub struct Arc[T] {
+  ptr: *T,
+  count: *i64,
+
+  /// Move `value` into a new heap allocation with count one.
+  pub fn new(value: T) Self {
+    let ptr = @as(*T, Allocator.alloc(@sizeof(T)));
+    *ptr = value;
+
+    let count = @as(*i64, Allocator.alloc(@sizeof(i64)));
+    *count = 1;
+
+    Self { .ptr = ptr, .count = count }
+  }
+
+  /// Number of owners sharing the value.
+  pub fn use_count(*const self) i64 {
+    return arc_fetch_add(self.count, 0);
+  }
+
+  /// `true` when this is the only owner.
+  pub fn is_unique(*const self) bool {
+    return self.use_count() == 1;
+  }
+
+  /// Raw access to the shared value.
+  pub fn get(*const self) *const T {
+    return self.ptr;
+  }
+
+  /// Mutable raw access to the shared value. Visible to every owner.
+  pub fn get_mut(*self) *T {
+    return self.ptr;
+  }
+}
+
+fn arc_fetch_add(count: *i64, value: i64) i64 {
+  @os[windows] {
+    return InterlockedExchangeAdd64(count, value);
+  } else {
+    return __atomic_fetch_add_8(count, value, ArcSeqCst);
+  }
+}
+
+fn arc_fetch_sub(count: *i64) i64 {
+  @os[windows] {
+    return InterlockedDecrement64(count);
+  } else {
+    return __atomic_fetch_sub_8(count, 1, ArcSeqCst);
+  }
+}
+
+@os[linux | android | darwin | freebsd] {
+  extern fn __atomic_fetch_add_8(ptr: *i64, value: i64, order: i32) i64;
+  extern fn __atomic_fetch_sub_8(ptr: *i64, value: i64, order: i32) i64;
+}
+
+const ArcSeqCst: i32 = 5;
+
+implement[T] Clone : Arc[T] {
+  fn clone(*const self) Self {
+    arc_fetch_add(self.count, 1);
+
+    Self { .ptr = self.ptr, .count = self.count }
+  }
+}
+
+implement[T] Drop : Arc[T] {
+  fn drop(self) {
+    if (arc_fetch_sub(self.count) == 1) {
+      let _owned: T = *self.ptr;
+      Allocator.dealloc(@as(*void, self.ptr));
+      Allocator.dealloc(@as(*void, self.count));
+    };
+  }
+}
+
+implement[T: Copy] Deref : Arc[T] {
+  fn deref(*const self) T {
+    *self.ptr
+  }
+}
+
+implement[T] DerefPtr : Arc[T] {
+  fn deref_ptr(*self) *T {
+    self.ptr
+  }
+}
+
+implement[T: Display] Display : Arc[T] {
+  fn display[W: StrWriter](*const self, out: *W) {
+    (*self.ptr).display(out);
+  }
+}
+
+implement[T: Debug] Debug : Arc[T] {
+  fn debug[W: StrWriter](*const self, out: *W) {
+    (*self.ptr).debug(out);
   }
 }
