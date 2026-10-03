@@ -367,6 +367,12 @@ impl<'ctx> DataFlow<'ctx> {
         if place_is_global(place) {
             return;
         }
+        if !place.projection.is_empty() {
+            self.mark_read(place.local);
+            for local in index_locals(place) {
+                self.mark_read(local);
+            }
+        }
         let is_field = matches!(place.projection.first(), Some(PlaceElem::Field(_)));
         if is_field && let Some(fields) = self.struct_fields_of(place.local) {
             self.current.write_struct_place(place, &fields);
