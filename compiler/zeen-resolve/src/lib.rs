@@ -542,6 +542,124 @@ mod tests {
     }
 
     #[test]
+    fn private_import_does_not_leak_to_importer() {
+        let errs = resolve_files(
+            "multi-vis-leak",
+            &[
+                ("a.zn", "pub fn secret() i32 { return 7; }"),
+                ("b.zn", "use a; pub fn face() i32 { return secret(); }"),
+                ("main.zn", "use b; fn main() i32 { return secret(); }"),
+            ],
+            "main.zn",
+        )
+        .unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::UnresolvedIdent { name, .. } if name.as_str() == "secret")
+        ));
+    }
+
+    #[test]
+    fn pub_use_reexports_transitively() {
+        files_ok(
+            "multi-vis-reexport",
+            &[
+                ("a.zn", "pub fn secret() i32 { return 7; }"),
+                ("b.zn", "pub use a; pub fn face() i32 { return 1; }"),
+                (
+                    "main.zn",
+                    "use b; fn main() i32 { return secret() + face(); }",
+                ),
+            ],
+            "main.zn",
+        );
+    }
+
+    #[test]
+    fn duplicate_pub_from_two_modules_is_ambiguous() {
+        let errs = resolve_files(
+            "multi-vis-ambiguous",
+            &[
+                ("c1.zn", "pub fn dup() i32 { return 1; }"),
+                ("c2.zn", "pub fn dup() i32 { return 2; }"),
+                ("main.zn", "use c1; use c2; fn main() i32 { return dup(); }"),
+            ],
+            "main.zn",
+        )
+        .unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::AmbiguousImport { name, .. } if name.as_str() == "dup")
+        ));
+    }
+
+    #[test]
+    fn duplicate_pub_unused_is_allowed() {
+        files_ok(
+            "multi-vis-ambiguous-idle",
+            &[
+                ("c1.zn", "pub fn dup() i32 { return 1; }"),
+                ("c2.zn", "pub fn dup() i32 { return 2; }"),
+                ("main.zn", "use c1; use c2; fn main() i32 { return 0; }"),
+            ],
+            "main.zn",
+        );
+    }
+
+    #[test]
+    fn duplicate_pub_type_is_ambiguous() {
+        let errs = resolve_files(
+            "multi-vis-ambiguous-type",
+            &[
+                ("t1.zn", "pub struct Box { x: i32 }"),
+                ("t2.zn", "pub struct Box { y: i32 }"),
+                (
+                    "main.zn",
+                    "use t1; use t2; struct Bar { f: Box } fn main() i32 { return 0; }",
+                ),
+            ],
+            "main.zn",
+        )
+        .unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::AmbiguousImport { name, .. } if name.as_str() == "Box")
+        ));
+    }
+
+    #[test]
+    fn own_item_shadows_import() {
+        files_ok(
+            "multi-vis-shadow",
+            &[
+                ("lib.zn", "pub fn foo() i32 { return 2; }"),
+                (
+                    "main.zn",
+                    "use lib; fn foo() i32 { return 1; } fn main() i32 { return foo(); }",
+                ),
+            ],
+            "main.zn",
+        );
+    }
+
+    #[test]
+    fn private_fn_of_used_module_stays_inaccessible() {
+        let errs = resolve_files(
+            "multi-vis-private",
+            &[
+                ("lib.zn", "fn hidden() i32 { return 1; }"),
+                ("main.zn", "use lib; fn main() i32 { return hidden(); }"),
+            ],
+            "main.zn",
+        )
+        .unwrap_err();
+
+        assert!(errs.iter().any(
+            |e| matches!(e, ResolveError::PrivateItemNotAccessible { name, .. } if name.as_str() == "hidden")
+        ));
+    }
+
+    #[test]
     fn core_interface_name_is_reserved() {
         let errs = resolve_full("struct Display {}").unwrap_err();
 
