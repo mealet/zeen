@@ -616,6 +616,41 @@ fn explicit_discard_and_void_statements_do_not_warn() {
 }
 
 #[test]
+fn discard_drop_payload_warns() {
+    let mir = compile_mir_ok(
+        "struct Resource { handle: i32 } \
+         implement Drop : Resource { fn drop(self) {} } \
+         pub enum Val { N, R: Resource, \
+           pub fn check(*const self) bool { return switch (*self) { .R(_) => true, _ => false, }; } } \
+         fn main() i32 { let v = Val.R(Resource { .handle = 1 }); if (v.check()) { return 0; }; return 1; }",
+    );
+
+    assert_eq!(
+        mir.warnings.len(),
+        1,
+        "expected one warning for `.R(_)` over a Drop payload, got {:?}",
+        mir.warnings
+    );
+}
+
+#[test]
+fn ref_and_copy_payload_bindings_do_not_warn() {
+    let mir = compile_mir_ok(
+        "struct Resource { handle: i32 } \
+         implement Drop : Resource { fn drop(self) {} } \
+         pub enum Val { N, R: Resource, I: i32, \
+           pub fn check(*const self) bool { return switch (*self) { .R(&_) => true, .I(_) => true, _ => false, }; } } \
+         fn main() i32 { let v = Val.R(Resource { .handle = 1 }); if (v.check()) { return 0; }; return 1; }",
+    );
+
+    assert!(
+        mir.warnings.is_empty(),
+        "ref bindings and Copy payloads must not warn, got {:?}",
+        mir.warnings
+    );
+}
+
+#[test]
 fn global_var_lowers_to_global_place() {
     let mir = compile_mir_ok(
         "let g: i32 = 42; \

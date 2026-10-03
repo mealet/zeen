@@ -45,4 +45,17 @@ pub enum MirWarning {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("discarding a value that needs dropping with `_`")]
+    #[diagnostic(
+        severity(Warning),
+        code(zeen::mir::discard_drop_payload),
+        help("bind it by reference instead: `&_`")
+    )]
+    DiscardDropPayload {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }

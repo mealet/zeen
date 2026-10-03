@@ -4301,6 +4301,15 @@ impl<'ctx> MirLowering<'ctx> {
                 } else {
                     payload_ty
                 };
+                if !is_ref
+                    && self.rodeo.borrow().resolve(&name) == "_"
+                    && self.mir_type_needs_drop(bind_ty, &HashMap::default())
+                {
+                    self.warnings.push(MirWarning::DiscardDropPayload {
+                        src: expr.source.src(),
+                        span,
+                    });
+                }
                 let local = fb.new_local(
                     bind_ty,
                     LocalKind::UserVariable,
