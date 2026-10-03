@@ -62,6 +62,9 @@ pub struct NameResolver {
 
     next_def_id: u32,
     current_src: NamedSource<Arc<String>>,
+
+    module_display: HashMap<String, String>,
+    current_module: String,
 }
 
 fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
@@ -78,7 +81,12 @@ fn is_self_param(param: &zeen_ast::declarations::FnParam) -> bool {
 }
 
 impl<'ctx> NameResolver {
-    pub fn new(filename: Rc<String>, src: Arc<String>, interner: Rc<RefCell<Rodeo>>) -> Self {
+    pub fn new(
+        filename: Rc<String>,
+        src: Arc<String>,
+        interner: Rc<RefCell<Rodeo>>,
+        module_display: HashMap<String, String>,
+    ) -> Self {
         Self {
             interner,
             errors: Vec::new(),
@@ -93,6 +101,9 @@ impl<'ctx> NameResolver {
 
             next_def_id: 0,
             current_src: NamedSource::new(filename.as_str(), src.clone()),
+
+            module_display,
+            current_module: String::new(),
         }
     }
 
@@ -110,9 +121,19 @@ impl<'ctx> NameResolver {
         id
     }
 
+    fn display_of(&self, src_name: &str) -> String {
+        self.module_display
+            .get(src_name)
+            .cloned()
+            .unwrap_or_else(|| src_name.to_string())
+    }
+
     fn define(&mut self, info: DefInfo) -> DefId {
         let id = self.fresh_def_id();
         self.result.defs.insert(id, info);
+        self.result
+            .def_modules
+            .insert(id, self.current_module.clone());
         id
     }
 
@@ -278,6 +299,7 @@ impl<'ctx> NameResolver {
     }
 
     fn declare_toplevel(&mut self, decl: &'ctx Declaration<'ctx>) {
+        self.current_module = self.display_of(decl.source.src().name());
         match decl.kind {
             DeclarationKind::FnDecl {
                 name,
@@ -490,6 +512,7 @@ impl<'ctx> NameResolver {
 
     fn resolve_decl(&mut self, decl: &'ctx Declaration<'ctx>) {
         self.current_src = decl.source.src();
+        self.current_module = self.display_of(decl.source.src().name());
 
         match decl.kind {
             DeclarationKind::FnDecl { .. } => {

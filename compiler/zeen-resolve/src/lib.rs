@@ -64,7 +64,10 @@ pub fn resolve<'ctx>(
         miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
     )?;
 
-    let mut name_resolver = name_resolver::NameResolver::new(filename, src, interner);
+    let module_display = include_resolver.module_display_index();
+
+    let mut name_resolver =
+        name_resolver::NameResolver::new(filename, src, interner, module_display);
     name_resolver.resolve_module(resolved_program);
 
     let resolution_result = name_resolver.finish()?;

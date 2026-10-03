@@ -881,6 +881,13 @@ impl<'ctx> IncludeResolver<'ctx> {
                     continue;
                 }
 
+                let (first_is_core, first_canonical, _) = self.module_source_of(first_decl);
+                let (second_is_core, second_canonical, _) = self.module_source_of(decl);
+
+                if !first_is_core && !second_is_core && first_canonical != second_canonical {
+                    continue;
+                }
+
                 let name = self.interner_resolve(&entry.1);
 
                 let first_definition = {
@@ -924,6 +931,27 @@ impl<'ctx> IncludeResolver<'ctx> {
                 seen.insert((ns, name), (span, decl));
             }
         }
+    }
+
+    pub(crate) fn module_display_index(&self) -> HashMap<String, String> {
+        let project_root = canonicalize_best_effort(&self.context.paths.project_root);
+        let std_root = self
+            .context
+            .paths
+            .std_root
+            .as_deref()
+            .map(canonicalize_best_effort);
+
+        let mut out = HashMap::new();
+        for (key, module) in &self.modules {
+            let display = if module.is_core {
+                key.to_string_lossy().into_owned()
+            } else {
+                display_for_path(&module.canonical_path, &project_root, std_root.as_deref())
+            };
+            out.insert(module.named_src.name().to_string(), display);
+        }
+        out
     }
 
     fn module_source_of(
@@ -997,6 +1025,30 @@ fn resolve_use_path(
     path.set_extension("zn");
 
     Ok(path)
+}
+
+fn display_for_path(canonical: &Path, project_root: &Path, std_root: Option<&Path>) -> String {
+    if let Ok(rel) = canonical.strip_prefix(project_root)
+        && let Some(rel) = rel.with_extension("").to_str()
+    {
+        return rel.to_string();
+    }
+
+    if let Some(std_root) = std_root
+        && let Ok(rel) = canonical.strip_prefix(std_root)
+    {
+        let dotted: Vec<String> = rel
+            .with_extension("")
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        return format!("std.{}", dotted.join("."));
+    }
+
+    canonical
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| canonical.to_string_lossy().into_owned())
 }
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {

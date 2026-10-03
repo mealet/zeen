@@ -1596,7 +1596,7 @@ mod tests {
         assert_matches!(
             parser.parse_program(),
             Ok([Declaration {
-                kind: DeclarationKind::Use { module: _, .. },
+                kind: DeclarationKind::Use { .. },
                 ..
             }])
         );
@@ -1611,7 +1611,7 @@ mod tests {
         assert_matches!(
             parser.parse_program(),
             Ok([Declaration {
-                kind: DeclarationKind::Use { module: _, .. },
+                kind: DeclarationKind::Use { .. },
                 ..
             }])
         );
