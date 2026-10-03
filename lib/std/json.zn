@@ -2,12 +2,6 @@ use std.string;
 use std.collections.list;
 use std.collections.map;
 
-const TagNull: u8 = 0;
-const TagBool: u8 = 1;
-const TagNum: u8 = 2;
-const TagStr: u8 = 3;
-const TagArray: u8 = 4;
-const TagObject: u8 = 5;
 const MaxJsonDepth: usize = 128;
 
 /// JSON parse error.
@@ -62,18 +56,22 @@ pub enum JsonValue {
 
   /// Object member by key, `None` outside objects.
   pub fn get(*const self, key: []const char) Option[*const JsonValue] {
-    if (@enumTag(self) != TagObject) {
-      return Option.None;
+    return switch (*self) {
+      .Object(&obj) => obj.get(key),
+      _ => Option.None,
     };
-    return (*self).Object.get(key);
   }
 
   /// Array element by index, `None` outside arrays.
   pub fn at(*const self, index: usize) Option[*const JsonValue] {
-    if (@enumTag(self) != TagArray) {
-      return Option.None;
+    return switch (*self) {
+      .Array(&items) => JsonValue.at_index(items, index),
+      _ => Option.None,
     };
-    let found = (*self).Array.get_ptr(index);
+  }
+
+  fn at_index(items: *const List[JsonValue], index: usize) Option[*const JsonValue] {
+    let found = items.get_ptr(index);
     if (found.is_none()) {
       return Option.None;
     };
@@ -83,18 +81,18 @@ pub enum JsonValue {
 
   /// Element count of arrays and objects, zero otherwise.
   pub fn len(*const self) usize {
-    let tag = @enumTag(self);
-    if (tag == TagArray) {
-      return (*self).Array.len();
+    return switch (*self) {
+      .Array(&items) => items.len(),
+      .Object(&obj) => obj.len(),
+      _ => 0,
     };
-    if (tag == TagObject) {
-      return (*self).Object.len();
-    };
-    return 0;
   }
 
   pub fn is_null(*const self) bool {
-    return @enumTag(self) == TagNull;
+    return switch (*self) {
+      .Null => true,
+      _ => false,
+    };
   }
 
   pub fn is_bool(*const self) bool {
@@ -110,25 +108,31 @@ pub enum JsonValue {
   }
 
   pub fn is_array(*const self) bool {
-    return @enumTag(self) == TagArray;
+    return switch (*self) {
+      .Array(&items) => true,
+      _ => false,
+    };
   }
 
   pub fn is_object(*const self) bool {
-    return @enumTag(self) == TagObject;
+    return switch (*self) {
+      .Object(&obj) => true,
+      _ => false,
+    };
   }
 
   pub fn as_bool(*const self) Option[bool] {
-    if (@enumTag(self) != TagBool) {
-      return Option.None;
+    return switch (*self) {
+      .Bool(value) => Option.Some(value),
+      _ => Option.None,
     };
-    return Option.Some(self.Bool);
   }
 
   pub fn as_num(*const self) Option[String] {
-    if (@enumTag(self) != TagNum) {
-      return Option.None;
+    return switch (*self) {
+      .Num(&text) => Option.Some(text.clone()),
+      _ => Option.None,
     };
-    return Option.Some(self.Num.clone());
   }
 
   pub fn as_i64(*const self) Option[i64] {
@@ -148,59 +152,56 @@ pub enum JsonValue {
   }
 
   pub fn as_str(*const self) Option[String] {
-    if (@enumTag(self) != TagStr) {
-      return Option.None;
+    return switch (*self) {
+      .Str(&text) => Option.Some(text.clone()),
+      _ => Option.None,
     };
-    return Option.Some(self.Str.clone());
   }
 
   pub fn write_into(*const self, out: *String) {
-    let tag = @enumTag(self);
-    if (tag == TagNull) {
-      out.push_str("null");
-      return;
-    };
-    if (tag == TagBool) {
-      if (self.Bool) {
-        out.push_str("true");
-      } else {
-        out.push_str("false");
-      };
-      return;
-    };
-    if (tag == TagNum) {
-      self.Num.display(out);
-      return;
-    };
-    if (tag == TagStr) {
-      JsonValue.write_string(out, &self.Str);
-      return;
-    };
-    if (tag == TagArray) {
-      out.push('[');
-      let items = &self.Array;
-      let i: usize = 0;
-      while (i < (*items).len()) {
-        if (i != 0) {
-          out.push(',');
+    switch (*self) {
+      .Null => {
+        out.push_str("null");
+      },
+      .Bool(value) => {
+        if (value) {
+          out.push_str("true");
+        } else {
+          out.push_str("false");
         };
-        let elem = (*items).get_ptr(i).unwrap();
-        (*elem).write_into(out);
-        i += 1;
-      }
-      out.push(']');
-      return;
+      },
+      .Num(&text) => {
+        text.display(out);
+      },
+      .Str(&text) => {
+        JsonValue.write_string(out, text);
+      },
+      .Array(&items) => {
+        out.push('[');
+        let i: usize = 0;
+        while (i < items.len()) {
+          if (i != 0) {
+            out.push(',');
+          };
+          let elem = items.get_ptr(i).unwrap();
+          elem.write_into(out);
+          i += 1;
+        }
+        out.push(']');
+      },
+      .Object(&obj) => {
+        obj.write_into(out);
+      },
     };
-    let obj = &self.Object;
-    (*obj).write_into(out);
   }
 
-  pub fn write_string(out: *String, text: *String) {    let hex: []const char = "0123456789abcdef";
+  pub fn write_string(out: *String, text: *String) {
+    let hex: []const char = "0123456789abcdef";
     out.push('"');
 
     let i: usize = 0;
-    while (i < (*text).len()) {
-      let c = (*text).get(i).unwrap();
+    while (i < text.len()) {
+      let c = text.get(i).unwrap();
       if (c == '"') {
         out.push(@as(char, 92));
         out.push('"');
@@ -284,7 +285,7 @@ struct JsonObject {
       JsonValue.write_string(out, key);
       out.push(':');
       let value = self.get_at(i);
-      (*value).write_into(out);
+      value.write_into(out);
       i += 1;
     }
     out.push('}');
