@@ -1,0 +1,7 @@
+use std.crypto.sha256;
+
+fn main() i32 {
+  @println("{}", Sha256.hexdigest(""));
+  @println("{}", Sha256.hexdigest("abc"));
+  return 0;
+}
