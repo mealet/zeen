@@ -607,10 +607,26 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let zeen_main = self.functions[&main_fn];
         let ret_ty = self.program.functions[&main_fn].ret_ty;
 
-        let main_ty = self.context.i32_type().fn_type(&[], false);
+        let i32_ty = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let main_ty = i32_ty.fn_type(&[i32_ty.into(), ptr_ty.into()], false);
         let main = self.module.add_function("main", main_ty, None);
         let entry = self.context.append_basic_block(main, "entry");
         self.builder.position_at_end(entry);
+
+        let argc_global = self.module.add_global(i32_ty, None, "__zeen_argc");
+        argc_global.set_initializer(&i32_ty.const_zero());
+        let argv_global = self.module.add_global(ptr_ty, None, "__zeen_argv");
+        argv_global.set_initializer(&ptr_ty.const_null());
+
+        if let Some(argc) = main.get_nth_param(0)
+            && let Some(argv) = main.get_nth_param(1)
+        {
+            self.builder.build_store(argc_global.as_pointer_value(), argc).unwrap();
+            self.builder
+                .build_store(argv_global.as_pointer_value(), argv)
+                .unwrap();
+        }
 
         if let Some(init_fn_id) = self.program.init_globals_fn
             && let Some(init_fn) = self.functions.get(&init_fn_id)
