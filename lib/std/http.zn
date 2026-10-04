@@ -700,7 +700,7 @@ fn parse_request(head: *String, stream: *TcpStream) Result[Request, IoError] {
     return Result.Err(IoError.new(IoErrorKind.InvalidData, "empty request"));
   };
 
-  let request_line = String.from((*lines.get_ptr(0).unwrap()).trim_end());
+  let request_line = String.from(lines.get_ptr(0).unwrap().trim_end());
   let parts = request_line.split(' ');
 
   switch (parts.get_ptr(0)) {

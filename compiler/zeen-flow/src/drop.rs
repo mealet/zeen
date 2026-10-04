@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use zeen_mir::{BlockId, LocalId, LocalKind, MirFunction, MirStatement, Place};
+use zeen_mir::{BlockId, LocalId, MirFunction, MirStatement, Place};
 use zeen_resolve::DefId;
 use zeen_typecheck::result::TypeCheckResult;
 use zeen_types::{Type, TypeId, TypeInterner, VariantPayload};
@@ -305,9 +305,6 @@ pub fn collect_local_drops(
     drops: &mut DropSet,
 ) {
     let decl = function.local(local);
-    if decl.kind == LocalKind::Temporary {
-        return;
-    }
     if !type_needs_drop(interner, typecheck, decl.ty) {
         return;
     }

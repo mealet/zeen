@@ -591,9 +591,7 @@ impl<'ctx> DataFlow<'ctx> {
                     continue;
                 };
                 let info = &snapshot.locals[local.0 as usize];
-                if info.kind == LocalKind::Temporary
-                    || !drop::type_needs_drop(&self.typecheck.interner, self.typecheck, info.ty)
-                {
+                if !drop::type_needs_drop(&self.typecheck.interner, self.typecheck, info.ty) {
                     continue;
                 }
 
