@@ -773,7 +773,7 @@ implement[T] Sliceable : List[T] {
   }
 }
 
-/// Borrowing iterator over `List` elements, yields pointers.
+/// Borrowing `List` iterator yielding pointers.
 pub struct ListIter[T] {
   ptr: [*]T,
   len: usize,
@@ -814,7 +814,7 @@ implement[T] OwnedIterator : List[T] {
   }
 }
 
-/// Owning iterator over `List` elements (takes the buffer over), yields moves.
+/// Owning `List` iterator yielding moves.
 pub struct OwnedListIter[T] {
   ptr: [*]T,
   len: usize,

@@ -1,0 +1,4 @@
+one=1 snapshot=50 total=50
+try-read=true
+try-write=true
+inner=7

@@ -20,6 +20,19 @@ use std.c.windows.windef;
   pub extern fn TryEnterCriticalSection(cs: *WinCriticalSection) WinBOOL;
   pub extern fn LeaveCriticalSection(cs: *WinCriticalSection) void;
 
+  pub alias WinBOOLEAN = u8;
+
+  pub struct WinSrwLock {
+    pub ptr: *void,
+  }
+
+  pub extern fn AcquireSRWLockExclusive(lock: *WinSrwLock) void;
+  pub extern fn AcquireSRWLockShared(lock: *WinSrwLock) void;
+  pub extern fn TryAcquireSRWLockExclusive(lock: *WinSrwLock) WinBOOLEAN;
+  pub extern fn TryAcquireSRWLockShared(lock: *WinSrwLock) WinBOOLEAN;
+  pub extern fn ReleaseSRWLockExclusive(lock: *WinSrwLock) void;
+  pub extern fn ReleaseSRWLockShared(lock: *WinSrwLock) void;
+
   pub extern fn WaitForSingleObject(
     handle: WinHANDLE,
     ms: WinDWORD,

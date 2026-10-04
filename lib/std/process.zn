@@ -46,8 +46,7 @@ pub struct Process {
     return out;
   }
 
-  /// Zero-copy iterator over the arguments. Yields immutable slices
-  /// borrowed from the OS, do not modify them.
+  /// Zero-copy argument iterator; slices are OS-borrowed, do not modify.
   pub fn args_iter() ArgsIter {
     return ArgsIter.new();
   }
@@ -158,12 +157,12 @@ pub struct Output {
   pub stderr: String,
 }
 
-/// Owned read end of a child stdio pipe. Closes itself on drop.
+/// Owned read end of a child stdio pipe, closes on drop.
 pub struct PipeReader {
   pub fd: c_int,
   pub handle: *void,
 
-  /// Read everything to EOF, appending to `out`. Returns bytes read.
+  /// Read to EOF into `out`, returns bytes read.
   pub fn read_to_string(*self, out: *String) Result[usize, IoError] {
     @os[windows] {
       return read_handle_to_string(self.handle, out);
@@ -187,7 +186,7 @@ implement Drop : PipeReader {
   }
 }
 
-/// Owned write end of a child stdio pipe. Closes itself on drop.
+/// Owned write end of a child stdio pipe, closes on drop.
 pub struct PipeWriter {
   pub fd: c_int,
   pub handle: *void,
@@ -216,8 +215,7 @@ implement Drop : PipeWriter {
   }
 }
 
-/// A running or finished child process. Pipes and handles close on drop;
-/// call `wait` to collect the exit status and avoid zombies.
+/// A running or finished child process; pipes close on drop, `wait` reaps it.
 pub struct Child {
   pub pid: i32,
   pub handle: *void,
@@ -424,20 +422,14 @@ implement Drop : Child {
   }
 }
 
-/// One environment override: `remove` deletes the key, otherwise `value` wins.
+/// Single environment override; `remove` deletes the key.
 struct CommandEnv {
   pub key: String,
   pub value: String,
   pub remove: bool,
 }
 
-/// A pending program invocation, in the shape of Rust `std::process::Command`.
-///
-/// Builder methods take `self` by value and return it, so calls chain on
-/// temporaries: `Command.new("ls").arg("-la").status()`. A bare
-/// `cmd.arg("x");` statement moves `cmd` away, rebind instead:
-/// `cmd = cmd.arg("x");`. Terminals (`spawn`, `status`, `output`) borrow,
-/// so one command spawns many children.
+/// Pending program invocation; builders move `self`, chain or rebind (`cmd = cmd.arg("x");`).
 pub struct Command {
   pub program: String,
   pub argv: List[String],
@@ -556,7 +548,7 @@ pub struct Command {
     }
   }
 
-  /// Spawn, wait to completion, discard output. Piped streams are closed unread.
+  /// Spawn, wait, discard output (piped streams close unread).
   pub fn status(*const self) Result[ExitStatus, IoError] {
     let spawned = self.spawn();
 

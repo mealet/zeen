@@ -174,7 +174,7 @@ pub enum JsonValue {
     return text.unwrap().parse_f64();
   }
 
-  /// String payload, cloned. `None` outside strings.
+  /// Cloned string payload, `None` outside strings.
   pub fn as_str(*const self) Option[String] {
     return switch (*self) {
       .Str(&text) => Option.Some(text.clone()),
