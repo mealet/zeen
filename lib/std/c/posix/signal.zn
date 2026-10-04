@@ -1,6 +1,5 @@
 use std.c.types;
 
-// Process signals, shared across POSIX targets.
 pub const SIGHUP: c_int = 1;
 pub const SIGINT: c_int = 2;
 pub const SIGQUIT: c_int = 3;

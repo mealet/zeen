@@ -103,7 +103,7 @@ implement[T] Drop : Mutex[T] {
   }
 }
 
-/// Held mutex lock, unlocks on drop. Bind to a named local; temporaries keep the lock held.
+/// Held mutex, bind in scope
 pub struct MutexGuard[T] {
   lock: *OsMutex,
   got: *T,
@@ -131,13 +131,12 @@ implement[T] Drop : MutexGuard[T] {
   }
 }
 
-/// Reader-writer lock with shared reads and exclusive writes.
+/// Shared read, exclusive write lock
 pub struct RwLock[T] {
   os: OsRwLock,
   data: T,
   open: bool,
 
-  /// Create an unlocked rwlock holding `value`.
   pub fn new(value: T) Self {
     @os[windows] {
       return RwLock { .os = WinSrwLock { .ptr = nullptr }, .data = value, .open = true };
@@ -153,7 +152,6 @@ pub struct RwLock[T] {
     }
   }
 
-  /// Lock for shared reading, blocking until acquired.
   pub fn read(*self) RwReadGuard[T] {
     @os[windows] {
       AcquireSRWLockShared(&self.os);
@@ -168,7 +166,6 @@ pub struct RwLock[T] {
     return RwReadGuard { .lock = &self.os, .got = &self.data };
   }
 
-  /// Lock for shared reading without blocking, `None` when a writer holds it.
   pub fn try_read(*self) Option[RwReadGuard[T]] {
     @os[windows] {
       let ok = TryAcquireSRWLockShared(&self.os);
@@ -191,7 +188,6 @@ pub struct RwLock[T] {
     return Option.Some(RwReadGuard { .lock = &self.os, .got = &self.data });
   }
 
-  /// Lock for exclusive writing, blocking until acquired.
   pub fn write(*self) RwWriteGuard[T] {
     @os[windows] {
       AcquireSRWLockExclusive(&self.os);
@@ -206,7 +202,6 @@ pub struct RwLock[T] {
     return RwWriteGuard { .lock = &self.os, .got = &self.data };
   }
 
-  /// Lock for exclusive writing without blocking, `None` when held.
   pub fn try_write(*self) Option[RwWriteGuard[T]] {
     @os[windows] {
       let ok = TryAcquireSRWLockExclusive(&self.os);
@@ -229,7 +224,6 @@ pub struct RwLock[T] {
     return Option.Some(RwWriteGuard { .lock = &self.os, .got = &self.data });
   }
 
-  /// Consume the rwlock, returning the data.
   pub fn into_inner(self) T {
     @os[windows] {
     } else {
@@ -257,7 +251,7 @@ implement[T] Drop : RwLock[T] {
   }
 }
 
-/// Held shared read lock, releases on drop. Bind to a named local; temporaries keep the lock held.
+/// Held shared read, bind in scope
 pub struct RwReadGuard[T] {
   lock: *OsRwLock,
   got: *T,
@@ -285,7 +279,7 @@ implement[T] Drop : RwReadGuard[T] {
   }
 }
 
-/// Held exclusive write lock, releases on drop. Bind to a named local; temporaries keep the lock held.
+/// Held exclusive write, bind in scope
 pub struct RwWriteGuard[T] {
   lock: *OsRwLock,
   got: *T,

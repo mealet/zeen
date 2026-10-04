@@ -92,7 +92,6 @@ pub enum JsonValue {
     };
   }
 
-  /// True for null values.
   pub fn is_null(*const self) bool {
     return switch (*self) {
       .Null => true,
@@ -100,7 +99,6 @@ pub enum JsonValue {
     };
   }
 
-  /// True for booleans.
   pub fn is_bool(*const self) bool {
     return switch (*self) {
       .Bool(&_) => true,
@@ -108,7 +106,6 @@ pub enum JsonValue {
     };
   }
 
-  /// True for numbers.
   pub fn is_num(*const self) bool {
     return switch (*self) {
       .Num(&_) => true,
@@ -116,7 +113,6 @@ pub enum JsonValue {
     };
   }
 
-  /// True for strings.
   pub fn is_str(*const self) bool {
     return switch (*self) {
       .Str(&_) => true,
@@ -124,7 +120,6 @@ pub enum JsonValue {
     };
   }
 
-  /// True for arrays.
   pub fn is_array(*const self) bool {
     return switch (*self) {
       .Array(&_) => true,
@@ -132,7 +127,6 @@ pub enum JsonValue {
     };
   }
 
-  /// True for objects.
   pub fn is_object(*const self) bool {
     return switch (*self) {
       .Object(&_) => true,
@@ -140,7 +134,6 @@ pub enum JsonValue {
     };
   }
 
-  /// Boolean payload, `None` outside booleans.
   pub fn as_bool(*const self) Option[bool] {
     return switch (*self) {
       .Bool(value) => Option.Some(value),
@@ -148,7 +141,6 @@ pub enum JsonValue {
     };
   }
 
-  /// Number text, `None` outside numbers.
   pub fn as_num(*const self) Option[String] {
     return switch (*self) {
       .Num(&text) => Option.Some(text.clone()),
@@ -156,7 +148,6 @@ pub enum JsonValue {
     };
   }
 
-  /// Number parsed as `i64`, `None` outside numbers or on overflow.
   pub fn as_i64(*const self) Option[i64] {
     let text = self.as_num();
     if (text.is_none()) {
@@ -165,7 +156,6 @@ pub enum JsonValue {
     return text.unwrap().parse_i64();
   }
 
-  /// Number parsed as `f64`, `None` outside numbers or on overflow.
   pub fn as_f64(*const self) Option[f64] {
     let text = self.as_num();
     if (text.is_none()) {
@@ -174,7 +164,6 @@ pub enum JsonValue {
     return text.unwrap().parse_f64();
   }
 
-  /// Cloned string payload, `None` outside strings.
   pub fn as_str(*const self) Option[String] {
     return switch (*self) {
       .Str(&text) => Option.Some(text.clone()),
@@ -182,7 +171,6 @@ pub enum JsonValue {
     };
   }
 
-  /// Append compact JSON to `out`.
   pub fn write_into(*const self, out: *String) {
     switch (*self) {
       .Null => {
@@ -220,7 +208,6 @@ pub enum JsonValue {
     };
   }
 
-  /// Append a quoted, escaped string to `out`.
   pub fn write_string(out: *String, text: *String) {
     let hex: []const char = "0123456789abcdef";
     let backslash = @as(char, 92);
@@ -272,12 +259,10 @@ struct JsonObject {
   map: HashMap[String, JsonValue],
   keys: List[String],
 
-  /// Empty object.
   pub fn new() Self {
     return JsonObject { .map = HashMap#[String, JsonValue].new(), .keys = List#[String].new() };
   }
 
-  /// Insert or replace a member, keeping first-insertion order.
   pub fn insert(*self, key: String, value: JsonValue) {
     if (!self.map.contains_key(&key)) {
       self.keys.push(key.clone());
@@ -285,29 +270,24 @@ struct JsonObject {
     let _ = self.map.insert(key, value);
   }
 
-  /// Member by key, `None` when absent.
   pub fn get(*const self, key: []const char) Option[*const JsonValue] {
     let owned = String.from(key);
     return self.map.get(&owned);
   }
 
-  /// Key at insertion index.
   pub fn key_at(*const self, index: usize) *String {
     return self.keys.get_ptr(index).unwrap();
   }
 
-  /// Value at insertion index.
   pub fn get_at(*const self, index: usize) *const JsonValue {
     let key = self.key_at(index);
     return self.map.get(key).unwrap();
   }
 
-  /// Member count.
   pub fn len(*const self) usize {
     return self.keys.len();
   }
 
-  /// Append `{...}` to `out`.
   pub fn write_into(*const self, out: *String) {
     out.push('{');
     let i: usize = 0;

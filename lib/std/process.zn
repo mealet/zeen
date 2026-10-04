@@ -46,7 +46,6 @@ pub struct Process {
     return out;
   }
 
-  /// Zero-copy argument iterator; slices are OS-borrowed, do not modify.
   pub fn args_iter() ArgsIter {
     return ArgsIter.new();
   }
@@ -114,24 +113,22 @@ implement Iterator : ArgsIter {
   }
 }
 
-/// Standard stream configuration for a child process.
+/// Child stdio config
 pub enum Stdio {
   Piped,
   Inherit,
   Null,
 }
 
-/// Termination report of a child process.
+/// Child exit report
 pub struct ExitStatus {
   pub exit_code: i32,
   pub term_signal: i32,
 
-  /// True when the process exited with code zero.
   pub fn success(*const self) bool {
     return self.term_signal == 0 && self.exit_code == 0;
   }
 
-  /// Exit code, `None` when killed by a signal.
   pub fn code(*const self) Option[i32] {
     if (self.term_signal != 0) {
       return Option.None;
@@ -140,7 +137,6 @@ pub struct ExitStatus {
     return Option.Some(self.exit_code);
   }
 
-  /// Killing signal number, `None` on normal exit.
   pub fn signal(*const self) Option[i32] {
     if (self.term_signal == 0) {
       return Option.None;
@@ -150,19 +146,18 @@ pub struct ExitStatus {
   }
 }
 
-/// Captured output of a finished child process.
+/// Finished child output
 pub struct Output {
   pub status: ExitStatus,
   pub stdout: String,
   pub stderr: String,
 }
 
-/// Owned read end of a child stdio pipe, closes on drop.
+/// Owned pipe read end, closes on drop
 pub struct PipeReader {
   pub fd: c_int,
   pub handle: *void,
 
-  /// Read to EOF into `out`, returns bytes read.
   pub fn read_to_string(*self, out: *String) Result[usize, IoError] {
     @os[windows] {
       return read_handle_to_string(self.handle, out);
@@ -186,12 +181,11 @@ implement Drop : PipeReader {
   }
 }
 
-/// Owned write end of a child stdio pipe, closes on drop.
+/// Owned pipe write end, closes on drop
 pub struct PipeWriter {
   pub fd: c_int,
   pub handle: *void,
 
-  /// Write the whole buffer, retrying short writes.
   pub fn write_all(*self, buf: []const char) Result[void, IoError] {
     @os[windows] {
       return write_handle_all(self.handle, buf);
@@ -215,7 +209,7 @@ implement Drop : PipeWriter {
   }
 }
 
-/// A running or finished child process; pipes close on drop, `wait` reaps it.
+/// Child handle, wait reaps it
 pub struct Child {
   pub pid: i32,
   pub handle: *void,
@@ -226,12 +220,10 @@ pub struct Child {
   pub win_out: *void,
   pub win_err: *void,
 
-  /// Process id.
   pub fn id(*const self) i32 {
     return self.pid;
   }
 
-  /// Take the piped stdin writer, `None` unless `stdin(Stdio.Piped)`.
   pub fn take_stdin(*self) Option[PipeWriter] {
     @os[windows] {
       if (self.win_in == nullptr) {
@@ -254,7 +246,6 @@ pub struct Child {
     }
   }
 
-  /// Take the piped stdout reader, `None` unless `stdout(Stdio.Piped)`.
   pub fn take_stdout(*self) Option[PipeReader] {
     @os[windows] {
       if (self.win_out == nullptr) {
@@ -277,7 +268,6 @@ pub struct Child {
     }
   }
 
-  /// Take the piped stderr reader, `None` unless `stderr(Stdio.Piped)`.
   pub fn take_stderr(*self) Option[PipeReader] {
     @os[windows] {
       if (self.win_err == nullptr) {
@@ -300,7 +290,6 @@ pub struct Child {
     }
   }
 
-  /// Wait for the child to finish, reporting how it terminated.
   pub fn wait(*self) Result[ExitStatus, IoError] {
     @os[windows] {
       let code: WinDWORD = 0;
@@ -336,7 +325,6 @@ pub struct Child {
     }
   }
 
-  /// Poll the child without blocking, `None` while it still runs.
   pub fn try_wait(*self) Result[Option[ExitStatus], IoError] {
     @os[windows] {
       let code: WinDWORD = 0;
@@ -375,7 +363,6 @@ pub struct Child {
     }
   }
 
-  /// Ask the child to terminate (SIGTERM on posix).
   pub fn kill(*self) Result[void, IoError] {
     @os[windows] {
       if (TerminateProcess(self.handle, 1) == WinFALSE) {
@@ -422,14 +409,14 @@ implement Drop : Child {
   }
 }
 
-/// Single environment override; `remove` deletes the key.
+/// Single env override, remove deletes
 struct CommandEnv {
   pub key: String,
   pub value: String,
   pub remove: bool,
 }
 
-/// Pending program invocation; builders move `self`, chain or rebind (`cmd = cmd.arg("x");`).
+/// Pending spawn, chain or rebind builders
 pub struct Command {
   pub program: String,
   pub argv: List[String],
@@ -441,7 +428,6 @@ pub struct Command {
   pub stdout_mode: Stdio,
   pub stderr_mode: Stdio,
 
-  /// Start building a command for `program` (PATH search on posix).
   pub fn new(program: []const char) Self {
     return Command {
       .program = String.from(program),
@@ -456,14 +442,12 @@ pub struct Command {
     };
   }
 
-  /// Append one argument.
   pub fn arg(self, value: []const char) Self {
     self.argv.push(String.from(value));
 
     return self;
   }
 
-  /// Append every argument from the list.
   pub fn args(self, values: *const List[String]) Self {
     let i: usize = 0;
 
@@ -476,7 +460,6 @@ pub struct Command {
     return self;
   }
 
-  /// Set an environment variable for the child.
   pub fn env(self, key: []const char, value: []const char) Self {
     self.envs.push(CommandEnv {
       .key = String.from(key),
@@ -487,7 +470,6 @@ pub struct Command {
     return self;
   }
 
-  /// Remove an environment variable for the child.
   pub fn env_remove(self, key: []const char) Self {
     self.envs.push(CommandEnv {
       .key = String.from(key),
@@ -498,14 +480,12 @@ pub struct Command {
     return self;
   }
 
-  /// Start the child with an empty environment.
   pub fn env_clear(self) Self {
     self.env_cleared = true;
 
     return self;
   }
 
-  /// Run the child with this working directory.
   pub fn current_dir(self, dir: []const char) Self {
     self.cwd = String.from(dir);
     self.has_cwd = true;
@@ -513,33 +493,24 @@ pub struct Command {
     return self;
   }
 
-  /// Configure the child stdin.
   pub fn stdin(self, mode: Stdio) Self {
     self.stdin_mode = mode;
 
     return self;
   }
 
-  /// Configure the child stdout.
   pub fn stdout(self, mode: Stdio) Self {
     self.stdout_mode = mode;
 
     return self;
   }
 
-  /// Configure the child stderr.
   pub fn stderr(self, mode: Stdio) Self {
     self.stderr_mode = mode;
 
     return self;
   }
 
-  /// Spawn the child without waiting for it.
-  ///
-  /// Possible IoError variants:
-  /// * IoErrorKind.NotFound
-  /// * IoErrorKind.PermissionDenied
-  /// * IoErrorKind.Uncategorized
   pub fn spawn(*const self) Result[Child, IoError] {
     @os[windows] {
       return spawn_windows(self);
@@ -548,7 +519,6 @@ pub struct Command {
     }
   }
 
-  /// Spawn, wait, discard output (piped streams close unread).
   pub fn status(*const self) Result[ExitStatus, IoError] {
     let spawned = self.spawn();
 
@@ -559,7 +529,6 @@ pub struct Command {
     return spawned.unwrap().wait();
   }
 
-  /// Spawn, capture piped stdout/stderr to completion.
   pub fn output(*self) Result[Output, IoError] {
     self.stdout_mode = Stdio.Piped;
     self.stderr_mode = Stdio.Piped;
@@ -648,7 +617,6 @@ pub struct Command {
   }
 }
 
-/// Null terminated copy of text for C calls.
 fn cstr(text: []const char) String {
   let s = String.from(text);
 
@@ -675,7 +643,6 @@ fn streq(a: []const char, b: []const char) bool {
   return true;
 }
 
-/// True when the command overrides the environment at all.
 fn cmd_has_env_changes(cmd: *const Command) bool {
   return (*cmd).env_cleared || (*cmd).envs.len() != 0;
 }
@@ -744,7 +711,6 @@ fn overridden_after(cmd: *const Command, from: usize, key: []const char) bool {
   return false;
 }
 
-/// Inherited variables minus removals and overrides, then explicit entries.
 fn merged_env(cmd: *const Command) List[String] {
   let out = List#[String].new();
 
@@ -795,7 +761,6 @@ fn merged_env(cmd: *const Command) List[String] {
 }
 
 @os[linux | android | darwin | freebsd] {
-  /// Resolve `program` through PATH, absolute when it holds a slash.
   fn find_program(program: []const char) Option[String] {
     let has_slash = false;
     let si: usize = 0;

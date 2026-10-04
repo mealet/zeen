@@ -24,7 +24,6 @@ use std.c.windows.windef;
   pub const FILE_ATTRIBUTE_NORMAL: WinDWORD = 0x00000080;
   pub const FILE_FLAG_DELETE_ON_CLOSE: WinDWORD = 0x04000000;
 
-  // Handle inheritance (winbase.h).
   pub const HANDLE_FLAG_INHERIT: WinDWORD = 0x00000001;
   pub const HANDLE_FLAG_PROTECT_FROM_CLOSE: WinDWORD = 0x00000002;
 
