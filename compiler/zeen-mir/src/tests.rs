@@ -1236,9 +1236,10 @@ fn generic_typed_capture_is_rejected() {
     );
 }
 
-// A heap-env closure owns its captured block: any fat value (Fn or FnOnce)
-// must get a synthesized `$fatdrop#N` drop function that `free`s the block,
-// and the `free` extern must be declared.
+#[test]
+fn deref_load_of_copy_value_is_allowed() {
+    compile_mir_ok("fn main() i32 { let x: i32 = 5; let p = &x; let c: i32 = (*p); return c; }");
+}
 
 #[test]
 fn escaping_fnonce_closure_gets_fat_drop_function() {

@@ -258,3 +258,50 @@ fn bounded_copy_impl_keeps_copy_instances_copyable() {
         "unexpected use-after-move for the Copy `Pair[i32]`, got {errors:?}"
     );
 }
+
+fn has_aliased_drop(errors: &[FlowError]) -> bool {
+    errors
+        .iter()
+        .any(|e| matches!(e, FlowError::AliasedDrop { .. }))
+}
+
+#[test]
+fn named_deref_copy_of_drop_value_is_rejected() {
+    let errors = flow_errors(
+        "use std.string; \
+         fn main() i32 { \
+             let s = String.from(\"hi\"); \
+             let p = &s; \
+             let c: String = (*p); \
+             return 0; \
+         }",
+    );
+
+    assert!(
+        has_aliased_drop(&errors),
+        "expected aliased-drop error, got {errors:?}"
+    );
+}
+
+#[test]
+fn take_then_free_is_accepted() {
+    let errors = flow_errors(
+        "use std.string; \
+         use std.alloc; \
+         fn main() i32 { \
+             let ptr = @as(*String, Allocator.alloc(@sizeof(String))); \
+             *ptr = String.from(\"hi\"); \
+             let owned: String = *ptr; \
+             Allocator.dealloc(@as(*void, ptr)); \
+             if (owned.len() != 2) { \
+               return 1; \
+             }; \
+             return 0; \
+         }",
+    );
+
+    assert!(
+        !has_aliased_drop(&errors),
+        "take-then-free must not report aliased-drop, got {errors:?}"
+    );
+}
