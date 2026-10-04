@@ -216,9 +216,6 @@ fn returning_global_ref_is_allowed() {
 
 #[test]
 fn bounded_copy_impl_leaves_non_copy_instances_move_only() {
-    // `implement[T: Copy] Copy : Pair[T]` must only make `Pair[T]` copyable
-    // when `T` is itself Copy; a double move of `Pair[Foo]` (Foo not Copy)
-    // must be rejected.
     let errors = flow_errors(
         "struct Pair[T] { pub value: T } \
          implement[T: Copy] Copy : Pair[T] {} \
@@ -240,7 +237,6 @@ fn bounded_copy_impl_leaves_non_copy_instances_move_only() {
 
 #[test]
 fn bounded_copy_impl_keeps_copy_instances_copyable() {
-    // The same bounded impl must still allow double use when `T` is Copy.
     let errors = flow_errors(
         "struct Pair[T] { pub value: T } \
          implement[T: Copy] Copy : Pair[T] {} \

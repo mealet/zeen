@@ -50,9 +50,7 @@ pub struct DataFlow<'ctx> {
     resolution: &'ctx ResolutionResult,
     rodeo: Rc<RefCell<Rodeo>>,
 
-    /// Locals holding values copied out of raw pointers, with source tokens.
     tainted: HashMap<LocalId, Taint>,
-    /// Whole-local copy sources, for resolving dealloc arguments.
     copies: HashMap<LocalId, Place>,
 
     /// In-progress state of the currently analyzed function.
@@ -212,8 +210,6 @@ impl<'ctx> DataFlow<'ctx> {
         self.insert_drops(function_id);
     }
 
-    /// Records whole-local copy sources for dealloc-argument resolution.
-    /// Each temp is defined once, so a single syntactic pass is exact.
     fn record_copies(&mut self, blocks: &[BasicBlock]) {
         for block in blocks {
             for stmt in &block.statements {
@@ -274,8 +270,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Maintains raw-pointer alias taint on whole-local writes. Partial
-    /// writes keep the base tainted once tainted.
     fn track_taint(&mut self, place: &Place, rvalue: &Rvalue, source: &Option<Source>) {
         if !place.projection.is_empty() {
             let taint = match rvalue {
@@ -363,8 +357,6 @@ impl<'ctx> DataFlow<'ctx> {
         };
     }
 
-    /// Whether a call target releases heap storage: `Allocator.dealloc`
-    /// by owner-qualified name. Anything else keeps taint.
     fn is_dealloc_call(&self, target: MirFunctionId) -> bool {
         let func = match self.program.functions.get(&target) {
             Some(func) => func,

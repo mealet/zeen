@@ -15,9 +15,6 @@ pub struct DropSet {
     pub places: Vec<Place>,
 }
 
-/// A value copied out of a raw pointer: dropping it while any source token
-/// is still owned elsewhere would free twice. An empty token list means the
-/// value can never be proven singly owned.
 #[derive(Debug, Clone)]
 pub struct Taint {
     pub tokens: Vec<Place>,
@@ -361,9 +358,6 @@ pub fn collect_local_drops(
     }
 }
 
-/// A tainted local (value copied out of a raw pointer) may be dropped only
-/// after every source token was released. Reports `AliasedDrop` and stops
-/// the drop when any token is still owned elsewhere.
 fn check_taint(
     local: LocalId,
     state: &FunctionState,

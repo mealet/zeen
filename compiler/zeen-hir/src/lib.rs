@@ -702,7 +702,7 @@ impl<'res> HirLowering<'res> {
             ExpressionKind::Ident { .. } => {
                 let resolution = self.resolution.resolution_of_expr(expr);
 
-                let base = match resolution {
+                match resolution {
                     Some(Resolution::Def(id)) => HirExprKind::VarRef {
                         def: id,
                         generic_args: self.generic_args_of_expr(expr),
@@ -713,9 +713,7 @@ impl<'res> HirLowering<'res> {
                     Some(Resolution::Builtin) | Some(Resolution::Error) | None => {
                         HirExprKind::Error
                     }
-                };
-
-                base
+                }
             }
 
             ExpressionKind::Binary { lhs, rhs, op } => HirExprKind::Binary {

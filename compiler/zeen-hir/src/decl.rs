@@ -7,14 +7,11 @@ use std::rc::Rc;
 
 use crate::{HirId, stmt::HirStmt, types::HirTypeExpr};
 
-/// Declaration in HIR (High Level Representation) version
 #[derive(Debug, Clone)]
 pub struct HirDecl {
     pub id: HirId,
     pub def_id: DefId,
     pub kind: HirDeclKind,
-
-    /// Source contains span of Declaration and ref to the current module source code
     pub source: Source,
 }
 
@@ -65,9 +62,6 @@ pub struct HirFn {
     pub is_extern: bool,
 
     pub self_param: Option<DefId>,
-
-    /// For nested functions: `DefId` of the enclosing function. Used to build
-    /// `<parent>-><name>` MIR/LLVM symbols.
     pub parent_fn: Option<DefId>,
 }
 
@@ -155,9 +149,9 @@ pub struct HirEnumVariant {
 
 #[derive(Debug, Clone)]
 pub enum HirEnumVariantPayload {
-    /// `b: i32` - a single typed value.
+    /// `b: i32` - a single typed value
     Single(Rc<HirTypeExpr>),
-    /// `c: { fields }` - an anonymous struct payload.
+    /// `c: { fields }` - an anonymous struct payload
     Anonymous {
         def_id: DefId,
         fields: Vec<HirField>,

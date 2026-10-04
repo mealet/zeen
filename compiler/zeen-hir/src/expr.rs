@@ -90,13 +90,11 @@ pub enum HirExprKind {
     },
     Type(Rc<HirTypeExpr>),
 
-    /// Anonymous function expression `fn(params) ret { body }`.
     Closure {
         def_id: DefId,
         def: Rc<HirFn>,
     },
 
-    /// Range expression: `a..b`, `a..=b`, `a..`, `..b`, `..=b`, `..`.
     Range {
         start: Option<Rc<HirExpr>>,
         end: Option<Rc<HirExpr>>,
