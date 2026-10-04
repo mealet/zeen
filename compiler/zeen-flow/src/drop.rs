@@ -15,7 +15,7 @@ pub struct DropSet {
     pub places: Vec<Place>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Taint {
     pub tokens: Vec<Place>,
     pub load: Option<Source>,

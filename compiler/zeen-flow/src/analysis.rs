@@ -127,6 +127,27 @@ impl<'ctx> DataFlow<'ctx> {
         self.tainted.clear();
         self.copies.clear();
 
+        {
+            let blocks = self
+                .program
+                .functions
+                .get(&function_id)
+                .map(|function| function.blocks.clone())
+                .unwrap_or_default();
+            self.record_copies(&blocks);
+        }
+        self.run_taint_fixpoint(function_id);
+        {
+            let DataFlow {
+                program,
+                typecheck,
+                tainted,
+                ..
+            } = &mut *self;
+            let function = program.functions.get_mut(&function_id).unwrap();
+            crate::liveness::insert_prompt_drops(function, &typecheck.interner, typecheck, tainted);
+        }
+
         // Take an owned snapshot of the function's shapes.
         let snapshot = {
             let function = self.program.functions.get(&function_id).unwrap();
@@ -161,8 +182,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
 
         let successors = compute_successors(snapshot);
-
-        self.record_copies(&blocks);
 
         self.block_in_states
             .insert(entry_block, self.current.clone());
@@ -237,11 +256,51 @@ impl<'ctx> DataFlow<'ctx> {
             }
         }
     }
-
     fn strip_operand_place(&self, operand: &Operand) -> Option<Place> {
         match operand {
             Operand::Copy(place, _) | Operand::Move(place, _) => Some(place.clone()),
             Operand::Constant(_, _) => None,
+        }
+    }
+
+    fn run_taint_fixpoint(&mut self, function_id: MirFunctionId) {
+        for _ in 0..64 {
+            let before = self.tainted.clone();
+            let blocks = self
+                .program
+                .functions
+                .get(&function_id)
+                .map(|function| function.blocks.clone())
+                .unwrap_or_default();
+            for block in &blocks {
+                for stmt in &block.statements {
+                    match stmt {
+                        MirStatement::Assign {
+                            place,
+                            rvalue,
+                            source,
+                        } => {
+                            self.track_taint(function_id, place, rvalue, source);
+                        }
+                        MirStatement::StorageLive(local) => {
+                            self.tainted.remove(local);
+                        }
+                        _ => {}
+                    };
+                }
+                match &block.terminator {
+                    Terminator::Call { destination, .. }
+                    | Terminator::MacroCall { destination, .. }
+                        if destination.projection.is_empty() =>
+                    {
+                        self.tainted.remove(&destination.local);
+                    }
+                    _ => {}
+                };
+            }
+            if self.tainted == before {
+                break;
+            };
         }
     }
 
@@ -263,14 +322,27 @@ impl<'ctx> DataFlow<'ctx> {
         self.tainted.get(&root.local).cloned()
     }
 
-    fn taint_name(&self, local: LocalId) -> SmolStr {
-        match self.local_name_and_source(local) {
-            Some((name, _)) => name,
+    fn taint_name(&self, function_id: MirFunctionId, local: LocalId) -> SmolStr {
+        let name = self
+            .program
+            .functions
+            .get(&function_id)
+            .and_then(|function| function.locals.get(local.0 as usize))
+            .and_then(|decl| decl.name)
+            .map(|name| self.rodeo.borrow().resolve(&name).to_string());
+        match name {
+            Some(name) => SmolStr::from(name),
             None => SmolStr::from("value"),
         }
     }
 
-    fn track_taint(&mut self, place: &Place, rvalue: &Rvalue, source: &Option<Source>) {
+    fn track_taint(
+        &mut self,
+        function_id: MirFunctionId,
+        place: &Place,
+        rvalue: &Rvalue,
+        source: &Option<Source>,
+    ) {
         if !place.projection.is_empty() {
             let taint = match rvalue {
                 Rvalue::Use(operand) | Rvalue::Cast { operand, .. } => self.tainted_source(operand),
@@ -280,7 +352,7 @@ impl<'ctx> DataFlow<'ctx> {
                     .map(|_| Taint {
                         tokens: Vec::new(),
                         load: source.clone(),
-                        name: self.taint_name(place.local),
+                        name: self.taint_name(function_id, place.local),
                     }),
                 _ => None,
             };
@@ -313,7 +385,7 @@ impl<'ctx> DataFlow<'ctx> {
                     Taint {
                         tokens,
                         load: source.clone(),
-                        name: self.taint_name(local),
+                        name: self.taint_name(function_id, local),
                     },
                 );
             }
@@ -325,7 +397,7 @@ impl<'ctx> DataFlow<'ctx> {
                             Taint {
                                 tokens: taint.tokens.clone(),
                                 load: taint.load.clone(),
-                                name: self.taint_name(local),
+                                name: self.taint_name(function_id, local),
                             },
                         );
                     }
@@ -344,7 +416,7 @@ impl<'ctx> DataFlow<'ctx> {
                     Taint {
                         tokens: Vec::new(),
                         load: source.clone(),
-                        name: self.taint_name(local),
+                        name: self.taint_name(function_id, local),
                     },
                 );
             }
@@ -412,7 +484,6 @@ impl<'ctx> DataFlow<'ctx> {
                 }
 
                 self.write_destination(place);
-                self.track_taint(place, rvalue, source);
             }
             MirStatement::Drop(place) => {
                 self.current_source = None;
@@ -424,7 +495,6 @@ impl<'ctx> DataFlow<'ctx> {
             }
             MirStatement::StorageLive(local) => {
                 self.current_source = None;
-                self.tainted.remove(local);
                 self.current
                     .set_state(*local, LocalState::Whole(ValueState::Uninitialized));
             }
@@ -474,9 +544,6 @@ impl<'ctx> DataFlow<'ctx> {
                     self.current.mark_freed(root);
                 };
                 self.write_destination(destination);
-                if destination.projection.is_empty() {
-                    self.tainted.remove(&destination.local);
-                }
             }
             Terminator::MacroCall {
                 args,
@@ -489,9 +556,6 @@ impl<'ctx> DataFlow<'ctx> {
                     self.consume_operand(arg);
                 }
                 self.write_destination(destination);
-                if destination.projection.is_empty() {
-                    self.tainted.remove(&destination.local);
-                }
             }
             Terminator::Return(operand) => {
                 self.current_source = None;

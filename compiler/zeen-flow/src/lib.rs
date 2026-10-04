@@ -10,6 +10,7 @@ use crate::analysis::DataFlow;
 pub mod analysis;
 pub mod drop;
 pub mod error;
+pub mod liveness;
 pub mod result;
 pub mod state;
 

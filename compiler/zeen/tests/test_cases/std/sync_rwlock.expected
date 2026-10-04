@@ -1,4 +1,6 @@
 one=1 snapshot=50 total=50
 try-read=true
 try-write=true
+inline-try=true
+after-inline=true
 inner=7

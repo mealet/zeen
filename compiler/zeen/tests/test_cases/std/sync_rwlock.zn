@@ -51,6 +51,9 @@ fn main() i32 {
     @println("try-write={}", w.is_some());
   };
 
+  @println("inline-try={}", m.get_mut().try_write().is_some());
+  @println("after-inline={}", m.get_mut().try_write().is_some());
+
   let solo = RwLock.new(7);
 
   @println("inner={}", solo.into_inner());
