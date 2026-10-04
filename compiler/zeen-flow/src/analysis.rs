@@ -8,6 +8,7 @@ use lasso::{Rodeo, Spur};
 use miette::{Diagnostic, Severity};
 use smol_str::SmolStr;
 use zeen_ast::Source;
+use zeen_ast::expressions::UnaryOp;
 use zeen_mir::{
     BasicBlock, BlockId, CallTarget, LocalId, LocalKind, MirFunctionId, MirProgram, MirStatement,
     Operand, Place, PlaceElem, Rvalue, Terminator, place_is_global,
@@ -17,7 +18,7 @@ use zeen_typecheck::result::TypeCheckResult;
 use zeen_types::{Type, TypeId};
 
 use crate::{
-    drop::{self, DropSet},
+    drop::{self, DropSet, Taint},
     error::FlowError,
     result::FlowResult,
     state::{FunctionState, LocalState, ReadOutcome, ValueState},
@@ -46,7 +47,13 @@ struct LocalInfo {
 pub struct DataFlow<'ctx> {
     program: &'ctx mut MirProgram,
     typecheck: &'ctx mut TypeCheckResult,
+    resolution: &'ctx ResolutionResult,
     rodeo: Rc<RefCell<Rodeo>>,
+
+    /// Locals holding values copied out of raw pointers, with source tokens.
+    tainted: HashMap<LocalId, Taint>,
+    /// Whole-local copy sources, for resolving dealloc arguments.
+    copies: HashMap<LocalId, Place>,
 
     /// In-progress state of the currently analyzed function.
     current: FunctionState,
@@ -77,13 +84,16 @@ impl<'ctx> DataFlow<'ctx> {
     pub fn new(
         program: &'ctx mut MirProgram,
         typecheck: &'ctx mut TypeCheckResult,
-        _resolution: &'ctx ResolutionResult,
+        resolution: &'ctx ResolutionResult,
         rodeo: Rc<RefCell<Rodeo>>,
     ) -> Self {
         Self {
             program,
             typecheck,
+            resolution,
             rodeo,
+            tainted: HashMap::new(),
+            copies: HashMap::new(),
             current: FunctionState::default(),
             block_in_states: HashMap::new(),
             exit_states: HashMap::new(),
@@ -116,6 +126,8 @@ impl<'ctx> DataFlow<'ctx> {
         self.exit_states.clear();
         self.storage_states.clear();
         self.read_locals.clear();
+        self.tainted.clear();
+        self.copies.clear();
 
         // Take an owned snapshot of the function's shapes.
         let snapshot = {
@@ -151,6 +163,8 @@ impl<'ctx> DataFlow<'ctx> {
         }
 
         let successors = compute_successors(snapshot);
+
+        self.record_copies(&blocks);
 
         self.block_in_states
             .insert(entry_block, self.current.clone());
@@ -198,6 +212,182 @@ impl<'ctx> DataFlow<'ctx> {
         self.insert_drops(function_id);
     }
 
+    /// Records whole-local copy sources for dealloc-argument resolution.
+    /// Each temp is defined once, so a single syntactic pass is exact.
+    fn record_copies(&mut self, blocks: &[BasicBlock]) {
+        for block in blocks {
+            for stmt in &block.statements {
+                let MirStatement::Assign { place, rvalue, .. } = stmt else {
+                    continue;
+                };
+                if !place.projection.is_empty() {
+                    continue;
+                };
+                match rvalue {
+                    Rvalue::Use(operand) | Rvalue::Cast { operand, .. } => {
+                        match self.strip_operand_place(operand) {
+                            Some(source) => {
+                                self.copies.insert(place.local, source);
+                            }
+                            None => {
+                                self.copies.remove(&place.local);
+                            }
+                        };
+                    }
+                    _ => {
+                        self.copies.remove(&place.local);
+                    }
+                };
+            }
+        }
+    }
+
+    fn strip_operand_place(&self, operand: &Operand) -> Option<Place> {
+        match operand {
+            Operand::Copy(place, _) | Operand::Move(place, _) => Some(place.clone()),
+            Operand::Constant(_, _) => None,
+        }
+    }
+
+    fn canonical_place(&self, mut place: Place) -> Place {
+        let mut seen = Vec::new();
+        while let Some(next) = self.copies.get(&place.local) {
+            if seen.contains(&place.local) {
+                break;
+            };
+            seen.push(place.local);
+            place = next.clone();
+        }
+        place
+    }
+
+    fn tainted_source(&self, operand: &Operand) -> Option<Taint> {
+        let place = self.strip_operand_place(operand)?;
+        let root = self.canonical_place(place);
+        self.tainted.get(&root.local).cloned()
+    }
+
+    fn taint_name(&self, local: LocalId) -> SmolStr {
+        match self.local_name_and_source(local) {
+            Some((name, _)) => name,
+            None => SmolStr::from("value"),
+        }
+    }
+
+    /// Maintains raw-pointer alias taint on whole-local writes. Partial
+    /// writes keep the base tainted once tainted.
+    fn track_taint(&mut self, place: &Place, rvalue: &Rvalue, source: &Option<Source>) {
+        if !place.projection.is_empty() {
+            let taint = match rvalue {
+                Rvalue::Use(operand) | Rvalue::Cast { operand, .. } => self.tainted_source(operand),
+                Rvalue::Aggregate { operands, .. } => operands
+                    .iter()
+                    .find_map(|operand| self.tainted_source(operand))
+                    .map(|_| Taint {
+                        tokens: Vec::new(),
+                        load: source.clone(),
+                        name: self.taint_name(place.local),
+                    }),
+                _ => None,
+            };
+            if let Some(taint) = taint {
+                let entry = self.tainted.entry(place.local).or_insert(Taint {
+                    tokens: Vec::new(),
+                    load: taint.load.clone(),
+                    name: taint.name.clone(),
+                });
+                for token in &taint.tokens {
+                    if !entry.tokens.contains(token) {
+                        entry.tokens.push(token.clone());
+                    };
+                }
+            };
+            return;
+        }
+        let local = place.local;
+        match rvalue {
+            Rvalue::UnaryOp {
+                op: UnaryOp::Deref,
+                operand,
+            } => {
+                let tokens = self
+                    .strip_operand_place(operand)
+                    .map(|place| vec![self.canonical_place(place)])
+                    .unwrap_or_default();
+                self.tainted.insert(
+                    local,
+                    Taint {
+                        tokens,
+                        load: source.clone(),
+                        name: self.taint_name(local),
+                    },
+                );
+            }
+            Rvalue::Use(operand) | Rvalue::Cast { operand, .. } => {
+                match self.tainted_source(operand) {
+                    Some(taint) => {
+                        self.tainted.insert(
+                            local,
+                            Taint {
+                                tokens: taint.tokens.clone(),
+                                load: taint.load.clone(),
+                                name: self.taint_name(local),
+                            },
+                        );
+                    }
+                    None => {
+                        self.tainted.remove(&local);
+                    }
+                };
+            }
+            Rvalue::Aggregate { operands, .. }
+                if operands
+                    .iter()
+                    .any(|operand| self.tainted_source(operand).is_some()) =>
+            {
+                self.tainted.insert(
+                    local,
+                    Taint {
+                        tokens: Vec::new(),
+                        load: source.clone(),
+                        name: self.taint_name(local),
+                    },
+                );
+            }
+            Rvalue::Aggregate { .. } => {
+                self.tainted.remove(&local);
+            }
+            _ => {
+                self.tainted.remove(&local);
+            }
+        };
+    }
+
+    /// Whether a call target releases heap storage: `Allocator.dealloc`
+    /// by owner-qualified name. Anything else keeps taint.
+    fn is_dealloc_call(&self, target: MirFunctionId) -> bool {
+        let func = match self.program.functions.get(&target) {
+            Some(func) => func,
+            None => return false,
+        };
+        let def = func.source_def;
+        let info = match self.resolution.defs.get(&def) {
+            Some(info) => info,
+            None => return false,
+        };
+        if self.rodeo.borrow().resolve(&info.name) != "dealloc" {
+            return false;
+        };
+        let owner = match self.typecheck.method_owner.get(&def) {
+            Some(owner) => owner,
+            None => return false,
+        };
+        match self.resolution.defs.get(owner) {
+            Some(info) => self.rodeo.borrow().resolve(&info.name) == "Allocator",
+            None => false,
+        }
+    }
+
     /// Applies a statement's effect to `self.current`.
     fn apply_statement(&mut self, stmt: &MirStatement, stmt_index: usize) {
         match stmt {
@@ -230,6 +420,7 @@ impl<'ctx> DataFlow<'ctx> {
                 }
 
                 self.write_destination(place);
+                self.track_taint(place, rvalue, source);
             }
             MirStatement::Drop(place) => {
                 self.current_source = None;
@@ -241,6 +432,7 @@ impl<'ctx> DataFlow<'ctx> {
             }
             MirStatement::StorageLive(local) => {
                 self.current_source = None;
+                self.tainted.remove(local);
                 self.current
                     .set_state(*local, LocalState::Whole(ValueState::Uninitialized));
             }
@@ -281,7 +473,18 @@ impl<'ctx> DataFlow<'ctx> {
                 for arg in args {
                     self.consume_operand(arg);
                 }
+                if let CallTarget::Direct(target) = func
+                    && self.is_dealloc_call(*target)
+                    && let Some(arg) = args.first()
+                    && let Some(place) = self.strip_operand_place(arg)
+                {
+                    let root = self.canonical_place(place);
+                    self.current.mark_freed(root);
+                };
                 self.write_destination(destination);
+                if destination.projection.is_empty() {
+                    self.tainted.remove(&destination.local);
+                }
             }
             Terminator::MacroCall {
                 args,
@@ -294,6 +497,9 @@ impl<'ctx> DataFlow<'ctx> {
                     self.consume_operand(arg);
                 }
                 self.write_destination(destination);
+                if destination.projection.is_empty() {
+                    self.tainted.remove(&destination.local);
+                }
             }
             Terminator::Return(operand) => {
                 self.current_source = None;
@@ -541,10 +747,18 @@ impl<'ctx> DataFlow<'ctx> {
         };
 
         let mut any_inserted = false;
+        let mut drop_errors = Vec::new();
         for (block_id, state) in &exit_states {
             let mut drops = {
                 let function = self.program.functions.get(&function_id).unwrap();
-                drop::collect_scope_drops(function, state, &self.typecheck.interner, self.typecheck)
+                drop::collect_scope_drops(
+                    function,
+                    state,
+                    &self.typecheck.interner,
+                    self.typecheck,
+                    &self.tainted,
+                    &mut drop_errors,
+                )
             };
             retain(&mut drops);
             if drops.places.is_empty() {
@@ -555,6 +769,8 @@ impl<'ctx> DataFlow<'ctx> {
             drop::insert_drops(function, *block_id, &drops);
             any_inserted = true;
         }
+
+        self.diagnostics.extend(drop_errors);
 
         if any_inserted {
             self.functions_with_drops.push(function_id);
@@ -598,14 +814,20 @@ impl<'ctx> DataFlow<'ctx> {
                 match state.state_of(*local) {
                     LocalState::Whole(ValueState::Initialized) | LocalState::PartiallyMoved(_) => {
                         let mut drops = DropSet::default();
+                        let mut taint_errors = Vec::new();
                         drop::collect_local_drops(
                             function,
                             *local,
                             state,
                             &self.typecheck.interner,
                             self.typecheck,
+                            &self.tainted,
                             &mut drops,
+                            &mut taint_errors,
                         );
+                        for error in taint_errors {
+                            per_block.entry(*block).or_default().errors.push(error);
+                        }
                         if !drops.places.is_empty() {
                             let insert_at = drop_insert_position(
                                 &snapshot.blocks[block.0 as usize].statements,

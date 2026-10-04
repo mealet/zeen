@@ -99,6 +99,8 @@ pub enum ReadOutcome {
 #[derive(Debug, Clone, Default)]
 pub struct FunctionState {
     locals: HashMap<LocalId, LocalState>,
+    /// Places whose storage was released (deallocated) on every path here.
+    freed: Vec<Place>,
 }
 
 impl FunctionState {
@@ -121,6 +123,18 @@ impl FunctionState {
     /// Marks a local as fully moved out.
     pub fn mark_moved(&mut self, local: LocalId) {
         self.set_state(local, LocalState::Whole(ValueState::Moved));
+    }
+
+    /// Records a released storage place. Duplicates are ignored.
+    pub fn mark_freed(&mut self, place: Place) {
+        if !self.freed.contains(&place) {
+            self.freed.push(place);
+        };
+    }
+
+    /// Places released on this path.
+    pub fn freed_places(&self) -> &[Place] {
+        &self.freed
     }
 
     /// Whether a place is safe to read as a fully-initialized value.
@@ -259,12 +273,17 @@ impl FunctionState {
             }
         }
 
+        let before = self.freed.len();
+        self.freed.retain(|place| other.freed.contains(place));
+        changed = changed || self.freed.len() != before;
+
         changed
     }
 
     /// Resets the state (fresh function entry).
     pub fn clear(&mut self) {
         self.locals.clear();
+        self.freed.clear();
     }
 }
 
