@@ -637,6 +637,40 @@ fn unused_variable_produces_warning() {
 }
 
 #[test]
+fn switch_ref_binding_written_through_is_not_unused() {
+    let result = flow_ok(
+        r#"
+enum Foo { c: { inner: i32 } }
+fn main() i32 {
+    let a = Foo.c { .inner = 1 };
+    switch (a) {
+        .c(&st) => { st.inner = 2; }
+    };
+    return 0;
+}
+"#,
+    );
+    assert!(result.warnings.is_empty());
+}
+
+#[test]
+fn switch_move_binding_written_through_is_not_unused() {
+    let result = flow_ok(
+        r#"
+enum Foo { c: { inner: i32 } }
+fn main() i32 {
+    let a = Foo.c { .inner = 1 };
+    switch (a) {
+        .c(st) => { st.inner = 2; }
+    };
+    return 0;
+}
+"#,
+    );
+    assert!(result.warnings.is_empty());
+}
+
+#[test]
 fn variable_used_as_slice_index_is_not_unused() {
     let result = flow_ok(
         r#"

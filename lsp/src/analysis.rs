@@ -811,10 +811,8 @@ impl<'ctx> Walker<'ctx> {
                 if self
                     .emit_target(varname.1.offset(), varname.1.len(), role, *def_id, None)
                     .is_some()
-                {
-                    if let Some(last) = self.analysis.occurrences.last_mut() {
+                && let Some(last) = self.analysis.occurrences.last_mut() {
                         last.type_hint = true;
-                    }
                 }
 
                 self.walk_expr(iterator);
@@ -830,7 +828,7 @@ impl<'ctx> Walker<'ctx> {
     fn walk_expr(&mut self, expr: &HirExpr) {
         match &expr.kind {
             HirExprKind::Literal(_) | HirExprKind::Error => {}
-            HirExprKind::VarRef(target)
+            HirExprKind::VarRef { def: target, generic_args: _ }
             | HirExprKind::GenericParamRef(target)
             | HirExprKind::SelfValue(target) => {
                 self.emit_ref(

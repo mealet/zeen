@@ -773,15 +773,15 @@ implement[T] Sliceable : List[T] {
   }
 }
 
-/// Borrowing iterator over `List` elements.
+/// Borrow iter yielding pointers
 pub struct ListIter[T] {
   ptr: [*]T,
   len: usize,
   idx: usize,
 }
 
-implement[T: Copy] Iterator : ListIter[T] {
-  fn next(*self) Option[T] {
+implement[T] Iterator : ListIter[T] {
+  fn next(*self) Option[*T] {
     if (self.idx >= self.len) {
       return Option.None;
     };
@@ -789,17 +789,17 @@ implement[T: Copy] Iterator : ListIter[T] {
     let i = self.idx;
     self.idx += 1;
 
-    Option.Some(self.ptr[i])
+    Option.Some(&self.ptr[i])
   }
 }
 
-implement[T: Copy] PtrIterator : List[T] {
+implement[T] PtrIterator : List[T] {
   fn iter(*self) ListIter[T] {
     ListIter { .ptr = self.ptr, .len = self._len, .idx = 0 }
   }
 }
 
-implement[T: Copy] OwnedIterator : List[T] {
+implement[T] OwnedIterator : List[T] {
   fn into_iter(self) OwnedListIter[T] {
     let ptr = self.ptr;
     let len = self._len;
@@ -814,7 +814,7 @@ implement[T: Copy] OwnedIterator : List[T] {
   }
 }
 
-/// Owning iterator over `List` elements (takes the buffer over)
+/// Owning iter yielding moves
 pub struct OwnedListIter[T] {
   ptr: [*]T,
   len: usize,
@@ -822,7 +822,7 @@ pub struct OwnedListIter[T] {
   _capacity: usize,
 }
 
-implement[T: Copy] Iterator : OwnedListIter[T] {
+implement[T] Iterator : OwnedListIter[T] {
   fn next(*self) Option[T] {
     if (self.idx >= self.len) {
       return Option.None;

@@ -1,0 +1,130 @@
+use std.c.types;
+use std.c.time;
+use std.string;
+
+@os[windows] {
+  use std.c.windows.winbase;
+}
+
+/// Seconds and nanoseconds span.
+pub struct Duration {
+  secs: u64,
+  nanos: u32,
+
+  pub fn from_secs(s: u64) Self {
+    return Duration { .secs = s, .nanos = 0 };
+  }
+
+  pub fn from_millis(ms: u64) Self {
+    return Duration { .secs = ms / 1000, .nanos = @as(u32, ms % 1000) * 1000000 };
+  }
+
+  pub fn from_micros(us: u64) Self {
+    return Duration { .secs = us / 1000000, .nanos = @as(u32, us % 1000000) * 1000 };
+  }
+
+  pub fn as_secs(*const self) u64 {
+    return self.secs;
+  }
+
+  pub fn subsec_nanos(*const self) u32 {
+    return self.nanos;
+  }
+
+  pub fn as_millis(*const self) u64 {
+    return self.secs * 1000 + @as(u64, self.nanos) / 1000000;
+  }
+
+  pub fn as_nanos(*const self) u64 {
+    return self.secs * 1000000000 + @as(u64, self.nanos);
+  }
+
+  pub fn is_zero(*const self) bool {
+    return self.secs == 0 && self.nanos == 0;
+  }
+}
+
+implement Display : Duration {
+  fn display[W: StrWriter](*const self, out: *W) void {
+    let text = @format("{} ms", self.as_millis());
+    (*out).write_str(text.slice(..));
+  }
+}
+
+/// Monotonic timestamp.
+pub struct Instant {
+  secs: i64,
+  nanos: i64,
+
+  pub fn now() Self {
+    @os[windows] {
+      let freq: i64 = 0;
+      QueryPerformanceFrequency(&freq);
+
+      let cur: i64 = 0;
+      QueryPerformanceCounter(&cur);
+
+      return Instant {
+        .secs = cur / freq,
+        .nanos = cur % freq * 1000000000 / freq,
+      };
+    } else {
+      return Instant.wall();
+    }
+  }
+
+  pub fn elapsed(*const self) Duration {
+    let now = Instant.now();
+
+    let secs = now.secs - self.secs;
+    let nanos = now.nanos - self.nanos;
+
+    if (nanos < 0) {
+      return Duration { .secs = @as(u64, secs - 1), .nanos = @as(u32, nanos + 1000000000) };
+    };
+
+    return Duration { .secs = @as(u64, secs), .nanos = @as(u32, nanos) };
+  }
+
+  fn wall() Self {
+    @os[windows] {
+      return Instant.wall_secs();
+    } else @os[linux | android | darwin | freebsd] {
+      let ts = c_Timespec { .tv_sec = 0, .tv_nsec = 0 };
+      let rc = clock_gettime(CLOCK_MONOTONIC, &ts);
+      if (rc != 0) {
+        @panic("clock_gettime failed");
+      };
+      return Instant { .secs = @as(i64, ts.tv_sec), .nanos = @as(i64, ts.tv_nsec) };
+    } else {
+      return Instant.wall_secs();
+    }
+  }
+
+  fn wall_secs() Self {
+    let t = time(nullptr);
+    return Instant { .secs = @as(i64, t), .nanos = 0 };
+  }
+}
+
+/// Thread sleep.
+pub struct Time {
+  /// Current system timestamp in seconds.
+  pub fn now() i64 {
+    return @as(i64, time(nullptr));
+  }
+
+  pub fn sleep(d: Duration) {
+    @os[windows] {
+      Sleep(@as(WinDWORD, d.as_millis()));
+    } else @os[linux | android | darwin | freebsd] {
+      let req = c_Timespec {
+        .tv_sec = @as(c_time_t, d.as_secs()),
+        .tv_nsec = @as(c_long, d.subsec_nanos()),
+      };
+      let _ = nanosleep(&req, nullptr);
+    } else {
+      @panic("sleep unsupported");
+    }
+  }
+}

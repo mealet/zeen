@@ -1,0 +1,15 @@
+use std.time;
+
+fn main() i32 {
+  let d = Duration.from_millis(1500);
+  @println("{}|{}|{}", d.as_secs(), d.as_millis(), d.subsec_nanos());
+
+  let t0 = Instant.now();
+  Time.sleep(Duration.from_millis(60));
+  let dt = t0.elapsed();
+  @println("slept={}", dt.as_millis() >= 50);
+  @println("zero={}", Duration.from_secs(0).is_zero());
+  @println("dur={}", Duration.from_millis(1500));
+  @println("ts={}", Time.now() > 1700000000);
+  return 0;
+}

@@ -1,0 +1,36 @@
+empty-obj={}
+empty-arr=[]
+nested={"a":[1,-2.5e3,true,null,"x"]}
+esc="a\"b\\c/d\b\f\n\r\t"
+nums=[0,-0,123,-45.67,1e10,2E-3,1.5e+2]
+dup={"k":2}
+ws={"a":1}
+bad1=ERR:true:1
+bad2=ERR:true:3
+trail-arr=[1,2]
+trail-obj={"a":1}
+trail-nested={"a":[1]}
+trail-dbl=ERR:true:3
+bad3=ERR:true:4
+bad4=ERR:true:7
+bad5=ERR:true:5
+bad6=ERR:false:3
+bad7=ERR:false:4
+bad8=ERR:true:3
+bad9=ERR:false:9
+bad10=ERR:false:0
+bad11=ERR:true:3
+bad12=ERR:false:0
+uni=true true
+big-rejected=true
+n=-42
+f=true
+b=true
+null=true missing=true
+len=5 arrlen=2
+at=20 oob=true
+wrongtype=true
+isarr=true isobj=true
+is=true false true true
+alive=2 2
+roundtrip={"n":-42,"f":2.5,"b":false,"z":null,"a":[10,20]}

@@ -1,0 +1,32 @@
+use std.path;
+
+fn show(label: []const char, value: []const char) {
+  @println("{}={}", label, value);
+}
+
+fn main() i32 {
+  @println("{}|{}|{}", Path.is_absolute("/a"), Path.is_absolute("a"), Path.is_absolute(""));
+
+  let p1: []const char = "/a/b.txt";
+  let p2: []const char = "b.txt";
+  let p3: []const char = "/a/";
+
+  show("base1", Path.basename(&p1));
+  show("base2", Path.basename(&p2));
+  show("base3", Path.basename(&p3));
+  show("dir1", Path.dirname(&p1));
+  show("dir2", Path.dirname(&p2));
+
+  @println("join1={}", Path.join("a", "b"));
+  @println("join2={}", Path.join("a/", "/b"));
+  @println("norm={}", Path.normalize("/a//./b/../c"));
+
+  let e = Path.extension(&p1);
+  if (e.is_some()) {
+    show("ext", e.unwrap());
+  };
+
+  let n = Path.extension(&p2);
+  @println("noext={}", n.is_none());
+  return 0;
+}

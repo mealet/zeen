@@ -116,4 +116,19 @@ pub enum FlowError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("dropping `{name}` copied out of a raw pointer while the source may still own it")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::dataflow::aliased_drop),
+        help("clone the value, borrow it, or free the source storage first")
+    )]
+    AliasedDrop {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }

@@ -1,0 +1,48 @@
+use std.string;
+use std.collections.list;
+
+fn main() i32 {
+  let items = List#[String].new();
+  items.push(String.from("a"));
+  items.push(String.from("bb"));
+  items.push(String.from("ccc"));
+
+  let probe = items.iter();
+  let first = probe.next();
+  @println("borrow-first={}", first.unwrap().len());
+  @println("borrow-intact={}", items.len());
+
+  for (s : items.iter()) {
+    @println("for-see={}", s.len());
+  };
+
+  let moved = List#[String].new();
+  let it = items.into_iter();
+  while (true) {
+    let next = it.next();
+    if (next.is_none()) {
+      break;
+    };
+    moved.push(next.unwrap());
+  };
+  @println("moved-len={} moved-first={}", moved.len(), moved.get_ptr(0).unwrap().len());
+
+  let empty = List#[i32].new();
+  @println("empty-none={}", empty.into_iter().next().is_none());
+
+  let nums = List#[i32].new();
+  nums.push(1);
+  nums.push(2);
+  nums.push(3);
+  let sum: i32 = 0;
+  let nit = nums.into_iter();
+  while (true) {
+    let n = nit.next();
+    if (n.is_none()) {
+      break;
+    };
+    sum += n.unwrap();
+  };
+  @println("sum={}", sum);
+  return 0;
+}

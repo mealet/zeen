@@ -1,0 +1,11 @@
+use std.crypto.base64;
+
+fn main() i32 {
+  @println("[{}][{}][{}][{}][{}][{}][{}]", Base64.encode(""), Base64.encode("f"), Base64.encode("fo"), Base64.encode("foo"), Base64.encode("foob"), Base64.encode("fooba"), Base64.encode("foobar"));
+  let back = Base64.decode("Zm9vYmFy");
+  if (back.is_some()) {
+    @println("roundtrip={}", back.unwrap());
+  };
+  @println("bad1={} bad2={}", Base64.decode("abc").is_none(), Base64.decode("!!!!").is_none());
+  return 0;
+}

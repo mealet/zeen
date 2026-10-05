@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use zeen_mir::{BlockId, LocalId, LocalKind, MirFunction, MirStatement, Place};
+use smol_str::SmolStr;
+use zeen_ast::Source;
+use zeen_mir::{BlockId, LocalId, MirFunction, MirStatement, Place};
 use zeen_resolve::DefId;
 use zeen_typecheck::result::TypeCheckResult;
 use zeen_types::{Type, TypeId, TypeInterner, VariantPayload};
@@ -11,6 +13,13 @@ use crate::state::{FunctionState, LocalState, PartialMoveState, ValueState};
 #[derive(Debug, Default)]
 pub struct DropSet {
     pub places: Vec<Place>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Taint {
+    pub tokens: Vec<Place>,
+    pub load: Option<Source>,
+    pub name: SmolStr,
 }
 
 /// Whether a value of type `ty` must be dropped: structs implementing `Drop`,
@@ -283,12 +292,16 @@ pub fn collect_scope_drops(
     state: &FunctionState,
     interner: &TypeInterner,
     typecheck: &TypeCheckResult,
+    tainted: &HashMap<LocalId, Taint>,
+    errors: &mut Vec<crate::error::FlowError>,
 ) -> DropSet {
     let mut drops = DropSet::default();
 
     for i in 0..function.locals.len() {
         let local = LocalId(i as u32);
-        collect_local_drops(function, local, state, interner, typecheck, &mut drops);
+        collect_local_drops(
+            function, local, state, interner, typecheck, tainted, &mut drops, errors,
+        );
     }
 
     drops
@@ -296,24 +309,26 @@ pub fn collect_scope_drops(
 
 /// Adds the drop places of a single local to `drops` if it is live at scope exit.
 /// `MaybeInitialized` is left to the caller.
+#[allow(clippy::too_many_arguments)]
 pub fn collect_local_drops(
     function: &MirFunction,
     local: LocalId,
     state: &FunctionState,
     interner: &TypeInterner,
     typecheck: &TypeCheckResult,
+    tainted: &HashMap<LocalId, Taint>,
     drops: &mut DropSet,
+    errors: &mut Vec<crate::error::FlowError>,
 ) {
     let decl = function.local(local);
-    if decl.kind == LocalKind::Temporary {
-        return;
-    }
     if !type_needs_drop(interner, typecheck, decl.ty) {
         return;
     }
-
     match state.state_of(local) {
         LocalState::Whole(ValueState::Initialized) => {
+            if check_taint(local, state, tainted, errors) {
+                return;
+            };
             expand_live_drops(
                 interner,
                 typecheck,
@@ -324,6 +339,9 @@ pub fn collect_local_drops(
             );
         }
         LocalState::PartiallyMoved(partial) => {
+            if check_taint(local, state, tainted, errors) {
+                return;
+            };
             expand_partial_drops(
                 interner,
                 typecheck,
@@ -338,6 +356,33 @@ pub fn collect_local_drops(
         | LocalState::Whole(ValueState::MaybeMoved)
         | LocalState::Whole(ValueState::MaybeInitialized) => {}
     }
+}
+
+fn check_taint(
+    local: LocalId,
+    state: &FunctionState,
+    tainted: &HashMap<LocalId, Taint>,
+    errors: &mut Vec<crate::error::FlowError>,
+) -> bool {
+    let Some(taint) = tainted.get(&local) else {
+        return false;
+    };
+    if !taint.tokens.is_empty()
+        && taint
+            .tokens
+            .iter()
+            .all(|token| state.freed_places().contains(token))
+    {
+        return false;
+    };
+    if let Some(load) = &taint.load {
+        errors.push(crate::error::FlowError::AliasedDrop {
+            name: taint.name.clone(),
+            src: load.src(),
+            span: load.span,
+        });
+    };
+    true
 }
 
 /// Appends `MirStatement::Drop` statements before the terminator of a specific

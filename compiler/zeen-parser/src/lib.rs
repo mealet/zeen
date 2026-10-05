@@ -173,7 +173,7 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
         let mut rest = raw;
         let mut base = 0;
         loop {
-            let end = rest.find('|').map_or(rest.len(), |i| i);
+            let end = rest.find('|').unwrap_or(rest.len());
             let part = &rest[..end];
             let ts = part.find(|c: char| !c.is_whitespace());
             if let Some(ts) = ts {

@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    path::Path,
+    rc::Rc,
+};
 
 use inkwell::{
     AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel,
@@ -326,47 +331,101 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn fill_enum_layouts(&mut self) {
-        for &ty in self.program.enum_layouts.keys() {
-            let Some(opaque) = self.enum_types.get(&ty).copied() else {
-                continue;
-            };
+        let mut pending: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
+        pending.sort_by_key(|ty| ty.0);
 
-            let payloads: Vec<TypeId> = self.program.enum_layouts[&ty]
-                .variants
-                .iter()
-                .filter_map(|v| v.payload)
-                .collect();
-            if payloads.is_empty() {
-                continue;
-            }
-
-            let mut measured: Vec<(u64, u64, TypeId)> = Vec::new();
-            for payload in payloads {
-                if matches!(self.typecheck.interner.get(payload), Type::Void) {
-                    measured.push((0, 1, payload));
-                    continue;
+        let mut filled: HashSet<TypeId> = HashSet::new();
+        loop {
+            let mut progressed = false;
+            pending.retain(|&ty| {
+                if self.enum_layout_measurable(ty, &filled) {
+                    self.fill_one_enum_layout(ty);
+                    filled.insert(ty);
+                    progressed = true;
+                    false
+                } else {
+                    true
                 }
-                let llvm_ty = self.map_basic_type(payload);
-                measured.push((
-                    self.target_data.get_abi_size(&llvm_ty),
-                    u64::from(self.target_data.get_abi_alignment(&llvm_ty)),
-                    payload,
-                ));
+            });
+            if !progressed {
+                break;
             }
-            let max_size = measured.iter().map(|m| m.0).max().unwrap_or(0);
-            let max_align = measured.iter().map(|m| m.1).max().unwrap_or(1);
+        }
 
-            let union_ty: BasicTypeEnum<'ctx> = if max_size == 0 {
-                self.context.i8_type().into()
-            } else if measured.len() == 1 {
-                self.map_basic_type(measured[0].2)
-            } else {
-                self.opaque_union(max_size, max_align)
-            };
+        for ty in pending {
+            self.fill_one_enum_layout(ty);
+        }
+    }
 
+    fn enum_layout_measurable(&self, ty: TypeId, filled: &HashSet<TypeId>) -> bool {
+        let Some(layout) = self.program.enum_layouts.get(&ty) else {
+            return true;
+        };
+        layout
+            .variants
+            .iter()
+            .filter_map(|v| v.payload)
+            .all(|payload| {
+                if matches!(self.typecheck.interner.get(payload), Type::Void) {
+                    return true;
+                }
+                if !matches!(self.typecheck.interner.get(payload), Type::Enum { .. }) {
+                    return true;
+                }
+                filled.contains(&payload)
+            })
+    }
+
+    fn fill_one_enum_layout(&mut self, ty: TypeId) {
+        let Some(opaque) = self.enum_types.get(&ty).copied() else {
+            return;
+        };
+
+        let payloads: Vec<TypeId> = self.program.enum_layouts[&ty]
+            .variants
+            .iter()
+            .filter_map(|v| v.payload)
+            .collect();
+        if payloads.is_empty() {
+            return;
+        }
+
+        if payloads.len() == 1 {
+            let union_ty: BasicTypeEnum<'ctx> =
+                if matches!(self.typecheck.interner.get(payloads[0]), Type::Void) {
+                    self.context.i8_type().into()
+                } else {
+                    self.map_basic_type(payloads[0])
+                };
             let tag_ty = self.context.i8_type().into();
             opaque.set_body(&[tag_ty, union_ty], false);
+            return;
         }
+
+        let mut measured: Vec<(u64, u64, TypeId)> = Vec::new();
+        for payload in payloads {
+            if matches!(self.typecheck.interner.get(payload), Type::Void) {
+                measured.push((0, 1, payload));
+                continue;
+            }
+            let llvm_ty = self.map_basic_type(payload);
+            measured.push((
+                self.target_data.get_abi_size(&llvm_ty),
+                u64::from(self.target_data.get_abi_alignment(&llvm_ty)),
+                payload,
+            ));
+        }
+        let max_size = measured.iter().map(|m| m.0).max().unwrap_or(0);
+        let max_align = measured.iter().map(|m| m.1).max().unwrap_or(1);
+
+        let union_ty: BasicTypeEnum<'ctx> = if max_size == 0 {
+            self.context.i8_type().into()
+        } else {
+            self.opaque_union(max_size, max_align)
+        };
+
+        let tag_ty = self.context.i8_type().into();
+        opaque.set_body(&[tag_ty, union_ty], false);
     }
 
     fn opaque_union(&self, max_size: u64, max_align: u64) -> BasicTypeEnum<'ctx> {
@@ -607,10 +666,34 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let zeen_main = self.functions[&main_fn];
         let ret_ty = self.program.functions[&main_fn].ret_ty;
 
-        let main_ty = self.context.i32_type().fn_type(&[], false);
+        let i32_ty = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let main_ty = i32_ty.fn_type(&[i32_ty.into(), ptr_ty.into()], false);
         let main = self.module.add_function("main", main_ty, None);
         let entry = self.context.append_basic_block(main, "entry");
         self.builder.position_at_end(entry);
+
+        let argc_global = match self.module.get_global("__zeen_argc") {
+            Some(existing) => existing,
+            None => self.module.add_global(i32_ty, None, "__zeen_argc"),
+        };
+        argc_global.set_initializer(&i32_ty.const_zero());
+        let argv_global = match self.module.get_global("__zeen_argv") {
+            Some(existing) => existing,
+            None => self.module.add_global(ptr_ty, None, "__zeen_argv"),
+        };
+        argv_global.set_initializer(&ptr_ty.const_null());
+
+        if let Some(argc) = main.get_nth_param(0)
+            && let Some(argv) = main.get_nth_param(1)
+        {
+            self.builder
+                .build_store(argc_global.as_pointer_value(), argc)
+                .unwrap();
+            self.builder
+                .build_store(argv_global.as_pointer_value(), argv)
+                .unwrap();
+        }
 
         if let Some(init_fn_id) = self.program.init_globals_fn
             && let Some(init_fn) = self.functions.get(&init_fn_id)

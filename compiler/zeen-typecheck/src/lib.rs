@@ -2152,7 +2152,17 @@ impl<'res> TypeChecker<'res> {
                 }
             },
 
-            HirExprKind::VarRef(def_id) => {
+            HirExprKind::VarRef {
+                def: def_id,
+                generic_args,
+            } => {
+                if !generic_args.is_empty() {
+                    let monos: Vec<TypeId> = generic_args
+                        .iter()
+                        .map(|ty| self.lower_hir_type(ty))
+                        .collect();
+                    self.result.fn_item_monos.insert(expr.id, monos);
+                }
                 if matches!(
                     self.def_kind(*def_id),
                     Some(DefKind::Struct | DefKind::Interface | DefKind::Enum | DefKind::TypeAlias)
@@ -2211,6 +2221,9 @@ impl<'res> TypeChecker<'res> {
             HirExprKind::Binary { lhs, rhs, op } => {
                 let lhs_ty = self.synth_expr(lhs);
                 let rhs_ty = self.synth_expr(rhs);
+
+                self.pin_binary_literal(lhs, lhs_ty, rhs_ty);
+                self.pin_binary_literal(rhs, rhs_ty, lhs_ty);
 
                 self.check_binary_op(*op, lhs_ty, rhs_ty, expr.id, expr.source.clone())
             }
@@ -3188,7 +3201,10 @@ impl<'res> TypeChecker<'res> {
     ) -> TypeId {
         let (field_name, field_span) = *field;
 
-        if let HirExprKind::VarRef(referenced_def) = &object.kind
+        if let HirExprKind::VarRef {
+            def: referenced_def,
+            ..
+        } = &object.kind
             && matches!(self.def_kind(*referenced_def), Some(DefKind::Enum))
         {
             return self.check_enum_variant_access(
@@ -4336,7 +4352,7 @@ impl<'res> TypeChecker<'res> {
 
             HirExprKind::SliceAccess { object, .. } => self.find_const_violation(object),
 
-            HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => self
+            HirExprKind::VarRef { def: def_id, .. } | HirExprKind::SelfValue(def_id) => self
                 .result
                 .const_bindings
                 .get(def_id)
@@ -4489,7 +4505,7 @@ impl<'res> TypeChecker<'res> {
         expected: Option<TypeId>,
     ) -> TypeId {
         if let HirExprKind::FieldAccess { object, field, .. } = &callee.kind {
-            if let HirExprKind::VarRef(enum_def) = &object.kind
+            if let HirExprKind::VarRef { def: enum_def, .. } = &object.kind
                 && matches!(self.def_kind(*enum_def), Some(DefKind::Enum))
                 && self.enum_variants.get(enum_def).is_some_and(|defs| {
                     defs.iter().any(|&v| {
@@ -4526,7 +4542,7 @@ impl<'res> TypeChecker<'res> {
         }
 
         let callee_def = match &callee.kind {
-            HirExprKind::VarRef(def_id) => Some(*def_id),
+            HirExprKind::VarRef { def: def_id, .. } => Some(*def_id),
             _ => None,
         };
 
@@ -4783,7 +4799,10 @@ impl<'res> TypeChecker<'res> {
     ) -> Option<TypeId> {
         let (field_name, field_span) = field;
 
-        if let HirExprKind::VarRef(referenced_def) = &object.kind
+        if let HirExprKind::VarRef {
+            def: referenced_def,
+            ..
+        } = &object.kind
             && matches!(
                 self.def_kind(*referenced_def),
                 Some(DefKind::Struct | DefKind::Enum)
@@ -6253,6 +6272,24 @@ impl<'res> TypeChecker<'res> {
                 self.unify_for_inference(pr, ar, bindings, source);
             }
 
+            (
+                Type::FatFn {
+                    params: pp,
+                    ret: pr,
+                    ..
+                },
+                Type::FatFn {
+                    params: ap,
+                    ret: ar,
+                    ..
+                },
+            ) if pp.len() == ap.len() => {
+                for (p, a) in pp.iter().zip(ap.iter()) {
+                    self.unify_for_inference(*p, *a, bindings, source.clone());
+                }
+                self.unify_for_inference(pr, ar, bindings, source);
+            }
+
             _ => {}
         }
     }
@@ -6708,9 +6745,6 @@ impl<'res> TypeChecker<'res> {
         };
 
         let mut generic_subst: HashMap<DefId, TypeId> = HashMap::new();
-        for (iface_g, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
-            generic_subst.insert(*iface_g, *struct_arg);
-        }
 
         let struct_generics: Vec<DefId> = match self.result.interner.get(self_struct_ty) {
             Type::Struct { def_id, .. } => self
@@ -6772,6 +6806,18 @@ impl<'res> TypeChecker<'res> {
             &all_iface_generics,
             &mut generic_subst,
         );
+        let mut instantiation_params: HashSet<DefId> = HashSet::new();
+        instantiation_params.extend(struct_generics.iter().copied());
+        instantiation_params.extend(sig_ctx.imp_generics.iter().copied());
+        for (iface_g, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
+            let inferred_varies = match generic_subst.get(iface_g) {
+                Some(&bound) => self.type_mentions_any(bound, &instantiation_params),
+                None => false,
+            };
+            if !inferred_varies {
+                generic_subst.insert(*iface_g, *struct_arg);
+            }
+        }
 
         let iface_params: Vec<TypeId> = iface_params_raw
             .iter()
@@ -6814,6 +6860,27 @@ impl<'res> TypeChecker<'res> {
                 src: sig_src,
                 span: sig_span,
             });
+        }
+    }
+
+    fn type_mentions_any(&self, ty: TypeId, params: &HashSet<DefId>) -> bool {
+        match self.result.interner.get(ty).clone() {
+            Type::GenericParam(g) => params.contains(&g),
+            Type::Pointer { inner, .. }
+            | Type::ManyPointer { inner, .. }
+            | Type::Array { element: inner, .. }
+            | Type::Slice { element: inner, .. } => self.type_mentions_any(inner, params),
+            Type::Struct { generic_args, .. } | Type::Enum { generic_args, .. } => generic_args
+                .iter()
+                .any(|&a| self.type_mentions_any(a, params)),
+            Type::Fn { params: ps, ret }
+            | Type::FatFn {
+                params: ps, ret, ..
+            } => {
+                ps.iter().any(|&p| self.type_mentions_any(p, params))
+                    || self.type_mentions_any(ret, params)
+            }
+            _ => false,
         }
     }
 
@@ -7069,6 +7136,26 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn pin_binary_literal(&mut self, operand: &HirExpr, operand_ty: TypeId, other_ty: TypeId) {
+        if !matches!(&operand.kind, HirExprKind::Literal(_)) {
+            return;
+        }
+
+        let pinned = match self.result.interner.get(operand_ty) {
+            Type::IntLiteral if matches!(self.result.interner.get(other_ty), Type::Builtin(b) if coerce::builtin_is_integer(*b)) => {
+                true
+            }
+            Type::FloatLiteral if matches!(self.result.interner.get(other_ty), Type::Builtin(b) if coerce::builtin_is_float(*b)) => {
+                true
+            }
+            _ => false,
+        };
+
+        if pinned {
+            self.check_expr(operand, other_ty, false);
+        }
+    }
+
     fn check_binary_op_builtin(
         &mut self,
         op: BinaryOp,
@@ -7082,6 +7169,10 @@ impl<'res> TypeChecker<'res> {
             && let Some(result_ty) = self.pointer_arith_operand(op, lhs, rhs)
         {
             return result_ty;
+        }
+
+        if matches!(op, Eq | Ne) && self.is_any_ptr(lhs) && self.is_any_ptr(rhs) {
+            return self.result.interner.builtin(BuiltinType::bool);
         }
 
         let unified = if lhs == rhs {
@@ -7131,15 +7222,16 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn is_any_ptr(&self, ty: TypeId) -> bool {
+        matches!(
+            self.result.interner.get(ty),
+            Type::Pointer { .. } | Type::ManyPointer { .. }
+        )
+    }
+
     fn pointer_arith_operand(&mut self, op: BinaryOp, lhs: TypeId, rhs: TypeId) -> Option<TypeId> {
         let isize = self.result.interner.builtin(BuiltinType::isize);
 
-        let is_ptr = |ty: TypeId| {
-            matches!(
-                self.result.interner.get(ty),
-                Type::Pointer { .. } | Type::ManyPointer { .. }
-            )
-        };
         let is_int = |ty: TypeId| match self.result.interner.get(ty) {
             Type::IntLiteral => true,
             Type::Builtin(b) => coerce::builtin_is_integer(*b),
@@ -7148,18 +7240,18 @@ impl<'res> TypeChecker<'res> {
 
         match op {
             BinaryOp::Add => {
-                if is_ptr(lhs) && is_int(rhs) {
+                if self.is_any_ptr(lhs) && is_int(rhs) {
                     Some(lhs)
-                } else if is_int(lhs) && is_ptr(rhs) {
+                } else if is_int(lhs) && self.is_any_ptr(rhs) {
                     Some(rhs)
                 } else {
                     None
                 }
             }
             BinaryOp::Sub => {
-                if is_ptr(lhs) && is_int(rhs) {
+                if self.is_any_ptr(lhs) && is_int(rhs) {
                     Some(lhs)
-                } else if is_ptr(lhs) && is_ptr(rhs) {
+                } else if self.is_any_ptr(lhs) && self.is_any_ptr(rhs) {
                     Some(isize)
                 } else {
                     None
@@ -11276,5 +11368,15 @@ mod tests {
             "#,
         )
         .expect("or with a binding must typecheck");
+    }
+
+    #[test]
+    fn explicit_fn_item_args_are_recorded() {
+        let result = typecheck("fn id[T](x: T) T { return x; } fn main() { let f = id#[i32]; }")
+            .expect("must typecheck");
+
+        assert_eq!(result.fn_item_monos.len(), 1);
+        let args = result.fn_item_monos.values().next().expect("one entry");
+        assert_eq!(args.len(), 1);
     }
 }

@@ -1,0 +1,178 @@
+use std.string;
+use std.collections.list;
+
+/// Portable path helpers.
+pub struct Path {
+  fn is_sep(c: char) bool {
+    @os[windows] {
+      return c == '/' || c == '\\';
+    } else {
+      return c == '/';
+    }
+  }
+
+  fn sep() char {
+    @os[windows] {
+      return '\\';
+    } else {
+      return '/';
+    }
+  }
+
+  /// Absolute path check.
+  pub fn is_absolute(path: []const char) bool {
+    if (path.len == 0) {
+      return false;
+    };
+
+    @os[windows] {
+      if (path.len >= 2 && path[1] == ':') {
+        return true;
+      };
+    }
+
+    return Path.is_sep(path[0]);
+  }
+
+  /// File name without directories, without trailing separators.
+  pub fn basename(path: *[]const char) []const char {
+    let total = (*path).len;
+    let end = total;
+    while (end > 0 && Path.is_sep((*path)[end - 1])) {
+      end -= 1;
+    }
+
+    let i = end;
+    while (i > 0 && !Path.is_sep((*path)[i - 1])) {
+      i -= 1;
+    }
+
+    return (*path)[i..end];
+  }
+
+  /// Directory part without the file name.
+  pub fn dirname(path: *[]const char) []const char {
+    let total = (*path).len;
+    let end = total;
+    while (end > 0 && Path.is_sep((*path)[end - 1])) {
+      end -= 1;
+    }
+
+    let i = end;
+    while (i > 0 && !Path.is_sep((*path)[i - 1])) {
+      i -= 1;
+    }
+
+    if (i == 0) {
+      return "";
+    };
+
+    if (i == 1 && Path.is_sep((*path)[0])) {
+      return (*path)[0..1];
+    };
+
+    return (*path)[0..i - 1];
+  }
+
+  /// Extension without the dot, `None` when missing.
+  pub fn extension(path: *[]const char) Option[[]const char] {
+    let total = (*path).len;
+
+    let end = total;
+    while (end > 0 && Path.is_sep((*path)[end - 1])) {
+      end -= 1;
+    }
+
+    let start = end;
+    while (start > 0 && !Path.is_sep((*path)[start - 1])) {
+      start -= 1;
+    }
+
+    let i = end;
+    while (i > start + 1 && (*path)[i - 1] != '.') {
+      i -= 1;
+    }
+
+    if (i <= start + 1) {
+      return Option.None;
+    };
+
+    return Option.Some((*path)[i..end]);
+  }
+
+  /// Join two parts with a single separator.
+  pub fn join(a: []const char, b: []const char) String {
+    let out = String.from(a);
+
+    if (out.len() > 0 && b.len > 0) {
+      let back = out.len() - 1;
+
+      if (Path.is_sep(a[back])) {
+        let start: usize = 0;
+        while (start < b.len && Path.is_sep(b[start])) {
+          start += 1;
+        }
+        out.push_str(b[start..b.len]);
+      } else {
+        if (!Path.is_sep(b[0])) {
+          out.push(Path.sep());
+        };
+        out.push_str(b);
+      };
+    } else {
+      out.push_str(b);
+    };
+
+    return out;
+  }
+
+  /// Collapse duplicate separators, single dots and parent markers.
+  pub fn normalize(path: []const char) String {
+    let rooted = Path.is_absolute(path);
+    let kept = List#[[]const char].new();
+
+    let i: usize = 0;
+    while (i < path.len) {
+      while (i < path.len && Path.is_sep(path[i])) {
+        i += 1;
+      }
+
+      let start = i;
+      while (i < path.len && !Path.is_sep(path[i])) {
+        i += 1;
+      }
+
+      if (start < i) {
+        let part = path[start..i];
+        if (part == "..") {
+          if (kept.len() > 0) {
+            let _ = kept.pop();
+          } else if (!rooted) {
+            kept.push(part);
+          };
+        } else if (part != "." && part.len != 0) {
+          kept.push(part);
+        };
+      };
+    }
+
+    let out = String.new();
+    if (rooted) {
+      out.push(Path.sep());
+    };
+
+    let first = true;
+    let j: usize = 0;
+    while (j < kept.len()) {
+      if (!first) {
+        out.push(Path.sep());
+      };
+      let part = kept.get_ptr(j).unwrap();
+      out.push_str(*part);
+      first = false;
+      j += 1;
+    }
+
+    return out;
+  }
+}

@@ -68,8 +68,10 @@ fn main_wrapper_calls_zeen_main_and_returns_value() {
     let ir = compile(&fx, CompilationMode::Debug);
 
     assert!(ir.contains("define i32 @zeen_main()"), "{ir}");
-    assert!(ir.contains("define i32 @main()"), "{ir}");
+    assert!(ir.contains("define i32 @main(i32"), "{ir}");
     assert!(ir.contains("call i32 @zeen_main()"), "{ir}");
+    assert!(ir.contains("@__zeen_argc = global i32 0"), "{ir}");
+    assert!(ir.contains("@__zeen_argv = global ptr null"), "{ir}");
 }
 
 #[test]
@@ -1185,7 +1187,7 @@ fn release_mode_runs_optimization_passes() {
 
     // The optimizer may annotate the definitions (`noundef`, `local_unnamed_addr`).
     assert!(ir.contains("@zeen_main()"), "{ir}");
-    assert!(ir.contains("@main()"), "{ir}");
+    assert!(ir.contains("@main(i32"), "{ir}");
 }
 
 #[test]

@@ -546,7 +546,7 @@ impl<'ctx> MirLowering<'ctx> {
 
     fn collect_global_expr_deps(&self, expr: &HirExpr, out: &mut Vec<DefId>) {
         match &expr.kind {
-            HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
+            HirExprKind::VarRef { def: def_id, .. } | HirExprKind::SelfValue(def_id) => {
                 if matches!(
                     self.resolution.defs.get(def_id).map(|info| &info.kind),
                     Some(DefKind::GlobalVar { .. })
@@ -1624,7 +1624,7 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn expr_type(&mut self, fb: &FnBuilder, expr: &HirExpr) -> TypeId {
-        if let HirExprKind::VarRef(def_id) = &expr.kind
+        if let HirExprKind::VarRef { def: def_id, .. } = &expr.kind
             && let Some((_, bound_ty)) = fb.fat_bindings.iter().find(|(d, _)| d == def_id)
         {
             return *bound_ty;
@@ -2865,7 +2865,7 @@ impl<'ctx> MirLowering<'ctx> {
                 )
             }
 
-            HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
+            HirExprKind::VarRef { def: def_id, .. } | HirExprKind::SelfValue(def_id) => {
                 if let Some(global_id) = self.globals_by_def.get(def_id) {
                     return (
                         block,
@@ -2875,7 +2875,7 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let expr_ty = self.expr_type(fb, expr);
 
-                if matches!(&expr.kind, HirExprKind::VarRef(_))
+                if matches!(&expr.kind, HirExprKind::VarRef { .. })
                     && matches!(
                         self.resolution.defs.get(def_id).map(|info| &info.kind),
                         Some(DefKind::Function)
@@ -2899,7 +2899,14 @@ impl<'ctx> MirLowering<'ctx> {
                         return self.build_fat_envelope(fb, block, expr_ty, *def_id, mir_f, expr);
                     }
 
-                    let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
+                    let mono_args = self
+                        .typecheck
+                        .fn_item_monos
+                        .get(&expr.id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let mono_args = self.substitute_generic_args(fb, &mono_args);
+                    let mir_id = self.monomorphize_fn(*def_id, mono_args, None, &[]);
                     return (
                         block,
                         Operand::Constant(ConstValue::Fn(mir_id), Some(expr.source.clone())),
@@ -3409,7 +3416,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::FieldAccess { object, field, .. } => {
-                if let HirExprKind::VarRef(enum_def) = &object.kind
+                if let HirExprKind::VarRef { def: enum_def, .. } = &object.kind
                     && matches!(
                         self.resolution.defs.get(enum_def).map(|info| &info.kind),
                         Some(DefKind::Enum)
@@ -3706,7 +3713,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let call_id = expr.id;
 
                 if let HirExprKind::FieldAccess { object, .. } = &callee.kind
-                    && let HirExprKind::VarRef(enum_def) = &object.kind
+                    && let HirExprKind::VarRef { def: enum_def, .. } = &object.kind
                     && matches!(
                         self.resolution.defs.get(enum_def).map(|info| &info.kind),
                         Some(DefKind::Enum)
@@ -4294,6 +4301,15 @@ impl<'ctx> MirLowering<'ctx> {
                 } else {
                     payload_ty
                 };
+                if !is_ref
+                    && self.rodeo.borrow().resolve(&name) == "_"
+                    && self.mir_type_needs_drop(bind_ty, &HashMap::default())
+                {
+                    self.warnings.push(MirWarning::DiscardDropPayload {
+                        src: expr.source.src(),
+                        span,
+                    });
+                }
                 let local = fb.new_local(
                     bind_ty,
                     LocalKind::UserVariable,
@@ -4829,7 +4845,7 @@ impl<'ctx> MirLowering<'ctx> {
 
     fn expr_is_place(&self, expr: &HirExpr) -> bool {
         match &expr.kind {
-            HirExprKind::VarRef(_) | HirExprKind::SelfValue(_) => true,
+            HirExprKind::VarRef { .. } | HirExprKind::SelfValue(_) => true,
             HirExprKind::FieldAccess { object, .. } => self.expr_is_place(object),
             HirExprKind::SliceAccess { object, .. } => self.expr_is_place(object),
             HirExprKind::Unary {
@@ -4871,7 +4887,7 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> (BlockId, Place) {
         match &expr.kind {
-            HirExprKind::VarRef(def_id) | HirExprKind::SelfValue(def_id) => {
+            HirExprKind::VarRef { def: def_id, .. } | HirExprKind::SelfValue(def_id) => {
                 if let Some(global_id) = self.globals_by_def.get(def_id) {
                     return (block, Place::global(*global_id));
                 }
@@ -4882,7 +4898,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::FieldAccess { object, .. } => {
-                if let HirExprKind::VarRef(enum_def) = &object.kind
+                if let HirExprKind::VarRef { def: enum_def, .. } = &object.kind
                     && matches!(
                         self.resolution.defs.get(enum_def).map(|info| &info.kind),
                         Some(DefKind::Enum)
@@ -7466,7 +7482,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
                 fb.loop_stack.pop();
 
-                fb.set_terminator(body_end, Terminator::Goto(header));
+                fb.join_if_open(body_end, header);
 
                 exit_bb
             }
@@ -7572,7 +7588,7 @@ impl<'ctx> MirLowering<'ctx> {
                 ) {
                     let what = match &expr.kind {
                         HirExprKind::Call { callee, .. } => match &callee.kind {
-                            HirExprKind::VarRef(def_id) => {
+                            HirExprKind::VarRef { def: def_id, .. } => {
                                 let name = self
                                     .resolution
                                     .defs

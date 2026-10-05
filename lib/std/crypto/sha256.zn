@@ -1,0 +1,118 @@
+use std.string;
+use std.collections.list;
+
+/// SHA-256 (FIPS 180-4), hex digests.
+pub struct Sha256 {
+  /// Hex digest of the message.
+  pub fn hexdigest(data: []const char) String {
+    let h: [8]u32 = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    let k: [64]u32 = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+
+    let buf = List#[u8].new();
+    let i: usize = 0;
+    while (i < data.len) {
+      buf.push(@as(u8, data[i]));
+      i += 1;
+    }
+
+    buf.push(128);
+    while ((buf.len() + 8) % 64 != 0) {
+      buf.push(0);
+    }
+
+    let bits = @as(u64, data.len) * 8;
+    let shift: u64 = 56;
+    while (true) {
+      buf.push(@as(u8, bits >> shift));
+      if (shift == 0) {
+        break;
+      };
+      shift -= 8;
+    }
+
+    let blocks = buf.len() / 64;
+    let block: usize = 0;
+    while (block < blocks) {
+      let w: [64]u32 = [0; 64];
+
+      let word: usize = 0;
+      while (word < 16) {
+        let offset = block * 64 + word * 4;
+        let byte0 = @as(u32, buf[offset]) << 24;
+        let byte1 = @as(u32, buf[offset + 1]) << 16;
+        let byte2 = @as(u32, buf[offset + 2]) << 8;
+        let byte3 = @as(u32, buf[offset + 3]);
+        w[word] = (byte0 | byte1) | (byte2 | byte3);
+        word += 1;
+      }
+
+      let sched: usize = 16;
+      while (sched < 64) {
+        let s0 = Sha256.rotr(w[sched - 15], 7) ^ Sha256.rotr(w[sched - 15], 18) ^ (w[sched - 15] >> 3);
+        let s1 = Sha256.rotr(w[sched - 2], 17) ^ Sha256.rotr(w[sched - 2], 19) ^ (w[sched - 2] >> 10);
+        w[sched] = w[sched - 16] + s0 + w[sched - 7] + s1;
+        sched += 1;
+      }
+
+      let a = h[0];
+      let b = h[1];
+      let c = h[2];
+      let d = h[3];
+      let e = h[4];
+      let f = h[5];
+      let g = h[6];
+      let hh = h[7];
+
+      let r: usize = 0;
+      while (r < 64) {
+        let s1 = Sha256.rotr(e, 6) ^ Sha256.rotr(e, 11) ^ Sha256.rotr(e, 25);
+        let ch = (e & f) ^ ((e ^ 0xFFFFFFFF) & g);
+        let t1 = (hh + s1 + ch + k[r]) + w[r];
+        let s0 = Sha256.rotr(a, 2) ^ Sha256.rotr(a, 13) ^ Sha256.rotr(a, 22);
+        let maj = ((a & b) ^ (a & c)) ^ (b & c);
+        let t2 = s0 + maj;
+        hh = g;
+        g = f;
+        f = e;
+        e = d + t1;
+        d = c;
+        c = b;
+        b = a;
+        a = t1 + t2;
+        r += 1;
+      }
+
+      h[0] += a;
+      h[1] += b;
+      h[2] += c;
+      h[3] += d;
+      h[4] += e;
+      h[5] += f;
+      h[6] += g;
+      h[7] += hh;
+      block += 1;
+    }
+
+    let digits: []const char = "0123456789abcdef";
+    let out = String.new();
+    let word: usize = 0;
+    while (word < 8) {
+      let value = h[word];
+      let shift: u32 = 28;
+      while (true) {
+        out.push(digits[@as(usize, (value >> shift) & 15)]);
+        if (shift == 0) {
+          break;
+        };
+        shift -= 4;
+      }
+      word += 1;
+    }
+
+    return out;
+  }
+
+  fn rotr(x: u32, n: u32) u32 {
+    return (x >> n) | (x << (32 - n));
+  }
+}

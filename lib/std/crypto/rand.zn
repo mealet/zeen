@@ -1,0 +1,60 @@
+use std.c.types;
+use std.c.stdlib;
+use std.time;
+
+/// Simple deterministic random numbers over C rand.
+pub struct Rand {
+  /// Seed the generator, same seed repeats the sequence.
+  pub fn seed(seed: u32) {
+    srand(@as(c_uint, seed));
+  }
+
+  /// Next unsigned value.
+  pub fn next_u32() u32 {
+    return @as(u32, rand());
+  }
+
+  /// Value below `upper`, slight modulo bias.
+  pub fn below(upper: u32) u32 {
+    return Rand.next_u32() % upper;
+  }
+}
+
+/// Seeded generator with its own state, no shared globals.
+pub struct Rng {
+  state: u64,
+
+  /// Create a generator seeded from the system timestamp.
+  pub fn new() Self {
+    return Rng.from_seed(@as(u64, Time.now()));
+  }
+
+  /// Create a generator with an explicit seed, zero replaced.
+  pub fn from_seed(seed: u64) Self {
+    if (seed == 0) {
+      return Rng { .state = 2685821657736338717 };
+    };
+
+    return Rng { .state = seed };
+  }
+
+  /// Next unsigned value.
+  pub fn next_u64(*self) u64 {
+    let x = self.state;
+    let x = x ^ (x >> 12);
+    let x = x ^ (x << 25);
+    let x = x ^ (x >> 27);
+    self.state = x;
+    return x * 2685821657736338717;
+  }
+
+  /// Next unsigned 32-bit value.
+  pub fn next_u32(*self) u32 {
+    return @as(u32, self.next_u64() >> 32);
+  }
+
+  /// Value in `[from, to)`.
+  pub fn range(*self, from: u32, to: u32) u32 {
+    return from + (self.next_u32() % (to - from));
+  }
+}

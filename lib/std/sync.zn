@@ -1,0 +1,414 @@
+use std.alloc;
+
+use std.c.types;
+use std.c.errno;
+
+@os[windows] {
+  use std.c.windows.windef;
+  use std.c.windows.winbase;
+  use std.c.windows.synchapi;
+
+  alias OsMutex = WinCriticalSection;
+  alias OsRwLock = WinSrwLock;
+} else {
+  use std.c.posix.pthread;
+
+  alias OsMutex = c_pthread_mutex_t;
+  alias OsRwLock = c_pthread_rwlock_t;
+}
+
+/// Mutual exclusion lock protecting shared data.
+pub struct Mutex[T] {
+  os: OsMutex,
+  data: T,
+  open: bool,
+
+  /// Create an unlocked mutex holding `value`.
+  pub fn new(value: T) Self {
+    let m = Mutex { .os = @uninit(), .data = value, .open = true };
+
+    @os[windows] {
+      InitializeCriticalSection(&m.os);
+    } else {
+      let rc = pthread_mutex_init(&m.os, nullptr);
+      if (rc != 0) {
+        @panic("mutex init failed");
+      };
+    }
+
+    return m;
+  }
+
+  /// Lock the mutex, blocking until acquired.
+  pub fn lock(*self) MutexGuard[T] {
+    @os[windows] {
+      EnterCriticalSection(&self.os);
+    } else {
+      let rc = pthread_mutex_lock(&self.os);
+      if (rc != 0) {
+        @panic("mutex lock failed");
+      };
+    }
+
+    return MutexGuard { .lock = &self.os, .got = &self.data };
+  }
+
+  /// Try to lock without blocking, `None` when held.
+  pub fn try_lock(*self) Option[MutexGuard[T]] {
+    @os[windows] {
+      let ok = TryEnterCriticalSection(&self.os);
+      if (ok == 0) {
+        return Option.None;
+      };
+    } else {
+      let rc = pthread_mutex_trylock(&self.os);
+      if (rc == EBUSY) {
+        return Option.None;
+      };
+      if (rc != 0) {
+        @panic("mutex try_lock failed");
+      };
+    }
+
+    return Option.Some(MutexGuard { .lock = &self.os, .got = &self.data });
+  }
+
+  /// Consume the mutex, returning the data.
+  pub fn into_inner(self) T {
+    @os[windows] {
+      DeleteCriticalSection(&self.os);
+    } else {
+      let _ = pthread_mutex_destroy(&self.os);
+    }
+
+    self.open = false;
+    let out = self.data;
+    return out;
+  }
+}
+
+implement[T] Drop : Mutex[T] {
+  fn drop(self) {
+    if (!self.open) {
+      return;
+    };
+
+    @os[windows] {
+      DeleteCriticalSection(&self.os);
+    } else {
+      let _ = pthread_mutex_destroy(&self.os);
+    }
+
+    let _dead: T = self.data;
+  }
+}
+
+/// Held mutex, bind in scope
+pub struct MutexGuard[T] {
+  lock: *OsMutex,
+  got: *T,
+}
+
+implement[T: Copy] Deref : MutexGuard[T] {
+  fn deref(*const self) T {
+    return *self.got;
+  }
+}
+
+implement[T] DerefPtr : MutexGuard[T] {
+  fn deref_ptr(*self) *T {
+    return self.got;
+  }
+}
+
+implement[T] Drop : MutexGuard[T] {
+  fn drop(self) {
+    @os[windows] {
+      LeaveCriticalSection(self.lock);
+    } else {
+      let _ = pthread_mutex_unlock(self.lock);
+    }
+  }
+}
+
+/// Shared read, exclusive write lock
+pub struct RwLock[T] {
+  os: OsRwLock,
+  data: T,
+  open: bool,
+
+  pub fn new(value: T) Self {
+    @os[windows] {
+      return RwLock { .os = WinSrwLock { .ptr = nullptr }, .data = value, .open = true };
+    } else {
+      let m = RwLock { .os = @uninit(), .data = value, .open = true };
+      let rc = pthread_rwlock_init(&m.os, nullptr);
+
+      if (rc != 0) {
+        @panic("rwlock init failed");
+      };
+
+      return m;
+    }
+  }
+
+  pub fn read(*self) RwReadGuard[T] {
+    @os[windows] {
+      AcquireSRWLockShared(&self.os);
+    } else {
+      let rc = pthread_rwlock_rdlock(&self.os);
+
+      if (rc != 0) {
+        @panic("rwlock read failed");
+      };
+    }
+
+    return RwReadGuard { .lock = &self.os, .got = &self.data };
+  }
+
+  pub fn try_read(*self) Option[RwReadGuard[T]] {
+    @os[windows] {
+      let ok = TryAcquireSRWLockShared(&self.os);
+
+      if (ok == 0) {
+        return Option.None;
+      };
+    } else {
+      let rc = pthread_rwlock_tryrdlock(&self.os);
+
+      if (rc == EBUSY) {
+        return Option.None;
+      };
+
+      if (rc != 0) {
+        @panic("rwlock try_read failed");
+      };
+    }
+
+    return Option.Some(RwReadGuard { .lock = &self.os, .got = &self.data });
+  }
+
+  pub fn write(*self) RwWriteGuard[T] {
+    @os[windows] {
+      AcquireSRWLockExclusive(&self.os);
+    } else {
+      let rc = pthread_rwlock_wrlock(&self.os);
+
+      if (rc != 0) {
+        @panic("rwlock write failed");
+      };
+    }
+
+    return RwWriteGuard { .lock = &self.os, .got = &self.data };
+  }
+
+  pub fn try_write(*self) Option[RwWriteGuard[T]] {
+    @os[windows] {
+      let ok = TryAcquireSRWLockExclusive(&self.os);
+
+      if (ok == 0) {
+        return Option.None;
+      };
+    } else {
+      let rc = pthread_rwlock_trywrlock(&self.os);
+
+      if (rc == EBUSY) {
+        return Option.None;
+      };
+
+      if (rc != 0) {
+        @panic("rwlock try_write failed");
+      };
+    }
+
+    return Option.Some(RwWriteGuard { .lock = &self.os, .got = &self.data });
+  }
+
+  pub fn into_inner(self) T {
+    @os[windows] {
+    } else {
+      let _ = pthread_rwlock_destroy(&self.os);
+    }
+
+    self.open = false;
+    let out = self.data;
+    return out;
+  }
+}
+
+implement[T] Drop : RwLock[T] {
+  fn drop(self) {
+    if (!self.open) {
+      return;
+    };
+
+    @os[windows] {
+    } else {
+      let _ = pthread_rwlock_destroy(&self.os);
+    }
+
+    let _dead: T = self.data;
+  }
+}
+
+/// Held shared read, bind in scope
+pub struct RwReadGuard[T] {
+  lock: *OsRwLock,
+  got: *T,
+}
+
+implement[T: Copy] Deref : RwReadGuard[T] {
+  fn deref(*const self) T {
+    return *self.got;
+  }
+}
+
+implement[T] DerefPtr : RwReadGuard[T] {
+  fn deref_ptr(*self) *T {
+    return self.got;
+  }
+}
+
+implement[T] Drop : RwReadGuard[T] {
+  fn drop(self) {
+    @os[windows] {
+      ReleaseSRWLockShared(self.lock);
+    } else {
+      let _ = pthread_rwlock_unlock(self.lock);
+    }
+  }
+}
+
+/// Held exclusive write, bind in scope
+pub struct RwWriteGuard[T] {
+  lock: *OsRwLock,
+  got: *T,
+}
+
+implement[T: Copy] Deref : RwWriteGuard[T] {
+  fn deref(*const self) T {
+    return *self.got;
+  }
+}
+
+implement[T] DerefPtr : RwWriteGuard[T] {
+  fn deref_ptr(*self) *T {
+    return self.got;
+  }
+}
+
+implement[T] Drop : RwWriteGuard[T] {
+  fn drop(self) {
+    @os[windows] {
+      ReleaseSRWLockExclusive(self.lock);
+    } else {
+      let _ = pthread_rwlock_unlock(self.lock);
+    }
+  }
+}
+
+/// Atomic reference count shared ownership, thread safe version of `Shared`.
+pub struct Arc[T] {
+  ptr: *T,
+  count: *i64,
+
+  /// Move `value` into a new heap allocation with count one.
+  pub fn new(value: T) Self {
+    let ptr = @as(*T, Allocator.alloc(@sizeof(T)));
+    *ptr = value;
+
+    let count = @as(*i64, Allocator.alloc(@sizeof(i64)));
+    *count = 1;
+
+    Self { .ptr = ptr, .count = count }
+  }
+
+  /// Number of owners sharing the value.
+  pub fn use_count(*const self) i64 {
+    return arc_fetch_add(self.count, 0);
+  }
+
+  /// `true` when this is the only owner.
+  pub fn is_unique(*const self) bool {
+    return self.use_count() == 1;
+  }
+
+  /// Raw access to the shared value.
+  pub fn get(*const self) *const T {
+    return self.ptr;
+  }
+
+  /// Mutable raw access to the shared value. Visible to every owner.
+  pub fn get_mut(*self) *T {
+    return self.ptr;
+  }
+}
+
+fn arc_fetch_add(count: *i64, value: i64) i64 {
+  @os[windows] {
+    return InterlockedExchangeAdd64(count, value);
+  } else @os[linux | android | darwin | freebsd] {
+    return __atomic_fetch_add_8(count, value, ArcSeqCst);
+  } else {
+    @panic("threads unsupported");
+  }
+}
+
+fn arc_fetch_sub(count: *i64) i64 {
+  @os[windows] {
+    return InterlockedDecrement64(count);
+  } else @os[linux | android | darwin | freebsd] {
+    return __atomic_fetch_sub_8(count, 1, ArcSeqCst);
+  } else {
+    @panic("threads unsupported");
+  }
+}
+
+@os[linux | android | darwin | freebsd] {
+  extern fn __atomic_fetch_add_8(ptr: *i64, value: i64, order: i32) i64;
+  extern fn __atomic_fetch_sub_8(ptr: *i64, value: i64, order: i32) i64;
+}
+
+const ArcSeqCst: i32 = 5;
+
+implement[T] Clone : Arc[T] {
+  fn clone(*const self) Self {
+    let _ = arc_fetch_add(self.count, 1);
+
+    Self { .ptr = self.ptr, .count = self.count }
+  }
+}
+
+implement[T] Drop : Arc[T] {
+  fn drop(self) {
+    if (arc_fetch_sub(self.count) == 1) {
+      let _owned: T = *self.ptr;
+      Allocator.dealloc(@as(*void, self.ptr));
+      Allocator.dealloc(@as(*void, self.count));
+    };
+  }
+}
+
+implement[T: Copy] Deref : Arc[T] {
+  fn deref(*const self) T {
+    *self.ptr
+  }
+}
+
+implement[T] DerefPtr : Arc[T] {
+  fn deref_ptr(*self) *T {
+    self.ptr
+  }
+}
+
+implement[T: Display] Display : Arc[T] {
+  fn display[W: StrWriter](*const self, out: *W) {
+    (*self.ptr).display(out);
+  }
+}
+
+implement[T: Debug] Debug : Arc[T] {
+  fn debug[W: StrWriter](*const self, out: *W) {
+    (*self.ptr).debug(out);
+  }
+}

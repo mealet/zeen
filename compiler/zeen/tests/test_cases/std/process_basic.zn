@@ -1,0 +1,17 @@
+use std.process;
+
+fn main() i32 {
+  if (Process.args_count() != 1) {
+    return 1;
+  };
+  let args = Process.args();
+  if (args.len() != 1) {
+    return 2;
+  };
+  let cwd = Process.cwd();
+  if (cwd.is_err()) {
+    return 3;
+  };
+  @println("process-ok");
+  return 0;
+}

@@ -1,0 +1,11 @@
+use std.crypto.rand;
+
+fn main() i32 {
+  Rand.seed(42);
+  let a = Rand.next_u32();
+  let b = Rand.next_u32();
+  Rand.seed(42);
+  @println("{} {}", a == Rand.next_u32(), b == Rand.next_u32());
+  @println("{}", Rand.below(100) < 100);
+  return 0;
+}

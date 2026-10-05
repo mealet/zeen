@@ -18,7 +18,10 @@ pub struct HirExpr {
 pub enum HirExprKind {
     Literal(zeen_ast::expressions::Literal),
 
-    VarRef(DefId),
+    VarRef {
+        def: DefId,
+        generic_args: Vec<Rc<HirTypeExpr>>,
+    },
     GenericParamRef(DefId),
     SelfValue(DefId),
 
@@ -87,13 +90,11 @@ pub enum HirExprKind {
     },
     Type(Rc<HirTypeExpr>),
 
-    /// Anonymous function expression `fn(params) ret { body }`.
     Closure {
         def_id: DefId,
         def: Rc<HirFn>,
     },
 
-    /// Range expression: `a..b`, `a..=b`, `a..`, `..b`, `..=b`, `..`.
     Range {
         start: Option<Rc<HirExpr>>,
         end: Option<Rc<HirExpr>>,

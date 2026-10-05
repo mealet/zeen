@@ -1,12 +1,3 @@
-//! Dataflow analysis, move semantics and drop insertion pass.
-//!
-//! Runs right after MIR lowering and works on a mutable `MirProgram`,
-//! tracking the state of every local/place at each point of the CFG:
-//! `initialized` / `uninitialized` / `moved` / partially moved / maybe-* variants.
-//!
-//! On top of the analysis it performs drop insertion and reports move/init
-//! errors plus unused-variable warnings (see `error` for diagnostics).
-
 use std::{cell::RefCell, rc::Rc};
 
 use lasso::Rodeo;
@@ -19,6 +10,7 @@ use crate::analysis::DataFlow;
 pub mod analysis;
 pub mod drop;
 pub mod error;
+pub mod liveness;
 pub mod result;
 pub mod state;
 
@@ -28,9 +20,6 @@ mod tests;
 pub use error::FlowError;
 pub use result::FlowResult;
 
-/// Runs the whole dataflow pass over a lowered MIR program.
-///
-/// Entry point wired in right after MIR lowering.
 pub fn run_dataflow(
     program: &mut MirProgram,
     typecheck: &mut TypeCheckResult,

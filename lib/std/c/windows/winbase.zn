@@ -6,4 +6,13 @@ use std.c.windows.windef;
   pub extern fn SetLastError(err: WinDWORD) void;
   pub extern fn Sleep(ms: WinDWORD) void;
   pub extern fn ExitProcess(code: c_uint) never;
+  pub extern fn GetCurrentDirectoryA(len: WinDWORD, buf: [*]char) WinDWORD;
+  pub extern fn SetCurrentDirectoryA(path: [*]const c_char) WinBOOL;
+  pub extern fn SetEnvironmentVariableA(name: [*]const c_char, value: [*]const c_char) WinBOOL;
+  pub extern fn GetEnvironmentStringsA() [*]c_char;
+  pub extern fn FreeEnvironmentStringsA(block: [*]c_char) WinBOOL;
+  pub extern fn InterlockedDecrement64(addend: *i64) i64;
+  pub extern fn InterlockedExchangeAdd64(addend: *i64, value: i64) i64;
+  pub extern fn QueryPerformanceCounter(out: *i64) WinBOOL;
+  pub extern fn QueryPerformanceFrequency(out: *i64) WinBOOL;
 }

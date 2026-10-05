@@ -1,0 +1,61 @@
+use std.sync;
+use std.thread;
+
+fn main() i32 {
+  let m = Arc.new(RwLock.new(0));
+  let c1 = m.clone();
+
+  let t1 = Thread.spawn(fn() i32 {
+    let i: i32 = 0;
+
+    while (i < 50) {
+      let g = c1.get_mut().write();
+      *g += 1;
+
+      i += 1;
+    };
+
+    return 1;
+  });
+
+  let one = t1.join();
+
+  let c2 = m.clone();
+
+  let t2 = Thread.spawn(fn() i32 {
+    let g = c2.get_mut().read();
+
+    return *g;
+  });
+
+  let snapshot = t2.join();
+  let total: i32 = 0;
+
+  {
+    let g = m.get_mut().read();
+
+    total = *g;
+  };
+
+  @println("one={} snapshot={} total={}", one, snapshot, total);
+
+  {
+    let r = m.get_mut().try_read();
+
+    @println("try-read={}", r.is_some());
+  };
+
+  {
+    let w = m.get_mut().try_write();
+
+    @println("try-write={}", w.is_some());
+  };
+
+  @println("inline-try={}", m.get_mut().try_write().is_some());
+  @println("after-inline={}", m.get_mut().try_write().is_some());
+
+  let solo = RwLock.new(7);
+
+  @println("inner={}", solo.into_inner());
+  return 0;
+}

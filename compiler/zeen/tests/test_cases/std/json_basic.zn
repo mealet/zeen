@@ -1,0 +1,66 @@
+use std.json;
+
+fn show(label: []const char, text: []const char) {
+  let doc = JsonValue.parse(text);
+  if (doc.is_err()) {
+    let e = doc.unwrap_err();
+    @println("{}=ERR:{}:{}", label, e.kind == JsonErrorKind.UnexpectedChar, e.pos);
+    return;
+  };
+  @println("{}={}", label, doc.unwrap().stringify());
+}
+
+fn main() i32 {
+  show("empty-obj", "{}");
+  show("empty-arr", "[]");
+  show("nested", "{\"a\": [1, -2.5e3, true, null, \"x\"]}");
+  show("esc", "\"a\\\"b\\\\c\\/d\\b\\f\\n\\r\\t\"");
+  show("nums", "[0, -0, 123, -45.67, 1e10, 2E-3, 1.5e+2]");
+  show("dup", "{\"k\": 1, \"k\": 2}");
+  show("ws", "  { \"a\" : 1 }  ");
+  show("bad1", "{,}");
+  show("bad2", "[1,,2]");
+  show("trail-arr", "[1, 2,]");
+  show("trail-obj", "{\"a\": 1,}");
+  show("trail-nested", "{\"a\": [1,],}");
+  show("trail-dbl", "[1,,]");
+  show("bad3", "{\"a\"}");
+  show("bad4", "{\"a\": 01}");
+  show("bad5", "[1, 2");
+  show("bad6", "\"\\x\"");
+  show("bad7", "\"abc");
+  show("bad8", "[1 2]");
+  show("bad9", "{\"a\": 1} trailing");
+  show("bad10", "");
+  show("bad11", "nul");
+  show("bad12", "12.");
+
+  let u = JsonValue.parse("\"\\u0041\\u00e9\"");
+  if (u.is_err()) {
+    return 1;
+  };
+  let s = u.unwrap().as_str().unwrap();
+  @println("uni={} {}", s.len() == 2, @as(u32, s[1]) == 233);
+
+  let big = JsonValue.parse("\"\\u4e2d\"");
+  @println("big-rejected={}", big.is_err());
+
+  let doc = JsonValue.parse("{\"n\": -42, \"f\": 2.5, \"b\": false, \"z\": null, \"a\": [10, 20]}");
+  if (doc.is_err()) {
+    return 2;
+  };
+  let root = doc.unwrap();
+  @println("n={}", root.get("n").unwrap().as_i64().unwrap());
+  @println("f={}", root.get("f").unwrap().as_f64().unwrap() == 2.5);
+  @println("b={}", root.get("b").unwrap().as_bool().unwrap() == false);
+  @println("null={} missing={}", root.get("z").unwrap().is_null(), root.get("nope").is_none());
+  @println("len={} arrlen={}", root.len(), root.get("a").unwrap().len());
+  @println("at={} oob={}", root.get("a").unwrap().at(1).unwrap().as_i64().unwrap(), root.get("a").unwrap().at(9).is_none());
+  @println("wrongtype={}", root.get("n").unwrap().as_str().is_none());
+  @println("isarr={} isobj={}", root.get("a").unwrap().is_array(), root.is_object());
+  let sv = JsonValue.parse("\"hi\"").unwrap();
+  @println("is={} {} {} {}", sv.is_str(), sv.is_num(), root.get("n").unwrap().is_num(), root.get("b").unwrap().is_bool());
+  @println("alive={} {}", sv.as_str().unwrap().len(), root.get("a").unwrap().len());
+  @println("roundtrip={}", root.stringify());
+  return 0;
+}

@@ -3,18 +3,14 @@ use std::process::Command;
 
 use zeen_driver::Target;
 
-/// How the resulting object files are turned into a binary.
 #[derive(Debug)]
 enum Toolchain {
-    /// A compiler/linker invoked as-is (gcc family, wasm-ld, native cc...).
     Command { program: String, args: Vec<String> },
-    /// `clang` style driver with a `--target <triple>` pair.
     Clang {
         program: String,
         triple: String,
         args: Vec<String>,
     },
-    /// MSVC `link.exe` with resolved library search paths and C runtime libs.
     Msvc {
         link: PathBuf,
         lib_paths: Vec<PathBuf>,
@@ -53,6 +49,33 @@ impl Toolchain {
                 program, triple, ..
             } => format!("{program} (target {triple})"),
             Toolchain::Msvc { .. } => "link.exe (MSVC)".to_owned(),
+        }
+    }
+
+    fn with_late_arg(&self, arg: &str) -> Option<Self> {
+        match self {
+            Toolchain::Command { program, args } => {
+                let mut args = args.clone();
+                args.push(arg.to_owned());
+                Some(Toolchain::Command {
+                    program: program.clone(),
+                    args,
+                })
+            }
+            Toolchain::Clang {
+                program,
+                triple,
+                args,
+            } => {
+                let mut args = args.clone();
+                args.push(arg.to_owned());
+                Some(Toolchain::Clang {
+                    program: program.clone(),
+                    triple: triple.clone(),
+                    args,
+                })
+            }
+            Toolchain::Msvc { .. } => None,
         }
     }
 
@@ -100,7 +123,6 @@ impl Toolchain {
     }
 }
 
-/// Links object files into a binary for a specific target.
 #[derive(Debug)]
 pub struct ObjectLinker {
     target: Target,
@@ -108,9 +130,6 @@ pub struct ObjectLinker {
 }
 
 impl ObjectLinker {
-    /// Resolves the toolchain able to link for `triple`.
-    ///
-    /// Fails with a descriptive message when no usable toolchain is found.
     pub fn detect(triple: &str) -> Result<Self, String> {
         let target = Target::parse(triple);
         let toolchain = Self::resolve(&target)?;
@@ -122,12 +141,10 @@ impl ObjectLinker {
         self.toolchain.display_name()
     }
 
-    /// The object file extension LLVM should use for this target.
     pub fn object_extension(&self) -> &'static str {
         Self::object_extension_for(&self.target.triple)
     }
 
-    /// Same as [`Self::object_extension`], usable without a resolved toolchain.
     pub fn object_extension_for(triple: &str) -> &'static str {
         if Target::parse(triple).is_windows() {
             "obj"
@@ -136,21 +153,14 @@ impl ObjectLinker {
         }
     }
 
-    /// Applies the binary extension for the target (`.exe` on Windows, `.wasm`
-    /// for wasm) unless the user already supplied it.
     pub fn output_path(&self, requested: &Path) -> PathBuf {
         Self::apply_extension(&self.target, requested)
     }
 
-    /// Whether the resolved toolchain can compile and link extra C sources
-    /// passed through [`Self::link`]. MSVC `link.exe` and `wasm-ld` only
-    /// accept object files.
     pub fn accepts_c_sources(&self) -> bool {
         !self.target.is_wasm() && !matches!(self.toolchain, Toolchain::Msvc { .. })
     }
 
-    /// Overrides the detected linker executable with `program` (a path or a
-    /// name looked up on `PATH`).
     pub fn with_linker(&mut self, program: &str) {
         self.toolchain = match &self.toolchain {
             Toolchain::Command { args, .. } => Toolchain::Command {
@@ -174,10 +184,12 @@ impl ObjectLinker {
         };
     }
 
-    /// Links `objects` into `output`.
-    ///
-    /// Returns the actual output path on success, or the linker's stderr/stdout
-    /// on failure.
+    fn missing_atomics(output: &[u8]) -> bool {
+        let text = String::from_utf8_lossy(output);
+        text.contains("__atomic_")
+            && (text.contains("undefined reference") || text.contains("undefined symbol"))
+    }
+
     pub fn link(
         &self,
         objects: &[PathBuf],
@@ -203,10 +215,18 @@ impl ObjectLinker {
             result.stderr
         };
 
+        if Self::missing_atomics(&body)
+            && let Some(toolchain) = self.toolchain.with_late_arg("-latomic")
+        {
+            let retry = toolchain.build_command(objects, extra, &output).output();
+            if retry.map(|output| output.status.success()).unwrap_or(false) {
+                return Ok(output);
+            };
+        }
+
         Err(String::from_utf8_lossy(&body).into_owned())
     }
 
-    /// Same as [`Self::output_path`], usable without a resolved toolchain.
     pub fn output_path_for(triple: &str, requested: &Path) -> PathBuf {
         Self::apply_extension(&Target::parse(triple), requested)
     }
@@ -475,8 +495,6 @@ impl ObjectLinker {
     }
 
     fn resolve_wasm(target: &Target) -> Result<Toolchain, String> {
-        // WASI prefers clang with a sysroot so libc symbols resolve properly;
-        // fall through to the libc-free path when no sysroot is installed.
         if (target.os == "wasip1" || target.os == "wasi")
             && let Some(sysroot) = Self::wasi_sysroot()
         {
@@ -605,8 +623,6 @@ impl ObjectLinker {
         }
     }
 
-    // MSVC toolchain discovery (Windows only, in practice).
-
     fn locate_msvc(lib_arch: &str) -> Option<(PathBuf, Vec<PathBuf>)> {
         let host_arch = if cfg!(target_pointer_width = "64") {
             "x64"
@@ -700,7 +716,6 @@ impl ObjectLinker {
             .find(|path| path.join("VC").is_dir())
     }
 
-    /// Finds the newest numeric version subdirectory under `parent`.
     fn newest_version_dir(parent: &Path) -> Option<String> {
         let entries = std::fs::read_dir(parent).ok()?;
 
@@ -760,5 +775,27 @@ mod tests {
     fn msvc_target_rejected_off_windows() {
         let error = ObjectLinker::detect("x86_64-pc-windows-msvc").unwrap_err();
         assert!(error.contains("windows-gnu"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn gnu_ld_missing_atomics_detected() {
+        let stderr = b"/usr/bin/ld: /tmp/x.o: in function `f':\nx.o:(.text+0x1): undefined reference to `__atomic_fetch_add_8'";
+        assert!(ObjectLinker::missing_atomics(stderr));
+    }
+
+    #[test]
+    fn lld_missing_atomics_detected() {
+        let stderr = b"ld.lld: error: undefined symbol: __atomic_fetch_sub_8";
+        assert!(ObjectLinker::missing_atomics(stderr));
+    }
+
+    #[test]
+    fn unrelated_link_errors_ignored() {
+        let stderr = b"/usr/bin/ld: /tmp/x.o: undefined reference to `pthread_create'";
+        assert!(!ObjectLinker::missing_atomics(stderr));
+        assert!(!ObjectLinker::missing_atomics(
+            b"collect2: error: ld returned 1 exit status"
+        ));
+        assert!(!ObjectLinker::missing_atomics(b""));
     }
 }
