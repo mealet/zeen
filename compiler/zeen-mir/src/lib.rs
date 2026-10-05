@@ -37,8 +37,6 @@ pub struct MirProgram {
     pub struct_layouts: HashMap<TypeId, StructLayout>,
     pub enum_layouts: HashMap<TypeId, EnumLayout>,
 
-    /// Maps a concrete `TypeId` with a `Drop` impl to its monomorphized
-    /// drop function.
     pub drop_functions: HashMap<TypeId, MirFunctionId>,
 
     pub extern_fns: Vec<ExternFnDecl>,
@@ -55,8 +53,6 @@ pub struct MirGlobalVar {
     pub ty: TypeId,
     pub is_const: bool,
     pub is_pub: bool,
-    /// True when the variable is an externally-defined symbol (`extern let`):
-    /// codegen emits an external reference instead of a definition.
     pub is_extern: bool,
 }
 
@@ -85,7 +81,6 @@ pub struct StructFieldLayout {
 pub struct EnumLayout {
     pub def_id: DefId,
     pub generic_args: Vec<TypeId>,
-    /// Variants in declaration order; the ordinal is the runtime tag.
     pub variants: Vec<EnumVariantLayout>,
 }
 
@@ -93,7 +88,6 @@ pub struct EnumLayout {
 pub struct EnumVariantLayout {
     pub def_id: DefId,
     pub name: Spur,
-    /// The concrete payload type; `None` for empty variants.
     pub payload: Option<TypeId>,
 }
 
@@ -109,8 +103,6 @@ pub struct MirFunction {
     pub entry_block: BlockId,
     pub ret_ty: TypeId,
 
-    /// Whether this function is a generated `drop` implementation. Its `self`
-    /// parameter must not get an automatic scope-exit drop.
     pub is_drop_impl: bool,
 }
 
@@ -182,13 +174,10 @@ pub enum MirStatement {
     Assign {
         place: Place,
         rvalue: Rvalue,
-        /// Source of the produced expression, for diagnostics on reads.
         source: Option<Source>,
     },
     Drop(Place),
 
-    /// Evaluates an operand and throws the value away (`let _ = expr`).
-    /// Moves are still recorded.
     Discard(Operand),
 
     StorageLive(LocalId),
@@ -235,7 +224,6 @@ impl Place {
         self
     }
 
-    /// Enters the union member of enum variant `variant_def`.
     pub fn enum_payload(mut self, variant_def: DefId) -> Self {
         self.projection.push(PlaceElem::EnumPayload(variant_def));
         self
@@ -252,7 +240,6 @@ pub enum PlaceElem {
     Index(LocalId),
     Deref,
     Global(MirGlobalVarId),
-    /// Index into the union of an enum value, tagged by the variant's ordinal.
     EnumPayload(DefId),
 }
 
@@ -272,12 +259,7 @@ pub enum ConstValue {
     Str(Spur),
     NullPtr,
     Void,
-    /// A function value: pointer to the monomorphized function.
     Fn(MirFunctionId),
-    /// Address of a declared extern function without a body.
-    /// Index into `MirProgram.extern_fns`. Bodyless externs never get
-    /// monomorphized: emitting a body would define the symbol locally and
-    /// interpose the real one at link time.
     ExternFn(usize),
 }
 
@@ -340,7 +322,6 @@ pub enum Terminator {
         args: Vec<Operand>,
         destination: Place,
         target: Option<BlockId>,
-        /// Source of the call expression, for diagnostics on reads.
         source: Option<Source>,
     },
 
@@ -348,11 +329,9 @@ pub enum Terminator {
         kind: HirMacroKind,
         format_chunks: Option<Vec<FormatChunk>>,
         args: Vec<Operand>,
-        /// Types of the macro arguments, for format-arg rendering.
         arg_types: Vec<TypeId>,
         destination: Place,
         target: Option<BlockId>,
-        /// Source of the macro call expression, for diagnostics on reads.
         source: Option<Source>,
     },
 

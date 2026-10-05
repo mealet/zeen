@@ -128,9 +128,6 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
         val
     }
 
-    /// Reads the directive name of the current `@name[...]` preprocessor token
-    /// (the caller must be positioned on a `PreprocessorIdent` / `PreprocessorDebug`
-    /// / `PreprocessorRelease` token). Does not consume the token.
     pub fn parse_preprocessor_directive(
         &self,
     ) -> Option<zeen_ast::declarations::PreprocessorDirective> {
@@ -141,8 +138,6 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
         PreprocessorDirective::from_name(name_slice)
     }
 
-    /// Parses the `[a | b]` value list of a directive into an arena slice.
-    /// Bool directives (`@debug`/`@release`) carry no brackets and yield `[]`.
     pub fn parse_directive_values(
         &mut self,
         directive: zeen_ast::declarations::PreprocessorDirective,
@@ -363,9 +358,6 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
         self.ensure_sync_progress(entry);
     }
 
-    /// A sync loop can stop on the very token the previous parse failed at
-    /// (e.g. a declaration keyword used in a wrong position): retrying from
-    /// it would repeat the same failure forever, so force one step forward.
     fn ensure_sync_progress(&mut self, entry: Token) {
         let current = self.current_clone();
 

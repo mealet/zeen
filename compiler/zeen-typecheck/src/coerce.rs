@@ -66,9 +66,6 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
         return CoerceResult::ErrorRecovery;
     }
 
-    // Once a diagnostic has been emitted, generics are often pinned to `error`
-    // which can sit nested inside pointers/arrays/structs. Treat any error
-    // occurrence as recovery so we don't cascade more diagnostics.
     if type_contains_error(interner, from) || type_contains_error(interner, to) {
         return CoerceResult::ErrorRecovery;
     }
@@ -77,8 +74,6 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
         return CoerceResult::NeverCoercion;
     }
 
-    // Literals are allowed inside wrapped types too: `let p: *i64 = &123;`
-    // pins the pointee to `i64`, mirroring the top-level `IntLiteral` rule.
     if nested_literal_pins(interner, from, to) {
         return CoerceResult::PinLiteral;
     }
@@ -185,10 +180,6 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
             CoerceResult::ArrayToManyPointer
         }
 
-        // A basic fn pointer coerces into a fat fn value of the same
-        // signature (`fn(T) R -> Fn(T) R`). The storage the coercion
-        // produces (inline env + static target, or an inline fn pointer) is
-        // decided by the checker, which knows the coerced expression.
         (
             Type::Fn {
                 params: fp,
@@ -201,10 +192,6 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
             },
         ) if fp == tp && fr == tr => CoerceResult::FatFnCoercion,
 
-        // A fat value widens into the erased `Fn`/`FnOnce` bound of the same
-        // signature. `FnOnce` never narrows back to `Fn`, while an `Fn` value
-        // may flow into an `FnOnce` slot (the concrete storage keeps its
-        // `Fn` abilities).
         (
             Type::FatFn {
                 params: fp,
@@ -222,9 +209,6 @@ pub fn try_coerce(interner: &mut TypeInterner, from: TypeId, to: TypeId) -> Coer
             CoerceResult::FatFnCoercion
         }
 
-        // The same widening, through a pointer: `*<concrete closure>` into
-        // `*Fn(T) R`. The pointer value is identical - only the annotation
-        // is erased - so the storage stays the concrete pointer type.
         (
             Type::Pointer {
                 inner: from_inner,
@@ -284,8 +268,6 @@ pub fn type_contains_error(interner: &TypeInterner, ty: TypeId) -> bool {
     }
 }
 
-/// Whether `from` and `to` share structure and differ only in literal leaves
-/// that can be pinned to matching builtins (e.g. `*IntLiteral` vs `*i64`).
 fn nested_literal_pins(interner: &TypeInterner, from: TypeId, to: TypeId) -> bool {
     match (interner.get(from), interner.get(to)) {
         (Type::IntLiteral, Type::Builtin(b)) => builtin_is_integer(*b),
@@ -975,9 +957,6 @@ mod tests {
         let mut it = TypeInterner::default();
         let i32 = it.intern(Type::Builtin(BuiltinType::i32));
 
-        // Concrete closures share no type-level identity with a target:
-        // dispatch is decided by MIR from the value. Two concrete fats with
-        // the same signature are structurally identical (hash-consed).
         let closure_a = it.intern(Type::FatFn {
             params: vec![i32],
             ret: i32,

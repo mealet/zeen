@@ -1,6 +1,5 @@
 use std::path::Path;
 
-/// A parsed target triple (`arch[-vendor]-os[-env]`, e.g. `x86_64-unknown-linux-gnu`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub triple: String,
@@ -28,9 +27,6 @@ impl Target {
         }
     }
 
-    /// The host target, normalized to common triple naming: `macos` becomes
-    /// `darwin`, `arm64` becomes `aarch64`, and Linux reports `-musl` when the
-    /// host runs the musl libc.
     pub fn host() -> Self {
         let arch = match std::env::consts::ARCH {
             "x86" => "i686",
@@ -73,7 +69,6 @@ impl Target {
         self.arch == "wasm32" || self.arch == "wasm64"
     }
 
-    /// Derives the platform family from the OS and architecture.
     fn derive_family(os: &str, arch: &str) -> String {
         match os {
             "linux" | "macos" | "darwin" | "freebsd" | "openbsd" | "netbsd" | "dragonfly" => {

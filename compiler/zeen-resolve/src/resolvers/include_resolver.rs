@@ -45,10 +45,6 @@ pub(crate) struct ModuleGraph {
     pub uses: HashMap<PathBuf, Vec<ModuleUseEdge>>,
 }
 
-/// Which std modules a program needs injected: `@format(...)` pulls in
-/// `std.string`, closure/fat usage pulls in `std.fn`. On top of that the
-/// prelude (`std.string`, `std.collections.list`) is injected when the
-/// program mentions `String` or `List`.
 #[derive(Default)]
 struct UsageFlags {
     has_format: bool,
@@ -115,8 +111,6 @@ impl<'ctx> IncludeResolver<'ctx> {
         miette::NamedSource::new(self.filename.as_str(), src_ref)
     }
 
-    /// Returns `true` if `raw` is a built-in module path (e.g. `std.alloc`)
-    /// already injected into `self.modules`.
     fn is_builtin_module(&self, raw: &str) -> bool {
         self.modules.contains_key(Path::new(raw))
     }
@@ -125,8 +119,6 @@ impl<'ctx> IncludeResolver<'ctx> {
         self.interner.borrow_mut().get_or_intern(value)
     }
 
-    /// Walks the whole AST for `@format` and closure/fat usage, deciding
-    /// whether `std.string` / `std.fn` must be injected.
     fn usage_flags(&self, decls: &[&'ctx Declaration<'ctx>]) -> UsageFlags {
         let mut flags = UsageFlags::default();
         for decl in decls {
@@ -518,9 +510,6 @@ impl<'ctx> IncludeResolver<'ctx> {
 
         let mut injected: Vec<&str> = Vec::new();
 
-        // Prelude: `String` and `List` work without an explicit import.
-        // Injected only when the program mentions them, plus `@format`
-        // still pulls `std.string`. Best effort when std root is missing.
         let prelude = [
             ("std.string", usage.has_string || usage.has_format),
             ("std.collections.list", usage.has_list),
@@ -802,9 +791,6 @@ impl<'ctx> IncludeResolver<'ctx> {
                 continue;
             }
 
-            // The std library has its own configured root dir, so only check
-            // non-std uses. A use path that escapes the project root is
-            // usually an accident, so flag it.
             if !raw.starts_with("std") {
                 let project_root = canonicalize_best_effort(&self.context.paths.project_root);
                 if !target_canonical.starts_with(&project_root) {
@@ -946,8 +932,6 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
     }
 
-    /// A body-less `extern fn` is declaration-only; repeated declarations
-    /// of the same symbol are allowed.
     fn is_bare_extern_fn(decl: &Declaration<'ctx>) -> bool {
         matches!(
             decl.kind,

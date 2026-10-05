@@ -7,9 +7,6 @@ use zeen_ast::{
     expressions::{Arm, Literal},
 };
 
-/// A raw AST node pointer used as a map key.
-/// SAFETY: only valid while the arena object is alive (the arena lives for
-/// the whole program cycle).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeKey(pub usize);
 
@@ -51,27 +48,22 @@ impl NodeKey {
     }
 }
 
-/// `<decl pointer, slot index>` key for the generic bindings of an
-/// `implement` declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BindingSlotKey(pub usize, pub usize);
 
-/// Unique identifier for a resolver definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DefId(pub u32);
 
-/// Resolution instance that kept in symtable.
 #[derive(Debug, Clone, Copy)]
 pub enum Resolution {
-    Def(DefId),          // function, struct, variable, etc.
-    GenericParam(DefId), // scope generic param (functions/structures)
-    SelfValue(DefId),    // `self` inside structures methods
-    SelfType(DefId),     // `Self` alias
-    Builtin,             // i32, u32, ...
+    Def(DefId),
+    GenericParam(DefId),
+    SelfValue(DefId),
+    SelfType(DefId),
+    Builtin,
     Error,
 }
 
-/// Keeping definition info here
 #[derive(Debug, Clone)]
 pub struct DefInfo {
     pub name: Spur,

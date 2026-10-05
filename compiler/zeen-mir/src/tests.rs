@@ -457,8 +457,6 @@ fn struct_format_arg_is_lowered_to_display_call() {
          fn main() { let f = Foo {}; @println(\"{}\", f); }",
     );
 
-    // The display method must be monomorphized: before the fix the format
-    // machinery never invoked it, so no `Foo.display` was emitted.
     let names: Vec<String> = mir.program.function_names.values().cloned().collect();
     assert!(
         names.iter().any(|n| n == "Foo.display"),
@@ -482,8 +480,6 @@ fn struct_format_arg_is_lowered_to_display_call() {
         .expect("main id");
     let main = &mir.program.functions[&main_id];
 
-    // The display method receives the stdout writer: the call passes the
-    // receiver plus one extra argument.
     let calls_display = main.blocks.iter().any(|b| {
         matches!(
             b.terminator,
@@ -495,8 +491,6 @@ fn struct_format_arg_is_lowered_to_display_call() {
     });
     assert!(calls_display, "expected a call to `Foo.display` in main");
 
-    // println itself keeps only the literal parts (the trailing newline):
-    // the struct content is written by the display call.
     let println_has_no_args = main.blocks.iter().any(|b| {
         matches!(
             b.terminator,
@@ -521,8 +515,6 @@ fn slice_struct_field_registers_slice_layout() {
          fn main() { let s = make(); @println(\"{}\", s.slc); }",
     );
 
-    // A slice field must get a synthetic `{ ptr, len }` layout; without it
-    // codegen panics even when the slice points at static string data.
     let has_slice_layout = mir
         .program
         .struct_layouts
@@ -537,10 +529,6 @@ fn slice_struct_field_registers_slice_layout() {
 
 #[test]
 fn referenced_generic_struct_registers_layout() {
-    // A monomorphized struct that is only referenced (as a local annotation /
-    // constructor return) but never materialized by a struct literal must
-    // still get a layout; before the fix codegen panicked with
-    // "no struct type registered".
     let mir = compile_mir_ok(
         "struct Foo[T] { \
              pub fn new(value: T) Self { @todo() } \
@@ -548,12 +536,11 @@ fn referenced_generic_struct_registers_layout() {
          fn main() { let a: Foo[i32] = Foo.new(123); }",
     );
 
-    let has_foo_i32 = mir.program.struct_layouts.values().any(|layout| {
-        matches!(
-            layout.generic_args.as_slice(),
-            [zeen_types::TypeId(_)] // one generic arg: i32
-        )
-    });
+    let has_foo_i32 = mir
+        .program
+        .struct_layouts
+        .values()
+        .any(|layout| matches!(layout.generic_args.as_slice(), [zeen_types::TypeId(_)]));
     assert!(
         has_foo_i32,
         "expected a registered layout for the monomorphized `Foo[i32]`"
@@ -562,9 +549,6 @@ fn referenced_generic_struct_registers_layout() {
 
 #[test]
 fn diverging_tail_expression_keeps_unreachable() {
-    // A non-void function whose body is just `@todo()` must not get a
-    // type-incorrect `Return(Void)` fused into its (dead) tail block; it
-    // should end with `Unreachable`.
     let mir = compile_mir_ok(
         "struct Foo {} \
          fn make() Foo { @todo() } \
@@ -780,8 +764,6 @@ fn global_initialized_from_another_global() {
     assert_eq!(mir.program.global_vars.len(), 2);
 }
 
-// --> Closures
-
 use crate::{
     AggregateKind, CallTarget, ConstValue, LocalId, MirFunctionId, Operand, Rvalue, Terminator,
 };
@@ -836,7 +818,6 @@ fn capturing_closure_body_has_env_first_param() {
 
     assert_eq!(body.params.len(), 2, "expected (env, user arg) params");
 
-    // Captured reads resolve as `(*env).$envN` rooted at the first param.
     let reads_via_env = body.blocks.iter().any(|b| {
         b.statements.iter().any(|s| {
             let crate::MirStatement::Assign { rvalue, .. } = s else {
@@ -873,9 +854,6 @@ fn fat_call_passes_env_before_user_args() {
     let apply_id = fn_id_starting_with(&mir, "apply");
     let apply = &mir.program.functions[&apply_id];
 
-    // The fat call dispatches indirectly through `$fn` (uniform env-first
-    // ABI), passing the `$env` field copy as the leading argument before the
-    // user args.
     let fat_call = apply.blocks.iter().find_map(|b| match &b.terminator {
         Terminator::Call {
             func: CallTarget::Indirect(_),
@@ -914,8 +892,6 @@ fn capturing_closure_env_is_heap_allocated() {
          }",
     );
 
-    // Captures live in a heap env block: building the closure mallocs it,
-    // and every fat value's death frees it back.
     assert!(
         mir.program
             .extern_fns
@@ -931,7 +907,6 @@ fn capturing_closure_env_is_heap_allocated() {
         "drops must declare `free` for the env block"
     );
 
-    // The captures are grouped into a plain env aggregate first.
     let builds_aggregate = mir.program.functions.values().any(|func| {
         func.blocks.iter().any(|b| {
             b.statements.iter().any(|s| {
@@ -959,9 +934,6 @@ fn closure_env_block_is_stored_through_a_boxed_pointer() {
          }",
     );
 
-    // The env block is malloc'd (sized with a `SizeOf`), and the aggregate is
-    // stored through a cast `*void -> *env` pointer, i.e. into a boxed
-    // deref.
     let main_id = closure_id_named(&mir, "main");
     let main = &mir.program.functions[&main_id];
     let sizes_env = main.blocks.iter().any(|b| {
@@ -1005,16 +977,12 @@ fn zero_capture_closure_coerced_to_fat_uses_env_first_adapter() {
          }",
     );
 
-    // The zero-capture closure is a plain body; its fat slot needs an
-    // env-first adapter, synthesized once.
     let names: Vec<String> = mir.program.function_names.values().cloned().collect();
     assert!(
         names.iter().any(|n| n.starts_with("$fatadapt")),
         "a zero-capture closure in a fat slot must get an env-first adapter, got {names:?}"
     );
 
-    // The mono copy of `apply_once` for the zero-capture closure calls
-    // indirectly through the `$fn` field (the adapter).
     let apply_once_id = fn_id_starting_with(&mir, "apply_once");
     let apply_once = &mir.program.functions[&apply_once_id];
     let indirect = apply_once.blocks.iter().any(|b| {
@@ -1037,15 +1005,12 @@ fn static_fn_coerced_to_fat_dispatches_through_adapter() {
          fn main() { @println(\"{}\", apply(double, 21)); }",
     );
 
-    // The static fn has an empty env, so the fat value holds a `null` env and
-    // an env-first adapter forwarding into `double`.
     let names: Vec<String> = mir.program.function_names.values().cloned().collect();
     assert!(
         names.iter().any(|n| n.starts_with("$fatadapt")),
         "a static fn in a fat slot must get an env-first adapter, got {names:?}"
     );
 
-    // Inside `apply` the call is indirect through `$fn`.
     let apply_id = fn_id_starting_with(&mir, "apply");
     let apply = &mir.program.functions[&apply_id];
     let calls_indirect = apply.blocks.iter().any(|b| {
@@ -1062,9 +1027,6 @@ fn static_fn_coerced_to_fat_dispatches_through_adapter() {
         "a static fn in a fat slot must be called indirectly through `$fn`"
     );
 
-    // The envelope is built at the call site: three fields, fn pointer, a
-    // `null` env mark and the shared no-op teardown for the adapter-callable
-    // empty envelope.
     let main_id = fn_id_by_name(&mir, "main").expect("main missing");
     let main_fn = &mir.program.functions[&main_id];
     let envelope = main_fn.blocks.iter().any(|b| {
@@ -1106,9 +1068,6 @@ fn fat_layout_is_static_two_field_envelope() {
          }",
     );
 
-    // A fat value is a static `{ $fn, $env, $drop }` envelope shared by
-    // every fat type; the captures live in the heap block `$env` points at
-    // and `$drop` tears them down before the block is freed.
     let fat_layouts: Vec<_> = mir
         .program
         .struct_layouts
@@ -1134,8 +1093,6 @@ fn fat_layout_is_static_two_field_envelope() {
         zeen_types::CLOSURE_FAT_DROP_FIELD,
     );
 
-    // The env captures get their own inline struct layout (one field for the
-    // sole captured `n`).
     let has_env_layout = mir
         .program
         .struct_layouts
@@ -1154,9 +1111,6 @@ fn runtime_bare_fn_coercion_boxes_pointer_and_uses_adapter() {
          }",
     );
 
-    // A basic fn value read from a variable is boxed into a heap fat
-    // envelope (env = null, `$fn` = the pointer), and calls go through a
-    // shared env-first pointer adapter.
     let names: Vec<String> = mir.program.function_names.values().cloned().collect();
     assert!(
         names.iter().any(|n| n.starts_with("$fatptr")),
@@ -1170,7 +1124,6 @@ fn runtime_bare_fn_coercion_boxes_pointer_and_uses_adapter() {
         "boxing the fn pointer must declare `malloc`"
     );
 
-    // Inside `apply` the call is indirect through `$fn` (the adapter).
     let apply_id = fn_id_starting_with(&mir, "apply");
     let apply = &mir.program.functions[&apply_id];
     let indirect = apply.blocks.iter().any(|b| {
@@ -1280,8 +1233,6 @@ fn heap_fn_closure_gets_drop_function() {
          }",
     );
 
-    // Every fat value owns a heap env block, `Fn` included: the value's
-    // scope-end drop must `free` it back.
     assert!(
         mir.program
             .extern_fns
@@ -1311,8 +1262,6 @@ fn fnonce_call_consumes_the_closure_value() {
     let apply_once = &mir.program.functions[&apply_once_id];
     let f_param = apply_once.params[0];
 
-    // The body must move the whole fat value into a slot before extracting
-    // `$fn`/`$env`, so a second call of `f` is rejected by dataflow.
     let consumes_value = apply_once.blocks.iter().any(|b| {
         b.statements.iter().any(|s| {
             matches!(
@@ -1332,9 +1281,6 @@ fn fnonce_call_consumes_the_closure_value() {
 
 #[test]
 fn live_heap_env_closure_registers_drop_function() {
-    // The closure is referenced without being moved (a shared borrow keeps it
-    // alive), so dataflow will drop it at scope exit and the env must be
-    // released through the synthesized per-type drop function.
     let mir = compile_mir_ok(
         "struct Wrap { pub v: i32 } \
          fn main() i32 { \
@@ -1356,9 +1302,6 @@ fn live_heap_env_closure_registers_drop_function() {
 
 #[test]
 fn fnonce_param_mono_copy_registers_drop_function() {
-    // The `FnOnce(i32) i32` parameter type is erased in the signature, but
-    // the monomorphized copy stores the concrete closure type and its
-    // FnOnce drop function must exist for uncalled/owned values.
     let mir = compile_mir_ok(
         "fn apply_once(f: FnOnce(i32) i32, x: i32) i32 { return f(x); } \
          fn main() i32 { \
@@ -1384,8 +1327,6 @@ fn fnonce_param_mono_copy_registers_drop_function() {
 
 #[test]
 fn consuming_call_of_concrete_env_calls_drop_function() {
-    // An in-frame `FnOnce` call consumes the value: the env must be released
-    // right after the call, through the type's drop function.
     let mir = compile_mir_ok(
         "struct Wrap { pub v: i32 } \
          fn main() i32 { \
@@ -1398,9 +1339,6 @@ fn consuming_call_of_concrete_env_calls_drop_function() {
     let main_id = closure_id_named(&mir, "main");
     let main = &mir.program.functions[&main_id];
 
-    // A direct call to the synthesized drop function must follow the
-    // indirect fat call, moving the consumed slot into it (so dataflow
-    // stops tracking it).
     let drops_after_call = main.blocks.iter().any(|b| {
         matches!(
             &b.terminator,
@@ -1422,8 +1360,6 @@ fn consuming_call_of_concrete_env_calls_drop_function() {
 
 #[test]
 fn generic_bound_method_call_dispatches_to_concrete_impl() {
-    // `out.write_str(...)` where `O: StrWriter` must dispatch to the concrete
-    // implementation (`MyOut.write_str`), not the bodyless interface method.
     let mir = compile_mir_ok(
         "struct MyOut {} \
          implement StrWriter : MyOut { \
@@ -1449,8 +1385,6 @@ fn generic_bound_method_call_dispatches_to_concrete_impl() {
 
 #[test]
 fn sizeof_of_unused_struct_registers_layout() {
-    // `@sizeof(Foo)` is the only reference to the struct; the layout must
-    // still be registered so codegen can size the type.
     let mir = compile_mir_ok(
         "struct Foo { a: i32, b: i64 } \
          fn main() { let s: usize = @sizeof(Foo); @println(\"{}\", s); }",

@@ -40,17 +40,10 @@ pub struct CompilationContext {
     pub core_files: Vec<(&'static str, &'static str)>,
     pub mode: CompilationMode,
     pub output: CompilationOutput,
-    /// Target triple being compiled for (`None` = host).
     pub target: Option<String>,
-    /// Non-fatal warnings collected during compilation.
     pub warnings: Vec<String>,
 }
 
-/// Whether the compilation target requires a `main` entry point.
-///
-/// Every executable target does. Bare wasm (`wasm32-unknown-unknown`) does
-/// not: the linker treats it as a module (`--no-entry`), so a program without
-/// `main` is fine there.
 pub fn target_requires_main(target: Option<&str>) -> bool {
     let Some(target) = target else {
         return true;

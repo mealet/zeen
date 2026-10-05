@@ -9,7 +9,6 @@ use zeen_types::{Type, TypeId, TypeInterner, VariantPayload};
 
 use crate::state::{FunctionState, LocalState, PartialMoveState, ValueState};
 
-/// Places that need a `Drop` statement at scope exit.
 #[derive(Debug, Default)]
 pub struct DropSet {
     pub places: Vec<Place>,
@@ -22,19 +21,10 @@ pub struct Taint {
     pub name: SmolStr,
 }
 
-/// Whether a value of type `ty` must be dropped: structs implementing `Drop`,
-/// or aggregates (arrays/slices/structs) containing drop-typed values.
-///
-/// For structs the monomorphized `generic_args` are substituted into the field
-/// types before recursing, so a `Pair[Foo, Foo]` whose fields are (transitively)
-/// drop-typed counts even though its fields are declared as `T`/`U`.
 pub fn type_needs_drop(interner: &TypeInterner, typecheck: &TypeCheckResult, ty: TypeId) -> bool {
     type_needs_drop_impl(interner, typecheck, ty, &HashMap::default())
 }
 
-/// Recursive implementation. `bindings` maps the generic parameter `DefId`s of
-/// the instantiation being inspected to the concrete types they were
-/// substituted with, letting field types be resolved against the real args.
 fn type_needs_drop_impl(
     interner: &TypeInterner,
     typecheck: &TypeCheckResult,
@@ -52,8 +42,6 @@ fn type_needs_drop_impl(
         | Type::Never
         | Type::Error => false,
 
-        // `Fn`/`FnOnce` closure values own a heap env block, so their death
-        // must `free` it back (a synthesized per-type drop function does it).
         Type::FatFn { .. } => true,
 
         Type::Struct {
@@ -97,12 +85,9 @@ fn type_needs_drop_impl(
             })
         }
 
-        // A slice is a view (`{ ptr, len }`) over someone else's storage: it
-        // owns nothing, so it never requires a drop.
         Type::Slice { .. } => false,
 
         Type::GenericParam(def) => bindings.get(&def).is_some_and(|&bound| {
-            // A parameter bound to itself is still unbound: no drop.
             bound != ty && type_needs_drop_impl(interner, typecheck, bound, bindings)
         }),
 
@@ -110,16 +95,6 @@ fn type_needs_drop_impl(
     }
 }
 
-/// Expands the drop places of a wholly-live value of type `ty` rooted at
-/// `place`, flattening structs that do not implement `Drop` into their fields.
-///
-/// A struct with an explicit `Drop` implementation is dropped as a whole - the
-/// codegen emits the implementation's `drop` call. Any other struct is expanded
-/// recursively: each field that (transitively) needs a drop ends up as its own
-/// `Drop` place. Arrays/slices stay a single drop of the whole aggregate, since
-/// their elements are never moved individually. This front-loading keeps the
-/// partially-moved state knowledge here; codegen only ever drops the places it
-/// is given and never has to decide which fields are live.
 fn expand_live_drops(
     interner: &TypeInterner,
     typecheck: &TypeCheckResult,
@@ -155,28 +130,21 @@ fn expand_live_drops(
                 );
             }
         }
-        // Substitute a generic parameter before recursing.
+
         Type::GenericParam(def) => {
             if let Some(&bound) = bindings.get(&def) {
                 expand_live_drops(interner, typecheck, place, bound, bindings, out);
             }
         }
-        // A fat closure value is dropped as a whole: codegen resolves the
-        // per-type drop (a heap env goes back through `free`); values of
-        // types without a registered drop function are skipped there.
+
         Type::FatFn { .. } => out.push(place.clone()),
-        // An enum dies as a whole: the synthesized per-type drop function
-        // switches on the runtime tag and tears down the live payload.
+
         Type::Enum { .. } => out.push(place.clone()),
         Type::Array { .. } | Type::Slice { .. } => out.push(place.clone()),
         _ => {}
     }
 }
 
-/// Expands the drop places of a partially moved struct: only the fields that
-/// are still live are dropped, each expanded to its own (possibly nested)
-/// explicit drops. Partially moved structs without an explicit `Drop` impl are
-/// the only ones that get here - field moves are rejected for `Drop` structs.
 fn expand_partial_drops(
     interner: &TypeInterner,
     typecheck: &TypeCheckResult,
@@ -220,8 +188,7 @@ fn expand_partial_drops(
                 );
             }
         }
-        // Not a resolvable struct: fall back to the directly tracked live
-        // fields.
+
         _ => {
             for (field, state) in partial.fields() {
                 if *state == ValueState::Initialized {
@@ -232,10 +199,6 @@ fn expand_partial_drops(
     }
 }
 
-/// Extends `bindings` with the generic parameters of `struct_def`, resolved to
-/// the concrete `generic_args` of this instantiation. An argument may itself be
-/// a `GenericParam` of an outer struct, so it is resolved through `bindings`
-/// first.
 fn bind_type_generics(
     interner: &TypeInterner,
     typecheck: &TypeCheckResult,
@@ -249,7 +212,6 @@ fn bind_type_generics(
     bind_params(interner, params, generic_args, bindings)
 }
 
-/// Same as [`bind_type_generics`], but for an enum's generic parameters.
 fn bind_enum_generics(
     interner: &TypeInterner,
     typecheck: &TypeCheckResult,
@@ -280,13 +242,6 @@ fn bind_params(
     nested
 }
 
-/// Computes the set of live places that need dropping at scope exit.
-///
-/// Only values that are still initialized at the point of exit, are not `Copy`
-/// and actually need a drop participate in the set. A struct with an explicit
-/// `Drop` implementation is dropped as a whole; any other struct is expanded
-/// into its live fields (recursively), so codegen never works with a partially
-/// moved root.
 pub fn collect_scope_drops(
     function: &MirFunction,
     state: &FunctionState,
@@ -307,8 +262,6 @@ pub fn collect_scope_drops(
     drops
 }
 
-/// Adds the drop places of a single local to `drops` if it is live at scope exit.
-/// `MaybeInitialized` is left to the caller.
 #[allow(clippy::too_many_arguments)]
 pub fn collect_local_drops(
     function: &MirFunction,
@@ -385,8 +338,6 @@ fn check_taint(
     true
 }
 
-/// Appends `MirStatement::Drop` statements before the terminator of a specific
-/// exit block, in reverse drop order (last declared first).
 pub fn insert_drops(function: &mut MirFunction, block: BlockId, drops: &DropSet) {
     let block = function.block_mut(block);
     for place in drops.places.iter().rev() {
@@ -394,7 +345,6 @@ pub fn insert_drops(function: &mut MirFunction, block: BlockId, drops: &DropSet)
     }
 }
 
-/// Inserts `Drop` statements before the statement at `index`, in reverse drop order.
 pub fn insert_scope_drop(
     function: &mut MirFunction,
     block: BlockId,
@@ -440,7 +390,6 @@ mod tests {
         }
     }
 
-    /// `Foo` implements `Drop`; `Pair[T, U]` does not but wraps two `Foo`s.
     fn pair_scene() -> (TypeInterner, TypeCheckResult) {
         let mut interner = TypeInterner::new();
         let mut rodeo = Rodeo::default();
@@ -574,8 +523,6 @@ mod tests {
     const OWNED_VARIANT: DefId = DefId(33);
     const SOME_VARIANT: DefId = DefId(34);
 
-    /// `Resource { none, owned: Foo }` (Foo has `Drop`) needs a drop through
-    /// its payload; `Opt { none, some: i32 }` does not.
     fn enum_scene() -> (TypeInterner, TypeCheckResult) {
         let mut interner = TypeInterner::new();
         let mut rodeo = Rodeo::default();

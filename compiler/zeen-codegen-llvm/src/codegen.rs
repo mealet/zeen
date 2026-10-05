@@ -45,9 +45,7 @@ use crate::error::CodegenError;
 
 #[derive(Debug, Clone)]
 pub struct CodegenOptions {
-    /// Debug vs Release (affects optimization level and panic strategy).
     pub mode: CompilationMode,
-    /// Target triple (see `--target`). `None` = host triple.
     pub target: Option<String>,
     pub main_fn: Option<MirFunctionId>,
     pub source_file_name: String,

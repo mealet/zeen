@@ -24,8 +24,6 @@ use crate::{
     state::{FunctionState, LocalState, ReadOutcome, ValueState},
 };
 
-/// Owned snapshot of a function, taken so the analysis never borrows the
-/// program while it also mutates its own bookkeeping.
 struct FunctionSnapshot {
     entry_block: BlockId,
     params: Vec<LocalId>,
@@ -40,10 +38,6 @@ struct LocalInfo {
     source: Option<Source>,
 }
 
-/// The dataflow pass over a lowered MIR program.
-///
-/// Consumes a mutable `MirProgram`, analyzes every function's CFG, reports
-/// move/init diagnostics and inserts `Drop` statements where needed.
 pub struct DataFlow<'ctx> {
     program: &'ctx mut MirProgram,
     typecheck: &'ctx mut TypeCheckResult,
@@ -53,25 +47,13 @@ pub struct DataFlow<'ctx> {
     tainted: HashMap<LocalId, Taint>,
     copies: HashMap<LocalId, Place>,
 
-    /// In-progress state of the currently analyzed function.
     current: FunctionState,
-    /// Merged in-states of each block, used by the worklist.
     block_in_states: HashMap<BlockId, FunctionState>,
-    /// States at the `Return` terminators, keyed by the returning block. Drop
-    /// insertion looks up the state of the exact exit block, so different exits
-    /// of a function keep their own live-set (a value live on one early-return
-    /// path must not be dropped on a path where it was already moved).
     exit_states: HashMap<BlockId, FunctionState>,
-    /// States captured before each `StorageDead`, for scope-exit drop insertion.
     storage_states: HashMap<(BlockId, usize), FunctionState>,
-    /// Locals read anywhere in the current function, for unused warnings.
     read_locals: HashSet<LocalId>,
-    /// Snapshot of the function currently being analyzed.
     snapshot: Option<FunctionSnapshot>,
-    /// Source of the statement/terminator currently being processed, used to
-    /// point borrow/move diagnostics at the offending use site.
     current_source: Option<Source>,
-    /// Block currently being analysed, used to record exit states.
     active_block: BlockId,
 
     diagnostics: Vec<FlowError>,
@@ -105,7 +87,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Runs the whole pass over every function of the program.
     pub fn run(&mut self) {
         let function_ids: Vec<MirFunctionId> = self.program.functions.keys().copied().collect();
 
@@ -116,8 +97,6 @@ impl<'ctx> DataFlow<'ctx> {
         self.check_escaping_borrows();
     }
 
-    /// Dataflow over a single function, ending with drop insertion
-    /// into its exit blocks.
     fn analyze_function(&mut self, function_id: MirFunctionId) {
         self.current.clear();
         self.block_in_states.clear();
@@ -148,7 +127,6 @@ impl<'ctx> DataFlow<'ctx> {
             crate::liveness::insert_prompt_drops(function, &typecheck.interner, typecheck, tainted);
         }
 
-        // Take an owned snapshot of the function's shapes.
         let snapshot = {
             let function = self.program.functions.get(&function_id).unwrap();
             FunctionSnapshot {
@@ -169,11 +147,8 @@ impl<'ctx> DataFlow<'ctx> {
         };
         self.snapshot = Some(snapshot);
 
-        // Entry state: parameters are live, everything else is uninitialized.
         let snapshot = self.snapshot.as_ref().unwrap();
 
-        // Owned copies for the worklist, so the loop never borrows `self`
-        // while the statement transfer takes `&mut self`.
         let entry_block = snapshot.entry_block;
         let blocks = snapshot.blocks.clone();
         let params = snapshot.params.clone();
@@ -206,9 +181,6 @@ impl<'ctx> DataFlow<'ctx> {
             let after = self.current.clone();
             let succ_ids = successors.get(&block_id).cloned().unwrap_or_default();
             for succ in succ_ids {
-                // A block with no incoming edge yet adopts this edge's state
-                // outright; joining would mix it with the bottom
-                // (all-uninitialized) default and poison every first visit.
                 if let std::collections::hash_map::Entry::Vacant(entry) =
                     self.block_in_states.entry(succ)
                 {
@@ -452,7 +424,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Applies a statement's effect to `self.current`.
     fn apply_statement(&mut self, stmt: &MirStatement, stmt_index: usize) {
         match stmt {
             MirStatement::Assign {
@@ -510,8 +481,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Applies a terminator's effect: consumes operands, writes the call
-    /// destination, and records the block's state on `Return`.
     fn apply_terminator(&mut self, terminator: &Terminator) {
         match terminator {
             Terminator::Goto(_) | Terminator::Unreachable => {
@@ -566,7 +535,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Consumes an operand: reads its place, applying move/init checks.
     fn consume_operand(&mut self, operand: &Operand) {
         match operand {
             Operand::Constant(_, _) => {}
@@ -575,10 +543,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// A plain read of a place (no ownership transfer). Read validation always
-    /// happens: even a `Copy` value can't be read before it is initialized or
-    /// after it was moved out. Only the state transition differs from a full
-    /// move.
     fn consume_copy_place(&mut self, place: &Place, source: Option<Source>) {
         if place_is_global(place) {
             for local in index_locals(place) {
@@ -595,7 +559,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// A move of a place (ownership transfer).
     fn consume_move_place(&mut self, place: &Place, source: Option<Source>) {
         if place_is_global(place) {
             for local in index_locals(place) {
@@ -607,8 +570,6 @@ impl<'ctx> DataFlow<'ctx> {
             self.mark_read(local);
         }
 
-        // Moving a field out of a struct with an explicit `Drop` impl is forbidden
-        // entirely.
         if first_field(place).is_some() && self.type_has_explicit_drop(place) {
             self.emit_drop_move_error(place, source.clone());
         }
@@ -623,8 +584,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Writes into a place, supplying the struct field set when the
-    /// destination is a field so reconstruction is tracked precisely.
     fn write_destination(&mut self, place: &Place) {
         if place_is_global(place) {
             return;
@@ -643,7 +602,6 @@ impl<'ctx> DataFlow<'ctx> {
         self.current.write_place(place);
     }
 
-    /// Field `DefId`s of the struct type of `local`, in declaration order.
     fn struct_fields_of(&self, local: LocalId) -> Option<Vec<DefId>> {
         let ty = self.snapshot.as_ref()?.locals.get(local.0 as usize)?.ty;
         match self.typecheck.interner.get(ty) {
@@ -656,7 +614,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Emits the appropriate diagnostic if `place` isn't safely readable.
     fn check_read(&mut self, place: &Place, source: Option<Source>) {
         let outcome = self.current.read_place(place);
         if let Some(error) = self.read_error(place, outcome, source) {
@@ -696,8 +653,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Best available source for a read of `local`: the current statement or
-    /// terminator, falling back to the local's declaration.
     fn use_source(&self, local: LocalId) -> Option<zeen_ast::Source> {
         self.current_source.clone().or_else(|| {
             self.snapshot
@@ -730,7 +685,6 @@ impl<'ctx> DataFlow<'ctx> {
         self.read_locals.insert(local);
     }
 
-    /// Reports `UnusedVariable` warnings for never-read user locals.
     fn report_unused(&mut self) {
         let Some(snapshot) = &self.snapshot else {
             return;
@@ -768,9 +722,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Inserts `Drop` statements at the exit blocks, using the live-set computed
-    /// for each specific exit. Values live on one early-return path are not
-    /// dropped on a path where they were already moved out.
     fn insert_drops(&mut self, function_id: MirFunctionId) {
         let exit_states = std::mem::take(&mut self.exit_states);
         if exit_states.is_empty() {
@@ -792,8 +743,6 @@ impl<'ctx> DataFlow<'ctx> {
             })
             .flatten();
 
-        // A `drop` implementation sorts out its own `self`; giving it an
-        // automatic scope-exit drop would call itself recursively.
         let retain = |drops: &mut DropSet| {
             if let Some(self_param) = &self_param {
                 drops.places.retain(|place| {
@@ -833,8 +782,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Inserts `Drop` statements before the `StorageDead` of a local.
-    /// A `MaybeInitialized` value at scope end is a hard error.
     #[allow(clippy::needless_collect)]
     fn insert_scope_drops(&mut self, function_id: MirFunctionId) {
         let storage_states = std::mem::take(&mut self.storage_states);
@@ -915,8 +862,6 @@ impl<'ctx> DataFlow<'ctx> {
             }
         }
 
-        // Insert drops deepest/rightmost first so earlier index shifts don't
-        // disturb the positions of drops that come after them.
         for (block, mut plan) in per_block {
             plan.insertions
                 .sort_by_key(|(index, _)| std::cmp::Reverse(*index));
@@ -935,10 +880,6 @@ impl<'ctx> DataFlow<'ctx> {
         self.type_is_copy(ty)
     }
 
-    /// Moves out of a field of a struct with an *explicit* `Drop` implementation
-    /// are rejected: dropping the partial value would bypass the
-    /// implementation's `drop`. Structs that merely *contain* drop values (and
-    /// drop per-field) may be partially moved freely.
     fn type_has_explicit_drop(&self, place: &Place) -> bool {
         let Some(ty) = self.root_type(place) else {
             return false;
@@ -964,9 +905,6 @@ impl<'ctx> DataFlow<'ctx> {
         let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
         for elem in &place.projection {
             let PlaceElem::Field(field) = elem else {
-                // An `EnumPayload` element switches the running type from the
-                // enum to the payload's struct/enum machinery; continue with
-                // the payload's own structural type.
                 if let PlaceElem::EnumPayload(variant) = elem
                     && let Some(payload_ty) = self.enum_payload_ty(ty, *variant)
                 {
@@ -1025,7 +963,6 @@ impl<'ctx> DataFlow<'ctx> {
         self.rodeo.borrow().resolve(&name).into()
     }
 
-    /// Mirrors `zeen_mir::lowering::mir_type_is_copy`: copy types never move.
     fn type_is_copy(&self, ty: TypeId) -> bool {
         match self.typecheck.interner.get(ty).clone() {
             Type::Builtin(_)
@@ -1045,8 +982,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Resolves the payload type of an enum variant projection, matching
-    /// `lowering::enum_payload_ty`.
     fn enum_payload_ty(&mut self, ty: TypeId, variant_def: DefId) -> Option<TypeId> {
         let Type::Enum {
             def_id: enum_def,
@@ -1095,7 +1030,6 @@ impl<'ctx> DataFlow<'ctx> {
     }
 }
 
-/// Block -> successor edges of the function.
 fn compute_successors(snapshot: &FunctionSnapshot) -> HashMap<BlockId, Vec<BlockId>> {
     let mut result = HashMap::new();
     for (i, block) in snapshot.blocks.iter().enumerate() {
@@ -1125,7 +1059,6 @@ fn successor_blocks(terminator: &Terminator) -> Vec<BlockId> {
     }
 }
 
-/// First `Field` projection of a place, if any.
 fn first_field(place: &Place) -> Option<DefId> {
     match place.projection.first() {
         Some(PlaceElem::Field(field)) => Some(*field),
@@ -1133,10 +1066,6 @@ fn first_field(place: &Place) -> Option<DefId> {
     }
 }
 
-/// Statement index at which a scope-end drop for `local` should be inserted:
-/// right after the last statement that reads `local`, provided nothing rewrites
-/// `local` between that read and the scope end. Otherwise it stays right before
-/// the `StorageDead` at `storage_idx`.
 fn drop_insert_position(statements: &[MirStatement], storage_idx: usize, local: LocalId) -> usize {
     let last_read = statements[..storage_idx]
         .iter()
@@ -1154,7 +1083,6 @@ fn drop_insert_position(statements: &[MirStatement], storage_idx: usize, local: 
     }
 }
 
-/// Whether the statement reads (uses) `local`'s value as an operand.
 fn stmt_reads_local(stmt: &MirStatement, local: LocalId) -> bool {
     match stmt {
         MirStatement::Assign { place, rvalue, .. } => {
@@ -1165,8 +1093,6 @@ fn stmt_reads_local(stmt: &MirStatement, local: LocalId) -> bool {
     }
 }
 
-/// Whether the statement (re)writes `local`, which would make the value to drop
-/// a different one than the value already planned for.
 fn stmt_writes_local(stmt: &MirStatement, local: LocalId) -> bool {
     match stmt {
         MirStatement::Assign { place, .. } => place.local == local,
@@ -1200,15 +1126,12 @@ fn operand_reads_local(operand: &Operand, local: LocalId) -> bool {
     }
 }
 
-/// Base local of a place plus every index local in its projection: reading
-/// `arr.ptr[i]` reads both `arr` and `i`.
 fn place_read_locals(place: &Place) -> Vec<LocalId> {
     let mut locals = vec![place.local];
     locals.extend(index_locals(place));
     locals
 }
 
-/// Index locals referenced by a place's projection.
 fn index_locals(place: &Place) -> Vec<LocalId> {
     place
         .projection
@@ -1220,20 +1143,14 @@ fn index_locals(place: &Place) -> Vec<LocalId> {
         .collect()
 }
 
-/// For each local that (transitively) holds a borrow, the set of frame locals
-/// its slice/pointer points into. An empty set means the value owns no borrow
-/// of this function's frame (external slice, string literal, plain data).
 type BorrowState = HashMap<LocalId, HashSet<LocalId>>;
 
-/// Transfer of a statement over the borrow state.
 fn apply_borrow_stmt(state: &mut BorrowState, stmt: &MirStatement) {
     let MirStatement::Assign { place, rvalue, .. } = stmt else {
         return;
     };
     let dest_root = place.local;
 
-    // Writes to a whole local replace its provenance; writes to a projected
-    // field/array slot merge into it.
     let write = |state: &mut BorrowState, roots: HashSet<LocalId>| {
         if place.projection.is_empty() {
             state.insert(dest_root, roots);
@@ -1271,8 +1188,6 @@ fn apply_borrow_stmt(state: &mut BorrowState, stmt: &MirStatement) {
             write(state, roots);
         }
 
-        // Binary ops, casts, discriminants and size queries produce scalars
-        // that never borrow frame memory.
         Rvalue::BinaryOp { .. }
         | Rvalue::UnaryOp { .. }
         | Rvalue::Cast { .. }
@@ -1282,8 +1197,6 @@ fn apply_borrow_stmt(state: &mut BorrowState, stmt: &MirStatement) {
     }
 }
 
-/// Returns the borrowed frame local (and diagnostic source) when the returned
-/// operand's provenance reaches into the current function's stack.
 fn check_return_borrow(state: &BorrowState, op: &Operand) -> Option<(LocalId, Option<Source>)> {
     match op {
         Operand::Copy(p, src) | Operand::Move(p, src) => state
@@ -1293,9 +1206,6 @@ fn check_return_borrow(state: &BorrowState, op: &Operand) -> Option<(LocalId, Op
     }
 }
 
-/// Unions `incoming` borrow origins into `target`. Returns true if anything
-/// changed (so the worklist re-visits the successor). Conservative join: an
-/// origin that was overwritten on one path stays, which can only over-approximate.
 fn merge_borrow_states(target: &mut BorrowState, incoming: &BorrowState) -> bool {
     let mut changed = false;
     for (local, roots) in incoming {
@@ -1308,9 +1218,6 @@ fn merge_borrow_states(target: &mut BorrowState, incoming: &BorrowState) -> bool
 }
 
 impl<'ctx> DataFlow<'ctx> {
-    /// Reports values that escape a function while still borrowing its stack
-    /// frame: returning `&local` (or a slice/struct holding such a borrow) is
-    /// always a dangling pointer once the frame is popped.
     fn check_escaping_borrows(&mut self) {
         let function_ids: Vec<MirFunctionId> = self.program.functions.keys().copied().collect();
 
@@ -1356,10 +1263,7 @@ impl<'ctx> DataFlow<'ctx> {
                 Terminator::Return(op) => {
                     if let Some((root, src)) = check_return_borrow(&state, op) {
                         let info = &snapshot.locals[root.0 as usize];
-                        // A borrow rooted at a pointer parameter points into
-                        // the caller's memory (`slice(*self, ...)` returning
-                        // `self.data[..]`), which outlives this call, so it
-                        // never dangles here.
+
                         let pointee_param = snapshot.params.contains(&root)
                             && matches!(
                                 self.typecheck.interner.get(info.ty),
@@ -1378,8 +1282,7 @@ impl<'ctx> DataFlow<'ctx> {
                             .push(FlowError::EscapingBorrow { name, src, span });
                     }
                 }
-                // A call's result cannot borrow this frame (the callee cannot
-                // produce a borrow of a local it never sees on that path).
+
                 Terminator::Call { destination, .. } => {
                     state.insert(destination.local, HashSet::new());
                 }
@@ -1408,8 +1311,6 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
-    /// Finalizes the pass, splitting diagnostics into errors and warnings.
-    /// Fails (returns `Err`) if any error-severity diagnostic was emitted.
     pub fn finish(self) -> Result<FlowResult, Vec<FlowError>> {
         let mut result = FlowResult::default();
 

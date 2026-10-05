@@ -314,8 +314,6 @@ mod tests {
     fn implement_names_tie_interface_and_object() {
         let fx = resolve_ok("struct Foo {} implement Foo : Copy {}");
 
-        // The core library contributes its own implementations; only the
-        // user's implementation is asserted here.
         let is_user_entry = |(iface, _): &(Resolution, Resolution)| match iface {
             Resolution::Def(def_id) => {
                 fx.resolution
@@ -872,7 +870,6 @@ mod tests {
             .def_id_by_name("closure0")
             .expect("closure0 def must be defined");
 
-        // `x` lives in main's dead frame - only `y` (nested's frame) is captured
         assert_eq!(fx.captured_names(closure), vec!["y".to_string()]);
     }
 

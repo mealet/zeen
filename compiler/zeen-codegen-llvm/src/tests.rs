@@ -1,5 +1,3 @@
-//! Unit tests for LLVM codegen
-
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -17,7 +15,6 @@ use zeen_types::Type;
 use crate::codegen::{CodeGen, CodegenOptions};
 use crate::fixtures::*;
 
-/// Runs the full codegen pipeline on a fixture and returns the printed IR
 fn compile(fx: &Fixture, mode: CompilationMode) -> String {
     let context = Context::create();
     let options = CodegenOptions {
@@ -198,7 +195,7 @@ fn fn_to_pointer_and_back_to_fn_cast_round_trip() {
     let restored = main.temp(fn_ty);
     let result = main.temp(i32);
     main.entry("bb0");
-    // fn_ptr = @as(*void, foo)
+
     main.assign(
         place(fn_ptr),
         Rvalue::Cast {
@@ -206,7 +203,7 @@ fn fn_to_pointer_and_back_to_fn_cast_round_trip() {
             target: ptr_ty,
         },
     );
-    // restored = @as(fn() i32, fn_ptr)
+
     main.assign(
         place(restored),
         Rvalue::Cast {
@@ -393,12 +390,8 @@ fn f32_division_narrows_to_slot_and_promotes_for_printf() {
 
     let ir = compile(&fx, CompilationMode::Debug);
 
-    // Float-literal operands are `f64` by default; the folded division result
-    // must be narrowed to the `f32` slot instead of being stored as a `double`
-    // (which would clobber adjacent memory and fail to verify).
     assert!(!ir.contains("store double"), "{ir}");
     assert!(ir.contains("store float"), "{ir}");
-    // ...and widened back to `double` for the variadic `snprintf` call.
     assert!(ir.contains("fpext float"), "{ir}");
     assert!(
         ir.contains("call i32 (ptr, i64, ptr, ...) @snprintf"),
@@ -527,7 +520,6 @@ fn payload_enum_builds_tagged_aggregate_and_reads_payload() {
     let payload = f.temp(i32);
 
     f.entry("bb0");
-    // Shape.Single(42): tag 1, payload 42.
     f.assign(
         place(agg),
         Rvalue::Aggregate {
@@ -538,7 +530,7 @@ fn payload_enum_builds_tagged_aggregate_and_reads_payload() {
             operands: vec![const_int(42)],
         },
     );
-    // payload = agg.enum_payload(Single)
+
     f.assign(
         place(payload),
         Rvalue::Use(copy_of_place(place(agg).enum_payload(single))),
@@ -548,13 +540,9 @@ fn payload_enum_builds_tagged_aggregate_and_reads_payload() {
 
     let ir = compile(&fx, CompilationMode::Debug);
 
-    // Verify the tagged-union struct layout.
     assert!(ir.contains("%enum.Shape = type { i8, i32 }"), "{ir}");
-    // Tag stored at field 0.
     assert!(ir.contains("store i8 1"), "{ir}");
-    // Payload stored at field 1.
     assert!(ir.contains("store i32 42"), "{ir}");
-    // Payload extracted from union member (GEP field index 1 → load).
     assert!(
         ir.contains("%enum.Shape, ptr %aggregate, i32 0, i32 1"),
         "{ir}"
@@ -605,8 +593,7 @@ fn empty_only_enum_tag_reads_bare_scalar() {
     let tag = f.temp(u8);
 
     f.entry("bb0");
-    // tag = discriminant(slot): the bare-tag scalar loads directly, with no
-    // struct GEP (empty-only enums are not aggregates).
+
     f.assign(place(tag), Rvalue::Discriminant(place(slot)));
     f.ret(copy_of(tag));
     f.finish();
@@ -662,16 +649,13 @@ fn enum_union_slot_pads_most_aligned_payload() {
     let slot = f.temp(packet_ty);
     let tag = f.temp(u8_tag);
     f.entry("bb0");
-    // A tag read forces the enum struct body into the IR.
+
     f.assign(place(tag), Rvalue::Discriminant(place(slot)));
     f.ret(copy_of(tag));
     f.finish();
 
     let ir = compile(&fx, CompilationMode::Debug);
 
-    // `[9 x i8]` is larger but only aligned to 1; the slot is an untyped
-    // blob sized to 9 bytes and aligned to 8, so every payload byte is
-    // real data and survives copies.
     assert!(
         ir.contains("%enum.Packet = type { i8, { [1 x i64], [1 x i8] } }"),
         "{ir}"
@@ -805,7 +789,6 @@ fn format_returns_a_slice() {
     let slice = fx.slice(char);
     let i32 = fx.i32();
 
-    // Register the synthetic `[]T` layout: `{ ptr: [*]T, len: usize }`.
     let ptr_ty = fx.ty(Type::ManyPointer {
         inner: char,
         is_const: false,
@@ -857,8 +840,6 @@ fn format_returns_a_slice() {
 
 #[test]
 fn char_display_uses_percent_c_and_debug_wraps_in_quotes() {
-    // Build a `@format` call with a single char arg so codegen picks the
-    // printf specifier for char (`%c` for Display, `'%c'` for Debug).
     for (spec, expected) in [(FormatSpec::Display, "%c"), (FormatSpec::Debug, "\'%c\'")] {
         let mut fx = Fixture::new();
         let fmt_def = fx.def("fmt", DefKind::Function);
@@ -893,7 +874,6 @@ fn string_constant_coerces_to_slice_argument() {
     let slice = fx.slice(char);
     let void = fx.void();
 
-    // Register the synthetic `[]T` layout: `{ ptr: [*]T, len: usize }`.
     let ptr_ty = fx.ty(Type::ManyPointer {
         inner: char,
         is_const: false,
@@ -959,7 +939,6 @@ fn string_literal_coerces_to_slice_return_value() {
     let slice = fx.slice(char);
     let void = fx.void();
 
-    // Register the synthetic `[]T` layout: `{ ptr: [*]T, len: usize }`.
     let ptr_ty = fx.ty(Type::ManyPointer {
         inner: char,
         is_const: false,
@@ -983,8 +962,6 @@ fn string_literal_coerces_to_slice_return_value() {
         },
     );
 
-    // `fn hello() []const char { return "hello!"; }` - a string literal
-    // returned from a function must lower to a `{ ptr, len }` slice.
     let hello_str = const_str(&mut fx, "hello!");
     let hello_def = fx.def("hello", DefKind::Function);
     let mut hello = fx.fn_builder("hello", hello_def, slice);
@@ -1006,7 +983,7 @@ fn string_literal_coerces_to_slice_return_value() {
     let ir = compile(&fx, CompilationMode::Debug);
 
     assert!(ir.contains("@str.0"), "{ir}");
-    // The returned slice stores the length of the string (without the NUL).
+
     assert!(ir.contains("store i64 6"), "{ir}");
     assert!(ir.contains("ret %slice.char"), "{ir}");
     assert!(ir.contains("%slice.char"), "{ir}");
@@ -1035,9 +1012,6 @@ fn string_literal_in_struct_array_field_is_stored_inline() {
         },
     );
 
-    // `let s: Str = Str { .inner = "hello" };` - the string literal fills the
-    // `[6]char` field, so its bytes must be copied into the array field, not
-    // stored as a raw pointer to the literal global.
     let hello = const_str(&mut fx, "hello");
     let main_def = fx.def("main", DefKind::Function);
     let void = fx.void();
@@ -1107,9 +1081,8 @@ fn string_literal_coerces_to_char_array_param_and_formats() {
 
     let ir = compile(&fx, CompilationMode::Debug);
 
-    // The string literal coerces to a `[7 x i8]` array argument.
     assert!(ir.contains("[7 x i8]"), "{ir}");
-    // The `[N]char` param is printed through `%.*s` with its length.
+
     assert!(ir.contains("@printf"), "{ir}");
     assert!(ir.contains("value is %.*s"), "{ir}");
 }
@@ -1185,7 +1158,6 @@ fn release_mode_runs_optimization_passes() {
 
     let ir = compile(&fx, CompilationMode::Release);
 
-    // The optimizer may annotate the definitions (`noundef`, `local_unnamed_addr`).
     assert!(ir.contains("@zeen_main()"), "{ir}");
     assert!(ir.contains("@main(i32"), "{ir}");
 }
@@ -1205,7 +1177,6 @@ fn const_string_global_is_deduplicated() {
 
     let ir = compile(&fx, CompilationMode::Debug);
 
-    // The `same` string must be emitted as exactly one global.
     assert_eq!(ir.matches("c\"same\\00\"").count(), 1, "{ir}");
 }
 
@@ -1384,10 +1355,10 @@ fn pointer_arithmetic_scales_offsets_by_element_size() {
     let ret = main.temp(i32);
 
     main.entry("bb0");
-    // p2 = p + 2, scaled by sizeof(i32) = 4.
+
     main.assign(place(sum), binary(BinaryOp::Add, copy_of(p), const_int(2)));
     main.assign(place(p2), use_const(Operand::Copy(place(sum), None)));
-    // diff = p2 - p, the element count (also scaled by 4).
+
     main.assign(place(diff), binary(BinaryOp::Sub, copy_of(p2), copy_of(p)));
     main.assign(
         place(diff_i32),

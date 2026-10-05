@@ -305,9 +305,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         )
     }
 
-    /// Continues parsing binary operators from an already-parsed LHS.
-    /// Callers can parse the LHS at higher precedence first, e.g. to sniff an
-    /// upcoming `=`.
     pub fn parse_binary_rest(
         &mut self,
         mut lhs: &'ctx Expression<'ctx>,
@@ -400,9 +397,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             TokenKind::Literal { kind } => self.parse_literal(*kind),
 
             TokenKind::Keyword(CompilerKeyword::Null) => {
-                // `null` literal is not included in `parse_literal` functions, but it is
-                // written with the same rule: don't move cursor.
-
                 let output = self.parse_literal_null();
                 let _ = self.p.advance();
 
@@ -1134,8 +1128,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         Some(expr)
     }
 
-    /// Parses an expression-level preprocessor guard: `@os[linux] { expr }`
-    /// followed by an optional `else` chain.
     fn parse_conditional_expr(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let start_token = self.p.current_clone();
         let start_span = start_token.span;
@@ -1233,7 +1225,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
         let first = self.parse()?;
 
-        // `[expr; N]` repeat syntax, mirrors the `[T; N]` type syntax.
         if self.p.eat(TokenKind::Semicolon) {
             let len = self.parse()?;
             let close = self.p.expect(TokenKind::CloseBracket, "]")?;
@@ -1328,7 +1319,6 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         Some(expr)
     }
 
-    /// Parses a closure expression: `fn(params) ret { body }`.
     fn parse_closure(&mut self) -> Option<&'ctx Expression<'ctx>> {
         use zeen_lexer::token::CompilerKeyword;
 

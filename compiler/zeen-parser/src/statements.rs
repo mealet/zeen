@@ -71,8 +71,6 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         }
     }
 
-    /// Parses a nested function declaration (`fn foo() { .. }`), optionally
-    /// prefixed with `pub`.
     fn parse_fn_decl(&mut self) -> Option<&'ctx Statement<'ctx>> {
         let start_span = self.p.current().span;
         let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
@@ -109,8 +107,6 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 }
 
 impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
-    /// Parses a statement-level preprocessor guard: `@os[linux] { stmts }`
-    /// followed by an optional `else` chain.
     pub fn parse_conditional_stmt(&mut self) -> Option<&'ctx Statement<'ctx>> {
         let start_token = self.p.current_clone();
         let start_span = start_token.span;

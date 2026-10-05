@@ -12,68 +12,43 @@ use crate::format_str::FormatChunk;
 pub struct TypeCheckResult {
     pub main_fn_def: Option<DefId>,
     pub interner: TypeInterner,
+
     pub expr_types: HashMap<HirId, TypeId>,
     pub def_types: HashMap<DefId, TypeId>,
     pub call_resolutions: HashMap<HirId, CallResolution>,
     pub fn_item_monos: HashMap<HirId, Vec<TypeId>>,
     pub field_resolutions: HashMap<HirId, DefId>,
     pub operator_resolutions: HashMap<HirId, OperatorResolution>,
+
     pub struct_info: HashMap<DefId, StructTypeInfo>,
     pub struct_generics: HashMap<DefId, Vec<DefId>>,
     pub enum_info: HashMap<DefId, EnumTypeInfo>,
     pub enum_generics: HashMap<DefId, Vec<DefId>>,
-    /// Interface names -> their `DefId`.
+
     pub interface_registry: HashMap<String, DefId>,
     pub enum_variants: HashMap<DefId, Vec<DefId>>,
     pub method_owner: HashMap<DefId, DefId>,
     pub const_bindings: HashMap<DefId, bool>,
     pub format_specs: HashMap<HirId, Vec<FormatChunk>>,
-    /// Per-closure-site environment allocation decision.
     pub closure_allocs: HashMap<DefId, ClosureAllocKind>,
 
-    /// Return expressions of functions declared to return a `Fn`/`FnOnce` bound.
     pub fat_return_candidates: HashMap<DefId, Vec<(HirId, Source)>>,
-
-    /// Variable defs whose initializer is a fat (or fat-bound-typed) value.
     pub fat_let_values: HashMap<DefId, HirId>,
-
-    /// VarRef expressions whose recorded type is a fat value.
     pub fat_value_defs: HashMap<HirId, DefId>,
-
-    /// Resolved concrete return type of a function declared to return a
-    /// `Fn`/`FnOnce` bound.
     pub fn_return_fats: HashMap<DefId, TypeId>,
 
-    /// Interface implementations registered per `(struct, interface)`,
-    /// including concrete specializations (`implement Display : Box[i32]`).
     pub impl_registry: HashMap<(DefId, DefId), Vec<ImplEntry>>,
-
-    /// Interface method chosen for a struct-typed format argument.
     pub format_arg_resolutions: HashMap<HirId, DefId>,
-
-    /// Every method declared directly inside an `interface` block, mapped to
-    /// the interface that owns it.
     pub interface_method_owners: HashMap<DefId, DefId>,
-
-    /// The concrete `Iterator::next` method resolved for a for-loop over a
-    /// struct, keyed by the loop statement. Mirrors `format_arg_resolutions`
-    /// so MIR dispatches to the same implementation the checker picked.
     pub for_iterator_next_methods: HashMap<HirId, DefId>,
 }
 
-/// A single `implement` block registered for a `(struct, interface)` pair.
 #[derive(Debug, Clone)]
 pub struct ImplEntry {
     pub methods: Vec<DefId>,
-    /// Lowered object slots: `Type::GenericParam` for generic-binding slots,
-    /// concrete types for specializations.
     pub object_args: Vec<TypeId>,
     pub is_specialized: bool,
-    /// Bounds of the implement's generic parameters
-    /// (`implement[T: Display]`): `T` -> the interfaces it requires.
     pub generic_bounds: Vec<(DefId, Vec<DefId>)>,
-    /// The implement's generic parameters bound to the struct's generic
-    /// slots (`implement[T] Display : Box[T]` -> `T` -> the struct's `T`).
     pub generic_bindings: Vec<(DefId, DefId)>,
 }
 
@@ -82,11 +57,6 @@ impl TypeCheckResult {
         self.expr_types.insert(id, ty);
     }
 
-    /// Whether a concrete type is `Copy`, decided per instantiation so that
-    /// bounded implementations like `implement[T: Copy] Copy : Option[T]`
-    /// only make `Option[T]` copyable when `T` itself is. Mirrors
-    /// `TypeChecker::applicable_impl`, but builtins are always Copy even
-    /// without a declared `Copy` impl.
     pub fn is_copy(&self, ty: TypeId) -> bool {
         match self.interner.get(ty).clone() {
             Type::Struct {
@@ -144,7 +114,6 @@ impl TypeCheckResult {
             return false;
         };
 
-        // A concrete specialization always wins.
         if entries
             .iter()
             .any(|e| e.is_specialized && e.object_args == generic_args)
@@ -159,8 +128,6 @@ impl TypeCheckResult {
             .or_else(|| self.enum_generics.get(&type_def).cloned())
             .unwrap_or_default();
 
-        // Bounded generic impls require the concrete args to satisfy their
-        // bounds (`implement[T: Copy] Copy : Option[T]`).
         for entry in entries
             .iter()
             .filter(|e| !e.is_specialized && !e.generic_bounds.is_empty())
@@ -171,15 +138,15 @@ impl TypeCheckResult {
                 else {
                     return true;
                 };
+
                 let Some(index) = member_generics.iter().position(|g| g == struct_slot) else {
                     return true;
                 };
+
                 let Some(concrete) = generic_args.get(index).copied() else {
                     return true;
                 };
-                // A Copy bound is satisfied exactly when the concrete argument
-                // is itself Copy. Non-Copy bounds are checked against the
-                // plain interface satisfaction path.
+
                 ifaces.iter().all(|&iface| {
                     if iface == copy_iface {
                         self.is_copy(concrete)
@@ -194,14 +161,11 @@ impl TypeCheckResult {
             }
         }
 
-        // A boundless wildcard implementation applies to every instantiation.
         entries
             .iter()
             .any(|e| !e.is_specialized && e.generic_bounds.is_empty())
     }
 
-    /// Whether a concrete (or interface) type satisfies the given interface.
-    /// Used to validate non-`Copy` bounds on a `Copy` implementation.
     fn satisfies_interface(&self, ty: TypeId, iface_def: DefId) -> bool {
         match self.interner.get(ty).clone() {
             Type::Error => true,
@@ -217,9 +181,6 @@ impl TypeCheckResult {
         }
     }
 
-    /// Selects the applicable implementation for `(struct_def, iface_def)` at
-    /// a concrete instantiation, reusing `applicable_copy_impl` for `Copy` so
-    /// builtins and bounded `Copy` impls are handled consistently.
     fn applicable_interface(
         &self,
         type_def: DefId,

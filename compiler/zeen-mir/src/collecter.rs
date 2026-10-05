@@ -55,8 +55,6 @@ fn collect_from_decl(decl: &HirDecl, map: &mut HashMap<DefId, Rc<HirFn>>) {
     }
 }
 
-/// Walks a statement tree, collecting nested function declarations so they can
-/// be monomorphized/lowered alongside top-level ones.
 fn collect_from_stmt(stmt: &HirStmt, map: &mut HashMap<DefId, Rc<HirFn>>) {
     match &stmt.kind {
         HirStmtKind::FnDecl(decl) => {

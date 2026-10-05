@@ -5,7 +5,10 @@ use zeen_driver::Target;
 
 #[derive(Debug)]
 enum Toolchain {
-    Command { program: String, args: Vec<String> },
+    Command {
+        program: String,
+        args: Vec<String>,
+    },
     Clang {
         program: String,
         triple: String,

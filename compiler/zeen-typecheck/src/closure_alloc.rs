@@ -1,50 +1,26 @@
-//! Per-closure-site environment allocation analysis.
-//!
-//! Every closure expression becomes a fat `Fn`/`FnOnce` value backed by an
-//! environment struct. Whether that environment lives on the stack of the
-//! creating frame or is heap-allocated (`malloc`) is a static per-site
-//! decision, consumed by MIR lowering.
-//!
-//! `Heap` is the conservative fallback for closures that can outlive their
-//! defining frame. Otherwise a closure bound to a `let` and referenced only
-//! as a call target gets a stack env; one never used at all is `Unused`.
-
 use std::collections::{HashMap, HashSet};
 
 use zeen_hir::{HirDeclKind, HirExpr, HirExprKind, HirModule, HirStmt, HirStmtKind};
 use zeen_resolve::DefId;
 
-/// How (and whether) a closure's captured environment is materialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ClosureAllocKind {
-    /// The env is heap-allocated (`malloc`) because the closure value can
-    /// outlive the creating frame.
     Heap,
-    /// The env is a plain stack value of the creating frame.
     Stack,
-    /// The closure value is never used; the backend must not create it.
     Unused,
 }
 
-/// What happens to the value a walked expression produces.
 #[derive(Debug, Clone)]
 enum Fate {
-    /// The value is dropped (statement context).
     Discard,
-    /// The value can leave the defining frame (return, argument, stored).
     Escaping,
-    /// The value is being called right now.
     Callee,
-    /// The value is bound to a `let` local.
     Bind(DefId),
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 struct LocalRefs {
-    /// Referenced as a call target (and nothing else).
     callee: bool,
-    /// Referenced in some escaping position (returned, passed, stored,
-    /// captured, moved out).
     other: bool,
 }
 
@@ -88,11 +64,8 @@ pub fn analyze_closures(
 
 struct Analyzer<'a> {
     captures: &'a HashMap<DefId, Vec<DefId>>,
-    /// Every let-bound local seen so far (keyed by its `DefId`).
     locals: HashMap<DefId, LocalRefs>,
-    /// Lexical scope stack of currently-visible local `DefId`s.
     scope: Vec<HashSet<DefId>>,
-    /// Closure `DefId` -> the local it was bound to.
     sites: HashMap<DefId, DefId>,
     allocs: HashMap<DefId, ClosureAllocKind>,
 }
@@ -308,7 +281,6 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// Resolves captured locals to `Heap`.
     fn finish(mut self) -> HashMap<DefId, ClosureAllocKind> {
         for captures in self.captures.values() {
             for captured in captures {

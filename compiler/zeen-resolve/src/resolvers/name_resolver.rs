@@ -5,7 +5,7 @@ use smol_str::SmolStr;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
 };
@@ -25,18 +25,13 @@ use crate::{
     symbol_table::{ScopeContent, ScopeKind, SymbolTable},
 };
 
-/// One active function-like boundary that restricts or enables captures.
 #[derive(Debug, Clone)]
 enum CaptureLayer {
-    /// An active closure body. `def_id` is the closure's function def,
-    /// `candidates` are the enclosing defs it is allowed to capture.
     Closure {
         def_id: DefId,
         candidates: HashSet<DefId>,
     },
 
-    /// An active nested `fn` body: capturing is forbidden entirely. Contains
-    /// every enclosing def the nested fn can see but must not reference.
     Blocked(HashSet<DefId>),
 }
 
@@ -47,19 +42,10 @@ pub struct NameResolver {
     table: SymbolTable,
     result: ResolutionResult,
 
-    /// Active capture boundaries, innermost last: one `Blocked` layer per
-    /// nested `fn` body, one `Closure` layer per closure body.
     capture_stack: Vec<CaptureLayer>,
-
-    /// The `DefId` of the function whose body is currently being resolved,
-    /// used to record the parent of nested function declarations.
     current_fn_def: Option<DefId>,
-
-    /// Counter for synthetic closure function names (`closure0`, `closure1`, ...).
     closure_counter: u32,
 
-    /// Edges of the global variables dependency graph: a global var -> globals
-    /// referenced from its initializer expression.
     global_deps: HashMap<DefId, Vec<DefId>>,
 
     next_def_id: u32,
@@ -177,12 +163,7 @@ impl<'ctx> NameResolver {
         id
     }
 
-    /// Captures cascade through enclosing closure boundaries so each
-    /// environment records a definition referenced by nested closures.
-    /// A nested `fn` boundary forbids capture. Returns `false` on error.
     fn process_capture(&mut self, def_id: DefId, span: SourceSpan) -> bool {
-        // Function defs are called, not captured: closures can recurse and
-        // call sibling/nested functions freely.
         if matches!(
             self.result.defs.get(&def_id).map(|info| &info.kind),
             Some(DefKind::Function)
@@ -244,7 +225,6 @@ impl<'ctx> NameResolver {
             .any(|layer| matches!(layer, CaptureLayer::Closure { .. }))
     }
 
-    /// Records `captured` in `closure_def`'s capture list (first-use order).
     fn record_capture(&mut self, closure_def: DefId, captured: DefId) {
         let captures = self.result.closure_captures.entry(closure_def).or_default();
         if !captures.contains(&captured) {
@@ -252,7 +232,6 @@ impl<'ctx> NameResolver {
         }
     }
 
-    /// Rejects defs a closure cannot own in its env (generics for now).
     fn check_capturable(&mut self, def_id: DefId, span: SourceSpan) -> bool {
         if matches!(
             self.result.defs.get(&def_id).map(|info| &info.kind),
@@ -525,7 +504,7 @@ impl<'ctx> NameResolver {
     fn insert_import(
         table: &mut HashMap<Spur, DefId>,
         ambiguous: &mut HashMap<PathBuf, HashSet<Spur>>,
-        canon: &PathBuf,
+        canon: &Path,
         own_keys: &HashSet<Spur>,
         name: Spur,
         id: DefId,
@@ -535,7 +514,10 @@ impl<'ctx> NameResolver {
         }
         match table.get(&name) {
             Some(existing) if *existing != id => {
-                ambiguous.entry(canon.clone()).or_default().insert(name);
+                ambiguous
+                    .entry(canon.to_path_buf())
+                    .or_default()
+                    .insert(name);
             }
             Some(_) => {}
             None => {
@@ -610,9 +592,6 @@ impl<'ctx> NameResolver {
                 body,
                 ..
             } => {
-                // A bare `extern fn` (no body) declares an external symbol:
-                // it is reachable across modules like a C declaration, even
-                // when duplicated by user code (`extern fn malloc` vs std).
                 let is_pub = is_pub || (is_extern && body.is_none());
 
                 let def_id = self.define_at(
@@ -984,12 +963,8 @@ impl<'ctx> NameResolver {
                 );
 
                 for (idx, slot) in object_bindings.iter().enumerate() {
-                    // Resolve the slot type so HIR can lower concrete slots.
                     self.resolve_type(slot);
 
-                    // A bare generic-parameter name of this implement keeps
-                    // the binding form (`Box[T]`); everything else is a
-                    // concrete specialization slot (`Box[i32]`).
                     if let TypeKind::Named {
                         name,
                         generic_args: None,
@@ -1233,7 +1208,6 @@ impl<'ctx> NameResolver {
     }
 
     fn check_global_var_cycles(&mut self) {
-        // 0 = unvisited, 1 = in progress, 2 = done
         let mut state: HashMap<DefId, u8> = HashMap::new();
         let mut stack: Vec<DefId> = Vec::new();
 
@@ -1479,8 +1453,6 @@ impl<'ctx> NameResolver {
         let self_param_node = params.first().filter(|p| is_self_param(p));
         let self_intern = self.interner_intern("self");
 
-        // The receiver gets a binding even when it is unnamed (`*const self`),
-        // otherwise its parameter def is lost downstream.
         let self_param_id = self_param_node.map(|p| {
             self.define_at(
                 NodeKey::from_param(p),
@@ -1546,10 +1518,6 @@ impl<'ctx> NameResolver {
         let Some(generics) = generics else { return };
 
         for generic in generics {
-            // A generic repeating an enclosing generic parameter name does
-            // not shadow it: it names the same parameter and only adds
-            // bounds for the current scope (e.g. `from_clone[T: Clone]`
-            // inside `struct List[T]`).
             if let Some(existing) = self.table.lookup_type(generic.name.0)
                 && matches!(
                     self.result.defs.get(&existing).map(|info| &info.kind),
@@ -1713,10 +1681,6 @@ impl<'ctx> NameResolver {
                 let prev_fn = self.current_fn_def;
                 self.current_fn_def = Some(def_id);
 
-                // Nested functions may not capture the enclosing function's
-                // params/locals/generics (no closures): hide them for the body.
-                // Function definitions are not closure captures, so they stay
-                // visible - a nested fn can recurse and call sibling fns.
                 let capture_blocked: HashSet<DefId> = self
                     .table
                     .enclosing_defs()
@@ -1748,7 +1712,6 @@ impl<'ctx> NameResolver {
 
     // --> Expressions
 
-    // First `Named` binding in the pattern, if any.
     fn arm_binding(pattern: &Pattern) -> Option<(Spur, SourceSpan)> {
         match pattern {
             Pattern::Named { name, span } => Some((*name, *span)),
@@ -1931,7 +1894,6 @@ impl<'ctx> NameResolver {
             ExpressionKind::FieldAccess { object, field } => {
                 self.resolve_expr(object);
 
-                // left for type checker, cuz NameResolver doesn't know any fields of objects
                 let _ = field;
             }
 
@@ -1945,7 +1907,6 @@ impl<'ctx> NameResolver {
 
                 if let Some(fields) = fields {
                     for field in fields {
-                        // fields names left for type checker
                         self.resolve_expr(field.value);
                     }
                 }
@@ -2003,9 +1964,6 @@ impl<'ctx> NameResolver {
         }
     }
 
-    /// Resolves a closure expression: defines a synthetic function def for it
-    /// (`closure<N>`), opens its scope and capture boundary, then resolves
-    /// params/return type/body inside.
     fn resolve_closure(
         &mut self,
         expr: &'ctx Expression<'ctx>,
@@ -2035,10 +1993,6 @@ impl<'ctx> NameResolver {
             self.result.nested_fn_parents.insert(closure_def, parent);
         }
 
-        // Capturable: the enclosing live frame plus everything outer closures
-        // may capture themselves. Inheritance stops at nested-fn boundaries -
-        // frames behind a `Blocked` layer are dead. Own scope is pushed first
-        // so the walk can skip it.
         self.table.push(ScopeKind::Function);
 
         let mut candidates = self.table.closure_capture_candidates();

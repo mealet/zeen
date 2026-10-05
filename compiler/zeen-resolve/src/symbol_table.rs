@@ -140,8 +140,6 @@ impl SymbolTable {
         self.current_mut().types.insert(name, id);
     }
 
-    /// Every `DefId` visible in scopes above the module one. Used to forbid
-    /// nested functions from capturing them.
     pub fn enclosing_defs(&self) -> std::collections::HashSet<DefId> {
         let mut out = std::collections::HashSet::new();
 
@@ -158,13 +156,10 @@ impl SymbolTable {
         out
     }
 
-    /// The `DefId`s a closure may capture: the enclosing function's live frame.
-    /// Globals are excluded, frames above it are dead.
     pub fn closure_capture_candidates(&self) -> std::collections::HashSet<DefId> {
         let mut out = std::collections::HashSet::new();
 
         let mut scopes = self.scopes.iter().rev();
-        // Skip the closure's own scope.
         scopes.next();
 
         for scope in scopes {

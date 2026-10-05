@@ -5,7 +5,6 @@ use zeen_types::TypeId;
 
 #[derive(Debug)]
 pub struct FnCtx {
-    /// `DefId` of the function whose body is being checked.
     pub fn_def: DefId,
     pub return_type: TypeId,
     pub self_type: Option<TypeId>,
@@ -65,7 +64,6 @@ impl TypeCheckCtx {
         self.stack.last()?.generic_bindings.get(&def_id).copied()
     }
 
-    /// `DefId` of the innermost function under check, if any.
     pub fn current_fn_def(&self) -> Option<DefId> {
         self.stack.last().map(|ctx| ctx.fn_def)
     }
