@@ -1,0 +1,3 @@
+pub fn index_value() i32 {
+  return 1;
+}

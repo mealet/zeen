@@ -1175,15 +1175,26 @@ fn resolve_use_path(
         _ => (current_dir.to_path_buf(), &segments[..]),
     };
 
-    let mut path = base_dir;
+    let mut dir_path = base_dir;
 
     for seg in rest {
-        path.push(seg);
+        dir_path.push(seg);
     }
 
-    path.set_extension("zn");
+    let mut file_path = dir_path.clone();
+    file_path.set_extension("zn");
 
-    Ok(path)
+    if file_path.is_file() {
+        return Ok(file_path);
+    }
+
+    let index_path = dir_path.join("index.zn");
+
+    if index_path.is_file() {
+        return Ok(index_path);
+    }
+
+    Ok(file_path)
 }
 
 fn display_for_path(canonical: &Path, project_root: &Path, std_root: Option<&Path>) -> String {

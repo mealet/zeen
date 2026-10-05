@@ -1,0 +1,7 @@
+use some_folder;
+use some_folder.module;
+
+fn main() i32 {
+  @println("index={} module={}", index_value(), module_value());
+  return 0;
+}
