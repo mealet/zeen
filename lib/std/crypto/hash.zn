@@ -1,4 +1,4 @@
-/// Non-cryptographic hashes.
+/// Fast hashes, not for crypto
 pub struct Hasher {
   /// 64-bit FNV-1a.
   pub fn fnv1a64(data: []const char) u64 {

@@ -254,7 +254,7 @@ pub enum JsonValue {
   }
 }
 
-/// Insertion-ordered object backing, fast lookup inside.
+/// Object backing in insert order, fast lookup
 struct JsonObject {
   map: HashMap[String, JsonValue],
   keys: List[String],
