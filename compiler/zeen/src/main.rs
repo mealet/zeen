@@ -151,9 +151,14 @@ fn compile(args: cli::Args) {
     let path = args
         .path
         .expect("path is required unless `--targets-list` is given");
-    let output = args
-        .output
-        .expect("output is required unless `--targets-list` is given");
+    let output = match args.output.clone() {
+        Some(output) => output,
+        None if args.check => std::path::PathBuf::new(),
+        None => {
+            cli::println_error("output is required unless `--targets-list` is given");
+            exit(1)
+        }
+    };
 
     let filename = path
         .file_name()
@@ -369,6 +374,12 @@ fn compile(args: cli::Args) {
                     cli::println_warn(format!("Compiler reported {count} warning(s)"));
                 }
             }
+
+            if args.check {
+                cli::println_info("Check", "all checks passed");
+
+                exit(0);
+            };
         }
         Err(errors) => {
             for err in &errors {

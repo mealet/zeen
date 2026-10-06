@@ -145,3 +145,37 @@ fn help_mentions_std_flag() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--std <PATH>"), "missing --std in help");
 }
+
+#[test]
+fn check_accepts_valid_program_without_output() {
+    let dir = std::env::temp_dir().join(format!("zeen_check_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src_path = dir.join("ok.zn");
+    std::fs::write(&src_path, "fn main() i32 {\n  return 0;\n}\n").unwrap();
+
+    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .arg(&src_path)
+        .arg("--check")
+        .assert()
+        .success();
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_rejects_invalid_program() {
+    let dir = std::env::temp_dir().join(format!("zeen_check_bad_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src_path = dir.join("bad.zn");
+    std::fs::write(&src_path, "fn main() i32 {\n  return unknown_name;\n}\n").unwrap();
+
+    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .arg(&src_path)
+        .arg("--check")
+        .assert()
+        .failure();
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

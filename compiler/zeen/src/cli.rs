@@ -20,8 +20,12 @@ pub struct Args {
     #[arg(required_unless_present = "targets_list")]
     pub path: Option<PathBuf>,
     /// Path to output file
-    #[arg(required_unless_present = "targets_list")]
+    #[arg(required_unless_present_any = ["targets_list", "check"])]
     pub output: Option<PathBuf>,
+
+    /// `--check` flag to run all checks without codegen
+    #[arg(long, action, help = "Run all checks without codegen")]
+    pub check: bool,
 
     /// `--no-warns` flag to disable compiler's warnings
     #[arg(long = "no-warns", action, help = "Disable compiler's warnings")]
