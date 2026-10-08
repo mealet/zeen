@@ -64,6 +64,19 @@ pub enum CompilationMode {
     Release,
 }
 
+impl std::fmt::Display for CompilationMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Debug => "debug",
+                Self::Release => "release",
+            }
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum CompilationOutput {
     #[value(name = "BIN")]

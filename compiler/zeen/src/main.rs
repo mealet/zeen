@@ -146,6 +146,7 @@ fn main() {
 }
 
 fn compile(args: cli::Args) {
+    let compilation_start = std::time::Instant::now();
     let target_triple = args.target.clone().unwrap_or_else(targets::host_target);
 
     let path = args
@@ -172,19 +173,19 @@ fn compile(args: cli::Args) {
             exit(1);
         });
 
-    cli::println_info(
-        "Reading",
-        format!(
-            "`{}` ({})",
-            filename,
-            std::fs::canonicalize(&path)
-                .unwrap_or_else(|_| {
-                    cli::println_error(format!("File `{}` doesn't exist", filename));
-                    exit(1);
-                })
-                .display()
-        ),
-    );
+    // cli::println_info(
+    //     "Reading",
+    //     format!(
+    //         "`{}` ({})",
+    //         filename,
+    //         std::fs::canonicalize(&path)
+    //             .unwrap_or_else(|_| {
+    //                 cli::println_error(format!("File `{}` doesn't exist", filename));
+    //                 exit(1);
+    //             })
+    //             .display()
+    //     ),
+    // );
 
     let rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
     let bump = bumpalo::Bump::default();
@@ -232,9 +233,9 @@ fn compile(args: cli::Args) {
     };
 
     cli::println_info(
-        "Setting",
+        "Building",
         format!(
-            "up project (root dir: \"{}\")",
+            "from `{filename}` entry (root: `{}`)",
             context.paths.project_root.display()
         ),
     );
@@ -250,7 +251,7 @@ fn compile(args: cli::Args) {
         Rc::clone(&rodeo),
     );
 
-    cli::println_info("Parsing", "abstract syntax tree");
+    // cli::println_info("Parsing", "abstract syntax tree");
 
     let program = parser.parse_program().unwrap_or_else(|errors| {
         for err in errors {
@@ -263,15 +264,15 @@ fn compile(args: cli::Args) {
         exit(1);
     });
 
-    cli::println_info("Preprocessing", "conditional declarations for target");
+    // cli::println_info("Preprocessing", "conditional declarations for target");
 
     let target = zeen_driver::Target::parse(&target_triple);
     let program = zeen_preprocessor::resolve(program, &bump, &rodeo, &target, context.mode);
 
-    cli::println_info(
-        "Resolving",
-        format!("program ({} declarations)", program.len()),
-    );
+    // cli::println_info(
+    //     "Resolving",
+    //     format!("program ({} declarations)", program.len()),
+    // );
 
     let (resolved_program, mut resolution_result) = zeen_resolve::resolve(
         Rc::clone(&filename),
@@ -304,13 +305,13 @@ fn compile(args: cli::Args) {
         }
     }
 
-    cli::println_info(
-        "Checking",
-        format!(
-            "resolved program ({} definitions)",
-            resolution_result.defs.len()
-        ),
-    );
+    // cli::println_info(
+    //     "Checking",
+    //     format!(
+    //         "resolved program ({} definitions)",
+    //         resolution_result.defs.len()
+    //     ),
+    // );
 
     let mut typechecker =
         zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&rodeo));
@@ -376,7 +377,7 @@ fn compile(args: cli::Args) {
             }
 
             if args.check {
-                cli::println_info("Check", "all checks passed");
+                cli::println_info("Check", format!("all checks passed (in {:.2}s)", compilation_start.elapsed().as_secs_f32()));
 
                 exit(0);
             };
@@ -421,13 +422,13 @@ fn compile(args: cli::Args) {
 
         cli::println_info(
             "Emitted",
-            format!("MIR representation to the file ({})", output_path.display()),
+            format!("MIR to the file ({})", output_path.display()),
         );
 
         exit(0);
     }
 
-    cli::println_info("Generating", "LLVM IR from MIR");
+    // cli::println_info("Generating", "LLVM IR from MIR");
 
     let codegen_options = zeen_codegen_llvm::CodegenOptions {
         mode: context.mode,
@@ -487,6 +488,8 @@ fn compile(args: cli::Args) {
                 "Emitted",
                 format!("LLVM IR to the file ({})", output_path.display()),
             );
+
+            cli::println_info("Finished", format!("`{}` profile [{}] in {:.2}s", args.mode, target_triple, compilation_start.elapsed().as_secs_f32()));
         }
 
         CompilationOutput::Object => {
@@ -506,6 +509,8 @@ fn compile(args: cli::Args) {
                 "Emitted",
                 format!("object file to the file ({})", output_path.display()),
             );
+
+            cli::println_info("Finished", format!("`{}` profile [{}] in {:.2}s", args.mode, target_triple, compilation_start.elapsed().as_secs_f32()));
         }
 
         CompilationOutput::Binary => {
@@ -563,14 +568,17 @@ fn compile(args: cli::Args) {
             );
 
             match result {
-                Ok(output_path) => cli::println_info(
+                Ok(output_path) => {
+                cli::println_info(
                     "Emitted",
                     format!(
                         "binary (with {}): `{}`",
                         linker.name(),
                         output_path.display()
-                    ),
-                ),
+                    ));
+
+                    cli::println_info("Finished", format!("`{}` profile [{}] in {:.2}s", args.mode, target_triple, compilation_start.elapsed().as_secs_f32()));
+                },
                 Err(err) => {
                     cli::println_error(format!(
                         "Linker failed (object linker: `{}`)",
