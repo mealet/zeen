@@ -111,6 +111,11 @@ fn main() {
         }
     });
 
+    // `--no-color`
+    if args.no_color {
+        colored::control::set_override(false);
+    }
+
     if let Some(triple) = &args.target
         && !targets::is_supported(triple)
     {
@@ -189,7 +194,7 @@ fn compile(args: cli::Args) {
 
     let rodeo = Rc::new(RefCell::new(lasso::Rodeo::default()));
     let bump = bumpalo::Bump::default();
-    let driver = MietteDriver::new();
+    let driver = MietteDriver::new().use_color(!args.no_color);
 
     let content = {
         let src = std::fs::read_to_string(&path).unwrap_or_else(|err| {
@@ -377,7 +382,13 @@ fn compile(args: cli::Args) {
             }
 
             if args.check {
-                cli::println_info("Check", format!("all checks passed (in {:.2}s)", compilation_start.elapsed().as_secs_f32()));
+                cli::println_info(
+                    "Check",
+                    format!(
+                        "all checks passed (in {:.2}s)",
+                        compilation_start.elapsed().as_secs_f32()
+                    ),
+                );
 
                 exit(0);
             };
@@ -489,7 +500,15 @@ fn compile(args: cli::Args) {
                 format!("LLVM IR to the file ({})", output_path.display()),
             );
 
-            cli::println_info("Finished", format!("`{}` profile [{}] in {:.2}s", args.mode, target_triple, compilation_start.elapsed().as_secs_f32()));
+            cli::println_info(
+                "Finished",
+                format!(
+                    "`{}` profile [{}] in {:.2}s",
+                    args.mode,
+                    target_triple,
+                    compilation_start.elapsed().as_secs_f32()
+                ),
+            );
         }
 
         CompilationOutput::Object => {
@@ -510,7 +529,15 @@ fn compile(args: cli::Args) {
                 format!("object file to the file ({})", output_path.display()),
             );
 
-            cli::println_info("Finished", format!("`{}` profile [{}] in {:.2}s", args.mode, target_triple, compilation_start.elapsed().as_secs_f32()));
+            cli::println_info(
+                "Finished",
+                format!(
+                    "`{}` profile [{}] in {:.2}s",
+                    args.mode,
+                    target_triple,
+                    compilation_start.elapsed().as_secs_f32()
+                ),
+            );
         }
 
         CompilationOutput::Binary => {
@@ -569,16 +596,25 @@ fn compile(args: cli::Args) {
 
             match result {
                 Ok(output_path) => {
-                cli::println_info(
-                    "Emitted",
-                    format!(
-                        "binary (with {}): `{}`",
-                        linker.name(),
-                        output_path.display()
-                    ));
+                    cli::println_info(
+                        "Emitted",
+                        format!(
+                            "binary (with {}): `{}`",
+                            linker.name(),
+                            output_path.display()
+                        ),
+                    );
 
-                    cli::println_info("Finished", format!("`{}` profile [{}] in {:.2}s", args.mode, target_triple, compilation_start.elapsed().as_secs_f32()));
-                },
+                    cli::println_info(
+                        "Finished",
+                        format!(
+                            "`{}` profile [{}] in {:.2}s",
+                            args.mode,
+                            target_triple,
+                            compilation_start.elapsed().as_secs_f32()
+                        ),
+                    );
+                }
                 Err(err) => {
                     cli::println_error(format!(
                         "Linker failed (object linker: `{}`)",

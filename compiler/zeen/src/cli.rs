@@ -31,6 +31,10 @@ pub struct Args {
     #[arg(long = "no-warns", action, help = "Disable compiler's warnings")]
     pub no_warns: bool,
 
+    /// `--no-color` flag to disable coloring on output
+    #[arg(long = "no-warns", action, help = "Disable coloring output")]
+    pub no_color: bool,
+
     /// `-m --mode` flag to specify compilation mode
     #[arg(short, long, value_enum, default_value_t = CompilationMode::Debug, help = "Specify compilation mode")]
     pub mode: CompilationMode,

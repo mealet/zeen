@@ -2,6 +2,7 @@ use std::{collections::HashSet, path::PathBuf};
 
 mod target;
 
+use miette::GraphicalTheme;
 pub use target::Target;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
@@ -24,6 +25,16 @@ impl MietteDriver {
             .with_cause_chain();
 
         Self { reporter }
+    }
+
+    pub fn use_color(mut self, flag: bool) -> Self {
+        self.reporter = if flag {
+            self.reporter.with_theme(GraphicalTheme::default())
+        } else {
+            self.reporter.with_theme(GraphicalTheme::unicode_nocolor())
+        };
+
+        self
     }
 
     pub fn report(&self, diagnostic: &dyn miette::Diagnostic) -> Result<String, std::fmt::Error> {
