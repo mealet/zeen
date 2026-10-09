@@ -46,6 +46,7 @@ fn compile_mode(src: &str, mode: CompilationMode) -> Result<String, Vec<String>>
             project_root: PathBuf::from("/"),
             std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")),
             linked: HashSet::new(),
+            packages: Vec::new(),
         },
         core_files: core_files(),
         mode,

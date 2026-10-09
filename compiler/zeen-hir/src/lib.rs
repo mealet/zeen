@@ -1197,6 +1197,7 @@ mod tests {
                 project_root: PathBuf::from("/"),
                 std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")),
                 linked: HashSet::new(),
+                packages: Vec::new(),
             },
             core_files: vec![("core.ops", CORE_OPS)],
             mode: CompilationMode::Debug,

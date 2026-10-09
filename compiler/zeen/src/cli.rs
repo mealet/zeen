@@ -69,6 +69,14 @@ pub struct Args {
     )]
     pub linker_path: Option<PathBuf>,
 
+    /// `--pkg` flag to map a package name to a source directory
+    #[arg(
+        long = "pkg",
+        value_name = "NAME=PATH",
+        help = "Map package name to source directory for imports"
+    )]
+    pub pkg: Vec<String>,
+
     /// `--targets-list` flag to print all supported target triples
     #[arg(long = "targets-list", action, help = "List supported target triples")]
     pub targets_list: bool,

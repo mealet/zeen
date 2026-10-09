@@ -105,6 +105,7 @@ pub struct PathsConfig {
     pub project_root: PathBuf,
     pub std_root: Option<PathBuf>,
     pub linked: HashSet<PathBuf>,
+    pub packages: Vec<(String, PathBuf)>,
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ fn flow_errors(src: &str) -> Vec<FlowError> {
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std"),
             ),
             linked: HashSet::new(),
+            packages: Vec::new(),
         },
         core_files: vec![
             ("core.ops", CORE_OPS),

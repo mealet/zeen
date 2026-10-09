@@ -22,6 +22,32 @@ fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
+fn parse_pkg_flags(flags: &[String]) -> Vec<(String, std::path::PathBuf)> {
+    let mut out = Vec::new();
+    for flag in flags {
+        match flag.split_once('=') {
+            Some((name, path))
+                if !name.is_empty() && !name.contains(['.', '/', '\\']) && !path.is_empty() =>
+            {
+                let path = std::path::PathBuf::from(path);
+                if !path.is_dir() {
+                    cli::println_error(format!(
+                        "--pkg `{flag}`: `{}` is not a directory",
+                        path.display()
+                    ));
+                    exit(1);
+                }
+                out.push((name.to_string(), path));
+            }
+            _ => {
+                cli::println_error(format!("--pkg `{flag}`: expected NAME=PATH"));
+                exit(1);
+            }
+        };
+    }
+    out
+}
+
 fn resolve_std_root(explicit: Option<&Path>) -> Result<Option<std::path::PathBuf>, String> {
     const REPO: &str = "https://github.com/mealet/zeen";
 
@@ -229,6 +255,7 @@ fn compile(args: cli::Args) {
             project_root,
             std_root,
             linked: HashSet::new(),
+            packages: parse_pkg_flags(&args.pkg),
         },
         core_files: CORE_FILES.iter().map(|file| file.to_basic()).collect(),
         mode: args.mode,

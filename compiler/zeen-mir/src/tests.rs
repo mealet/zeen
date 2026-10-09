@@ -31,6 +31,7 @@ fn compile_mir_mode(
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std"),
             ),
             linked: HashSet::new(),
+            packages: Vec::new(),
         },
         core_files: vec![
             ("core.ops", CORE_OPS),
@@ -1747,6 +1748,7 @@ fn print_mir_ok(src: &str) -> String {
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std"),
             ),
             linked: HashSet::new(),
+            packages: Vec::new(),
         },
         core_files: vec![
             ("core.ops", CORE_OPS),

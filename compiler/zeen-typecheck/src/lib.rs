@@ -7957,6 +7957,7 @@ mod tests {
                     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")
                 }),
                 linked: HashSet::new(),
+                packages: Vec::new(),
             },
             core_files,
             mode: CompilationMode::Debug,

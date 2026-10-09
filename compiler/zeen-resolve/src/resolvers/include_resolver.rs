@@ -775,6 +775,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 self.named_src(),
                 &self.context.paths.project_root,
                 self.context.paths.std_root.as_deref(),
+                &self.context.paths.packages,
                 module.1,
             ) {
                 Ok(pb) => pb,
@@ -792,13 +793,22 @@ impl<'ctx> IncludeResolver<'ctx> {
             }
 
             if !raw.starts_with("std") {
-                let project_root = canonicalize_best_effort(&self.context.paths.project_root);
-                if !target_canonical.starts_with(&project_root) {
-                    self.context.warnings.push(format!(
-                        "use '{}' resolves outside the project root ({})",
-                        raw,
-                        target_canonical.display()
-                    ));
+                let first = raw.split('.').next().unwrap_or("");
+                let is_pkg = self
+                    .context
+                    .paths
+                    .packages
+                    .iter()
+                    .any(|(name, _)| name == first);
+                if !is_pkg {
+                    let project_root = canonicalize_best_effort(&self.context.paths.project_root);
+                    if !target_canonical.starts_with(&project_root) {
+                        self.context.warnings.push(format!(
+                            "use '{}' resolves outside the project root ({})",
+                            raw,
+                            target_canonical.display()
+                        ));
+                    }
                 }
             }
 
@@ -908,6 +918,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                         md.named_src.clone(),
                         &self.context.paths.project_root,
                         self.context.paths.std_root.as_deref(),
+                        &self.context.paths.packages,
                         module.1,
                     ) else {
                         continue;
@@ -1070,7 +1081,12 @@ impl<'ctx> IncludeResolver<'ctx> {
             let display = if module.is_core {
                 key.to_string_lossy().into_owned()
             } else {
-                display_for_path(&module.canonical_path, &project_root, std_root.as_deref())
+                display_for_path(
+                    &module.canonical_path,
+                    &project_root,
+                    std_root.as_deref(),
+                    &self.context.paths.packages,
+                )
             };
             graph.display_by_src.insert(
                 module.named_src.name().to_string(),
@@ -1126,6 +1142,7 @@ fn resolve_use_path(
 
     project_root: &Path,
     std_dir: Option<&Path>,
+    packages: &[(String, PathBuf)],
 
     span: SourceSpan,
 ) -> Result<PathBuf, Box<ResolveError>> {
@@ -1156,7 +1173,10 @@ fn resolve_use_path(
                 }));
             }
         },
-        _ => (current_dir.to_path_buf(), &segments[..]),
+        name => match packages.iter().rev().find(|(pkg, _)| pkg == name) {
+            Some((_, dir)) => (canonicalize_best_effort(dir), &segments[1..]),
+            None => (current_dir.to_path_buf(), &segments[..]),
+        },
     };
 
     let mut dir_path = base_dir;
@@ -1181,11 +1201,30 @@ fn resolve_use_path(
     Ok(file_path)
 }
 
-fn display_for_path(canonical: &Path, project_root: &Path, std_root: Option<&Path>) -> String {
+fn display_for_path(
+    canonical: &Path,
+    project_root: &Path,
+    std_root: Option<&Path>,
+    packages: &[(String, PathBuf)],
+) -> String {
     if let Ok(rel) = canonical.strip_prefix(project_root)
         && let Some(rel) = rel.with_extension("").to_str()
     {
         return rel.to_string();
+    }
+
+    for (name, dir) in packages {
+        if let Ok(rel) = canonical.strip_prefix(canonicalize_best_effort(dir)) {
+            let dotted: Vec<String> = rel
+                .with_extension("")
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            if dotted.is_empty() || dotted == ["index"] {
+                return name.clone();
+            };
+            return format!("{name}.{}", dotted.join("."));
+        };
     }
 
     if let Some(std_root) = std_root
@@ -1207,4 +1246,183 @@ fn display_for_path(canonical: &Path, project_root: &Path, std_root: Option<&Pat
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pkg_root(name: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("zeen_pkg_{}_{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("httplib").join("folder")).unwrap();
+        std::fs::write(
+            dir.join("httplib").join("index.zn"),
+            "pub fn version() i32 {\n  return 1;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("httplib").join("submodule.zn"),
+            "pub fn answer() i32 {\n  return 2;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("httplib").join("folder").join("lib.zn"),
+            "pub fn deep() i32 {\n  return 3;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("plain.zn"), "pub fn x() i32 {\n  return 4;\n}\n").unwrap();
+        dir
+    }
+
+    fn context_paths(root: &Path) -> (PathBuf, Option<PathBuf>, Vec<(String, PathBuf)>) {
+        (
+            root.to_path_buf(),
+            None,
+            vec![("http".to_string(), root.join("httplib"))],
+        )
+    }
+
+    #[test]
+    fn pkg_root_resolves_index() {
+        let root = pkg_root("root_resolves");
+        let (project_root, std_root, packages) = context_paths(&root);
+        let current = root.join("main.zn");
+        let span = SourceSpan::new(0.into(), 0);
+        let src = NamedSource::new("main", Arc::new(String::new()));
+        let target = resolve_use_path(
+            "http",
+            &current,
+            src,
+            &project_root,
+            std_root.as_deref(),
+            &packages,
+            span,
+        )
+        .unwrap();
+        assert_eq!(target, root.join("httplib").join("index.zn"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pkg_nested_file_resolves() {
+        let root = pkg_root("pkg_nested_file_resolves");
+        let (project_root, std_root, packages) = context_paths(&root);
+        let current = root.join("main.zn");
+        let span = SourceSpan::new(0.into(), 0);
+        let src = NamedSource::new("main", Arc::new(String::new()));
+        let target = resolve_use_path(
+            "http.folder.lib",
+            &current,
+            src,
+            &project_root,
+            std_root.as_deref(),
+            &packages,
+            span,
+        )
+        .unwrap();
+        assert_eq!(target, root.join("httplib").join("folder").join("lib.zn"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pkg_explicit_index_matches_root() {
+        let root = pkg_root("pkg_explicit_index_matches_root");
+        let (project_root, std_root, packages) = context_paths(&root);
+        let current = root.join("main.zn");
+        let span = SourceSpan::new(0.into(), 0);
+        let src = NamedSource::new("main", Arc::new(String::new()));
+        let plain = resolve_use_path(
+            "http.index",
+            &current,
+            src.clone(),
+            &project_root,
+            std_root.as_deref(),
+            &packages,
+            span,
+        )
+        .unwrap();
+        let folder = resolve_use_path(
+            "http",
+            &current,
+            src,
+            &project_root,
+            std_root.as_deref(),
+            &packages,
+            span,
+        )
+        .unwrap();
+        assert_eq!(plain, folder);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn package_mapping_beats_local_file() {
+        let root = pkg_root("package_mapping_beats_local_file");
+        let (project_root, std_root, packages) = context_paths(&root);
+        let current = root.join("main.zn");
+        let span = SourceSpan::new(0.into(), 0);
+        let src = NamedSource::new("main", Arc::new(String::new()));
+        std::fs::write(root.join("http.zn"), "pub fn y() i32 {\n  return 5;\n}\n").unwrap();
+        let mapped = resolve_use_path(
+            "http",
+            &current,
+            src,
+            &project_root,
+            std_root.as_deref(),
+            &packages,
+            span,
+        )
+        .unwrap();
+        assert_eq!(mapped, root.join("httplib").join("index.zn"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_package_path_reports_file() {
+        let root = pkg_root("missing_package_path_reports_file");
+        let (project_root, std_root, packages) = context_paths(&root);
+        let current = root.join("main.zn");
+        let span = SourceSpan::new(0.into(), 0);
+        let src = NamedSource::new("main", Arc::new(String::new()));
+        let target = resolve_use_path(
+            "http.nope",
+            &current,
+            src,
+            &project_root,
+            std_root.as_deref(),
+            &packages,
+            span,
+        )
+        .unwrap();
+        assert_eq!(target, root.join("httplib").join("nope.zn"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn package_display_names() {
+        let root = pkg_root("package_display_names");
+        let (_, _, packages) = context_paths(&root);
+        let project = PathBuf::from("/elsewhere");
+        assert_eq!(
+            display_for_path(
+                &root.join("httplib").join("index.zn"),
+                &project,
+                None,
+                &packages
+            ),
+            "http"
+        );
+        assert_eq!(
+            display_for_path(
+                &root.join("httplib").join("folder").join("lib.zn"),
+                &project,
+                None,
+                &packages
+            ),
+            "http.folder.lib"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
