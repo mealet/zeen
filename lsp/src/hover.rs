@@ -53,7 +53,7 @@ fn assemble(code: &str, info: &[String], occurrence: &Occurrence) -> (String, us
 }
 
 fn code_block(code: &str) -> String {
-    format!("```zn\n{code}\n```")
+    format!("```zeen\n{code}\n```")
 }
 
 fn defined_at(text: &str, occurrence: &Occurrence, filename: &str) -> Option<String> {
@@ -729,6 +729,25 @@ mod tests {
         let markdown = hovering(SAMPLE, "a: i32, b: i32");
 
         assert!(markdown.contains("```zn\na: i32\n```"), "{markdown}");
+    }
+
+    #[test]
+    fn method_decl_shows_signature() {
+        let markdown = hovering(SAMPLE, "fn get(*self)");
+
+        assert!(markdown.contains("fn get(*self) i32"), "{markdown}");
+        assert!(markdown.contains("instance method"), "{markdown}");
+    }
+
+    #[test]
+    fn static_decl_shows_signature() {
+        let markdown = hovering(SAMPLE, "fn make(x: i32");
+
+        assert!(
+            markdown.contains("fn make(x: i32, s: i32) Point"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("static method"), "{markdown}");
     }
 
     #[test]
