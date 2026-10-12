@@ -1168,6 +1168,7 @@ dependencies = [
  "zeen-preprocessor",
  "zeen-resolve",
  "zeen-typecheck",
+ "zeen-types",
 ]
 
 [[package]]

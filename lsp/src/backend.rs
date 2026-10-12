@@ -253,58 +253,36 @@ impl LanguageServer for Backend {
             params.text_document_position_params.position,
         );
 
-        let Some(occurrence) = document.analysis.at(offset) else {
+        let open_path = diagnostics::file_uri_to_path(&uri);
+        let open_dir = open_path
+            .as_ref()
+            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+        let project_root = open_path
+            .as_ref()
+            .map(|path| diagnostics::project_root_for(path, &document.text));
+        let std_root = diagnostics::resolve_std_root();
+        let paths = crate::completion::ResolvePaths {
+            dir: open_dir.as_deref(),
+            root: project_root.as_deref(),
+            std: std_root.as_deref(),
+        };
+
+        let Some(result) = crate::hover::hover_markdown(
+            &document.text,
+            &document.analysis,
+            offset,
+            paths,
+            &diagnostics::uri_filename(&uri),
+        ) else {
             return Ok(None);
         };
 
-        let name = document
-            .text
-            .get(occurrence.offset..occurrence.offset + occurrence.len)
-            .unwrap_or("");
-
-        let mut contents = vec![MarkedString::from_language_code(
-            "zeen".to_string(),
-            name.to_string(),
-        )];
-
-        let mut detail = format!("----\n{}", occurrence.role.label());
-
-        if let Some(ty) = &occurrence.ty {
-            detail.push_str(&format!("\ntype: `{ty}`"));
-        }
-
-        let target_text: Option<String> = match &occurrence.target_file {
-            Some(target_name) => self
-                .resolve_sibling_text(&uri, target_name)
-                .await
-                .map(|(_, text)| text),
-            None => Some(document.text.clone()),
-        };
-
-        if let (Some(target_text), Some(target_offset)) = (target_text, occurrence.target_offset) {
-            let target = position::offset_to_position(&target_text, target_offset);
-            let preview = position::line_text(&target_text, target.line).trim();
-            let file = match &occurrence.target_file {
-                Some(target_name) => target_name.clone(),
-                None => diagnostics::uri_filename(&uri),
-            };
-
-            detail.push_str(&format!(
-                "\ndefined at {}:{}\n----\n```zn\n{}\n```",
-                file,
-                target.line + 1,
-                preview
-            ));
-        }
-
-        contents.push(MarkedString::from_markdown(detail));
-
         Ok(Some(Hover {
-            contents: HoverContents::Array(contents),
+            contents: HoverContents::Array(vec![MarkedString::from_markdown(result.markdown)]),
             range: Some(position::span_to_range(
                 &document.text,
-                occurrence.offset,
-                occurrence.len,
+                result.offset,
+                result.len,
             )),
         }))
     }

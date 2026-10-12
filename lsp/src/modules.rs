@@ -1,6 +1,6 @@
 use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc};
 
-use zeen_ast::declarations::DeclarationKind;
+use zeen_ast::declarations::{DeclarationKind, EnumVariantPayload};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModuleKind {
@@ -352,4 +352,69 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
 
     members.sort_by(|a, b| a.name.cmp(&b.name));
     members
+}
+
+pub fn variant_payload_fields(
+    open_dir: &Path,
+    project_root: &Path,
+    std_root: Option<&Path>,
+    imports: &[String],
+    variant_name: &str,
+) -> Vec<ModuleMember> {
+    let mut fields = Vec::new();
+
+    for import in imports {
+        let Some((module, content)) = resolve_import(open_dir, project_root, std_root, import)
+        else {
+            continue;
+        };
+
+        let filename = Rc::new(format!("{module}.zn"));
+        let source = Arc::new(content.clone());
+        let interner = Rc::new(RefCell::new(lasso::Rodeo::default()));
+        let bump = bumpalo::Bump::new();
+        let mut tokens = zeen_lexer::tokenize(&content);
+
+        let mut parser = zeen_parser::Parser::new(
+            Rc::clone(&filename),
+            Arc::clone(&source),
+            &mut tokens,
+            &bump,
+            Rc::clone(&interner),
+        );
+
+        let Ok(program) = parser.parse_program() else {
+            continue;
+        };
+
+        let interner = interner.borrow();
+        let resolve = |spur: &lasso::Spur| interner.resolve(spur).to_string();
+
+        for decl in program {
+            let DeclarationKind::EnumDecl { variants, .. } = &decl.kind else {
+                continue;
+            };
+
+            for variant in *variants {
+                if resolve(&variant.name) != variant_name {
+                    continue;
+                }
+
+                if let Some(EnumVariantPayload::Anonymous(payload)) = variant.payload {
+                    for field in payload {
+                        fields.push(ModuleMember {
+                            module: module.to_string(),
+                            name: resolve(&field.name),
+                            kind: ModuleKind::Field,
+                            is_static: false,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fields.sort_by(|a, b| a.name.cmp(&b.name));
+    fields.dedup_by(|a, b| a.name == b.name);
+    fields
 }

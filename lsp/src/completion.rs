@@ -117,6 +117,16 @@ pub fn complete(
             continue;
         }
 
+        if matches!(
+            occurrence.role,
+            Role::Property | Role::Method | Role::Function
+        ) && occurrence.is_pub == Some(false)
+            && let Some(owner) = occurrence.owner
+            && !scope_covers(analysis, owner, offset)
+        {
+            continue;
+        }
+
         items.push(CompletionItem {
             label: name.to_string(),
             kind: Some(role_kind(occurrence.role)),
@@ -159,7 +169,7 @@ fn module_kind(kind: &ModuleKind) -> CompletionItemKind {
     }
 }
 
-fn normalize_type_name(ty: &str) -> Option<String> {
+pub(crate) fn normalize_type_name(ty: &str) -> Option<String> {
     let mut name = ty.trim();
 
     loop {
@@ -814,13 +824,8 @@ pub fn struct_init_complete(
     }
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
-        let mut imported = crate::modules::type_members(
-            dir,
-            root,
-            paths.std,
-            &crate::modules::use_imports(text),
-            &type_name,
-        );
+        let imports = crate::modules::use_imports(text);
+        let mut imported = crate::modules::type_members(dir, root, paths.std, &imports, &type_name);
         imported.sort_by(|a, b| a.name.cmp(&b.name));
 
         for member in imported {
@@ -839,6 +844,28 @@ pub fn struct_init_complete(
                     sort_text: Some(format!("0_{}", member.name)),
                     ..Default::default()
                 });
+            }
+        }
+
+        if items.is_empty() {
+            let mut payload =
+                crate::modules::variant_payload_fields(dir, root, paths.std, &imports, &type_name);
+            payload.sort_by(|a, b| a.name.cmp(&b.name));
+
+            for member in payload {
+                if used.contains(&member.name) || !member.name.starts_with(&filter) {
+                    continue;
+                }
+
+                if seen.insert(member.name.clone()) {
+                    items.push(CompletionItem {
+                        label: member.name.clone(),
+                        kind: Some(CompletionItemKind::FIELD),
+                        detail: Some(member.module.clone()),
+                        sort_text: Some(format!("0_{}", member.name)),
+                        ..Default::default()
+                    });
+                }
             }
         }
     }
@@ -1476,8 +1503,9 @@ mod tests {
         assert_eq!(names, vec!["c"]);
     }
 
-    fn import_project() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("zeen-lsp-imports-{}", std::process::id()));
+    fn import_project(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("zeen-lsp-imports-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::create_dir_all(dir.join("pkg")).unwrap();
@@ -1494,7 +1522,7 @@ mod tests {
 
     #[test]
     fn dotted_super_root_and_index_imports() {
-        let dir = import_project();
+        let dir = import_project("dotted");
         let sub = dir.join("sub");
 
         let helper = |members: Vec<crate::modules::ModuleMember>| {
@@ -1654,5 +1682,48 @@ mod tests {
         let names = labels(&items);
 
         assert_eq!(names, vec!["secret"]);
+    }
+
+    #[test]
+    fn global_complete_hides_private_outside() {
+        let analysis = sample_analysis(PRIVATE_SAMPLE);
+
+        let text = format!("{PRIVATE_SAMPLE}\n    comb");
+        let items = complete(&text, &analysis, text.len(), ResolvePaths::default());
+        let names = labels(&items);
+        assert!(!names.contains(&"combo"));
+
+        let text = format!("{PRIVATE_SAMPLE}\n    mak");
+        let items = complete(&text, &analysis, text.len(), ResolvePaths::default());
+        let names = labels(&items);
+        assert!(names.contains(&"make"));
+    }
+
+    #[test]
+    fn imported_variant_payload_suggests_fields() {
+        let dir = import_project("variant");
+        std::fs::write(
+            dir.join("sub").join("sig.zn"),
+            "pub enum Signal {\n    stop,\n    go: {\n        speed: i32,\n        dir: i32,\n    },\n}\n",
+        )
+        .unwrap();
+
+        let text = "use sub.sig;\n\nfn main() {\n    let s = go { .speed = 1, .";
+        let anchor = "go { .speed = 1, .";
+        let offset = text.find(anchor).unwrap() + anchor.len();
+
+        assert!(struct_init_field_position(text, offset));
+
+        let paths = ResolvePaths {
+            dir: Some(dir.as_path()),
+            root: Some(dir.as_path()),
+            std: None,
+        };
+        let items = struct_init_complete(text, &Analysis::default(), offset, paths);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["dir"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

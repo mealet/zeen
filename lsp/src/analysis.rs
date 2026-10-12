@@ -15,6 +15,7 @@ use zeen_hir::{
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_typecheck::result::TypeCheckResult;
+use zeen_types::{Type, TypeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -49,9 +50,14 @@ pub struct Occurrence {
     pub target_offset: Option<usize>,
     pub target_len: Option<usize>,
     pub target_file: Option<String>,
+    pub target_module: Option<String>,
     pub hir: Option<HirId>,
     pub def: Option<DefId>,
+    pub owner: Option<DefId>,
     pub ty: Option<String>,
+    pub caps: Option<String>,
+    pub is_pub: Option<bool>,
+    pub is_const: Option<bool>,
     pub type_hint: bool,
 }
 
@@ -68,16 +74,28 @@ pub(crate) struct RawAccess {
     pub field: (usize, usize),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldTarget {
+    pub field_def: DefId,
+    pub ty: String,
+    pub is_pub: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Analysis {
     pub occurrences: Vec<Occurrence>,
     pub calls: Vec<CallSite>,
     pub field_hints: Vec<FieldHint>,
     pub members: HashMap<DefId, Vec<Member>>,
+    pub member_owner: HashMap<DefId, DefId>,
     pub variant_fields: HashMap<DefId, Vec<String>>,
     pub scopes: Vec<Scope>,
     pub access_types: HashMap<(usize, usize), String>,
     pub call_types: HashMap<(usize, usize), String>,
+    pub method_calls: HashMap<(usize, usize), DefId>,
+    pub field_targets: HashMap<(usize, usize), FieldTarget>,
+    pub fn_generics: HashMap<DefId, Vec<String>>,
+    pub method_self: HashMap<DefId, String>,
     pub(crate) fn_params: HashMap<DefId, Vec<Option<String>>>,
     pub(crate) raw_calls: Vec<RawCall>,
     pub(crate) raw_fields: Vec<RawFieldInit>,
@@ -159,6 +177,24 @@ impl Analysis {
             walker.walk_decl(decl);
         }
 
+        for occurrence in &mut walker.analysis.occurrences {
+            let Some(def) = occurrence.def else {
+                continue;
+            };
+
+            let Some(info) = resolution.defs.get(&def) else {
+                continue;
+            };
+
+            occurrence.is_pub = Some(info.is_pub);
+            occurrence.owner = walker.analysis.member_owner.get(&def).copied();
+            occurrence.is_const = match info.kind {
+                DefKind::Variable { is_const } | DefKind::GlobalVar { is_const } => Some(is_const),
+                _ => None,
+            };
+            occurrence.target_module = resolution.def_modules.get(&def).cloned();
+        }
+
         walker
             .analysis
             .occurrences
@@ -204,6 +240,7 @@ impl Analysis {
                         .interner
                         .display_type(id, interner.clone(), resolution),
                 );
+                occurrence.caps = Some(caps_display(types, id));
             }
         }
     }
@@ -220,6 +257,8 @@ impl Analysis {
             let Some(resolution) = types.call_resolutions.get(&raw.call) else {
                 continue;
             };
+
+            self.method_calls.insert(raw.callee, resolution.fn_def);
 
             let Some(params) = self.fn_params.get(&resolution.fn_def) else {
                 continue;
@@ -272,6 +311,60 @@ impl Analysis {
         }
     }
 
+    pub fn resolve_field_targets(
+        &mut self,
+        types: &TypeCheckResult,
+        interner: Rc<RefCell<Rodeo>>,
+        resolution: &ResolutionResult,
+    ) {
+        for raw in &self.raw_access {
+            let Some(field_def) = types.field_resolutions.get(&raw.access).copied() else {
+                continue;
+            };
+
+            let Some(id) = types.expr_types.get(&raw.access).copied() else {
+                continue;
+            };
+
+            let is_pub = resolution
+                .defs
+                .get(&field_def)
+                .is_some_and(|info| info.is_pub);
+
+            self.field_targets.insert(
+                raw.field,
+                FieldTarget {
+                    field_def,
+                    ty: types
+                        .interner
+                        .display_type(id, interner.clone(), resolution),
+                    is_pub,
+                },
+            );
+        }
+
+        for raw in &self.raw_fields {
+            let Some(info) = types.struct_info.get(&raw.struct_def) else {
+                continue;
+            };
+
+            let Some(field) = info.fields.iter().find(|field| field.name == raw.name) else {
+                continue;
+            };
+
+            self.field_targets.insert(
+                (raw.offset, raw.len),
+                FieldTarget {
+                    field_def: field.field_def,
+                    ty: types
+                        .interner
+                        .display_type(field.field_ty, interner.clone(), resolution),
+                    is_pub: field.is_pub,
+                },
+            );
+        }
+    }
+
     pub fn resolve_fields(
         &mut self,
         types: &TypeCheckResult,
@@ -320,6 +413,40 @@ impl Analysis {
                 ));
             }
         }
+    }
+}
+
+fn caps_display(types: &TypeCheckResult, id: TypeId) -> String {
+    let copy = types.is_copy(id);
+
+    let copy_word = if copy { "Copy" } else { "Move-only" };
+    let drop_word = if needs_drop(types, id, copy) {
+        "needs Drop"
+    } else {
+        "no Drop"
+    };
+
+    format!("{copy_word}, {drop_word}")
+}
+
+fn needs_drop(types: &TypeCheckResult, id: TypeId, copy: bool) -> bool {
+    match types.interner.get(id) {
+        Type::Struct { def_id, .. } => {
+            types
+                .struct_info
+                .get(def_id)
+                .is_some_and(|info| info.capabalities.has_explicit_drop)
+                || !copy
+        }
+        Type::Enum { def_id, .. } => {
+            types
+                .enum_info
+                .get(def_id)
+                .is_some_and(|info| info.capabalities.has_explicit_drop)
+                || !copy
+        }
+        Type::FatFn { .. } => true,
+        _ => false,
     }
 }
 
@@ -383,9 +510,14 @@ impl<'ctx> Walker<'ctx> {
             target_offset: target.0,
             target_len: target.1,
             target_file: target.2,
+            target_module: None,
             hir,
             def,
+            owner: None,
             ty: None,
+            caps: None,
+            is_pub: None,
+            is_const: None,
             type_hint: false,
         });
 
@@ -596,6 +728,8 @@ impl<'ctx> Walker<'ctx> {
             return;
         };
 
+        self.analysis.member_owner.insert(method.def_id, owner);
+
         self.analysis
             .members
             .entry(owner)
@@ -648,6 +782,8 @@ impl<'ctx> Walker<'ctx> {
                         let target = self.def_target_span(field.def_id);
                         self.push(offset, len, role, target, None, Some(field.def_id));
                     }
+
+                    self.analysis.member_owner.insert(field.def_id, decl.def_id);
 
                     self.analysis
                         .members
@@ -732,6 +868,10 @@ impl<'ctx> Walker<'ctx> {
                         Role::EnumMember,
                         Some(variant.def_id),
                     );
+
+                    self.analysis
+                        .member_owner
+                        .insert(variant.def_id, decl.def_id);
 
                     self.analysis
                         .members
@@ -820,6 +960,31 @@ impl<'ctx> Walker<'ctx> {
         }
 
         self.analysis.fn_params.insert(def_id, params);
+
+        if !func.generics.is_empty() {
+            self.analysis.fn_generics.insert(
+                def_id,
+                func.generics
+                    .iter()
+                    .map(|generic| self.interner.resolve(&generic.name.0).to_string())
+                    .collect(),
+            );
+        }
+
+        if hir_fn_takes_self(func)
+            && let Some(first) = func.params.first()
+        {
+            let start = first.ty.source.span.offset().min(self.text.len());
+            let end = start
+                .saturating_add(first.ty.source.span.len())
+                .min(self.text.len());
+
+            if let Some(spelling) = self.text.get(start..end) {
+                self.analysis
+                    .method_self
+                    .insert(def_id, spelling.to_string());
+            }
+        }
 
         for generic in &func.generics {
             self.walk_generic(generic);
@@ -1259,9 +1424,14 @@ fn push_syntax(occurrences: &mut Vec<Occurrence>, offset: usize, len: usize, rol
         target_offset: None,
         target_len: None,
         target_file: None,
+        target_module: None,
         hir: None,
         def: None,
+        owner: None,
         ty: None,
+        caps: None,
+        is_pub: None,
+        is_const: None,
         type_hint: false,
     });
 }

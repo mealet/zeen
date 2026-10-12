@@ -20,3 +20,4 @@ zeen-hir = { path = "../compiler/zeen-hir" }
 zeen-typecheck = { path = "../compiler/zeen-typecheck" }
 zeen-mir = { path = "../compiler/zeen-mir" }
 zeen-flow = { path = "../compiler/zeen-flow" }
+zeen-types = { path = "../compiler/zeen-types" }
