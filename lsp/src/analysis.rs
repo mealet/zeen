@@ -96,6 +96,8 @@ pub struct Analysis {
     pub field_targets: HashMap<(usize, usize), FieldTarget>,
     pub fn_generics: HashMap<DefId, Vec<String>>,
     pub method_self: HashMap<DefId, String>,
+    pub fn_signatures: HashMap<DefId, String>,
+    pub enum_payloads: HashMap<String, Vec<(String, Option<String>)>>,
     pub(crate) fn_params: HashMap<DefId, Vec<Option<String>>>,
     pub(crate) raw_calls: Vec<RawCall>,
     pub(crate) raw_fields: Vec<RawFieldInit>,
@@ -362,6 +364,104 @@ impl Analysis {
                     is_pub: field.is_pub,
                 },
             );
+        }
+    }
+
+    pub fn resolve_fn_signatures(
+        &mut self,
+        types: &TypeCheckResult,
+        interner: Rc<RefCell<Rodeo>>,
+        resolution: &ResolutionResult,
+    ) {
+        let defs: Vec<DefId> = self.fn_params.keys().copied().collect();
+
+        for def in defs {
+            let Some(id) = types.def_types.get(&def).copied() else {
+                continue;
+            };
+
+            let Type::Fn { params, ret } = types.interner.get(id) else {
+                continue;
+            };
+
+            let names = self.fn_params.get(&def).cloned().unwrap_or_default();
+            let mut args = Vec::with_capacity(params.len());
+
+            for (index, param) in params.iter().enumerate() {
+                if index == 0 && let Some(spelling) = self.method_self.get(&def) {
+                    args.push(spelling.clone());
+                    continue;
+                }
+
+                let name = names
+                    .get(index)
+                    .and_then(|name| name.as_deref())
+                    .unwrap_or("_");
+                let ty = types
+                    .interner
+                    .display_type(*param, interner.clone(), resolution);
+                args.push(format!("{name}: {ty}"));
+            }
+
+            let ret = types
+                .interner
+                .display_type(*ret, interner.clone(), resolution);
+
+            self.fn_signatures
+                .insert(def, format!("({}) {ret}", args.join(", ")));
+        }
+    }
+
+    pub fn resolve_enum_payloads(
+        &mut self,
+        types: &TypeCheckResult,
+        interner: Rc<RefCell<Rodeo>>,
+        resolution: &ResolutionResult,
+    ) {
+        let borrowed = interner.borrow();
+
+        for (enum_def, variants) in &types.enum_variants {
+            let Some(info) = types.enum_info.get(enum_def) else {
+                continue;
+            };
+
+            let Some(enum_name) = resolution
+                .defs
+                .get(enum_def)
+                .map(|def| borrowed.resolve(&def.name).to_string())
+            else {
+                continue;
+            };
+
+            let mut payloads = Vec::with_capacity(variants.len());
+
+            for variant in variants {
+                let Some(entry) = info.variants.iter().find(|entry| entry.def_id == *variant)
+                else {
+                    continue;
+                };
+
+                let Some(name) = resolution
+                    .defs
+                    .get(variant)
+                    .map(|def| borrowed.resolve(&def.name).to_string())
+                else {
+                    continue;
+                };
+
+                let payload = match &entry.payload {
+                    Some(zeen_types::VariantPayload::Single(ty)) => Some(
+                        types
+                            .interner
+                            .display_type(*ty, interner.clone(), resolution),
+                    ),
+                    _ => None,
+                };
+
+                payloads.push((name, payload));
+            }
+
+            self.enum_payloads.insert(enum_name, payloads);
         }
     }
 

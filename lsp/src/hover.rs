@@ -86,7 +86,9 @@ fn method_at(analysis: &Analysis, key: (usize, usize)) -> Option<zeen_resolve::D
     analysis
         .method_calls
         .iter()
-        .filter(|((start, len), _)| *start <= key.0 && key.0 + key.1 <= start + len)
+        .filter(|((start, len), _)| {
+            (*start, *len) != key && *start < key.0 && key.0 + key.1 <= start + len
+        })
         .min_by_key(|((_, len), _)| *len)
         .map(|(_, def)| *def)
 }
@@ -125,6 +127,25 @@ fn fn_generics_part(analysis: &Analysis, def: zeen_resolve::DefId) -> String {
         Some(generics) if !generics.is_empty() => format!("[{}]", generics.join(", ")),
         _ => String::new(),
     }
+}
+
+fn fn_code(
+    analysis: &Analysis,
+    fn_def: zeen_resolve::DefId,
+    name: &str,
+    ty: Option<&str>,
+) -> String {
+    let generics = fn_generics_part(analysis, fn_def);
+
+    if let Some(signature) = analysis.fn_signatures.get(&fn_def) {
+        return format!("fn {name}{generics}{signature}");
+    }
+
+    let spelling = analysis.method_self.get(&fn_def).map(String::as_str);
+    let fallback =
+        find_member(analysis, fn_def).and_then(|(_, member)| member.signature.as_deref());
+
+    render_fn(name, &generics, fallback.or(ty), spelling)
 }
 
 fn render_fn(
@@ -284,7 +305,6 @@ fn method_call_hover(
     filename: &str,
 ) -> HoverResult {
     let key = (occurrence.offset, occurrence.len);
-    let generics = fn_generics_part(analysis, fn_def);
     let mut info = Vec::new();
 
     let code = if let Some((owner, member)) = find_member(analysis, fn_def) {
@@ -294,16 +314,7 @@ fn method_call_hover(
             .unwrap_or_else(|| label.to_string());
         info.push(owner_text);
 
-        let spelling = (!member.is_static)
-            .then(|| analysis.method_self.get(&fn_def))
-            .flatten()
-            .map(String::as_str);
-
-        member
-            .signature
-            .as_deref()
-            .map(|signature| render_fn(name, &generics, Some(signature), spelling))
-            .unwrap_or_else(|| render_fn(name, &generics, None, spelling))
+        fn_code(analysis, fn_def, name, None)
     } else {
         let dotted = key.0 > 0 && text.as_bytes().get(key.0 - 1) == Some(&b'.');
 
@@ -314,7 +325,7 @@ fn method_call_hover(
             info.push(method_kind_label(is_static).to_string());
         }
 
-        render_fn(name, &generics, occurrence.ty.as_deref(), None)
+        fn_code(analysis, fn_def, name, occurrence.ty.as_deref())
     };
 
     if let Some(location) = defined_at(text, occurrence, filename) {
@@ -390,8 +401,6 @@ fn method_decl_hover(
     let code = occurrence.def.map_or_else(
         || render_fn(name, "", None, None),
         |def| {
-            let generics = fn_generics_part(analysis, def);
-
             if let Some((owner, member)) = find_member(analysis, def) {
                 let label = method_kind_label(Some(member.is_static));
                 let owner_text = owner_name(text, analysis, owner)
@@ -399,19 +408,10 @@ fn method_decl_hover(
                     .unwrap_or_else(|| label.to_string());
                 info.push(owner_text);
 
-                let spelling = (!member.is_static)
-                    .then(|| analysis.method_self.get(&def))
-                    .flatten()
-                    .map(String::as_str);
-
-                member
-                    .signature
-                    .as_deref()
-                    .map(|signature| render_fn(name, &generics, Some(signature), spelling))
-                    .unwrap_or_else(|| render_fn(name, &generics, None, spelling))
+                fn_code(analysis, def, name, None)
             } else {
                 info.push(method_kind_label(None).to_string());
-                render_fn(name, &generics, None, None)
+                fn_code(analysis, def, name, None)
             }
         },
     );
@@ -440,14 +440,7 @@ fn function_hover(
 
     let code = occurrence.def.map_or_else(
         || render_fn(name, "", None, None),
-        |def| {
-            render_fn(
-                name,
-                &fn_generics_part(analysis, def),
-                occurrence.ty.as_deref(),
-                None,
-            )
-        },
+        |def| fn_code(analysis, def, name, occurrence.ty.as_deref()),
     );
 
     if let Some(location) = defined_at(text, occurrence, filename) {
@@ -472,16 +465,24 @@ fn property_hover(
 ) -> HoverResult {
     let mut info = Vec::new();
 
-    let variant = occurrence
+    let field = occurrence
         .def
         .and_then(|def| find_member(analysis, def))
-        .filter(|(_, member)| member.kind == crate::analysis::MemberKind::Variant);
+        .filter(|(_, member)| member.kind == crate::analysis::MemberKind::Field);
 
-    if let Some((owner, _)) = variant {
-        let code = owner_name(text, analysis, owner)
-            .map(|owner| format!("{owner}.{name}"))
+    if let Some((_, member)) = field {
+        let code = member
+            .signature
+            .as_deref()
+            .map(|ty| {
+                if member.is_pub {
+                    format!("pub {name}: {ty}")
+                } else {
+                    format!("{name}: {ty}")
+                }
+            })
             .unwrap_or_else(|| name.to_string());
-        info.push("enum member".to_string());
+        info.push("struct field".to_string());
 
         if let Some(location) = defined_at(text, occurrence, filename) {
             info.push(location);
@@ -496,6 +497,20 @@ fn property_hover(
         };
     }
 
+    let payload_ty = variant_parent_before(text, occurrence.offset, occurrence.len).and_then(
+        |(parent, variant)| {
+            analysis.enum_payloads.get(&parent).and_then(|variants| {
+                variants.iter().find_map(|(candidate, payload)| {
+                    (candidate == &variant).then(|| payload.clone()).flatten()
+                })
+            })
+        },
+    );
+
+    if payload_ty.is_some() {
+        info.push("enum member".to_string());
+    }
+
     let code = occurrence
         .def
         .and_then(|def| find_member(analysis, def))
@@ -508,6 +523,7 @@ fn property_hover(
                 }
             })
         })
+        .or_else(|| payload_ty.map(|ty| format!("{name}: {ty}")))
         .unwrap_or_else(|| match &occurrence.ty {
             Some(ty) => format!("{name}: {ty}"),
             None => name.to_string(),
@@ -570,7 +586,7 @@ fn type_hover(text: &str, name: &str, occurrence: &Occurrence, filename: &str) -
         info.push(caps.to_string());
     }
 
-    if let Some(location) = defined_at("", occurrence, filename) {
+    if let Some(location) = defined_at(text, occurrence, filename) {
         info.push(location);
     }
 
@@ -583,6 +599,29 @@ fn type_hover(text: &str, name: &str, occurrence: &Occurrence, filename: &str) -
     }
 }
 
+fn variant_parent_before(text: &str, offset: usize, len: usize) -> Option<(String, String)> {
+    if offset == 0 || text.as_bytes().get(offset - 1) != Some(&b'.') {
+        return None;
+    }
+
+    let mut start = offset - 1;
+
+    while start > 0 && {
+        let byte = text.as_bytes()[start - 1];
+        byte.is_ascii_alphanumeric() || byte == b'_'
+    } {
+        start -= 1;
+    }
+
+    if start == offset - 1 {
+        return None;
+    }
+
+    let variant = text.get(offset..offset + len)?.to_string();
+
+    Some((text[start..offset - 1].to_string(), variant))
+}
+
 fn variant_hover(
     text: &str,
     analysis: &Analysis,
@@ -592,12 +631,27 @@ fn variant_hover(
 ) -> HoverResult {
     let mut info = vec!["enum member".to_string()];
 
-    let code = occurrence
+    let owner = occurrence
         .def
         .and_then(|def| analysis.member_owner.get(&def).copied())
-        .and_then(|owner| owner_name(text, analysis, owner))
-        .map(|owner| format!("{owner}.{name}"))
-        .unwrap_or_else(|| name.to_string());
+        .and_then(|owner| owner_name(text, analysis, owner).map(str::to_string))
+        .or_else(|| {
+            variant_parent_before(text, occurrence.offset, occurrence.len).map(|(parent, _)| parent)
+        });
+
+    let payload = owner.as_deref().and_then(|parent| {
+        analysis.enum_payloads.get(parent).and_then(|variants| {
+            variants
+                .iter()
+                .find_map(|(variant, payload)| (variant == name).then(|| payload.clone()).flatten())
+        })
+    });
+
+    let code = match (owner, payload) {
+        (_, Some(ty)) => format!("{name}: {ty}"),
+        (Some(owner), None) => format!("{owner}.{name}"),
+        (None, None) => name.to_string(),
+    };
 
     if let Some(location) = defined_at(text, occurrence, filename) {
         info.push(location);
@@ -617,7 +671,7 @@ mod tests {
     use super::*;
     use crate::completion::ResolvePaths;
 
-    const SAMPLE: &str = "const LIMIT: i32 = 10;\nlet counter: i32 = 0;\n\nstruct Point {\n    pub x: i32,\n    secret: i32,\n\n    pub fn make(x: i32, s: i32) Point {\n        return Point { .x = x, .secret = s };\n    }\n\n    pub fn get(*self) i32 {\n        return self.x;\n    }\n}\n\nenum Color {\n    red,\n    green,\n}\n\nfn add(a: i32, b: i32) i32 {\n    return a + b;\n}\n\nfn max[T](a: T, b: T) T {\n    return a;\n}\n\nfn main() {\n    let p = Point.make(1, 2);\n    let g = p.get();\n    let m = max(1, 2);\n    let c = Color.red;\n    @println(\"{} {} {} {} {} {}\", p.x, g, m, c, LIMIT, counter);\n}\n";
+    const SAMPLE: &str = "const LIMIT: i32 = 10;\nlet counter: i32 = 0;\n\nstruct Point {\n    pub x: i32,\n    secret: i32,\n\n    pub fn make(x: i32, s: i32) Point {\n        return Point { .x = x, .secret = s };\n    }\n\n    pub fn get(*self) i32 {\n        return self.x;\n    }\n}\n\nenum Color {\n    red,\n    green,\n    num: i32,\n}\n\nfn add(a: i32, b: i32) i32 {\n    return a + b;\n}\n\nfn max[T](a: T, b: T) T {\n    return a;\n}\n\nfn main() {\n    let p = Point.make(1, 2);\n    let g = p.get();\n    let m = max(1, 2);\n    let c = Color.red;\n    let n = Color.num(7);\n    @println(\"{} {} {} {} {} {} {}\", p.x, g, m, @enumTag(c), @enumTag(n), LIMIT, counter);\n}\n";
 
     fn hovering(text: &str, marker: &str) -> String {
         let uri: tower_lsp_server::ls_types::Uri =
@@ -689,7 +743,10 @@ mod tests {
     fn static_call_shows_static() {
         let markdown = hovering(SAMPLE, "make(1, 2)");
 
-        assert!(markdown.contains("fn make(i32, i32) Point"), "{markdown}");
+        assert!(
+            markdown.contains("fn make(x: i32, s: i32) Point"),
+            "{markdown}"
+        );
         assert!(markdown.contains("static method"), "{markdown}");
     }
 
@@ -705,7 +762,7 @@ mod tests {
     fn generic_fn_shows_params() {
         let markdown = hovering(SAMPLE, "max[T]");
 
-        assert!(markdown.contains("fn max[T](T, T) T"), "{markdown}");
+        assert!(markdown.contains("fn max[T](a: T, b: T) T"), "{markdown}");
     }
 
     #[test]
@@ -721,6 +778,59 @@ mod tests {
 
         assert!(markdown.contains("Color.red"), "{markdown}");
         assert!(markdown.contains("enum member"), "{markdown}");
+    }
+
+    #[test]
+    fn field_decl_shows_type() {
+        let markdown = hovering(SAMPLE, "x: i32,");
+
+        assert!(markdown.contains("```zn\npub x: i32\n```"), "{markdown}");
+        assert!(markdown.contains("struct field"), "{markdown}");
+    }
+
+    #[test]
+    fn global_decl_shows_type() {
+        let markdown = hovering(SAMPLE, "LIMIT: i32");
+
+        assert!(
+            markdown.contains("```zn\nconst LIMIT: i32\n```"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn free_fn_decl_shows_named_params() {
+        let markdown = hovering(SAMPLE, "add(");
+
+        assert!(
+            markdown.contains("```zn\nfn add(a: i32, b: i32) i32\n```"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn payload_variant_shows_payload() {
+        let markdown = hovering(SAMPLE, "num(7)");
+
+        assert!(markdown.contains("num: i32"), "{markdown}");
+    }
+
+    const BUFFER_SAMPLE: &str = "struct Buffer {\n    pub data: i32,\n\n    pub fn trim_end(*self) i32 {\n        return self.data;\n    }\n}\n\nfn main() {\n    let buffer = Buffer { .data = 1 };\n    let t = buffer.trim_end();\n    @println(\"{}\", t);\n}\n";
+
+    #[test]
+    fn struct_name_is_not_a_function() {
+        let markdown = hovering(BUFFER_SAMPLE, "Buffer { .data");
+
+        assert!(!markdown.contains("function"), "{markdown}");
+        assert!(!markdown.contains("fn Buffer"), "{markdown}");
+    }
+
+    #[test]
+    fn variable_is_not_a_function() {
+        let markdown = hovering(BUFFER_SAMPLE, "buffer.trim_end");
+
+        assert!(markdown.contains("let buffer: Buffer"), "{markdown}");
+        assert!(!markdown.contains("function"), "{markdown}");
     }
 
     #[test]

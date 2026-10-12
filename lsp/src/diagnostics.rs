@@ -237,6 +237,16 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
         Rc::clone(&interner),
         &resolution_result,
     );
+    analysis.resolve_fn_signatures(
+        &typechecker_result,
+        Rc::clone(&interner),
+        &resolution_result,
+    );
+    analysis.resolve_enum_payloads(
+        &typechecker_result,
+        Rc::clone(&interner),
+        &resolution_result,
+    );
     analysis.resolve_member_types(
         &typechecker_result,
         Rc::clone(&interner),
