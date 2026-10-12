@@ -7,6 +7,19 @@ use zeen_lexer::token::{CompilerKeyword, CompilerType};
 use crate::analysis::{Analysis, Member, MemberKind, Role};
 use crate::modules::{ModuleKind, ModuleMember};
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResolvePaths<'a> {
+    pub dir: Option<&'a std::path::Path>,
+    pub root: Option<&'a std::path::Path>,
+    pub std: Option<&'a std::path::Path>,
+}
+
+impl<'a> ResolvePaths<'a> {
+    pub fn project(&self) -> Option<&'a std::path::Path> {
+        self.root.or(self.dir)
+    }
+}
+
 const SNIPPETS: &[(&str, &str)] = &[
     ("fn", "fn ${1:name}(${2:params}) ${3:Ret} {\n\t$0\n}"),
     ("struct", "struct ${1:Name} {\n\t$0\n}"),
@@ -44,8 +57,7 @@ pub fn complete(
     text: &str,
     analysis: &Analysis,
     offset: usize,
-    open_dir: Option<&std::path::Path>,
-    std_root: Option<&std::path::Path>,
+    paths: ResolvePaths<'_>,
 ) -> Vec<CompletionItem> {
     let prefix = ident_prefix(text, offset);
     let mut seen: HashSet<String> = HashSet::new();
@@ -113,9 +125,9 @@ pub fn complete(
         });
     }
 
-    if let Some(dir) = open_dir {
+    if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
         for import in crate::modules::use_imports(text) {
-            for member in crate::modules::members_of_use(dir, std_root, &import) {
+            for member in crate::modules::members_of_use(dir, root, paths.std, &import) {
                 if !member.name.starts_with(prefix) || !seen.insert(member.name.clone()) {
                     continue;
                 }
@@ -232,6 +244,25 @@ fn find_type_def(analysis: &Analysis, text: &str, name: &str) -> Option<zeen_res
     })
 }
 
+fn find_variant_def(analysis: &Analysis, text: &str, name: &str) -> Option<zeen_resolve::DefId> {
+    analysis.occurrences.iter().find_map(|occurrence| {
+        if occurrence.role == Role::EnumMember
+            && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
+        {
+            occurrence.def
+        } else {
+            None
+        }
+    })
+}
+
+pub fn scope_covers(analysis: &Analysis, owner: zeen_resolve::DefId, cursor: usize) -> bool {
+    analysis
+        .scopes
+        .iter()
+        .any(|scope| scope.owner == owner && scope.start <= cursor && cursor <= scope.end)
+}
+
 fn member_completion_kind(member: &Member) -> CompletionItemKind {
     match member.kind {
         MemberKind::Method if member.is_static => CompletionItemKind::FUNCTION,
@@ -293,8 +324,7 @@ pub fn dot_complete(
     text: &str,
     analysis: &Analysis,
     dot_offset: usize,
-    open_dir: Option<&std::path::Path>,
-    std_root: Option<&std::path::Path>,
+    paths: ResolvePaths<'_>,
 ) -> Vec<CompletionItem> {
     let bytes = text.as_bytes();
     let mut start = dot_offset;
@@ -315,7 +345,14 @@ pub fn dot_complete(
     let mut static_context: Option<bool> = None;
     let mut type_name: Option<String> = None;
 
-    if let Some(receiver) = analysis.at(start) {
+    if let Some(ty) = analysis
+        .access_types
+        .get(&(start, dot_offset - start))
+        .and_then(|ty| normalize_type_name(ty))
+    {
+        static_context = Some(false);
+        type_name = Some(ty);
+    } else if let Some(receiver) = analysis.at(start) {
         if receiver.role == Role::Type {
             if let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) {
                 static_context = Some(true);
@@ -331,14 +368,43 @@ pub fn dot_complete(
 
     let mut items = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    push_type_members(
+        analysis,
+        text,
+        &lookup,
+        static_context,
+        dot_offset,
+        &filter,
+        paths,
+        &mut items,
+        &mut seen,
+    );
 
-    if let Some(def) = find_type_def(analysis, text, &lookup)
+    items
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_type_members(
+    analysis: &Analysis,
+    text: &str,
+    lookup: &str,
+    static_context: Option<bool>,
+    cursor: usize,
+    filter: &str,
+    paths: ResolvePaths<'_>,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if let Some(def) = find_type_def(analysis, text, lookup)
         && let Some(members) = analysis.members.get(&def)
     {
+        let allow_private = scope_covers(analysis, def, cursor);
         let mut local: Vec<&Member> = members
             .iter()
             .filter(|member| {
-                keep_local_member(member, static_context) && member.name.starts_with(&filter)
+                (member.is_pub || allow_private)
+                    && keep_local_member(member, static_context)
+                    && member.name.starts_with(filter)
             })
             .collect();
         local.sort_by(|a, b| a.name.cmp(&b.name));
@@ -361,17 +427,18 @@ pub fn dot_complete(
         }
     }
 
-    if let Some(dir) = open_dir {
+    if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
         let mut imported = crate::modules::type_members(
             dir,
-            std_root,
+            root,
+            paths.std,
             &crate::modules::use_imports(text),
-            &lookup,
+            lookup,
         );
         imported.sort_by(|a, b| a.name.cmp(&b.name));
 
         for member in imported {
-            if !member.name.starts_with(&filter) || !keep_module_member(&member, static_context) {
+            if !member.name.starts_with(filter) || !keep_module_member(&member, static_context) {
                 continue;
             }
 
@@ -391,6 +458,148 @@ pub fn dot_complete(
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CallTrigger {
+    pub callee: (usize, usize),
+    pub dot: usize,
+}
+
+fn is_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn match_open_paren(text: &str, close: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth: usize = 0;
+    let mut index = close;
+
+    loop {
+        match bytes.get(index) {
+            Some(b')') => depth += 1,
+            Some(b'(') => {
+                depth = depth.saturating_sub(1);
+
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            Some(_) => {}
+            None => return None,
+        }
+
+        if index == 0 {
+            return None;
+        }
+
+        index -= 1;
+    }
+}
+
+fn expr_start_before(text: &str, open_paren: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut pos = open_paren;
+    let mut start = None;
+
+    loop {
+        while pos > 0 && bytes[pos - 1].is_ascii_whitespace() {
+            pos -= 1;
+        }
+
+        let mut head = pos;
+
+        while head > 0 && is_ident_byte(bytes[head - 1]) {
+            head -= 1;
+        }
+
+        if head == pos {
+            return start;
+        }
+
+        start = Some(head);
+
+        let mut tail = head;
+
+        while tail > 0 && bytes[tail - 1].is_ascii_whitespace() {
+            tail -= 1;
+        }
+
+        if tail == 0 || bytes[tail - 1] != b'.' {
+            return start;
+        }
+
+        let mut before = tail - 1;
+
+        while before > 0 && bytes[before - 1].is_ascii_whitespace() {
+            before -= 1;
+        }
+
+        if before > 0 && bytes[before - 1] == b')' {
+            pos = match_open_paren(text, before - 1)?;
+            continue;
+        }
+
+        pos = before;
+    }
+}
+
+pub fn call_dot_before(text: &str, offset: usize) -> Option<CallTrigger> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut end = offset;
+
+    while end > 0 && is_ident_byte(bytes[end - 1]) {
+        end -= 1;
+    }
+
+    if end == 0 || bytes[end - 1] != b'.' {
+        return None;
+    }
+
+    let dot = end - 1;
+
+    if dot == 0 || bytes[dot - 1] != b')' {
+        return None;
+    }
+
+    let open = match_open_paren(text, dot - 1)?;
+    let start = expr_start_before(text, open)?;
+
+    Some(CallTrigger {
+        callee: (start, open - start),
+        dot,
+    })
+}
+
+pub fn call_complete(
+    text: &str,
+    analysis: &Analysis,
+    trigger: CallTrigger,
+    paths: ResolvePaths<'_>,
+) -> Vec<CompletionItem> {
+    let Some(ty) = analysis
+        .call_types
+        .get(&trigger.callee)
+        .and_then(|ty| normalize_type_name(ty))
+    else {
+        return Vec::new();
+    };
+
+    let filter = forward_ident(text, trigger.dot + 1).to_string();
+    let mut items = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    push_type_members(
+        analysis,
+        text,
+        &ty,
+        Some(false),
+        trigger.dot,
+        &filter,
+        paths,
+        &mut items,
+        &mut seen,
+    );
 
     items
 }
@@ -542,8 +751,7 @@ pub fn struct_init_complete(
     text: &str,
     analysis: &Analysis,
     offset: usize,
-    open_dir: Option<&std::path::Path>,
-    std_root: Option<&std::path::Path>,
+    paths: ResolvePaths<'_>,
 ) -> Vec<CompletionItem> {
     let Some((type_name, open)) = struct_init_context(text, offset) else {
         return Vec::new();
@@ -557,10 +765,12 @@ pub fn struct_init_complete(
     if let Some(def) = find_type_def(analysis, text, &type_name)
         && let Some(members) = analysis.members.get(&def)
     {
+        let allow_private = scope_covers(analysis, def, offset);
         let mut local: Vec<&Member> = members
             .iter()
             .filter(|member| {
                 member.kind == MemberKind::Field
+                    && (member.is_pub || allow_private)
                     && !used.contains(&member.name)
                     && member.name.starts_with(&filter)
             })
@@ -580,10 +790,34 @@ pub fn struct_init_complete(
         }
     }
 
-    if let Some(dir) = open_dir {
+    if items.is_empty()
+        && let Some(def) = find_variant_def(analysis, text, &type_name)
+        && let Some(fields) = analysis.variant_fields.get(&def)
+    {
+        let mut names: Vec<&str> = fields
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !used.contains(*name) && name.starts_with(&filter))
+            .collect();
+        names.sort();
+
+        for name in names {
+            if seen.insert(name.to_string()) {
+                items.push(CompletionItem {
+                    label: name.to_string(),
+                    kind: Some(CompletionItemKind::FIELD),
+                    sort_text: Some(format!("0_{name}")),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
         let mut imported = crate::modules::type_members(
             dir,
-            std_root,
+            root,
+            paths.std,
             &crate::modules::use_imports(text),
             &type_name,
         );
@@ -613,14 +847,27 @@ pub fn struct_init_complete(
 }
 
 pub fn repair_for_completion(text: &str, offset: usize) -> Option<String> {
-    repair_impl(text, offset, false)
+    repair_impl(text, offset, 0, false)
 }
 
 pub fn repair_for_completion_closed(text: &str, offset: usize) -> Option<String> {
-    repair_impl(text, offset, true)
+    repair_impl(text, offset, 1, false)
 }
 
-fn repair_impl(text: &str, offset: usize, close_brace: bool) -> Option<String> {
+pub fn repair_for_completion_nested(text: &str, offset: usize, extra: usize) -> Option<String> {
+    repair_impl(text, offset, extra.min(3), false)
+}
+
+pub fn repair_for_completion_semi(
+    text: &str,
+    offset: usize,
+    extra: usize,
+    semi: bool,
+) -> Option<String> {
+    repair_impl(text, offset, extra.min(3), semi)
+}
+
+fn repair_impl(text: &str, offset: usize, extra_closes: usize, semi: bool) -> Option<String> {
     let offset = offset.min(text.len());
     let bytes = text.as_bytes();
 
@@ -640,52 +887,50 @@ fn repair_impl(text: &str, offset: usize, close_brace: bool) -> Option<String> {
         return None;
     }
 
-    let open = struct_init_context(text, offset).map(|(_, open)| open);
+    let in_field = struct_init_field_position(text, offset);
 
-    if let Some(open) = open {
+    if in_field {
         let mut repaired = String::with_capacity(text.len() + 24);
         repaired.push_str(&text[..offset]);
         repaired.push_str("__zeen_complete = 0");
 
-        if close_brace {
-            repaired.push('}');
-
-            let mut rest = offset;
-
-            while rest < bytes.len() && bytes[rest].is_ascii_whitespace() {
-                rest += 1;
+        if extra_closes > 0 {
+            for _ in 0..extra_closes {
+                repaired.push('}');
             }
 
-            if !matches!(
-                bytes.get(rest),
-                Some(b';') | Some(b',') | Some(b')') | Some(b']') | Some(b'}')
-            ) {
+            if semi {
                 repaired.push(';');
+            } else {
+                let mut rest = offset;
+
+                while rest < bytes.len() && bytes[rest].is_ascii_whitespace() {
+                    rest += 1;
+                }
+
+                if !matches!(
+                    bytes.get(rest),
+                    Some(b';') | Some(b',') | Some(b')') | Some(b']') | Some(b'}')
+                ) {
+                    repaired.push(';');
+                }
             }
         }
 
         repaired.push_str(&text[offset..]);
 
-        let mut depth: usize = 0;
-        let mut closed = false;
+        let mut balance: isize = 0;
 
-        for byte in &repaired.as_bytes()[open + 1..] {
+        for byte in repaired.bytes() {
             match byte {
-                b'{' => depth += 1,
-                b'}' => {
-                    if depth == 0 {
-                        closed = true;
-                        break;
-                    }
-
-                    depth -= 1;
-                }
+                b'{' => balance += 1,
+                b'}' => balance -= 1,
                 _ => {}
             }
         }
 
-        if !closed {
-            repaired.push_str("\n}");
+        for _ in 0..balance {
+            repaired.push('}');
         }
 
         return Some(repaired);
@@ -937,6 +1182,29 @@ mod tests {
     }
 
     #[test]
+    fn call_dot_detects_callee() {
+        let text = "let s = Outer.spawn().inner;";
+        let dot = text.find("().").unwrap() + 2;
+        let trigger = call_dot_before(text, dot + 1).unwrap();
+        assert_eq!(dot, trigger.dot);
+        assert_eq!(
+            &text[trigger.callee.0..trigger.callee.0 + trigger.callee.1],
+            "Outer.spawn"
+        );
+
+        let nested = "let s = foo().bar().baz;";
+        let dot = nested.find("().baz").unwrap() + 2;
+        let trigger = call_dot_before(nested, dot + 1).unwrap();
+        assert_eq!(
+            &nested[trigger.callee.0..trigger.callee.0 + trigger.callee.1],
+            "foo().bar"
+        );
+
+        assert!(call_dot_before("p.len", 5).is_none());
+        assert!(call_dot_before("p.", 2).is_none());
+    }
+
+    #[test]
     fn struct_init_context_finds_owner() {
         let text = "let p = Point { .x = 1, .";
         let offset = text.len();
@@ -1003,7 +1271,7 @@ mod tests {
     fn static_dot_shows_only_static() {
         let analysis = sample_analysis(SAMPLE);
         let dot = SAMPLE.find("Point.new").unwrap() + "Point".len();
-        let items = dot_complete(SAMPLE, &analysis, dot, None, None);
+        let items = dot_complete(SAMPLE, &analysis, dot, ResolvePaths::default());
         let names = labels(&items);
 
         assert!(names.contains(&"new"));
@@ -1020,7 +1288,7 @@ mod tests {
     fn value_dot_shows_methods_and_fields() {
         let analysis = sample_analysis(SAMPLE);
         let dot = SAMPLE.find("p.len").unwrap() + "p".len();
-        let items = dot_complete(SAMPLE, &analysis, dot, None, None);
+        let items = dot_complete(SAMPLE, &analysis, dot, ResolvePaths::default());
         let names = labels(&items);
 
         assert_eq!(names, vec!["len"]);
@@ -1042,14 +1310,27 @@ mod tests {
         let uri: tower_lsp_server::ls_types::Uri =
             "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
         let stale = crate::diagnostics::check(&uri, &broken);
-        assert!(dot_complete(&broken, &stale.analysis, offset - 1, None, None).is_empty());
+        assert!(
+            dot_complete(
+                &broken,
+                &stale.analysis,
+                offset - 1,
+                ResolvePaths::default()
+            )
+            .is_empty()
+        );
 
         let repaired = repair_for_completion(&broken, offset).unwrap();
         let fresh = crate::diagnostics::check(&uri, &repaired);
         for (def, members) in &fresh.analysis.members {
             eprintln!("MEMBERS {def:?} count {}", members.len());
         }
-        let items = dot_complete(&broken, &fresh.analysis, offset - 1, None, None);
+        let items = dot_complete(
+            &broken,
+            &fresh.analysis,
+            offset - 1,
+            ResolvePaths::default(),
+        );
         let names = labels(&items);
 
         assert!(names.contains(&"len"));
@@ -1089,7 +1370,7 @@ mod tests {
             }
         }
 
-        let items = struct_init_complete(&text, &output.analysis, offset, None, None);
+        let items = struct_init_complete(&text, &output.analysis, offset, ResolvePaths::default());
         let names = labels(&items);
 
         assert_eq!(names, vec!["y"]);
@@ -1113,9 +1394,265 @@ mod tests {
         let output = crate::diagnostics::check(&uri, &repaired);
         assert!(!output.analysis.occurrences.is_empty());
 
-        let items = struct_init_complete(&text, &output.analysis, offset, None, None);
+        let items = struct_init_complete(&text, &output.analysis, offset, ResolvePaths::default());
         let names = labels(&items);
 
         assert_eq!(names, vec!["y"]);
+    }
+
+    const IMPORT_LIB: &str = "pub struct Helper {\n    pub x: i32,\n\n    pub fn make() Helper {\n        return Helper { .x = 1 };\n    }\n\n    pub fn get(*self) i32 {\n        return self.x;\n    }\n}\n";
+
+    fn variant_sample() -> String {
+        "enum Widget {\n    empty,\n    point: {\n        x: i32,\n        y: i32,\n    },\n}\n\nfn main() {\n    let m = Widget.point { .x = 1, .\n    @println(\"{}\", @enumTag(m));\n}\n"
+            .to_string()
+    }
+
+    fn check_first_working(
+        uri: &tower_lsp_server::ls_types::Uri,
+        text: &str,
+        offset: usize,
+    ) -> crate::analysis::Analysis {
+        let base = repair_for_completion(text, offset).unwrap();
+        let mut last = crate::diagnostics::check(uri, &base);
+        let mut seen = base;
+
+        for extra in 0..=3 {
+            for semi in [false, true] {
+                if last.analysis.occurrences.is_empty()
+                    && let Some(next) = repair_for_completion_semi(text, offset, extra, semi)
+                    && next != seen
+                {
+                    seen = next.clone();
+                    let retry = crate::diagnostics::check(uri, &next);
+
+                    if !retry.analysis.occurrences.is_empty() {
+                        last = retry;
+                    }
+                }
+
+                if !last.analysis.occurrences.is_empty() {
+                    break;
+                }
+            }
+        }
+
+        last.analysis
+    }
+
+    #[test]
+    fn variant_payload_suggests_missing_fields() {
+        let text = variant_sample();
+        let anchor = "Widget.point { .x = 1, .";
+        let offset = text.find(anchor).unwrap() + anchor.len();
+
+        assert!(struct_init_field_position(&text, offset));
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let analysis = check_first_working(&uri, &text, offset);
+        let items = struct_init_complete(&text, &analysis, offset, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["y"]);
+    }
+
+    const NESTED_SAMPLE: &str = "struct Inner {\n    pub a: i32,\n    pub c: i32,\n}\n\nstruct Outer {\n    pub inner: Inner,\n    pub b: i32,\n}\n\nfn main() {\n    let o = Outer { .b = 2, .inner = Inner { .a = 1, .";
+
+    #[test]
+    fn nested_init_repairs_two_levels() {
+        let offset = NESTED_SAMPLE.len();
+
+        assert!(struct_init_field_position(NESTED_SAMPLE, offset));
+
+        let (name, _) = struct_init_context(NESTED_SAMPLE, offset).unwrap();
+        assert_eq!(name, "Inner");
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let analysis = check_first_working(&uri, NESTED_SAMPLE, offset);
+        let items = struct_init_complete(NESTED_SAMPLE, &analysis, offset, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["c"]);
+    }
+
+    fn import_project() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-imports-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::create_dir_all(dir.join("pkg")).unwrap();
+        std::fs::write(dir.join("main.zn"), "fn main() {}\n").unwrap();
+        std::fs::write(dir.join("lib.zn"), IMPORT_LIB).unwrap();
+        std::fs::write(dir.join("sub").join("lib.zn"), IMPORT_LIB).unwrap();
+        std::fs::write(
+            dir.join("pkg").join("index.zn"),
+            IMPORT_LIB.replace("Helper", "Indexed"),
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn dotted_super_root_and_index_imports() {
+        let dir = import_project();
+        let sub = dir.join("sub");
+
+        let helper = |members: Vec<crate::modules::ModuleMember>| {
+            let names: Vec<&str> = members.iter().map(|member| member.name.as_str()).collect();
+            assert!(names.contains(&"x"));
+            assert!(names.contains(&"make"));
+            assert!(names.contains(&"get"));
+
+            let make = members.iter().find(|member| member.name == "make").unwrap();
+            assert!(make.is_static);
+
+            let get = members.iter().find(|member| member.name == "get").unwrap();
+            assert!(!get.is_static);
+        };
+
+        helper(crate::modules::type_members(
+            &sub,
+            &dir,
+            None,
+            &["super.lib".to_string()],
+            "Helper",
+        ));
+
+        helper(crate::modules::type_members(
+            &sub,
+            &dir,
+            None,
+            &["root.lib".to_string()],
+            "Helper",
+        ));
+
+        helper(crate::modules::type_members(
+            &dir,
+            &dir,
+            None,
+            &["sub.lib".to_string()],
+            "Helper",
+        ));
+
+        let indexed =
+            crate::modules::type_members(&dir, &dir, None, &["pkg".to_string()], "Indexed");
+        assert!(indexed.iter().any(|member| member.name == "x"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const PRIVATE_SAMPLE: &str = "struct Vault {\n    pub opened: i32,\n    secret: i32,\n\n    pub fn make(o: i32, s: i32) Vault {\n        return Vault { .opened = o, .secret = s };\n    }\n\n    pub fn open(*self) i32 {\n        return self.secret;\n    }\n\n    fn poke(*self) i32 {\n        return self.secret;\n    }\n\n    fn combo() i32 {\n        return 7;\n    }\n}\n\nimplement Clone : Vault {\n    pub fn clone(*const self) Vault {\n        return Vault { .opened = 1, .secret = 2 };\n    }\n}\n\nfn main() {\n    let v = Vault.make(1, 2);\n    let o = v.open();\n    @println(\"{} {}\", v.opened, o);\n}\n";
+
+    const CHAIN_SAMPLE: &str = "struct Inner {\n    pub v: i32,\n\n    pub fn get(*self) i32 {\n        return self.v;\n    }\n}\n\nstruct Outer {\n    pub inner: Inner,\n\n    pub fn spawn() Outer {\n        return Outer { .inner = Inner { .v = 1 } };\n    }\n}\n\nfn main() {\n    let o = Outer.spawn();\n    let g = o.inner.get();\n    let s = Outer.spawn().inner;\n    @println(\"{}\", o.inner.v);\n    @println(\"{}\", g);\n    @println(\"{}\", s.v);\n}\n";
+
+    #[test]
+    fn field_chain_resolves_middle_type() {
+        let analysis = sample_analysis(CHAIN_SAMPLE);
+
+        let dot = CHAIN_SAMPLE.find("o.inner.get").unwrap() + "o.inner".len();
+        let items = dot_complete(CHAIN_SAMPLE, &analysis, dot, ResolvePaths::default());
+        assert_eq!(labels(&items), vec!["get"]);
+
+        let dot = CHAIN_SAMPLE.find("o.inner.v").unwrap() + "o.inner".len();
+        let items = dot_complete(CHAIN_SAMPLE, &analysis, dot, ResolvePaths::default());
+        assert_eq!(labels(&items), vec!["v"]);
+    }
+
+    #[test]
+    fn call_chain_resolves_result_type() {
+        let analysis = sample_analysis(CHAIN_SAMPLE);
+        let anchor = "Outer.spawn().inner";
+        let dot = CHAIN_SAMPLE.find(anchor).unwrap() + "Outer.spawn()".len();
+
+        let trigger = call_dot_before(CHAIN_SAMPLE, dot + 1).unwrap();
+        assert_eq!(trigger.dot, dot);
+
+        let items = call_complete(CHAIN_SAMPLE, &analysis, trigger, ResolvePaths::default());
+        assert_eq!(labels(&items), vec!["inner"]);
+    }
+
+    #[test]
+    fn dangling_call_recovers_through_repair() {
+        let broken = CHAIN_SAMPLE.replacen(
+            "    let s = Outer.spawn().inner;",
+            "    let s = Outer.spawn().inner;\n    Outer.spawn().",
+            1,
+        );
+        let offset = broken.find("\n    Outer.spawn().").unwrap() + "\n    Outer.spawn().".len();
+
+        let trigger = call_dot_before(&broken, offset).unwrap();
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let analysis = check_first_working(&uri, &broken, offset);
+        let items = call_complete(&broken, &analysis, trigger, ResolvePaths::default());
+        assert_eq!(labels(&items), vec!["inner"]);
+    }
+
+    #[test]
+    fn dangling_chain_recovers_through_repair() {
+        let broken = CHAIN_SAMPLE.replacen(
+            "    let g = o.inner.get();",
+            "    let g = o.inner.get();\n    o.inner.",
+            1,
+        );
+        let offset = broken.find("\n    o.inner.").unwrap() + "\n    o.inner.".len();
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let analysis = check_first_working(&uri, &broken, offset);
+        let dot = offset - 1;
+        let items = dot_complete(&broken, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"get"));
+        assert!(names.contains(&"v"));
+    }
+
+    #[test]
+    fn private_hidden_outside() {
+        let analysis = sample_analysis(PRIVATE_SAMPLE);
+
+        let value = PRIVATE_SAMPLE.find("v.opened").unwrap() + "v".len();
+        let items = dot_complete(PRIVATE_SAMPLE, &analysis, value, ResolvePaths::default());
+        let names = labels(&items);
+        assert_eq!(names, vec!["opened"]);
+
+        let statik = PRIVATE_SAMPLE.find("Vault.make").unwrap() + "Vault".len();
+        let items = dot_complete(PRIVATE_SAMPLE, &analysis, statik, ResolvePaths::default());
+        let names = labels(&items);
+        assert_eq!(names, vec!["make"]);
+    }
+
+    #[test]
+    fn private_shown_inside_own_method() {
+        let analysis = sample_analysis(PRIVATE_SAMPLE);
+
+        let dot = PRIVATE_SAMPLE.find("self.secret").unwrap() + "self".len();
+        let items = dot_complete(PRIVATE_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"secret"));
+    }
+
+    #[test]
+    fn private_shown_inside_implement() {
+        let text = PRIVATE_SAMPLE.replacen(
+            "return Vault { .opened = 1, .secret = 2 };",
+            "return Vault { .opened = 1, .",
+            1,
+        );
+        let anchor = "Vault { .opened = 1, .";
+        let offset = text.find(anchor).unwrap() + anchor.len();
+
+        assert!(struct_init_field_position(&text, offset));
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let analysis = check_first_working(&uri, &text, offset);
+        let items = struct_init_complete(&text, &analysis, offset, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["secret"]);
     }
 }

@@ -68,6 +68,7 @@ pub fn use_imports(text: &str) -> Vec<String> {
 
 fn resolve_import(
     open_dir: &Path,
+    project_root: &Path,
     std_root: Option<&Path>,
     import: &str,
 ) -> Option<(String, String)> {
@@ -80,22 +81,62 @@ fn resolve_import(
         return Some((import.to_string(), content.to_string()));
     }
 
-    let path = if let Some(rest) = import.strip_prefix("std.") {
-        std_root.map(|root| root.join(rest.replace('.', "/") + ".zn"))
-    } else if !import.contains('.') {
-        Some(open_dir.join(import.to_string() + ".zn"))
-    } else {
-        None
+    let segments: Vec<&str> = import.split('.').collect();
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    let (base_dir, rest): (std::path::PathBuf, &[&str]) = match segments[0] {
+        "std" => (std_root?.to_path_buf(), &segments[1..]),
+        "root" => (project_root.to_path_buf(), &segments[1..]),
+        "super" => (
+            open_dir.parent().unwrap_or(open_dir).to_path_buf(),
+            &segments[1..],
+        ),
+        _ => (open_dir.to_path_buf(), &segments[..]),
     };
 
-    let path = path?;
-    let content = std::fs::read_to_string(&path).ok()?;
+    let mut dir_path = base_dir;
+
+    for seg in rest {
+        if seg.is_empty() {
+            return None;
+        }
+
+        dir_path.push(seg);
+    }
+
+    let file_path = file_or_index(&dir_path)?;
+    let content = std::fs::read_to_string(&file_path).ok()?;
 
     Some((import.to_string(), content))
 }
 
-pub fn members_of_use(open_dir: &Path, std_root: Option<&Path>, import: &str) -> Vec<ModuleMember> {
-    let Some((module, content)) = resolve_import(open_dir, std_root, import) else {
+fn file_or_index(dir_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut file_path = dir_path.to_path_buf();
+    file_path.set_extension("zn");
+
+    if file_path.is_file() {
+        return Some(file_path);
+    }
+
+    let index_path = dir_path.join("index.zn");
+
+    if index_path.is_file() {
+        return Some(index_path);
+    }
+
+    None
+}
+
+pub fn members_of_use(
+    open_dir: &Path,
+    project_root: &Path,
+    std_root: Option<&Path>,
+    import: &str,
+) -> Vec<ModuleMember> {
+    let Some((module, content)) = resolve_import(open_dir, project_root, std_root, import) else {
         return Vec::new();
     };
 
@@ -104,6 +145,7 @@ pub fn members_of_use(open_dir: &Path, std_root: Option<&Path>, import: &str) ->
 
 pub fn type_members(
     open_dir: &Path,
+    project_root: &Path,
     std_root: Option<&Path>,
     imports: &[String],
     type_name: &str,
@@ -111,7 +153,8 @@ pub fn type_members(
     let mut members = Vec::new();
 
     for import in imports {
-        let Some((module, content)) = resolve_import(open_dir, std_root, import) else {
+        let Some((module, content)) = resolve_import(open_dir, project_root, std_root, import)
+        else {
             continue;
         };
 

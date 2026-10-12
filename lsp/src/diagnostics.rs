@@ -227,7 +227,11 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
         &resolution_result,
     );
 
-    analysis.resolve_calls(&typechecker_result);
+    analysis.resolve_calls(
+        &typechecker_result,
+        Rc::clone(&interner),
+        &resolution_result,
+    );
     analysis.resolve_member_types(
         &typechecker_result,
         Rc::clone(&interner),
@@ -402,6 +406,15 @@ pub(crate) fn file_uri_to_path(uri: &Uri) -> Option<PathBuf> {
     let stripped = uri.as_str().strip_prefix("file://")?;
 
     Some(PathBuf::from(decode_uri_path(stripped)))
+}
+
+pub(crate) fn project_root_for(open_path: &Path, open_text: &str) -> PathBuf {
+    let entry = discover_entry(open_path, open_text);
+
+    entry
+        .parent()
+        .map(|parent| parent.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn discover_entry(open_path: &Path, open_text: &str) -> PathBuf {

@@ -25,6 +25,7 @@ struct Document {
 enum CompletionBranch {
     StructInit,
     Dot(usize),
+    Call(completion::CallTrigger),
 }
 
 impl Backend {
@@ -50,8 +51,7 @@ impl Backend {
         uri: &Uri,
         text: &str,
         offset: usize,
-        open_dir: Option<&std::path::Path>,
-        std_root: Option<&std::path::Path>,
+        paths: completion::ResolvePaths<'_>,
         branch: CompletionBranch,
     ) -> Vec<CompletionItem> {
         let Some(first) = completion::repair_for_completion(text, offset) else {
@@ -59,24 +59,38 @@ impl Backend {
         };
 
         let mut output = diagnostics::check(uri, &first);
+        let mut seen = first;
 
-        if output.analysis.occurrences.is_empty()
-            && let Some(second) = completion::repair_for_completion_closed(text, offset)
-            && second != first
-        {
-            let retry = diagnostics::check(uri, &second);
+        for extra in 0..=3 {
+            for semi in [false, true] {
+                if output.analysis.occurrences.is_empty()
+                    && let Some(next) =
+                        completion::repair_for_completion_semi(text, offset, extra, semi)
+                    && next != seen
+                {
+                    seen = next.clone();
+                    let retry = diagnostics::check(uri, &next);
 
-            if !retry.analysis.occurrences.is_empty() {
-                output = retry;
+                    if !retry.analysis.occurrences.is_empty() {
+                        output = retry;
+                    }
+                }
+
+                if !output.analysis.occurrences.is_empty() {
+                    break;
+                }
             }
         }
 
         match branch {
             CompletionBranch::StructInit => {
-                completion::struct_init_complete(text, &output.analysis, offset, open_dir, std_root)
+                completion::struct_init_complete(text, &output.analysis, offset, paths)
             }
             CompletionBranch::Dot(dot) => {
-                completion::dot_complete(text, &output.analysis, dot, open_dir, std_root)
+                completion::dot_complete(text, &output.analysis, dot, paths)
+            }
+            CompletionBranch::Call(trigger) => {
+                completion::call_complete(text, &output.analysis, trigger, paths)
             }
         }
     }
@@ -389,9 +403,19 @@ impl LanguageServer for Backend {
         };
 
         let offset = position::position_to_offset(&document.text, position);
-        let open_dir = diagnostics::file_uri_to_path(&uri)
+        let open_path = diagnostics::file_uri_to_path(&uri);
+        let open_dir = open_path
+            .as_ref()
             .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+        let project_root = open_path
+            .as_ref()
+            .map(|path| diagnostics::project_root_for(path, &document.text));
         let std_root = diagnostics::resolve_std_root();
+        let paths = completion::ResolvePaths {
+            dir: open_dir.as_deref(),
+            root: project_root.as_deref(),
+            std: std_root.as_deref(),
+        };
         let items = if let Some(prefix) = completion::use_path_prefix(&document.text, offset) {
             let mut modules = completion::core_modules();
 
@@ -410,55 +434,51 @@ impl LanguageServer for Backend {
 
             completion::complete_use(&prefix, &modules)
         } else if completion::struct_init_field_position(&document.text, offset) {
-            let items = completion::struct_init_complete(
-                &document.text,
-                &document.analysis,
-                offset,
-                open_dir.as_deref(),
-                std_root.as_deref(),
-            );
+            let items =
+                completion::struct_init_complete(&document.text, &document.analysis, offset, paths);
 
             if items.is_empty() {
                 self.retry_with_repaired(
                     &uri,
                     &document.text,
                     offset,
-                    open_dir.as_deref(),
-                    std_root.as_deref(),
+                    paths,
                     CompletionBranch::StructInit,
                 )
             } else {
                 items
             }
-        } else if let Some(dot) = completion::receiver_dot_before(&document.text, offset) {
-            let items = completion::dot_complete(
-                &document.text,
-                &document.analysis,
-                dot,
-                open_dir.as_deref(),
-                std_root.as_deref(),
-            );
+        } else if let Some(trigger) = completion::call_dot_before(&document.text, offset) {
+            let items =
+                completion::call_complete(&document.text, &document.analysis, trigger, paths);
 
             if items.is_empty() {
                 self.retry_with_repaired(
                     &uri,
                     &document.text,
                     offset,
-                    open_dir.as_deref(),
-                    std_root.as_deref(),
+                    paths,
+                    CompletionBranch::Call(trigger),
+                )
+            } else {
+                items
+            }
+        } else if let Some(dot) = completion::receiver_dot_before(&document.text, offset) {
+            let items = completion::dot_complete(&document.text, &document.analysis, dot, paths);
+
+            if items.is_empty() {
+                self.retry_with_repaired(
+                    &uri,
+                    &document.text,
+                    offset,
+                    paths,
                     CompletionBranch::Dot(dot),
                 )
             } else {
                 items
             }
         } else {
-            completion::complete(
-                &document.text,
-                &document.analysis,
-                offset,
-                open_dir.as_deref(),
-                std_root.as_deref(),
-            )
+            completion::complete(&document.text, &document.analysis, offset, paths)
         };
 
         Ok(Some(CompletionResponse::Array(items)))

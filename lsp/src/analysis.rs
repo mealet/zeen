@@ -55,15 +55,33 @@ pub struct Occurrence {
     pub type_hint: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scope {
+    pub start: usize,
+    pub end: usize,
+    pub owner: DefId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RawAccess {
+    pub access: HirId,
+    pub field: (usize, usize),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Analysis {
     pub occurrences: Vec<Occurrence>,
     pub calls: Vec<CallSite>,
     pub field_hints: Vec<FieldHint>,
     pub members: HashMap<DefId, Vec<Member>>,
+    pub variant_fields: HashMap<DefId, Vec<String>>,
+    pub scopes: Vec<Scope>,
+    pub access_types: HashMap<(usize, usize), String>,
+    pub call_types: HashMap<(usize, usize), String>,
     pub(crate) fn_params: HashMap<DefId, Vec<Option<String>>>,
     pub(crate) raw_calls: Vec<RawCall>,
     pub(crate) raw_fields: Vec<RawFieldInit>,
+    pub(crate) raw_access: Vec<RawAccess>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,7 +208,12 @@ impl Analysis {
         }
     }
 
-    pub fn resolve_calls(&mut self, types: &TypeCheckResult) {
+    pub fn resolve_calls(
+        &mut self,
+        types: &TypeCheckResult,
+        interner: Rc<RefCell<Rodeo>>,
+        resolution: &ResolutionResult,
+    ) {
         let mut calls = Vec::with_capacity(self.raw_calls.len());
 
         for raw in &self.raw_calls {
@@ -221,6 +244,32 @@ impl Analysis {
         }
 
         self.calls = calls;
+
+        for raw in &self.raw_calls {
+            let Some(id) = types.expr_types.get(&raw.call).copied() else {
+                continue;
+            };
+
+            self.call_types.insert(
+                raw.callee,
+                types
+                    .interner
+                    .display_type(id, interner.clone(), resolution),
+            );
+        }
+
+        for raw in &self.raw_access {
+            let Some(id) = types.expr_types.get(&raw.access).copied() else {
+                continue;
+            };
+
+            self.access_types.insert(
+                raw.field,
+                types
+                    .interner
+                    .display_type(id, interner.clone(), resolution),
+            );
+        }
     }
 
     pub fn resolve_fields(
@@ -521,6 +570,20 @@ impl<'ctx> Walker<'ctx> {
         }
     }
 
+    fn record_method_scope(&mut self, owner: DefId, method: &HirDecl) {
+        let start = method.source.span.offset();
+        let end = start.saturating_add(method.source.span.len());
+
+        self.analysis.scopes.push(Scope { start, end, owner });
+    }
+
+    fn record_impl_scope(&mut self, owner: DefId, decl: &HirDecl) {
+        let start = decl.source.span.offset();
+        let end = start.saturating_add(decl.source.span.len());
+
+        self.analysis.scopes.push(Scope { start, end, owner });
+    }
+
     fn collect_method(&mut self, owner: DefId, method: &HirDecl) {
         let HirDeclKind::Fn(func) = &method.kind else {
             return;
@@ -604,6 +667,7 @@ impl<'ctx> Walker<'ctx> {
 
                 for method in &strukt.methods {
                     self.collect_method(decl.def_id, method);
+                    self.record_method_scope(decl.def_id, method);
                     self.walk_decl(method);
                 }
             }
@@ -639,6 +703,8 @@ impl<'ctx> Walker<'ctx> {
                 for method in &implement.methods {
                     if let Some(owner) = implement.object {
                         self.collect_method(owner, method);
+                        self.record_method_scope(owner, method);
+                        self.record_impl_scope(owner, decl);
                     }
 
                     self.walk_decl(method);
@@ -682,12 +748,24 @@ impl<'ctx> Walker<'ctx> {
 
                     match &variant.payload {
                         Some(HirEnumVariantPayload::Single(ty)) => self.walk_type(ty),
-                        Some(HirEnumVariantPayload::Anonymous { .. }) | None => {}
+                        Some(HirEnumVariantPayload::Anonymous { fields, .. }) => {
+                            for field in fields {
+                                self.analysis
+                                    .variant_fields
+                                    .entry(variant.def_id)
+                                    .or_default()
+                                    .push(self.interner.resolve(&field.name).to_string());
+
+                                self.walk_type(&field.ty);
+                            }
+                        }
+                        None => {}
                     }
                 }
 
                 for method in &enumeration.methods {
                     self.collect_method(decl.def_id, method);
+                    self.record_method_scope(decl.def_id, method);
                     self.walk_decl(method);
                 }
             }
@@ -951,6 +1029,11 @@ impl<'ctx> Walker<'ctx> {
             } => {
                 self.walk_expr(object);
                 self.emit_def(field.1.offset(), field.1.len(), Role::Property, None);
+
+                self.analysis.raw_access.push(RawAccess {
+                    access: expr.id,
+                    field: (field.1.offset(), field.1.len()),
+                });
 
                 for ty in object_generic_args {
                     self.walk_type(ty);
