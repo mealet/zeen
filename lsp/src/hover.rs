@@ -1,4 +1,4 @@
-use crate::analysis::{Analysis, Member, Occurrence, Role};
+use crate::analysis::{Analysis, Member, MemberKind, Occurrence, Role};
 use crate::completion::{ResolvePaths, normalize_type_name};
 pub struct HoverResult {
     pub markdown: String,
@@ -33,7 +33,9 @@ pub fn hover_markdown(
         Role::Method => Some(method_decl_hover(
             text, analysis, name, occurrence, filename,
         )),
-        Role::Function => Some(function_hover(text, analysis, name, occurrence, filename)),
+        Role::Function => Some(function_or_method_hover(
+            text, analysis, name, occurrence, filename,
+        )),
         Role::Property => Some(property_hover(text, analysis, name, occurrence, filename)),
         Role::Variable | Role::Parameter => Some(binding_hover(text, name, occurrence, filename)),
         Role::Type => Some(type_hover(text, name, occurrence, filename)),
@@ -429,6 +431,24 @@ fn method_decl_hover(
     }
 }
 
+fn function_or_method_hover(
+    text: &str,
+    analysis: &Analysis,
+    name: &str,
+    occurrence: &Occurrence,
+    filename: &str,
+) -> HoverResult {
+    let is_method = occurrence.def.is_some_and(|def| {
+        find_member(analysis, def).is_some_and(|(_, member)| member.kind == MemberKind::Method)
+    });
+
+    if is_method {
+        method_decl_hover(text, analysis, name, occurrence, filename)
+    } else {
+        function_hover(text, analysis, name, occurrence, filename)
+    }
+}
+
 fn function_hover(
     text: &str,
     analysis: &Analysis,
@@ -700,7 +720,10 @@ mod tests {
     fn local_shows_let_and_caps() {
         let markdown = hovering(SAMPLE, "p = Point.make");
 
-        assert!(markdown.contains("```zn\nlet p: Point\n```"), "{markdown}");
+        assert!(
+            markdown.contains("```zeen\nlet p: Point\n```"),
+            "{markdown}"
+        );
         assert!(markdown.contains("Move-only, needs Drop"), "{markdown}");
     }
 
@@ -709,7 +732,7 @@ mod tests {
         let markdown = hovering(SAMPLE, "LIMIT, counter");
 
         assert!(
-            markdown.contains("```zn\nconst LIMIT: i32\n```"),
+            markdown.contains("```zeen\nconst LIMIT: i32\n```"),
             "{markdown}"
         );
     }
@@ -719,7 +742,7 @@ mod tests {
         let markdown = hovering(SAMPLE, "counter)");
 
         assert!(
-            markdown.contains("```zn\nlet counter: i32\n```"),
+            markdown.contains("```zeen\nlet counter: i32\n```"),
             "{markdown}"
         );
     }
@@ -728,12 +751,12 @@ mod tests {
     fn param_shows_bare_name() {
         let markdown = hovering(SAMPLE, "a: i32, b: i32");
 
-        assert!(markdown.contains("```zn\na: i32\n```"), "{markdown}");
+        assert!(markdown.contains("```zeen\na: i32\n```"), "{markdown}");
     }
 
     #[test]
     fn method_decl_shows_signature() {
-        let markdown = hovering(SAMPLE, "fn get(*self)");
+        let markdown = hovering(SAMPLE, "get(*self)");
 
         assert!(markdown.contains("fn get(*self) i32"), "{markdown}");
         assert!(markdown.contains("instance method"), "{markdown}");
@@ -741,7 +764,7 @@ mod tests {
 
     #[test]
     fn static_decl_shows_signature() {
-        let markdown = hovering(SAMPLE, "fn make(x: i32");
+        let markdown = hovering(SAMPLE, "make(x: i32");
 
         assert!(
             markdown.contains("fn make(x: i32, s: i32) Point"),
@@ -788,7 +811,7 @@ mod tests {
     fn field_access_shows_pub() {
         let markdown = hovering(SAMPLE, "x, g, m");
 
-        assert!(markdown.contains("```zn\npub x: i32\n```"), "{markdown}");
+        assert!(markdown.contains("```zeen\npub x: i32\n```"), "{markdown}");
     }
 
     #[test]
@@ -803,7 +826,7 @@ mod tests {
     fn field_decl_shows_type() {
         let markdown = hovering(SAMPLE, "x: i32,");
 
-        assert!(markdown.contains("```zn\npub x: i32\n```"), "{markdown}");
+        assert!(markdown.contains("```zeen\npub x: i32\n```"), "{markdown}");
         assert!(markdown.contains("struct field"), "{markdown}");
     }
 
@@ -812,7 +835,7 @@ mod tests {
         let markdown = hovering(SAMPLE, "LIMIT: i32");
 
         assert!(
-            markdown.contains("```zn\nconst LIMIT: i32\n```"),
+            markdown.contains("```zeen\nconst LIMIT: i32\n```"),
             "{markdown}"
         );
     }
@@ -822,7 +845,7 @@ mod tests {
         let markdown = hovering(SAMPLE, "add(");
 
         assert!(
-            markdown.contains("```zn\nfn add(a: i32, b: i32) i32\n```"),
+            markdown.contains("```zeen\nfn add(a: i32, b: i32) i32\n```"),
             "{markdown}"
         );
     }
