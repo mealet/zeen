@@ -388,7 +388,9 @@ impl Analysis {
             let mut args = Vec::with_capacity(params.len());
 
             for (index, param) in params.iter().enumerate() {
-                if index == 0 && let Some(spelling) = self.method_self.get(&def) {
+                if index == 0
+                    && let Some(spelling) = self.method_self.get(&def)
+                {
                     args.push(spelling.clone());
                     continue;
                 }
