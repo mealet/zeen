@@ -20,6 +20,24 @@ pub struct ModuleMember {
     pub module: String,
     pub name: String,
     pub kind: ModuleKind,
+    pub is_static: bool,
+}
+
+fn fn_takes_self(params: &[zeen_ast::declarations::FnParam<'_>]) -> bool {
+    let Some(first) = params.first() else {
+        return false;
+    };
+
+    let mut current = &first.ty.kind;
+
+    loop {
+        match current {
+            zeen_ast::types::TypeKind::SelfType => return true,
+            zeen_ast::types::TypeKind::Const(inner)
+            | zeen_ast::types::TypeKind::SinglePointer(inner) => current = &inner.kind,
+            _ => return false,
+        }
+    }
 }
 
 pub fn use_imports(text: &str) -> Vec<String> {
@@ -152,6 +170,7 @@ fn members_of_source(content: &str, module: &str) -> Vec<ModuleMember> {
             module: module.to_string(),
             name: interner.resolve(&name).to_string(),
             kind,
+            is_static: false,
         });
     }
 
@@ -203,18 +222,23 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                         module: module.to_string(),
                         name: resolve(&field.name),
                         kind: ModuleKind::Field,
+                        is_static: false,
                     });
                 }
 
                 for method in *methods {
                     if let DeclarationKind::FnDecl {
-                        name, is_pub: true, ..
+                        name,
+                        params,
+                        is_pub: true,
+                        ..
                     } = &method.kind
                     {
                         members.push(ModuleMember {
                             module: module.to_string(),
                             name: resolve(&name.0),
                             kind: ModuleKind::Method,
+                            is_static: !fn_takes_self(params),
                         });
                     }
                 }
@@ -234,18 +258,23 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                         module: module.to_string(),
                         name: resolve(&variant.name),
                         kind: ModuleKind::Variant,
+                        is_static: true,
                     });
                 }
 
                 for method in *methods {
                     if let DeclarationKind::FnDecl {
-                        name, is_pub: true, ..
+                        name,
+                        params,
+                        is_pub: true,
+                        ..
                     } = &method.kind
                     {
                         members.push(ModuleMember {
                             module: module.to_string(),
                             name: resolve(&name.0),
                             kind: ModuleKind::Method,
+                            is_static: !fn_takes_self(params),
                         });
                     }
                 }
@@ -259,13 +288,17 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
 
                 for method in *methods {
                     if let DeclarationKind::FnDecl {
-                        name, is_pub: true, ..
+                        name,
+                        params,
+                        is_pub: true,
+                        ..
                     } = &method.kind
                     {
                         members.push(ModuleMember {
                             module: module.to_string(),
                             name: resolve(&name.0),
                             kind: ModuleKind::Method,
+                            is_static: !fn_takes_self(params),
                         });
                     }
                 }

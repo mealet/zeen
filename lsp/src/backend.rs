@@ -21,6 +21,12 @@ struct Document {
     analysis: analysis::Analysis,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionBranch {
+    StructInit,
+    Dot(usize),
+}
+
 impl Backend {
     pub fn new(client: Client) -> Self {
         Self {
@@ -37,6 +43,42 @@ impl Backend {
         }
         let text = std::fs::read_to_string(&sibling).ok()?;
         Some((sibling_uri, text))
+    }
+
+    fn retry_with_repaired(
+        &self,
+        uri: &Uri,
+        text: &str,
+        offset: usize,
+        open_dir: Option<&std::path::Path>,
+        std_root: Option<&std::path::Path>,
+        branch: CompletionBranch,
+    ) -> Vec<CompletionItem> {
+        let Some(first) = completion::repair_for_completion(text, offset) else {
+            return Vec::new();
+        };
+
+        let mut output = diagnostics::check(uri, &first);
+
+        if output.analysis.occurrences.is_empty()
+            && let Some(second) = completion::repair_for_completion_closed(text, offset)
+            && second != first
+        {
+            let retry = diagnostics::check(uri, &second);
+
+            if !retry.analysis.occurrences.is_empty() {
+                output = retry;
+            }
+        }
+
+        match branch {
+            CompletionBranch::StructInit => {
+                completion::struct_init_complete(text, &output.analysis, offset, open_dir, std_root)
+            }
+            CompletionBranch::Dot(dot) => {
+                completion::dot_complete(text, &output.analysis, dot, open_dir, std_root)
+            }
+        }
     }
 }
 
@@ -357,24 +399,58 @@ impl LanguageServer for Backend {
                 modules.extend(completion::std_modules(&root));
             }
 
-            if let Some(path) = diagnostics::file_uri_to_path(&uri) {
-                if let (Some(dir), Some(stem)) = (
+            if let Some(path) = diagnostics::file_uri_to_path(&uri)
+                && let (Some(dir), Some(stem)) = (
                     path.parent(),
                     path.file_stem().and_then(|stem| stem.to_str()),
-                ) {
-                    modules.extend(completion::sibling_modules(dir, stem));
-                }
+                )
+            {
+                modules.extend(completion::sibling_modules(dir, stem));
             }
 
             completion::complete_use(&prefix, &modules)
-        } else if offset > 0 && document.text.as_bytes().get(offset - 1) == Some(&b'.') {
-            completion::dot_complete(
+        } else if completion::struct_init_field_position(&document.text, offset) {
+            let items = completion::struct_init_complete(
                 &document.text,
                 &document.analysis,
-                offset - 1,
+                offset,
                 open_dir.as_deref(),
                 std_root.as_deref(),
-            )
+            );
+
+            if items.is_empty() {
+                self.retry_with_repaired(
+                    &uri,
+                    &document.text,
+                    offset,
+                    open_dir.as_deref(),
+                    std_root.as_deref(),
+                    CompletionBranch::StructInit,
+                )
+            } else {
+                items
+            }
+        } else if let Some(dot) = completion::receiver_dot_before(&document.text, offset) {
+            let items = completion::dot_complete(
+                &document.text,
+                &document.analysis,
+                dot,
+                open_dir.as_deref(),
+                std_root.as_deref(),
+            );
+
+            if items.is_empty() {
+                self.retry_with_repaired(
+                    &uri,
+                    &document.text,
+                    offset,
+                    open_dir.as_deref(),
+                    std_root.as_deref(),
+                    CompletionBranch::Dot(dot),
+                )
+            } else {
+                items
+            }
         } else {
             completion::complete(
                 &document.text,

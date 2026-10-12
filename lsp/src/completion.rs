@@ -4,8 +4,8 @@ use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextF
 use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
-use crate::analysis::{Analysis, MemberKind, Role};
-use crate::modules::ModuleKind;
+use crate::analysis::{Analysis, Member, MemberKind, Role};
+use crate::modules::{ModuleKind, ModuleMember};
 
 const SNIPPETS: &[(&str, &str)] = &[
     ("fn", "fn ${1:name}(${2:params}) ${3:Ret} {\n\t$0\n}"),
@@ -147,30 +147,146 @@ fn module_kind(kind: &ModuleKind) -> CompletionItemKind {
     }
 }
 
-fn member_kind(kind: &MemberKind) -> CompletionItemKind {
-    match kind {
+fn normalize_type_name(ty: &str) -> Option<String> {
+    let mut name = ty.trim();
+
+    loop {
+        if let Some(rest) = name.strip_prefix("[*]") {
+            name = rest.trim_start();
+            continue;
+        }
+
+        if let Some(rest) = name.strip_prefix("[]") {
+            name = rest.trim_start();
+            continue;
+        }
+
+        if let Some(rest) = name.strip_prefix('*') {
+            name = rest.trim_start();
+            continue;
+        }
+
+        if let Some(rest) = name.strip_prefix("const ") {
+            name = rest.trim_start();
+            continue;
+        }
+
+        if let Some(rest) = name.strip_prefix("const\t") {
+            name = rest.trim_start();
+            continue;
+        }
+
+        break;
+    }
+
+    if name.starts_with('[') {
+        return None;
+    }
+
+    let mut end = name.len();
+
+    for (index, byte) in name.bytes().enumerate() {
+        if byte == b'[' || byte == b'(' || byte == b' ' || byte == b'\t' {
+            end = index;
+            break;
+        }
+    }
+
+    name = &name[..end];
+
+    if name.is_empty()
+        || name == "fn"
+        || name == "Fn"
+        || name == "FnOnce"
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return None;
+    }
+
+    Some(name.to_string())
+}
+
+fn forward_ident(text: &str, offset: usize) -> &str {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut end = offset;
+
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+        end += 1;
+    }
+
+    &text[offset..end]
+}
+
+fn find_type_def(analysis: &Analysis, text: &str, name: &str) -> Option<zeen_resolve::DefId> {
+    analysis.occurrences.iter().find_map(|occurrence| {
+        if occurrence.role == Role::Type
+            && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
+        {
+            occurrence.def
+        } else {
+            None
+        }
+    })
+}
+
+fn member_completion_kind(member: &Member) -> CompletionItemKind {
+    match member.kind {
+        MemberKind::Method if member.is_static => CompletionItemKind::FUNCTION,
         MemberKind::Method => CompletionItemKind::METHOD,
         MemberKind::Field => CompletionItemKind::FIELD,
         MemberKind::Variant => CompletionItemKind::ENUM_MEMBER,
     }
 }
 
-fn normalize_type_name(ty: &str) -> Option<&str> {
-    let mut name = ty.trim();
-
-    while let Some(rest) = name.strip_prefix('*') {
-        name = rest.trim_start();
+fn module_member_completion_kind(member: &ModuleMember) -> CompletionItemKind {
+    match &member.kind {
+        ModuleKind::Method if member.is_static => CompletionItemKind::FUNCTION,
+        ModuleKind::Method => CompletionItemKind::METHOD,
+        ModuleKind::Field => CompletionItemKind::FIELD,
+        ModuleKind::Variant => CompletionItemKind::ENUM_MEMBER,
+        _ => CompletionItemKind::FIELD,
     }
+}
 
-    if let Some(bracket) = name.find(['[', '(']) {
-        name = &name[..bracket];
+fn keep_local_member(member: &Member, static_context: Option<bool>) -> bool {
+    match (static_context, &member.kind) {
+        (Some(true), MemberKind::Method) => member.is_static,
+        (Some(true), MemberKind::Variant) => true,
+        (Some(true), MemberKind::Field) => false,
+        (Some(false), MemberKind::Method) => !member.is_static,
+        (Some(false), MemberKind::Field) => true,
+        (Some(false), MemberKind::Variant) => false,
+        (None, _) => true,
     }
+}
 
-    if name.is_empty() {
-        return None;
+fn keep_module_member(member: &ModuleMember, static_context: Option<bool>) -> bool {
+    match (static_context, &member.kind) {
+        (Some(true), ModuleKind::Method) => member.is_static,
+        (Some(true), ModuleKind::Variant) => true,
+        (Some(true), _) => false,
+        (Some(false), ModuleKind::Method) => !member.is_static,
+        (Some(false), ModuleKind::Field) => true,
+        (Some(false), _) => false,
+        (None, ModuleKind::Method | ModuleKind::Field | ModuleKind::Variant) => true,
+        (None, _) => false,
     }
+}
 
-    Some(name)
+fn member_rank(is_static_item: bool, static_context: Option<bool>) -> u8 {
+    match static_context {
+        Some(_) => 0,
+        None => {
+            if is_static_item {
+                0
+            } else {
+                1
+            }
+        }
+    }
 }
 
 pub fn dot_complete(
@@ -195,54 +311,81 @@ pub fn dot_complete(
         return Vec::new();
     };
 
+    let filter = forward_ident(text, dot_offset + 1).to_string();
+    let mut static_context: Option<bool> = None;
+    let mut type_name: Option<String> = None;
+
+    if let Some(receiver) = analysis.at(start) {
+        if receiver.role == Role::Type {
+            if let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) {
+                static_context = Some(true);
+                type_name = Some(name.to_string());
+            }
+        } else if let Some(ty) = receiver.ty.as_deref().and_then(normalize_type_name) {
+            static_context = Some(false);
+            type_name = Some(ty);
+        }
+    }
+
+    let lookup = type_name.as_deref().unwrap_or(receiver_name).to_string();
+
     let mut items = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    if let Some(receiver) = analysis.at(start) {
-        let name: Option<&str> = if receiver.role == Role::Type {
-            text.get(receiver.offset..receiver.offset + receiver.len)
-        } else {
-            receiver.ty.as_deref().and_then(normalize_type_name)
-        };
+    if let Some(def) = find_type_def(analysis, text, &lookup)
+        && let Some(members) = analysis.members.get(&def)
+    {
+        let mut local: Vec<&Member> = members
+            .iter()
+            .filter(|member| {
+                keep_local_member(member, static_context) && member.name.starts_with(&filter)
+            })
+            .collect();
+        local.sort_by(|a, b| a.name.cmp(&b.name));
 
-        if let Some(name) = name {
-            if let Some(def) = analysis.occurrences.iter().find_map(|occurrence| {
-                if occurrence.role == Role::Type
-                    && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
-                {
-                    occurrence.def
-                } else {
-                    None
-                }
-            }) {
-                if let Some(members) = analysis.members.get(&def) {
-                    for member in members {
-                        if seen.insert(member.name.clone()) {
-                            items.push(CompletionItem {
-                                label: member.name.clone(),
-                                kind: Some(member_kind(&member.kind)),
-                                detail: member.signature.clone(),
-                                ..Default::default()
-                            });
-                        }
-                    }
-                }
+        for member in local {
+            if seen.insert(member.name.clone()) {
+                let rank = member_rank(
+                    member.kind == MemberKind::Variant
+                        || (member.kind == MemberKind::Method && member.is_static),
+                    static_context,
+                );
+                items.push(CompletionItem {
+                    label: member.name.clone(),
+                    kind: Some(member_completion_kind(member)),
+                    detail: member.signature.clone(),
+                    sort_text: Some(format!("{rank}_{}", member.name)),
+                    ..Default::default()
+                });
             }
         }
     }
 
     if let Some(dir) = open_dir {
-        for member in crate::modules::type_members(
+        let mut imported = crate::modules::type_members(
             dir,
             std_root,
             &crate::modules::use_imports(text),
-            receiver_name,
-        ) {
+            &lookup,
+        );
+        imported.sort_by(|a, b| a.name.cmp(&b.name));
+
+        for member in imported {
+            if !member.name.starts_with(&filter) || !keep_module_member(&member, static_context) {
+                continue;
+            }
+
             if seen.insert(member.name.clone()) {
+                let rank = member_rank(
+                    member.kind == ModuleKind::Variant
+                        || (member.kind == ModuleKind::Method && member.is_static),
+                    static_context,
+                );
                 items.push(CompletionItem {
                     label: member.name.clone(),
-                    kind: Some(module_kind(&member.kind)),
+                    kind: Some(module_member_completion_kind(&member)),
                     detail: Some(member.module.clone()),
+                    sort_text: Some(format!("{rank}_{}", member.name)),
                     ..Default::default()
                 });
             }
@@ -250,6 +393,394 @@ pub fn dot_complete(
     }
 
     items
+}
+
+pub fn struct_init_context(text: &str, offset: usize) -> Option<(String, usize)> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut depth: usize = 0;
+    let mut index = offset;
+
+    let open = loop {
+        if index == 0 {
+            return None;
+        }
+
+        index -= 1;
+
+        match bytes[index] {
+            b'}' => depth += 1,
+            b'{' => {
+                if depth == 0 {
+                    break index;
+                }
+
+                depth -= 1;
+            }
+            _ => {}
+        }
+    };
+
+    let mut cursor = open;
+
+    while cursor > 0 && bytes[cursor - 1].is_ascii_whitespace() {
+        cursor -= 1;
+    }
+
+    if cursor > 0 && bytes[cursor - 1] == b']' {
+        let mut brackets: usize = 0;
+        let mut inner = cursor;
+
+        loop {
+            if inner == 0 {
+                return None;
+            }
+
+            inner -= 1;
+
+            match bytes[inner] {
+                b']' => brackets += 1,
+                b'[' => {
+                    if brackets == 0 {
+                        return None;
+                    }
+
+                    brackets -= 1;
+
+                    if brackets == 0 {
+                        cursor = inner;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        while cursor > 0 && bytes[cursor - 1].is_ascii_whitespace() {
+            cursor -= 1;
+        }
+    }
+
+    let mut start = cursor;
+
+    while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+        start -= 1;
+    }
+
+    if start == cursor {
+        return None;
+    }
+
+    text.get(start..cursor)
+        .filter(|name| !name.is_empty())
+        .map(|name| (name.to_string(), open))
+}
+
+fn struct_init_used_fields(text: &str, open: usize) -> std::collections::HashSet<String> {
+    let bytes = text.as_bytes();
+    let mut depth: usize = 0;
+    let mut end = text.len();
+
+    for (position, byte) in bytes.iter().enumerate().skip(open + 1) {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                if depth == 0 {
+                    end = position;
+                    break;
+                }
+
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+
+    let Some(body) = text.get(open + 1..end.min(text.len())) else {
+        return std::collections::HashSet::new();
+    };
+
+    let mut used = std::collections::HashSet::new();
+
+    for (position, current) in body.char_indices() {
+        if current != '.' {
+            continue;
+        }
+
+        let name_start = position + 1;
+        let mut name_end = name_start;
+
+        while name_end < body.len() && {
+            let byte = body.as_bytes()[name_end];
+            byte.is_ascii_alphanumeric() || byte == b'_'
+        } {
+            name_end += 1;
+        }
+
+        if name_end == name_start {
+            continue;
+        }
+
+        let mut rest = name_end;
+
+        while rest < body.len() && body.as_bytes()[rest].is_ascii_whitespace() {
+            rest += 1;
+        }
+
+        if rest < body.len()
+            && body.as_bytes()[rest] == b'='
+            && let Some(field) = body.get(name_start..name_end)
+        {
+            used.insert(field.to_string());
+        }
+    }
+
+    used
+}
+
+pub fn struct_init_complete(
+    text: &str,
+    analysis: &Analysis,
+    offset: usize,
+    open_dir: Option<&std::path::Path>,
+    std_root: Option<&std::path::Path>,
+) -> Vec<CompletionItem> {
+    let Some((type_name, open)) = struct_init_context(text, offset) else {
+        return Vec::new();
+    };
+
+    let filter = ident_prefix(text, offset).to_string();
+    let used = struct_init_used_fields(text, open);
+    let mut items = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    if let Some(def) = find_type_def(analysis, text, &type_name)
+        && let Some(members) = analysis.members.get(&def)
+    {
+        let mut local: Vec<&Member> = members
+            .iter()
+            .filter(|member| {
+                member.kind == MemberKind::Field
+                    && !used.contains(&member.name)
+                    && member.name.starts_with(&filter)
+            })
+            .collect();
+        local.sort_by(|a, b| a.name.cmp(&b.name));
+
+        for member in local {
+            if seen.insert(member.name.clone()) {
+                items.push(CompletionItem {
+                    label: member.name.clone(),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: member.signature.clone(),
+                    sort_text: Some(format!("0_{}", member.name)),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    if let Some(dir) = open_dir {
+        let mut imported = crate::modules::type_members(
+            dir,
+            std_root,
+            &crate::modules::use_imports(text),
+            &type_name,
+        );
+        imported.sort_by(|a, b| a.name.cmp(&b.name));
+
+        for member in imported {
+            if member.kind != ModuleKind::Field
+                || used.contains(&member.name)
+                || !member.name.starts_with(&filter)
+            {
+                continue;
+            }
+
+            if seen.insert(member.name.clone()) {
+                items.push(CompletionItem {
+                    label: member.name.clone(),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: Some(member.module.clone()),
+                    sort_text: Some(format!("0_{}", member.name)),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    items
+}
+
+pub fn repair_for_completion(text: &str, offset: usize) -> Option<String> {
+    repair_impl(text, offset, false)
+}
+
+pub fn repair_for_completion_closed(text: &str, offset: usize) -> Option<String> {
+    repair_impl(text, offset, true)
+}
+
+fn repair_impl(text: &str, offset: usize, close_brace: bool) -> Option<String> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+
+    if offset == 0 || bytes.get(offset - 1) != Some(&b'.') {
+        return None;
+    }
+
+    if offset < bytes.len() {
+        let next = bytes[offset];
+
+        if next.is_ascii_alphanumeric() || next == b'_' {
+            return None;
+        }
+    }
+
+    if offset >= 2 && bytes[offset - 2].is_ascii_digit() {
+        return None;
+    }
+
+    let open = struct_init_context(text, offset).map(|(_, open)| open);
+
+    if let Some(open) = open {
+        let mut repaired = String::with_capacity(text.len() + 24);
+        repaired.push_str(&text[..offset]);
+        repaired.push_str("__zeen_complete = 0");
+
+        if close_brace {
+            repaired.push('}');
+
+            let mut rest = offset;
+
+            while rest < bytes.len() && bytes[rest].is_ascii_whitespace() {
+                rest += 1;
+            }
+
+            if !matches!(
+                bytes.get(rest),
+                Some(b';') | Some(b',') | Some(b')') | Some(b']') | Some(b'}')
+            ) {
+                repaired.push(';');
+            }
+        }
+
+        repaired.push_str(&text[offset..]);
+
+        let mut depth: usize = 0;
+        let mut closed = false;
+
+        for byte in &repaired.as_bytes()[open + 1..] {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    if depth == 0 {
+                        closed = true;
+                        break;
+                    }
+
+                    depth -= 1;
+                }
+                _ => {}
+            }
+        }
+
+        if !closed {
+            repaired.push_str("\n}");
+        }
+
+        return Some(repaired);
+    }
+
+    let mut repaired = String::with_capacity(text.len() + 1);
+    repaired.push_str(&text[..offset - 1]);
+
+    let mut rest = offset;
+
+    while rest < bytes.len() && bytes[rest].is_ascii_whitespace() {
+        rest += 1;
+    }
+
+    let need_semi = !matches!(
+        bytes.get(rest),
+        None | Some(b';') | Some(b')') | Some(b']') | Some(b',')
+    );
+
+    if rest == bytes.len() || need_semi {
+        repaired.push(';');
+    }
+
+    repaired.push_str(&text[offset..]);
+
+    Some(repaired)
+}
+
+pub fn receiver_dot_before(text: &str, offset: usize) -> Option<usize> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut end = offset;
+
+    while end > 0 && (bytes[end - 1].is_ascii_alphanumeric() || bytes[end - 1] == b'_') {
+        end -= 1;
+    }
+
+    if end == 0 || bytes[end - 1] != b'.' {
+        return None;
+    }
+
+    let dot = end - 1;
+    let mut start = dot;
+
+    while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+        start -= 1;
+    }
+
+    if start == dot {
+        return None;
+    }
+
+    Some(dot)
+}
+
+pub fn struct_init_field_position(text: &str, offset: usize) -> bool {
+    if struct_init_context(text, offset).is_none() {
+        return false;
+    }
+
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut end = offset;
+
+    while end > 0 && (bytes[end - 1].is_ascii_alphanumeric() || bytes[end - 1] == b'_') {
+        end -= 1;
+    }
+
+    if end != offset {
+        return end > 0 && bytes[end - 1] == b'.';
+    }
+
+    let mut cursor = end;
+
+    while cursor > 0 && bytes[cursor - 1].is_ascii_whitespace() {
+        cursor -= 1;
+    }
+
+    if cursor == 0 {
+        return false;
+    }
+
+    match bytes[cursor - 1] {
+        b'{' | b',' => true,
+        b'.' => {
+            if cursor < 2 {
+                return true;
+            }
+
+            let prev = bytes[cursor - 2];
+
+            !(prev.is_ascii_alphanumeric() || prev == b'_' || prev == b')' || prev == b']')
+        }
+        _ => false,
+    }
 }
 
 pub fn use_path_prefix(text: &str, offset: usize) -> Option<String> {
@@ -375,4 +906,216 @@ pub fn sibling_modules(dir: &std::path::Path, open_name: &str) -> Vec<String> {
 
     modules.sort();
     modules
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_strips_pointers_and_const() {
+        assert_eq!(normalize_type_name("Point"), Some("Point".to_string()));
+        assert_eq!(normalize_type_name("*Point"), Some("Point".to_string()));
+        assert_eq!(
+            normalize_type_name("*const Point"),
+            Some("Point".to_string())
+        );
+        assert_eq!(normalize_type_name("List[i32]"), Some("List".to_string()));
+        assert_eq!(normalize_type_name("[5]i32"), None);
+        assert_eq!(normalize_type_name("fn(i32) void"), None);
+        assert_eq!(normalize_type_name("Fn(i32) i32"), None);
+    }
+
+    #[test]
+    fn receiver_dot_detects_prefix() {
+        assert_eq!(receiver_dot_before("p.", 2), Some(1));
+        assert_eq!(receiver_dot_before("p.le", 4), Some(1));
+        assert_eq!(receiver_dot_before("Point.new", 9), Some(5));
+        assert_eq!(receiver_dot_before("p", 1), None);
+        assert_eq!(receiver_dot_before("p + q", 5), None);
+        assert_eq!(receiver_dot_before(".", 1), None);
+    }
+
+    #[test]
+    fn struct_init_context_finds_owner() {
+        let text = "let p = Point { .x = 1, .";
+        let offset = text.len();
+        let (name, _) = struct_init_context(text, offset).unwrap();
+        assert_eq!(name, "Point");
+
+        let body = "fn f() { x";
+        assert!(struct_init_context(body, body.len()).is_none());
+    }
+
+    #[test]
+    fn struct_init_position_separates_value() {
+        let field = "let p = Point { .";
+        assert!(struct_init_field_position(field, field.len()));
+
+        let partial = "let p = Point { .x = 1, .y";
+        assert!(struct_init_field_position(partial, partial.len()));
+
+        let value = "let p = Point { .x = ";
+        assert!(!struct_init_field_position(value, value.len()));
+
+        let nested = "let p = Point { .x = foo.";
+        assert!(!struct_init_field_position(nested, nested.len()));
+        assert_eq!(
+            receiver_dot_before(nested, nested.len()),
+            Some(nested.len() - 1)
+        );
+    }
+
+    #[test]
+    fn repair_deletes_dangling_dot() {
+        let text = "let q = p.";
+        let repaired = repair_for_completion(text, text.len()).unwrap();
+        assert_eq!(repaired, "let q = p;");
+
+        let done = "let q = p.len";
+        assert!(repair_for_completion(done, done.len()).is_none());
+
+        let strukt = "let p = Point { .";
+        let repaired = repair_for_completion(strukt, strukt.len()).unwrap();
+        assert!(repaired.contains(".__zeen_complete = 0"));
+        assert!(repaired.ends_with('}'));
+    }
+
+    const SAMPLE: &str = "struct Point {\n    pub x: i32,\n    pub y: i32,\n\n    pub fn new(x: i32, y: i32) Point {\n        return Point { .x = x, .y = y };\n    }\n\n    pub fn len(*self) i32 {\n        return self.x;\n    }\n}\n\nfn main() {\n    let p = Point.new(1, 2);\n    let q = p.len();\n    @println(\"{} {}\", p.x, q);\n}\n";
+
+    fn sample_analysis(text: &str) -> crate::analysis::Analysis {
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let output = crate::diagnostics::check(&uri, text);
+        assert!(
+            output.diagnostics.is_empty(),
+            "sample must check cleanly: {:?}",
+            output.diagnostics
+        );
+        output.analysis
+    }
+
+    fn labels(items: &[CompletionItem]) -> Vec<&str> {
+        items.iter().map(|item| item.label.as_str()).collect()
+    }
+
+    #[test]
+    fn static_dot_shows_only_static() {
+        let analysis = sample_analysis(SAMPLE);
+        let dot = SAMPLE.find("Point.new").unwrap() + "Point".len();
+        let items = dot_complete(SAMPLE, &analysis, dot, None, None);
+        let names = labels(&items);
+
+        assert!(names.contains(&"new"));
+
+        for hidden in ["len", "x", "y"] {
+            assert!(!names.contains(&hidden), "static must hide {hidden}");
+        }
+
+        let new_item = items.iter().find(|item| item.label == "new").unwrap();
+        assert_eq!(new_item.kind, Some(CompletionItemKind::FUNCTION));
+    }
+
+    #[test]
+    fn value_dot_shows_methods_and_fields() {
+        let analysis = sample_analysis(SAMPLE);
+        let dot = SAMPLE.find("p.len").unwrap() + "p".len();
+        let items = dot_complete(SAMPLE, &analysis, dot, None, None);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["len"]);
+
+        let len_item = items.iter().find(|item| item.label == "len").unwrap();
+        assert_eq!(len_item.kind, Some(CompletionItemKind::METHOD));
+    }
+
+    #[test]
+    fn dangling_dot_recovers_through_repair() {
+        let broken = SAMPLE.replacen(
+            "    let p = Point.new(1, 2);",
+            "    let p = Point.new(1, 2);\n    p.",
+            1,
+        );
+        let offset = broken.find("\n    p.").unwrap() + "\n    p.".len();
+        assert_eq!(receiver_dot_before(&broken, offset), Some(offset - 1));
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let stale = crate::diagnostics::check(&uri, &broken);
+        assert!(dot_complete(&broken, &stale.analysis, offset - 1, None, None).is_empty());
+
+        let repaired = repair_for_completion(&broken, offset).unwrap();
+        let fresh = crate::diagnostics::check(&uri, &repaired);
+        for (def, members) in &fresh.analysis.members {
+            eprintln!("MEMBERS {def:?} count {}", members.len());
+        }
+        let items = dot_complete(&broken, &fresh.analysis, offset - 1, None, None);
+        let names = labels(&items);
+
+        assert!(names.contains(&"len"));
+        assert!(names.contains(&"x"));
+        assert!(!names.contains(&"new"));
+
+        let len_item = items.iter().find(|item| item.label == "len").unwrap();
+        assert_eq!(len_item.kind, Some(CompletionItemKind::METHOD));
+
+        let field_item = items.iter().find(|item| item.label == "x").unwrap();
+        assert_eq!(field_item.kind, Some(CompletionItemKind::FIELD));
+    }
+
+    #[test]
+    fn struct_init_suggests_missing_fields() {
+        let text = SAMPLE.replacen(
+            "    let p = Point.new(1, 2);",
+            "    let p = Point.new(1, 2);\n    let r = Point { .x = 1, .",
+            1,
+        );
+        let anchor = "Point { .x = 1, .";
+        let offset = text.find(anchor).unwrap() + anchor.len();
+
+        assert!(struct_init_field_position(&text, offset));
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let first = repair_for_completion(&text, offset).unwrap();
+        let mut output = crate::diagnostics::check(&uri, &first);
+
+        if output.analysis.occurrences.is_empty() {
+            let second = repair_for_completion_closed(&text, offset).unwrap();
+            let retry = crate::diagnostics::check(&uri, &second);
+
+            if !retry.analysis.occurrences.is_empty() {
+                output = retry;
+            }
+        }
+
+        let items = struct_init_complete(&text, &output.analysis, offset, None, None);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["y"]);
+    }
+
+    #[test]
+    fn struct_init_with_closer_below() {
+        let text = SAMPLE.replacen(
+            "    let p = Point.new(1, 2);",
+            "    let p = Point.new(1, 2);\n    let r = Point { .x = 1, .\n    };",
+            1,
+        );
+        let anchor = "Point { .x = 1, .";
+        let offset = text.find(anchor).unwrap() + anchor.len();
+
+        assert!(struct_init_field_position(&text, offset));
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let repaired = repair_for_completion(&text, offset).unwrap();
+        let output = crate::diagnostics::check(&uri, &repaired);
+        assert!(!output.analysis.occurrences.is_empty());
+
+        let items = struct_init_complete(&text, &output.analysis, offset, None, None);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["y"]);
+    }
 }

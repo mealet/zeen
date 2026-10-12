@@ -89,6 +89,8 @@ pub struct Member {
     pub kind: MemberKind,
     pub def: DefId,
     pub signature: Option<String>,
+    pub is_static: bool,
+    pub is_pub: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,6 +278,28 @@ fn is_ident_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
+fn hir_fn_takes_self(func: &HirFn) -> bool {
+    if func.self_param.is_some() {
+        return true;
+    }
+
+    let Some(first) = func.params.first() else {
+        return false;
+    };
+
+    let mut current = &first.ty.kind;
+
+    loop {
+        match current {
+            HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_) => return true,
+            HirTypeKind::Const(inner) | HirTypeKind::SinglePointer(inner) => {
+                current = &inner.kind;
+            }
+            _ => return false,
+        }
+    }
+}
+
 struct Walker<'ctx> {
     resolution: &'ctx ResolutionResult,
     interner: std::cell::Ref<'ctx, Rodeo>,
@@ -414,9 +438,7 @@ impl<'ctx> Walker<'ctx> {
         target: DefId,
         hir: Option<HirId>,
     ) -> Option<(usize, usize)> {
-        let Some(role) = self.role_of_def(target) else {
-            return None;
-        };
+        let role = self.role_of_def(target)?;
         self.emit_target(offset, len, role, target, hir)
     }
 
@@ -520,6 +542,8 @@ impl<'ctx> Walker<'ctx> {
                 kind: MemberKind::Method,
                 def: method.def_id,
                 signature: None,
+                is_static: !hir_fn_takes_self(func),
+                is_pub: func.is_pub,
             });
     }
 
@@ -571,6 +595,8 @@ impl<'ctx> Walker<'ctx> {
                             kind: MemberKind::Field,
                             def: field.def_id,
                             signature: None,
+                            is_static: false,
+                            is_pub: field.is_pub,
                         });
 
                     self.walk_type(&field.ty);
@@ -650,6 +676,8 @@ impl<'ctx> Walker<'ctx> {
                             kind: MemberKind::Variant,
                             def: variant.def_id,
                             signature: None,
+                            is_static: true,
+                            is_pub: true,
                         });
 
                     match &variant.payload {
@@ -765,10 +793,9 @@ impl<'ctx> Walker<'ctx> {
                     .emit_named(stmt.source.span, *name, role, Some(*def_id), None)
                     .is_some()
                     && explicit_type.is_none()
+                    && let Some(last) = self.analysis.occurrences.last_mut()
                 {
-                    if let Some(last) = self.analysis.occurrences.last_mut() {
-                        last.type_hint = true;
-                    }
+                    last.type_hint = true;
                 }
 
                 if let Some(ty) = explicit_type {
@@ -811,8 +838,9 @@ impl<'ctx> Walker<'ctx> {
                 if self
                     .emit_target(varname.1.offset(), varname.1.len(), role, *def_id, None)
                     .is_some()
-                && let Some(last) = self.analysis.occurrences.last_mut() {
-                        last.type_hint = true;
+                    && let Some(last) = self.analysis.occurrences.last_mut()
+                {
+                    last.type_hint = true;
                 }
 
                 self.walk_expr(iterator);
@@ -828,7 +856,10 @@ impl<'ctx> Walker<'ctx> {
     fn walk_expr(&mut self, expr: &HirExpr) {
         match &expr.kind {
             HirExprKind::Literal(_) | HirExprKind::Error => {}
-            HirExprKind::VarRef { def: target, generic_args: _ }
+            HirExprKind::VarRef {
+                def: target,
+                generic_args: _,
+            }
             | HirExprKind::GenericParamRef(target)
             | HirExprKind::SelfValue(target) => {
                 self.emit_ref(
@@ -1042,10 +1073,9 @@ impl<'ctx> Walker<'ctx> {
                 None,
             )
             .is_some()
+            && let Some(last) = self.analysis.occurrences.last_mut()
         {
-            if let Some(last) = self.analysis.occurrences.last_mut() {
-                last.type_hint = true;
-            }
+            last.type_hint = true;
         }
     }
 

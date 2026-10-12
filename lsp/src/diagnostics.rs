@@ -156,6 +156,7 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
             project_root,
             std_root: resolve_std_root(),
             linked: HashSet::new(),
+            packages: Vec::new(),
         },
         core_files: zeen_driver::CORE_FILES
             .iter()
