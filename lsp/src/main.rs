@@ -8,6 +8,7 @@ mod hover;
 mod modules;
 mod position;
 mod semantic;
+mod zora;
 
 use backend::Backend;
 use tower_lsp_server::{LspService, Server};

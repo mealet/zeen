@@ -70,6 +70,7 @@ fn resolve_import(
     open_dir: &Path,
     project_root: &Path,
     std_root: Option<&Path>,
+    packages: &[(String, std::path::PathBuf)],
     import: &str,
 ) -> Option<(String, String)> {
     if import.starts_with("core.") {
@@ -94,7 +95,10 @@ fn resolve_import(
             open_dir.parent().unwrap_or(open_dir).to_path_buf(),
             &segments[1..],
         ),
-        _ => (open_dir.to_path_buf(), &segments[..]),
+        name => match packages.iter().rev().find(|(pkg, _)| pkg == name) {
+            Some((_, dir)) => (dir.clone(), &segments[1..]),
+            None => (open_dir.to_path_buf(), &segments[..]),
+        },
     };
 
     let mut dir_path = base_dir;
@@ -134,9 +138,12 @@ pub fn members_of_use(
     open_dir: &Path,
     project_root: &Path,
     std_root: Option<&Path>,
+    packages: &[(String, std::path::PathBuf)],
     import: &str,
 ) -> Vec<ModuleMember> {
-    let Some((module, content)) = resolve_import(open_dir, project_root, std_root, import) else {
+    let Some((module, content)) =
+        resolve_import(open_dir, project_root, std_root, packages, import)
+    else {
         return Vec::new();
     };
 
@@ -147,13 +154,15 @@ pub fn type_members(
     open_dir: &Path,
     project_root: &Path,
     std_root: Option<&Path>,
+    packages: &[(String, std::path::PathBuf)],
     imports: &[String],
     type_name: &str,
 ) -> Vec<ModuleMember> {
     let mut members = Vec::new();
 
     for import in imports {
-        let Some((module, content)) = resolve_import(open_dir, project_root, std_root, import)
+        let Some((module, content)) =
+            resolve_import(open_dir, project_root, std_root, packages, import)
         else {
             continue;
         };
@@ -358,13 +367,15 @@ pub fn variant_payload_fields(
     open_dir: &Path,
     project_root: &Path,
     std_root: Option<&Path>,
+    packages: &[(String, std::path::PathBuf)],
     imports: &[String],
     variant_name: &str,
 ) -> Vec<ModuleMember> {
     let mut fields = Vec::new();
 
     for import in imports {
-        let Some((module, content)) = resolve_import(open_dir, project_root, std_root, import)
+        let Some((module, content)) =
+            resolve_import(open_dir, project_root, std_root, packages, import)
         else {
             continue;
         };

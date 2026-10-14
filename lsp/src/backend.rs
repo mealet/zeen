@@ -1,10 +1,15 @@
 use std::str::FromStr;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use tokio::sync::RwLock;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
-use crate::{analysis, completion, diagnostics, position, semantic};
+use crate::{analysis, completion, diagnostics, position, semantic, zora};
 
 const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(30);
 
@@ -12,6 +17,14 @@ const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(30);
 pub struct Backend {
     client: Client,
     documents: Arc<RwLock<HashMap<Uri, Document>>>,
+    deps: Arc<RwLock<HashMap<PathBuf, CachedDeps>>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CachedDeps {
+    packages: Vec<(String, PathBuf)>,
+    toml_mtime: Option<std::time::SystemTime>,
+    lock_mtime: Option<std::time::SystemTime>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,12 +41,67 @@ enum CompletionBranch {
     Call(completion::CallTrigger),
 }
 
+async fn packages_for_cache(
+    deps: &Arc<RwLock<HashMap<PathBuf, CachedDeps>>>,
+    root: Option<&std::path::Path>,
+) -> (Vec<(String, PathBuf)>, Option<String>) {
+    let Some(root) = root else {
+        return (Vec::new(), None);
+    };
+
+    {
+        let cached = deps.read().await;
+
+        if let Some(entry) = cached.get(root) {
+            let (toml, lock) = zora::manifest_mtimes(root);
+
+            if entry.toml_mtime == toml && entry.lock_mtime == lock {
+                return (entry.packages.clone(), None);
+            }
+        }
+    }
+
+    let root_buf = root.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || zora::run_deps_map(&root_buf)).await;
+
+    match result {
+        Ok(deps_map) => {
+            let (toml, lock) = zora::manifest_mtimes(root);
+            let output = (deps_map.packages.clone(), deps_map.stderr);
+
+            deps.write().await.insert(
+                root.to_path_buf(),
+                CachedDeps {
+                    packages: deps_map.packages,
+                    toml_mtime: toml,
+                    lock_mtime: lock,
+                },
+            );
+
+            output
+        }
+        Err(_) => (Vec::new(), None),
+    }
+}
+
 impl Backend {
     pub fn new(client: Client) -> Self {
         Self {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
+            deps: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    async fn packages_for(
+        &self,
+        root: Option<&std::path::Path>,
+    ) -> (Vec<(String, PathBuf)>, Option<String>) {
+        packages_for_cache(&self.deps, root).await
+    }
+    fn zora_root_of(&self, uri: &Uri) -> Option<PathBuf> {
+        let path = diagnostics::file_uri_to_path(uri)?;
+        zora::find_root(&path)
     }
 
     async fn resolve_sibling_text(&self, uri: &Uri, name: &str) -> Option<(Uri, String)> {
@@ -77,7 +145,7 @@ impl Backend {
                     && diagnostics::parses(&next)
                 {
                     seen = next.clone();
-                    let retry = diagnostics::check_completion(uri, &next);
+                    let retry = diagnostics::check_completion(uri, &next, paths.packages());
 
                     if !retry.analysis.occurrences.is_empty() {
                         output = retry;
@@ -145,6 +213,27 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "zeen-lsp ready")
             .await;
+
+        let watchers = [zora::MANIFEST, zora::LOCKFILE]
+            .into_iter()
+            .map(|file| FileSystemWatcher {
+                glob_pattern: GlobPattern::String(format!("**/{file}")),
+                kind: None,
+            })
+            .collect();
+
+        let options = serde_json::to_value(DidChangeWatchedFilesRegistrationOptions { watchers });
+
+        if let Ok(register_options) = options {
+            let _ = self
+                .client
+                .register_capability(vec![Registration {
+                    id: "zeen-zora-watch".to_string(),
+                    method: "workspace/didChangeWatchedFiles".to_string(),
+                    register_options: Some(register_options),
+                }])
+                .await;
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -250,9 +339,9 @@ impl LanguageServer for Backend {
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
-        let documents = self.documents.read().await;
+        let document = self.documents.read().await.get(&uri).cloned();
 
-        let Some(document) = documents.get(&uri) else {
+        let Some(document) = document else {
             return Ok(None);
         };
 
@@ -269,10 +358,13 @@ impl LanguageServer for Backend {
             .as_ref()
             .map(|path| diagnostics::project_root_for(path, &document.text));
         let std_root = diagnostics::resolve_std_root();
+        let zora_root = open_path.as_ref().and_then(|path| zora::find_root(path));
+        let (packages, _) = self.packages_for(zora_root.as_deref()).await;
         let paths = crate::completion::ResolvePaths {
             dir: open_dir.as_deref(),
             root: project_root.as_deref(),
             std: std_root.as_deref(),
+            packages: Some(packages.as_slice()),
         };
 
         let Some(result) = crate::hover::hover_markdown(
@@ -382,9 +474,9 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let position = params.text_document_position.position;
         let uri = params.text_document_position.text_document.uri.clone();
-        let documents = self.documents.read().await;
+        let document = self.documents.read().await.get(&uri).cloned();
 
-        let Some(document) = documents.get(&uri) else {
+        let Some(document) = document else {
             return Ok(None);
         };
 
@@ -397,10 +489,13 @@ impl LanguageServer for Backend {
             .as_ref()
             .map(|path| diagnostics::project_root_for(path, &document.text));
         let std_root = diagnostics::resolve_std_root();
+        let zora_root = open_path.as_ref().and_then(|path| zora::find_root(path));
+        let (packages, _) = self.packages_for(zora_root.as_deref()).await;
         let paths = completion::ResolvePaths {
             dir: open_dir.as_deref(),
             root: project_root.as_deref(),
             std: std_root.as_deref(),
+            packages: Some(packages.as_slice()),
         };
         let items = if let Some(prefix) = completion::use_path_prefix(&document.text, offset) {
             let mut modules = completion::core_modules();
@@ -534,7 +629,14 @@ impl LanguageServer for Backend {
         let version = params.text_document.version;
         let text = params.text_document.text;
 
-        let output = diagnostics::check(&uri, &text);
+        let root = self.zora_root_of(&uri);
+        let (packages, stderr) = self.packages_for(root.as_deref()).await;
+
+        if let Some(message) = stderr {
+            self.client.show_message(MessageType::ERROR, message).await;
+        }
+
+        let output = diagnostics::check(&uri, &text, &packages);
 
         self.documents.write().await.insert(
             uri.clone(),
@@ -579,7 +681,9 @@ impl LanguageServer for Backend {
 
         let client = self.client.clone();
         let documents = Arc::clone(&self.documents);
+        let deps = Arc::clone(&self.deps);
         let version = params.text_document.version;
+        let root = self.zora_root_of(&uri);
 
         tokio::spawn(async move {
             tokio::time::sleep(DIAGNOSTIC_DEBOUNCE).await;
@@ -594,7 +698,8 @@ impl LanguageServer for Backend {
                 return;
             }
 
-            let output = diagnostics::check(&uri, &current.text);
+            let packages = packages_for_cache(&deps, root.as_deref()).await;
+            let output = diagnostics::check(&uri, &current.text, &packages.0);
 
             let analysis = if output.analysis.occurrences.is_empty() {
                 current.analysis.clone()
@@ -629,5 +734,70 @@ impl LanguageServer for Backend {
         self.client
             .publish_diagnostics(params.text_document.uri, Vec::new(), None)
             .await
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let mut roots = HashSet::new();
+
+        for change in &params.changes {
+            let Some(path) = diagnostics::file_uri_to_path(&change.uri) else {
+                continue;
+            };
+
+            let is_manifest = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == zora::MANIFEST || name == zora::LOCKFILE);
+
+            if is_manifest && let Some(parent) = path.parent() {
+                roots.insert(parent.to_path_buf());
+            }
+        }
+
+        for root in roots {
+            self.deps.write().await.remove(&root);
+            let (packages, stderr) = self.packages_for(Some(&root)).await;
+
+            if let Some(message) = stderr {
+                self.client.show_message(MessageType::ERROR, message).await;
+            } else {
+                self.client
+                    .show_message(
+                        MessageType::INFO,
+                        format!("dependencies updated: {} packages", packages.len()),
+                    )
+                    .await;
+            }
+
+            let open: Vec<(Uri, String, i32)> = {
+                let documents = self.documents.read().await;
+
+                documents
+                    .iter()
+                    .filter(|(uri, _)| {
+                        diagnostics::file_uri_to_path(uri)
+                            .is_some_and(|path| path.starts_with(&root))
+                    })
+                    .map(|(uri, document)| (uri.clone(), document.text.clone(), document.version))
+                    .collect()
+            };
+
+            for (uri, text, version) in open {
+                let output = diagnostics::check(&uri, &text, &packages);
+
+                self.documents.write().await.insert(
+                    uri.clone(),
+                    Document {
+                        version,
+                        text,
+                        analysis: output.analysis,
+                    },
+                );
+
+                self.client
+                    .publish_diagnostics(uri, output.diagnostics, None)
+                    .await;
+            }
+        }
     }
 }

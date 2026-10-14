@@ -12,11 +12,16 @@ pub struct ResolvePaths<'a> {
     pub dir: Option<&'a std::path::Path>,
     pub root: Option<&'a std::path::Path>,
     pub std: Option<&'a std::path::Path>,
+    pub packages: Option<&'a [(String, std::path::PathBuf)]>,
 }
 
 impl<'a> ResolvePaths<'a> {
     pub fn project(&self) -> Option<&'a std::path::Path> {
         self.root.or(self.dir)
+    }
+
+    pub fn packages(&self) -> &'a [(String, std::path::PathBuf)] {
+        self.packages.unwrap_or(&[])
     }
 }
 
@@ -137,7 +142,9 @@ pub fn complete(
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
         for import in crate::modules::use_imports(text) {
-            for member in crate::modules::members_of_use(dir, root, paths.std, &import) {
+            for member in
+                crate::modules::members_of_use(dir, root, paths.std, paths.packages(), &import)
+            {
                 if !member.name.starts_with(prefix) || !seen.insert(member.name.clone()) {
                     continue;
                 }
@@ -442,6 +449,7 @@ fn push_type_members(
             dir,
             root,
             paths.std,
+            paths.packages(),
             &crate::modules::use_imports(text),
             lookup,
         );
@@ -825,7 +833,14 @@ pub fn struct_init_complete(
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
         let imports = crate::modules::use_imports(text);
-        let mut imported = crate::modules::type_members(dir, root, paths.std, &imports, &type_name);
+        let mut imported = crate::modules::type_members(
+            dir,
+            root,
+            paths.std,
+            paths.packages(),
+            &imports,
+            &type_name,
+        );
         imported.sort_by(|a, b| a.name.cmp(&b.name));
 
         for member in imported {
@@ -848,8 +863,14 @@ pub fn struct_init_complete(
         }
 
         if items.is_empty() {
-            let mut payload =
-                crate::modules::variant_payload_fields(dir, root, paths.std, &imports, &type_name);
+            let mut payload = crate::modules::variant_payload_fields(
+                dir,
+                root,
+                paths.std,
+                paths.packages(),
+                &imports,
+                &type_name,
+            );
             payload.sort_by(|a, b| a.name.cmp(&b.name));
 
             for member in payload {
@@ -1281,7 +1302,7 @@ mod tests {
     fn sample_analysis(text: &str) -> crate::analysis::Analysis {
         let uri: tower_lsp_server::ls_types::Uri =
             "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
-        let output = crate::diagnostics::check(&uri, text);
+        let output = crate::diagnostics::check(&uri, text, &[]);
         assert!(
             output.diagnostics.is_empty(),
             "sample must check cleanly: {:?}",
@@ -1336,7 +1357,7 @@ mod tests {
 
         let uri: tower_lsp_server::ls_types::Uri =
             "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
-        let stale = crate::diagnostics::check(&uri, &broken);
+        let stale = crate::diagnostics::check(&uri, &broken, &[]);
         assert!(
             dot_complete(
                 &broken,
@@ -1348,7 +1369,7 @@ mod tests {
         );
 
         let repaired = repair_for_completion(&broken, offset).unwrap();
-        let fresh = crate::diagnostics::check(&uri, &repaired);
+        let fresh = crate::diagnostics::check(&uri, &repaired, &[]);
         for (def, members) in &fresh.analysis.members {
             eprintln!("MEMBERS {def:?} count {}", members.len());
         }
@@ -1386,11 +1407,11 @@ mod tests {
         let uri: tower_lsp_server::ls_types::Uri =
             "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
         let first = repair_for_completion(&text, offset).unwrap();
-        let mut output = crate::diagnostics::check(&uri, &first);
+        let mut output = crate::diagnostics::check(&uri, &first, &[]);
 
         if output.analysis.occurrences.is_empty() {
             let second = repair_for_completion_closed(&text, offset).unwrap();
-            let retry = crate::diagnostics::check(&uri, &second);
+            let retry = crate::diagnostics::check(&uri, &second, &[]);
 
             if !retry.analysis.occurrences.is_empty() {
                 output = retry;
@@ -1418,7 +1439,7 @@ mod tests {
         let uri: tower_lsp_server::ls_types::Uri =
             "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
         let repaired = repair_for_completion(&text, offset).unwrap();
-        let output = crate::diagnostics::check(&uri, &repaired);
+        let output = crate::diagnostics::check(&uri, &repaired, &[]);
         assert!(!output.analysis.occurrences.is_empty());
 
         let items = struct_init_complete(&text, &output.analysis, offset, ResolvePaths::default());
@@ -1440,7 +1461,7 @@ mod tests {
         offset: usize,
     ) -> crate::analysis::Analysis {
         let base = repair_for_completion(text, offset).unwrap();
-        let mut last = crate::diagnostics::check(uri, &base);
+        let mut last = crate::diagnostics::check(uri, &base, &[]);
         let mut seen = base;
 
         for extra in 0..=3 {
@@ -1450,7 +1471,7 @@ mod tests {
                     && next != seen
                 {
                     seen = next.clone();
-                    let retry = crate::diagnostics::check(uri, &next);
+                    let retry = crate::diagnostics::check(uri, &next, &[]);
 
                     if !retry.analysis.occurrences.is_empty() {
                         last = retry;
@@ -1542,6 +1563,7 @@ mod tests {
             &sub,
             &dir,
             None,
+            &[],
             &["super.lib".to_string()],
             "Helper",
         ));
@@ -1550,6 +1572,7 @@ mod tests {
             &sub,
             &dir,
             None,
+            &[],
             &["root.lib".to_string()],
             "Helper",
         ));
@@ -1558,12 +1581,13 @@ mod tests {
             &dir,
             &dir,
             None,
+            &[],
             &["sub.lib".to_string()],
             "Helper",
         ));
 
         let indexed =
-            crate::modules::type_members(&dir, &dir, None, &["pkg".to_string()], "Indexed");
+            crate::modules::type_members(&dir, &dir, None, &[], &["pkg".to_string()], "Indexed");
         assert!(indexed.iter().any(|member| member.name == "x"));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1700,6 +1724,62 @@ mod tests {
     }
 
     #[test]
+    fn package_types_complete_through_deps_map() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-pkg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pkg = dir.join("httplib");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            dir.join("Zora.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nzeen = \"0.3\"\ntype = \"bin\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("index.zn"),
+            "pub struct Client {\n    pub base: i32,\n\n    pub fn make() Client {\n        return Client { .base = 1 };\n    }\n\n    pub fn get(*self) i32 {\n        return self.base;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let main = dir.join("src").join("main.zn");
+        let text = "use http;\n\nfn main() {\n    let c = Client.make();\n    @println(\"{}\", c.base);\n}\n";
+        std::fs::write(&main, text).unwrap();
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            format!("file://{}", main.display()).parse().unwrap();
+        let packages = vec![("http".to_string(), pkg)];
+
+        assert_eq!(crate::zora::find_root(&main), Some(dir.clone()));
+        assert_eq!(
+            crate::zora::entry_for_root(&dir),
+            Some(dir.join("src").join("main.zn"))
+        );
+
+        let output = crate::diagnostics::check(&uri, text, &packages);
+        assert!(
+            output.diagnostics.is_empty(),
+            "package sample must check cleanly: {:?}",
+            output.diagnostics
+        );
+
+        let src = dir.join("src");
+        let paths = ResolvePaths {
+            dir: Some(src.as_path()),
+            root: Some(dir.as_path()),
+            std: None,
+            packages: Some(packages.as_slice()),
+        };
+
+        let dot = text.find("Client.make").unwrap() + "Client".len();
+        let items = dot_complete(text, &output.analysis, dot, paths);
+        let names = labels(&items);
+        assert!(names.contains(&"make"));
+        assert!(!names.contains(&"get"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn imported_variant_payload_suggests_fields() {
         let dir = import_project("variant");
         std::fs::write(
@@ -1718,6 +1798,7 @@ mod tests {
             dir: Some(dir.as_path()),
             root: Some(dir.as_path()),
             std: None,
+            packages: None,
         };
         let items = struct_init_complete(text, &Analysis::default(), offset, paths);
         let names = labels(&items);

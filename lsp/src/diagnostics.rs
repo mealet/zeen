@@ -26,6 +26,7 @@ pub struct CheckOutput {
 
 struct OpenFile<'a> {
     uri: &'a Uri,
+    path: Option<PathBuf>,
     filename: &'a str,
     canonical: String,
     text: &'a str,
@@ -45,12 +46,12 @@ fn severity_of(err: &dyn miette::Diagnostic) -> DiagnosticSeverity {
     }
 }
 
-pub fn check(uri: &Uri, text: &str) -> CheckOutput {
-    check_with(uri, text, true)
+pub fn check(uri: &Uri, text: &str, packages: &[(String, PathBuf)]) -> CheckOutput {
+    check_with(uri, text, true, packages)
 }
 
-pub fn check_completion(uri: &Uri, text: &str) -> CheckOutput {
-    check_with(uri, text, false)
+pub fn check_completion(uri: &Uri, text: &str, packages: &[(String, PathBuf)]) -> CheckOutput {
+    check_with(uri, text, false, packages)
 }
 
 pub(crate) fn parses(text: &str) -> bool {
@@ -66,7 +67,7 @@ pub(crate) fn parses(text: &str) -> bool {
     parser.parse_program().is_ok()
 }
 
-fn check_with(uri: &Uri, text: &str, full: bool) -> CheckOutput {
+fn check_with(uri: &Uri, text: &str, full: bool, packages: &[(String, PathBuf)]) -> CheckOutput {
     let Some(open_path) = file_uri_to_path(uri) else {
         return CheckOutput {
             diagnostics: check_syntax(uri, text),
@@ -80,20 +81,71 @@ fn check_with(uri: &Uri, text: &str, full: bool) -> CheckOutput {
         .unwrap_or_else(|_| filename.clone());
     let open = OpenFile {
         uri,
+        path: Some(open_path.clone()),
         filename: &filename,
         canonical,
         text,
     };
-    let entry_path = discover_entry(&open_path, text);
-    if entry_path == open_path {
-        return check_full(&entry_path, uri, text, open, full);
+
+    if let Some(root) = crate::zora::find_root(&open_path) {
+        let entry_path = crate::zora::entry_for_root(&root).unwrap_or_else(|| open_path.clone());
+        return check_entry(&entry_path, open, full, packages, &root);
     }
-    let Ok(entry_text) = std::fs::read_to_string(&entry_path) else {
-        return check_full(&open_path, uri, text, open, full);
+
+    let entry_path = discover_entry(&open_path, text);
+    let project_root = entry_path
+        .parent()
+        .map(|parent| parent.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    check_entry(&entry_path, open, full, packages, &project_root)
+}
+
+fn check_entry(
+    entry_path: &Path,
+    open: OpenFile<'_>,
+    full: bool,
+    packages: &[(String, PathBuf)],
+    project_root: &Path,
+) -> CheckOutput {
+    let open_path = open.path.clone().unwrap_or_else(|| PathBuf::from("."));
+
+    if entry_path == open_path {
+        return check_full(
+            entry_path,
+            open.uri,
+            open.text,
+            open,
+            full,
+            packages,
+            project_root,
+        );
+    }
+
+    let Ok(entry_text) = std::fs::read_to_string(entry_path) else {
+        return check_full(
+            &open_path,
+            open.uri,
+            open.text,
+            open,
+            full,
+            packages,
+            project_root,
+        );
     };
-    let entry_uri =
-        Uri::from_str(&format!("file://{}", entry_path.display())).unwrap_or_else(|_| uri.clone());
-    check_full(&entry_path, &entry_uri, &entry_text, open, full)
+
+    let entry_uri = Uri::from_str(&format!("file://{}", entry_path.display()))
+        .unwrap_or_else(|_| open.uri.clone());
+
+    check_full(
+        entry_path,
+        &entry_uri,
+        &entry_text,
+        open,
+        full,
+        packages,
+        project_root,
+    )
 }
 
 fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
@@ -108,6 +160,7 @@ fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
 
     let open = OpenFile {
         uri,
+        path: file_uri_to_path(uri),
         filename: filename.as_str(),
         canonical: filename.to_string(),
         text,
@@ -133,6 +186,8 @@ fn check_full(
     text: &str,
     open: OpenFile<'_>,
     full: bool,
+    packages: &[(String, PathBuf)],
+    project_root: &Path,
 ) -> CheckOutput {
     let filename = Rc::new(uri_filename(uri));
     let content = Arc::new(text.to_string());
@@ -173,17 +228,12 @@ fn check_full(
         zeen_driver::CompilationMode::Debug,
     );
 
-    let project_root = entry_path
-        .parent()
-        .map(|parent| parent.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."));
-
     let mut context = zeen_driver::CompilationContext {
         paths: zeen_driver::PathsConfig {
-            project_root,
+            project_root: project_root.to_path_buf(),
             std_root: resolve_std_root(),
             linked: HashSet::new(),
-            packages: Vec::new(),
+            packages: packages.to_vec(),
         },
         core_files: zeen_driver::CORE_FILES
             .iter()
@@ -458,6 +508,10 @@ pub(crate) fn file_uri_to_path(uri: &Uri) -> Option<PathBuf> {
 }
 
 pub(crate) fn project_root_for(open_path: &Path, open_text: &str) -> PathBuf {
+    if let Some(root) = crate::zora::find_root(open_path) {
+        return root;
+    }
+
     let entry = discover_entry(open_path, open_text);
 
     entry
@@ -569,10 +623,10 @@ mod tests {
         let text = "struct Point {\n    pub x: i32,\n}\n\nfn main() {\n    let p = Point { .x = 1 };\n    @println(\"{}\", p.x);\n}\n";
         let uri = Uri::from_str("file:///tmp/zeen-lsp-completion-parity.zn").unwrap();
 
-        let full = check(&uri, text);
+        let full = check(&uri, text, &[]);
         assert!(full.diagnostics.is_empty());
 
-        let light = check_completion(&uri, text);
+        let light = check_completion(&uri, text, &[]);
 
         assert_eq!(
             light.analysis.occurrences.len(),

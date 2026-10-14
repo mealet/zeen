@@ -291,10 +291,17 @@ fn lookup_imported_static(
         _ => return None,
     };
 
-    crate::modules::type_members(dir, root, paths.std, &crate::modules::use_imports(text), ty)
-        .into_iter()
-        .find(|member| member.kind == crate::modules::ModuleKind::Method && member.name == method)
-        .map(|member| member.is_static)
+    crate::modules::type_members(
+        dir,
+        root,
+        paths.std,
+        paths.packages(),
+        &crate::modules::use_imports(text),
+        ty,
+    )
+    .into_iter()
+    .find(|member| member.kind == crate::modules::ModuleKind::Method && member.name == method)
+    .map(|member| member.is_static)
 }
 
 fn method_call_hover(
@@ -696,7 +703,7 @@ mod tests {
     fn hovering(text: &str, marker: &str) -> String {
         let uri: tower_lsp_server::ls_types::Uri =
             "file:///tmp/zeen-lsp-hover-probe.zn".parse().unwrap();
-        let output = crate::diagnostics::check(&uri, text);
+        let output = crate::diagnostics::check(&uri, text, &[]);
         assert!(
             output.diagnostics.is_empty(),
             "sample must check cleanly: {:?}",
@@ -892,7 +899,7 @@ mod tests {
             format!("file://{}", dir.join("main.zn").display())
                 .parse()
                 .unwrap();
-        let output = crate::diagnostics::check(&uri, text);
+        let output = crate::diagnostics::check(&uri, text, &[]);
         assert!(
             output.diagnostics.is_empty(),
             "sample must check cleanly: {:?}",
@@ -903,6 +910,7 @@ mod tests {
             dir: Some(dir.as_path()),
             root: Some(dir.as_path()),
             std: None,
+            packages: None,
         };
 
         let offset = text.find("Helper.make").unwrap();

@@ -1156,6 +1156,7 @@ dependencies = [
  "bumpalo",
  "lasso",
  "miette",
+ "serde_json",
  "tokio",
  "tower-lsp-server",
  "zeen-ast",
