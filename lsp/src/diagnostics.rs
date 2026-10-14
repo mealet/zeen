@@ -46,6 +46,27 @@ fn severity_of(err: &dyn miette::Diagnostic) -> DiagnosticSeverity {
 }
 
 pub fn check(uri: &Uri, text: &str) -> CheckOutput {
+    check_with(uri, text, true)
+}
+
+pub fn check_completion(uri: &Uri, text: &str) -> CheckOutput {
+    check_with(uri, text, false)
+}
+
+pub(crate) fn parses(text: &str) -> bool {
+    let filename = Rc::new(String::from("completion.zn"));
+    let content = Arc::new(text.to_string());
+    let interner = Rc::new(RefCell::new(Rodeo::default()));
+    let bump = Bump::new();
+
+    let mut tokens = zeen_lexer::tokenize(text);
+    let mut parser =
+        zeen_parser::Parser::new(Rc::clone(&filename), content, &mut tokens, &bump, interner);
+
+    parser.parse_program().is_ok()
+}
+
+fn check_with(uri: &Uri, text: &str, full: bool) -> CheckOutput {
     let Some(open_path) = file_uri_to_path(uri) else {
         return CheckOutput {
             diagnostics: check_syntax(uri, text),
@@ -65,14 +86,14 @@ pub fn check(uri: &Uri, text: &str) -> CheckOutput {
     };
     let entry_path = discover_entry(&open_path, text);
     if entry_path == open_path {
-        return check_full(&entry_path, uri, text, open);
+        return check_full(&entry_path, uri, text, open, full);
     }
     let Ok(entry_text) = std::fs::read_to_string(&entry_path) else {
-        return check_full(&open_path, uri, text, open);
+        return check_full(&open_path, uri, text, open, full);
     };
     let entry_uri =
         Uri::from_str(&format!("file://{}", entry_path.display())).unwrap_or_else(|_| uri.clone());
-    check_full(&entry_path, &entry_uri, &entry_text, open)
+    check_full(&entry_path, &entry_uri, &entry_text, open, full)
 }
 
 fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
@@ -106,7 +127,13 @@ fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
     }
 }
 
-fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> CheckOutput {
+fn check_full(
+    entry_path: &Path,
+    uri: &Uri,
+    text: &str,
+    open: OpenFile<'_>,
+    full: bool,
+) -> CheckOutput {
     let filename = Rc::new(uri_filename(uri));
     let content = Arc::new(text.to_string());
     let interner = Rc::new(RefCell::new(Rodeo::default()));
@@ -257,6 +284,13 @@ fn check_full(entry_path: &Path, uri: &Uri, text: &str, open: OpenFile<'_>) -> C
         Rc::clone(&interner),
         &resolution_result,
     );
+
+    if !full {
+        return CheckOutput {
+            diagnostics: diags,
+            analysis,
+        };
+    }
 
     let mut lowered = match zeen_mir::lowering::lower_program(
         Rc::clone(&interner),
@@ -521,6 +555,31 @@ mod tests {
         assert!(contains_main("fn main() i32 {\nreturn 0;\n}"));
         assert!(!contains_main("fn helper() {}"));
         assert!(!contains_main(""));
+    }
+
+    #[test]
+    fn parses_accepts_valid_and_rejects_dangling_dot() {
+        assert!(parses("fn main() {\n    let x = 1;\n}\n"));
+        assert!(!parses("fn main() {\n    let x = foo.\n}\n"));
+        assert!(!parses("fn main() {\n    let p = Point { .\n}\n"));
+    }
+
+    #[test]
+    fn check_completion_matches_full_analysis() {
+        let text = "struct Point {\n    pub x: i32,\n}\n\nfn main() {\n    let p = Point { .x = 1 };\n    @println(\"{}\", p.x);\n}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-completion-parity.zn").unwrap();
+
+        let full = check(&uri, text);
+        assert!(full.diagnostics.is_empty());
+
+        let light = check_completion(&uri, text);
+
+        assert_eq!(
+            light.analysis.occurrences.len(),
+            full.analysis.occurrences.len()
+        );
+        assert_eq!(light.analysis.members.len(), full.analysis.members.len());
+        assert!(!light.analysis.members.is_empty());
     }
 
     #[test]

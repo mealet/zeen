@@ -54,32 +54,40 @@ impl Backend {
         paths: completion::ResolvePaths<'_>,
         branch: CompletionBranch,
     ) -> Vec<CompletionItem> {
-        let Some(first) = completion::repair_for_completion(text, offset) else {
-            return Vec::new();
+        let mut output = diagnostics::CheckOutput {
+            diagnostics: Vec::new(),
+            analysis: crate::analysis::Analysis::default(),
         };
-
-        let mut output = diagnostics::check(uri, &first);
-        let mut seen = first;
+        let mut seen = String::new();
 
         for extra in 0..=3 {
             for semi in [false, true] {
-                if output.analysis.occurrences.is_empty()
-                    && let Some(next) =
-                        completion::repair_for_completion_semi(text, offset, extra, semi)
+                if !output.analysis.occurrences.is_empty() {
+                    break;
+                }
+
+                let candidate = if extra == 0 && !semi {
+                    completion::repair_for_completion(text, offset)
+                } else {
+                    completion::repair_for_completion_semi(text, offset, extra, semi)
+                };
+
+                if let Some(next) = candidate
                     && next != seen
+                    && diagnostics::parses(&next)
                 {
                     seen = next.clone();
-                    let retry = diagnostics::check(uri, &next);
+                    let retry = diagnostics::check_completion(uri, &next);
 
                     if !retry.analysis.occurrences.is_empty() {
                         output = retry;
                     }
                 }
-
-                if !output.analysis.occurrences.is_empty() {
-                    break;
-                }
             }
+        }
+
+        if output.analysis.occurrences.is_empty() {
+            return Vec::new();
         }
 
         match branch {
