@@ -513,6 +513,18 @@ impl LanguageServer for Backend {
                 modules.extend(completion::sibling_modules(dir, stem));
             }
 
+            if (prefix == "super" || prefix.starts_with("super."))
+                && let Some(base) = open_dir.as_deref().and_then(|dir| dir.parent())
+            {
+                modules.extend(crate::modules::prefixed_modules(base, "super"));
+            }
+
+            if (prefix == "root" || prefix.starts_with("root."))
+                && let Some(base) = project_root.as_deref()
+            {
+                modules.extend(crate::modules::prefixed_modules(base, "root"));
+            }
+
             completion::complete_use(&prefix, &modules)
         } else if completion::struct_init_field_position(&document.text, offset) {
             let items =

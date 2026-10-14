@@ -429,3 +429,120 @@ pub fn variant_payload_fields(
     fields.dedup_by(|a, b| a.name == b.name);
     fields
 }
+
+pub fn prefixed_modules(base: &Path, prefix: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_prefixed(base, base, prefix, &mut out, 0);
+    out.sort();
+    out
+}
+
+fn collect_prefixed(base: &Path, dir: &Path, prefix: &str, out: &mut Vec<String>, depth: usize) {
+    if depth > 6 {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        let Some(name) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.starts_with('.'))
+        else {
+            continue;
+        };
+
+        if path.is_dir() {
+            if name == "target" {
+                continue;
+            }
+
+            collect_prefixed(base, &path, prefix, out, depth + 1);
+            continue;
+        }
+
+        if path.extension().and_then(|ext| ext.to_str()) != Some("zn") {
+            continue;
+        }
+
+        let Ok(relative) = path.strip_prefix(base) else {
+            continue;
+        };
+
+        let mut dotted = prefix.to_string();
+
+        for component in relative.components() {
+            let Some(text) = component.as_os_str().to_str() else {
+                continue;
+            };
+
+            dotted.push('.');
+            dotted.push_str(text);
+        }
+
+        let Some(candidate) = dotted.strip_suffix(".zn") else {
+            continue;
+        };
+
+        out.push(candidate.to_string());
+
+        if let Some(indexless) = candidate.strip_suffix(".index") {
+            out.push(indexless.to_string());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("zeen-lsp-prefixed-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub").join("deep")).unwrap();
+        std::fs::create_dir_all(dir.join("pkg")).unwrap();
+        std::fs::write(dir.join("lib.zn"), "pub fn f() i32 {\n    return 1;\n}\n").unwrap();
+        std::fs::write(
+            dir.join("sub").join("lib.zn"),
+            "pub fn g() i32 {\n    return 2;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("pkg").join("index.zn"),
+            "pub fn h() i32 {\n    return 3;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("notes.txt"), "skip me\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn lists_nested_with_prefix() {
+        let dir = layout("nested");
+        let modules = prefixed_modules(&dir, "super");
+
+        assert!(modules.contains(&"super.lib".to_string()));
+        assert!(modules.contains(&"super.sub.lib".to_string()));
+        assert!(modules.contains(&"super.pkg.index".to_string()));
+        assert!(modules.contains(&"super.pkg".to_string()));
+        assert!(!modules.iter().any(|module| module.contains("notes")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_dir_gives_empty() {
+        let dir =
+            std::env::temp_dir().join(format!("zeen-lsp-prefixed-gone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(prefixed_modules(&dir, "root").is_empty());
+    }
+}

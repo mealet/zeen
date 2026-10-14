@@ -1220,6 +1220,19 @@ mod tests {
     }
 
     #[test]
+    fn use_prefix_matches_dotted_paths() {
+        let modules = [
+            "super.lib".to_string(),
+            "super.other".to_string(),
+            "root.lib".to_string(),
+        ];
+        let items = complete_use("super.li", &modules);
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+
+        assert_eq!(labels, vec!["super.lib"]);
+    }
+
+    #[test]
     fn receiver_dot_detects_prefix() {
         assert_eq!(receiver_dot_before("p.", 2), Some(1));
         assert_eq!(receiver_dot_before("p.le", 4), Some(1));
