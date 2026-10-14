@@ -266,6 +266,30 @@ fn check_full(
         }
     };
 
+    if open.path.as_deref() != Some(entry_path)
+        && !resolution_result.defs.values().any(|info| {
+            let name = info.span.src.name();
+            name == open.filename || Some(name) == Some(open.canonical.as_str())
+        })
+    {
+        let Some(open_path) = open.path.clone() else {
+            return CheckOutput {
+                diagnostics: diags,
+                analysis: Analysis::default(),
+            };
+        };
+
+        return check_full(
+            &open_path,
+            open.uri,
+            open.text,
+            open,
+            full,
+            packages,
+            project_root,
+        );
+    }
+
     let mut hir_lowering = zeen_hir::HirLowering::new(&resolution_result, Rc::clone(&interner));
     let hir_module = hir_lowering.lower_module(resolved_program);
 
@@ -634,6 +658,113 @@ mod tests {
         );
         assert_eq!(light.analysis.members.len(), full.analysis.members.len());
         assert!(!light.analysis.members.is_empty());
+    }
+
+    fn zora_lib_project(tag: &str, index: &str, testing: &str) -> (PathBuf, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("zeen-lsp-zoralib-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Zora.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nzeen = \"0.3\"\ntype = \"lib/static\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src").join("index.zn"), index).unwrap();
+        let testing_path = dir.join("src").join("testing.zn");
+        std::fs::write(&testing_path, testing).unwrap();
+
+        (dir, testing_path)
+    }
+
+    #[test]
+    fn lib_dependency_file_reports_errors() {
+        let (_dir, testing_path) = zora_lib_project(
+            "dep",
+            "use testing;\n\npub fn helper() i32 {\n    return 1;\n}\n",
+            "pub fn broken() i32 {\n    return undefined_variable;\n}\n",
+        );
+        let uri = Uri::from_str(&format!("file://{}", testing_path.display())).unwrap();
+        let text = std::fs::read_to_string(&testing_path).unwrap();
+        let output = check(&uri, &text, &[]);
+
+        assert!(!output.diagnostics.is_empty());
+        assert!(!output.analysis.occurrences.is_empty());
+    }
+
+    #[test]
+    fn unreachable_file_checked_standalone() {
+        let (_dir, testing_path) = zora_lib_project(
+            "unreached",
+            "pub fn helper() i32 {\n    return 1;\n}\n",
+            "pub fn broken() i32 {\n    return undefined_variable;\n}\n",
+        );
+        let uri = Uri::from_str(&format!("file://{}", testing_path.display())).unwrap();
+        let text = std::fs::read_to_string(&testing_path).unwrap();
+        let output = check(&uri, &text, &[]);
+
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diag| diag.message.contains("undefined_variable")),
+            "standalone errors must show: {:?}",
+            output.diagnostics
+        );
+        assert!(!output.analysis.occurrences.is_empty());
+    }
+
+    fn zora_bin_project(tag: &str, main: &str, extra: &str) -> (PathBuf, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("zeen-lsp-zorabin-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Zora.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nzeen = \"0.3\"\ntype = \"bin\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src").join("main.zn"), main).unwrap();
+        let extra_path = dir.join("src").join("extra.zn");
+        std::fs::write(&extra_path, extra).unwrap();
+
+        (dir, extra_path)
+    }
+
+    #[test]
+    fn bin_unreachable_file_checked_standalone() {
+        let (_dir, extra_path) = zora_bin_project(
+            "dep",
+            "fn main() {\n    @println(\"hi\");\n}\n",
+            "pub fn broken() i32 {\n    return undefined_variable;\n}\n",
+        );
+        let uri = Uri::from_str(&format!("file://{}", extra_path.display())).unwrap();
+        let text = std::fs::read_to_string(&extra_path).unwrap();
+        let output = check(&uri, &text, &[]);
+
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diag| diag.message.contains("undefined_variable")),
+            "standalone errors must show: {:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
+    fn bin_reachable_file_uses_entry_analysis() {
+        let (_dir, extra_path) = zora_bin_project(
+            "reached",
+            "use extra;\n\nfn main() {\n    @println(\"{}\", extra.value());\n}\n",
+            "pub fn value() i32 {\n    return 7;\n}\n",
+        );
+        let uri = Uri::from_str(&format!("file://{}", extra_path.display())).unwrap();
+        let text = std::fs::read_to_string(&extra_path).unwrap();
+        let output = check(&uri, &text, &[]);
+
+        assert!(output.diagnostics.is_empty());
+        assert!(!output.analysis.occurrences.is_empty());
     }
 
     #[test]
