@@ -67,12 +67,18 @@ async fn packages_for_cache(
     match result {
         Ok(deps_map) => {
             let (toml, lock) = zora::manifest_mtimes(root);
-            let output = (deps_map.packages.clone(), deps_map.stderr);
+            let mut packages = deps_map.packages;
+
+            if let Some(self_package) = zora::self_mapping(root) {
+                packages.push(self_package);
+            }
+
+            let output = (packages.clone(), deps_map.stderr);
 
             deps.write().await.insert(
                 root.to_path_buf(),
                 CachedDeps {
-                    packages: deps_map.packages,
+                    packages,
                     toml_mtime: toml,
                     lock_mtime: lock,
                 },
@@ -80,7 +86,24 @@ async fn packages_for_cache(
 
             output
         }
-        Err(_) => (Vec::new(), None),
+        Err(_) => {
+            let (toml, lock) = zora::manifest_mtimes(root);
+            let packages = zora::self_mapping(root)
+                .map(|pair| vec![pair])
+                .unwrap_or_default();
+            let output = (packages.clone(), None);
+
+            deps.write().await.insert(
+                root.to_path_buf(),
+                CachedDeps {
+                    packages,
+                    toml_mtime: toml,
+                    lock_mtime: lock,
+                },
+            );
+
+            output
+        }
     }
 }
 

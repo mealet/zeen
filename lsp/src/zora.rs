@@ -35,6 +35,57 @@ pub fn entry_for_root(root: &Path) -> Option<PathBuf> {
     })
 }
 
+pub fn self_mapping(root: &Path) -> Option<(String, PathBuf)> {
+    let manifest = std::fs::read_to_string(root.join(MANIFEST)).ok()?;
+    let name = package_name(&manifest)?;
+    let src = root.join("src");
+
+    if src.is_dir() {
+        Some((name, src))
+    } else {
+        None
+    }
+}
+
+fn package_name(manifest: &str) -> Option<String> {
+    let mut in_package = false;
+
+    for line in manifest.lines() {
+        let line = line.trim();
+
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+            continue;
+        }
+
+        if !in_package {
+            continue;
+        }
+
+        let Some(rest) = line.strip_prefix("name") else {
+            continue;
+        };
+
+        if !rest.starts_with([' ', '\t', '=']) {
+            continue;
+        }
+
+        let value = rest
+            .trim_start_matches([' ', '\t', '='])
+            .trim()
+            .trim_matches('"')
+            .trim();
+
+        if value.is_empty() {
+            continue;
+        }
+
+        return Some(value.to_string());
+    }
+
+    None
+}
+
 fn entry_kind(manifest: &str) -> Option<EntryKind> {
     let mut in_package = false;
 
@@ -146,6 +197,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("zeen-lsp-zora-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("a").join("b").join("c")).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join(MANIFEST), manifest).unwrap();
         dir
     }
@@ -198,6 +250,30 @@ mod tests {
         );
 
         assert_eq!(entry_for_root(&dir), Some(dir.join("src").join("main.zn")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn self_mapping_reads_name() {
+        let dir = project("selfmap", BIN_MANIFEST);
+
+        assert_eq!(
+            self_mapping(&dir),
+            Some(("demo".to_string(), dir.join("src")))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn self_mapping_needs_src_dir() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-zora-nosrc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(MANIFEST), BIN_MANIFEST).unwrap();
+
+        assert_eq!(self_mapping(&dir), None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

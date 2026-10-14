@@ -1793,6 +1793,43 @@ mod tests {
     }
 
     #[test]
+    fn project_self_mapping_resolves_use() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-selfpkg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            dir.join("Zora.toml"),
+            "[package]\nname = \"adder\"\nversion = \"0.1.0\"\nzeen = \"0.3\"\ntype = \"bin\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("calc.zn"),
+            "pub fn add(a: i32, b: i32) i32 {\n    return a + b;\n}\n",
+        )
+        .unwrap();
+
+        let main = src.join("main.zn");
+        let text = "use adder.calc;\n\nfn main() {\n    @println(\"{}\", add(1, 2));\n}\n";
+        std::fs::write(&main, text).unwrap();
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            format!("file://{}", main.display()).parse().unwrap();
+        let mapping = crate::zora::self_mapping(&dir).unwrap();
+        assert_eq!(mapping.0, "adder");
+
+        let packages = vec![mapping];
+        let output = crate::diagnostics::check(&uri, text, &packages);
+        assert!(
+            output.diagnostics.is_empty(),
+            "self import must check cleanly: {:?}",
+            output.diagnostics
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn imported_variant_payload_suggests_fields() {
         let dir = import_project("variant");
         std::fs::write(
