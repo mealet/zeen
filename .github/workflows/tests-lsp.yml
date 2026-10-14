@@ -1,0 +1,46 @@
+name: Tests LSP
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests-lsp:
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        working-directory: ./lsp
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+    # Checkout
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+    # Install Rust
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      with:
+          toolchain: stable
+
+    # Install Nextest
+    - name: Install Nextest
+      uses: taiki-e/install-action@6d7ea3ee4000cadd654f6bd50c17380bfa413696
+
+    # Setup Zeen Standard Library
+    - name: Set ZEEN_STD
+      run: echo "ZEEN_STD=$GITHUB_WORKSPACE/lib/std" >> "$GITHUB_ENV"
+
+    # Run tests
+    - name: LSP Tests
+      run: cargo nextest run
