@@ -97,6 +97,8 @@ pub struct Analysis {
     pub fn_generics: HashMap<DefId, Vec<String>>,
     pub method_self: HashMap<DefId, String>,
     pub fn_signatures: HashMap<DefId, String>,
+    pub fn_source_sig: HashMap<DefId, String>,
+    pub def_spans: HashMap<DefId, (usize, usize, Option<String>)>,
     pub enum_payloads: HashMap<String, Vec<(String, Option<String>)>>,
     pub(crate) fn_params: HashMap<DefId, Vec<Option<String>>>,
     pub(crate) raw_calls: Vec<RawCall>,
@@ -195,6 +197,24 @@ impl Analysis {
                 _ => None,
             };
             occurrence.target_module = resolution.def_modules.get(&def).cloned();
+
+            let name = info.span.src.name();
+
+            if name != walker.filename && Some(name) != Some(walker.canonical) {
+                walker.analysis.def_spans.insert(
+                    def,
+                    (
+                        info.span.span.offset(),
+                        info.span.span.len(),
+                        Some(name.to_string()),
+                    ),
+                );
+            } else {
+                walker
+                    .analysis
+                    .def_spans
+                    .insert(def, (info.span.span.offset(), info.span.span.len(), None));
+            }
         }
 
         walker
@@ -1050,6 +1070,65 @@ impl<'ctx> Walker<'ctx> {
         }
     }
 
+    fn record_fn_source_sig(&mut self, func: &HirFn, def_id: DefId) {
+        let name_start = func.name.1.offset().min(self.text.len());
+        let name_end = name_start
+            .saturating_add(func.name.1.len())
+            .min(self.text.len());
+
+        let Some(name) = self.text.get(name_start..name_end) else {
+            return;
+        };
+
+        if name.is_empty() {
+            return;
+        }
+
+        let limit = self.text.len().min(name_end.saturating_add(160));
+        let mut paren = name_end;
+
+        while paren < limit && self.text.as_bytes()[paren] != b'(' {
+            paren += 1;
+        }
+
+        if paren >= limit {
+            return;
+        }
+
+        let generics = self
+            .text
+            .get(name_end..paren)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let mut args = Vec::with_capacity(func.params.len());
+
+        for param in &func.params {
+            let start = param.span.offset().min(self.text.len());
+            let end = start.saturating_add(param.span.len()).min(self.text.len());
+
+            if let Some(spelling) = self.text.get(start..end).filter(|text| !text.is_empty()) {
+                args.push(spelling.to_string());
+            }
+        }
+
+        let mut code = format!("fn {name}{generics}({})", args.join(", "));
+
+        if let Some(ret) = &func.return_type {
+            let start = ret.source.span.offset().min(self.text.len());
+            let end = start
+                .saturating_add(ret.source.span.len())
+                .min(self.text.len());
+
+            if let Some(spelling) = self.text.get(start..end).filter(|text| !text.is_empty()) {
+                code.push(' ');
+                code.push_str(spelling);
+            }
+        }
+
+        self.analysis.fn_source_sig.insert(def_id, code);
+    }
+
     fn walk_fn(&mut self, func: &HirFn, def_id: DefId) {
         let mut params = Vec::with_capacity(func.params.len());
 
@@ -1062,6 +1141,8 @@ impl<'ctx> Walker<'ctx> {
         }
 
         self.analysis.fn_params.insert(def_id, params);
+
+        self.record_fn_source_sig(func, def_id);
 
         if !func.generics.is_empty() {
             self.analysis.fn_generics.insert(

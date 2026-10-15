@@ -80,7 +80,7 @@ fn defined_at(text: &str, occurrence: &Occurrence, filename: &str) -> Option<Str
     Some(format!("defined at {filename}:{line}"))
 }
 
-fn method_at(analysis: &Analysis, key: (usize, usize)) -> Option<zeen_resolve::DefId> {
+pub(crate) fn method_at(analysis: &Analysis, key: (usize, usize)) -> Option<zeen_resolve::DefId> {
     if let Some(def) = analysis.method_calls.get(&key).copied() {
         return Some(def);
     }
@@ -137,6 +137,10 @@ fn fn_code(
     name: &str,
     ty: Option<&str>,
 ) -> String {
+    if let Some(source) = analysis.fn_source_sig.get(&fn_def) {
+        return source.clone();
+    }
+
     let generics = fn_generics_part(analysis, fn_def);
 
     if let Some(signature) = analysis.fn_signatures.get(&fn_def) {

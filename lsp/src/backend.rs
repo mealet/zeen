@@ -239,7 +239,7 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![".".to_string()]),
+                    trigger_characters: Some(vec![".".to_string(), "@".to_string()]),
                     ..Default::default()
                 }),
                 signature_help_provider: Some(SignatureHelpOptions {
@@ -361,6 +361,28 @@ impl LanguageServer for Backend {
         let Some(occurence) = document.analysis.at(offset) else {
             return Ok(None);
         };
+
+        let key = (occurence.offset, occurence.len);
+
+        if let Some(fn_def) = crate::hover::method_at(&document.analysis, key)
+            && let Some((target_offset, target_len, target_file)) =
+                document.analysis.def_spans.get(&fn_def)
+        {
+            let (target_uri, target_text) = match target_file {
+                Some(target_name) => {
+                    let Some(resolved) = self.resolve_target_text(&uri, target_name).await else {
+                        return Ok(None);
+                    };
+                    resolved
+                }
+                None => (uri.clone(), document.text.clone()),
+            };
+
+            return Ok(Some(GotoDefinitionResponse::Array(vec![Location {
+                uri: target_uri,
+                range: position::span_to_range(&target_text, *target_offset, *target_len),
+            }])));
+        }
 
         let (Some(target_offset), Some(target_len)) =
             (occurence.target_offset, occurence.target_len)

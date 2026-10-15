@@ -58,6 +58,114 @@ fn ident_prefix(text: &str, offset: usize) -> &str {
     &text[start..offset]
 }
 
+fn is_at_trigger(text: &str, offset: usize, prefix: &str) -> bool {
+    let start = offset.min(text.len()).saturating_sub(prefix.len());
+
+    start > 0 && text.as_bytes().get(start - 1) == Some(&b'@')
+}
+
+fn bracket_directive(text: &str, offset: usize, prefix: &str) -> Option<(String, String)> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut cursor = offset.saturating_sub(prefix.len());
+
+    if cursor == 0 || bytes[cursor - 1] != b'[' {
+        return None;
+    }
+
+    cursor -= 1;
+    let mut start = cursor;
+
+    while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+        start -= 1;
+    }
+
+    if start == cursor || start == 0 || bytes[start - 1] != b'@' {
+        return None;
+    }
+
+    Some((text.get(start..cursor)?.to_string(), prefix.to_string()))
+}
+
+const PREPROC_DIRECTIVES: &[&str] = &[
+    "os", "arch", "env", "target", "family", "var", "debug", "release",
+];
+
+fn directive_values(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "os" => Some(&["linux", "windows", "darwin", "freebsd", "android", "wasip1"]),
+        "arch" => Some(&["x86_64", "aarch64", "i686", "wasm32", "wasm64"]),
+        "env" => Some(&["gnu", "musl", "msvc", "android"]),
+        "family" => Some(&["unix", "windows", "wasm"]),
+        "var" => Some(&["os", "arch", "env", "target", "family", "debug", "release"]),
+        "target" => Some(&[
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "i686-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin",
+            "x86_64-pc-windows-gnu",
+            "x86_64-pc-windows-msvc",
+            "i686-pc-windows-gnu",
+            "i686-pc-windows-msvc",
+            "wasm32-unknown-unknown",
+            "wasm32-unknown-wasip1",
+            "x86_64-unknown-freebsd",
+            "aarch64-linux-android",
+        ]),
+        _ => None,
+    }
+}
+
+fn complete_directive_values(directive: &str, prefix: &str) -> Vec<CompletionItem> {
+    let Some(values) = directive_values(directive) else {
+        return Vec::new();
+    };
+
+    values
+        .iter()
+        .filter(|value| value.starts_with(prefix))
+        .map(|value| CompletionItem {
+            label: value.to_string(),
+            kind: Some(CompletionItemKind::VALUE),
+            ..Default::default()
+        })
+        .collect()
+}
+
+fn complete_at_items(prefix: &str) -> Vec<CompletionItem> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut items = Vec::new();
+
+    for name in HirMacroKind::all_names() {
+        let label = format!("@{name}");
+        let trimmed = label.trim_start_matches('@');
+
+        if trimmed.starts_with(prefix) && seen.insert(label.clone()) {
+            items.push(CompletionItem {
+                label,
+                kind: Some(CompletionItemKind::FUNCTION),
+                ..Default::default()
+            });
+        }
+    }
+
+    for directive in PREPROC_DIRECTIVES {
+        let label = format!("@{directive}");
+
+        if directive.starts_with(prefix) && seen.insert(label.clone()) {
+            items.push(CompletionItem {
+                label,
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            });
+        }
+    }
+
+    items
+}
+
 pub fn complete(
     text: &str,
     analysis: &Analysis,
@@ -65,6 +173,15 @@ pub fn complete(
     paths: ResolvePaths<'_>,
 ) -> Vec<CompletionItem> {
     let prefix = ident_prefix(text, offset);
+
+    if let Some((directive, value_prefix)) = bracket_directive(text, offset, prefix) {
+        return complete_directive_values(&directive, &value_prefix);
+    }
+
+    if is_at_trigger(text, offset, prefix) {
+        return complete_at_items(prefix);
+    }
+
     let mut seen: HashSet<String> = HashSet::new();
     let mut items = Vec::new();
 
@@ -1230,6 +1347,61 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
 
         assert_eq!(labels, vec!["super.lib"]);
+    }
+
+    #[test]
+    fn at_trigger_suggests_macros_and_directives() {
+        let analysis = Analysis::default();
+
+        let text = "@pr";
+        let items = complete(text, &analysis, text.len(), ResolvePaths::default());
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+
+        assert!(labels.contains(&"@print"));
+        assert!(labels.contains(&"@println"));
+        assert!(labels.iter().all(|label| label.starts_with('@')));
+
+        let text = "@o";
+        let items = complete(text, &analysis, text.len(), ResolvePaths::default());
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+
+        assert!(labels.contains(&"@os"));
+    }
+
+    #[test]
+    fn bracket_suggests_directive_values() {
+        let analysis = Analysis::default();
+
+        let text = "@os[lin";
+        let items = complete(text, &analysis, text.len(), ResolvePaths::default());
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+
+        assert_eq!(labels, vec!["linux"]);
+
+        let text = "@var[";
+        let items = complete(text, &analysis, text.len(), ResolvePaths::default());
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+
+        assert!(labels.contains(&"os"));
+        assert!(labels.contains(&"debug"));
+
+        let text = "@foo[";
+        let items = complete(text, &analysis, text.len(), ResolvePaths::default());
+
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn method_def_span_covers_decl_name() {
+        let analysis = sample_analysis(CHAIN_SAMPLE);
+        let callee = CHAIN_SAMPLE.find("o.inner.get").unwrap() + "o.inner.".len();
+        let fn_def = crate::hover::method_at(&analysis, (callee, "get".len())).unwrap();
+
+        let (offset, len, file) = analysis.def_spans.get(&fn_def).cloned().unwrap();
+        assert!(file.is_none());
+
+        let name = CHAIN_SAMPLE.find("fn get(*self)").unwrap() + "fn ".len();
+        assert!(offset <= name && name < offset + len);
     }
 
     #[test]
