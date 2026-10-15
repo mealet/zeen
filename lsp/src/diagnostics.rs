@@ -338,6 +338,7 @@ fn check_full(
         Rc::clone(&interner),
         &resolution_result,
     );
+    analysis.resolve_def_spans(&resolution_result, &filename, &open.canonical);
     analysis.resolve_fn_signatures(
         &typechecker_result,
         Rc::clone(&interner),
