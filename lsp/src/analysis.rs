@@ -91,6 +91,7 @@ pub struct Analysis {
     pub type_kinds: HashMap<DefId, TypeKind>,
     pub variant_fields: HashMap<DefId, Vec<String>>,
     pub scopes: Vec<Scope>,
+    pub full_spans: HashMap<DefId, (usize, usize)>,
     pub access_types: HashMap<(usize, usize), String>,
     pub call_types: HashMap<(usize, usize), String>,
     pub method_calls: HashMap<(usize, usize), DefId>,
@@ -98,6 +99,8 @@ pub struct Analysis {
     pub fn_generics: HashMap<DefId, Vec<String>>,
     pub method_self: HashMap<DefId, String>,
     pub fn_signatures: HashMap<DefId, String>,
+    pub fn_param_labels: HashMap<DefId, Vec<String>>,
+    pub fn_rets: HashMap<DefId, String>,
     pub fn_source_sig: HashMap<DefId, String>,
     pub def_spans: HashMap<DefId, (usize, usize, Option<String>)>,
     pub enum_payloads: HashMap<String, Vec<(String, Option<String>)>>,
@@ -300,13 +303,47 @@ impl Analysis {
                 .method_calls
                 .get(&(call.callee_offset, call.callee_len))
                 .is_some_and(|def| self.method_self.contains_key(def));
+            let skip = usize::from(takes_self);
 
-            let params: Vec<String> = call
-                .params
-                .iter()
-                .skip(usize::from(takes_self))
-                .map(|param| param.as_deref().unwrap_or("_").to_string())
-                .collect();
+            let fn_labels = self
+                .method_calls
+                .get(&(call.callee_offset, call.callee_len))
+                .and_then(|def| {
+                    self.fn_param_labels
+                        .get(def)
+                        .map(|labels| (labels, self.fn_rets.get(def)))
+                });
+
+            let (params, label) = match fn_labels {
+                Some((labels, ret)) => {
+                    let params: Vec<String> = labels.iter().skip(skip).cloned().collect();
+                    let label = match ret {
+                        Some(ret) => format!(
+                            "{}({}) {ret}",
+                            short_callee_name(&call.callee),
+                            params.join(", ")
+                        ),
+                        None => {
+                            format!("{}({})", short_callee_name(&call.callee), params.join(", "))
+                        }
+                    };
+
+                    (params, label)
+                }
+                None => {
+                    let params: Vec<String> = call
+                        .params
+                        .iter()
+                        .skip(skip)
+                        .map(|param| param.as_deref().unwrap_or("_").to_string())
+                        .collect();
+
+                    (
+                        params.clone(),
+                        format!("{}({})", short_callee_name(&call.callee), params.join(", ")),
+                    )
+                }
+            };
 
             let active = if params.is_empty() {
                 None
@@ -318,7 +355,7 @@ impl Analysis {
             };
 
             return Some(SignatureData {
-                label: format!("{}({})", short_callee_name(&call.callee), params.join(", ")),
+                label,
                 params,
                 active,
             });
@@ -516,6 +553,8 @@ impl Analysis {
                 .interner
                 .display_type(*ret, interner.clone(), resolution);
 
+            self.fn_param_labels.insert(def, args.clone());
+            self.fn_rets.insert(def, ret.clone());
             self.fn_signatures
                 .insert(def, format!("({}) {ret}", args.join(", ")));
         }
@@ -1006,6 +1045,13 @@ impl<'ctx> Walker<'ctx> {
         if !self.file_matches(decl.source.src.name()) {
             return;
         }
+
+        let start = decl.source.span.offset().min(self.text.len());
+        let end = start
+            .saturating_add(decl.source.span.len())
+            .min(self.text.len());
+
+        self.analysis.full_spans.insert(decl.def_id, (start, end));
 
         match &decl.kind {
             HirDeclKind::Fn(func) => {

@@ -40,7 +40,9 @@ pub fn hover_markdown(
         Role::Function => Some(function_or_method_hover(
             text, analysis, name, occurrence, filename,
         )),
-        Role::Property => Some(property_hover(text, analysis, name, occurrence, filename)),
+        Role::Property => Some(property_hover(
+            text, analysis, name, occurrence, paths, filename,
+        )),
         Role::Variable | Role::Parameter => Some(binding_hover(text, name, occurrence, filename)),
         Role::Type => Some(type_hover(text, name, occurrence, filename)),
         Role::EnumMember => Some(variant_hover(text, analysis, name, occurrence, filename)),
@@ -59,7 +61,9 @@ fn assemble(code: &str, info: &[String], occurrence: &Occurrence) -> (String, us
 }
 
 fn use_hover(text: &str, offset: usize, paths: ResolvePaths<'_>) -> Option<HoverResult> {
-    let prefix = crate::completion::use_path_prefix(text, offset)?;
+    crate::completion::use_path_prefix(text, offset)?;
+
+    let path = full_use_path(text, offset)?;
     let line_start = text[..offset.min(text.len())]
         .rfind('\n')
         .map(|index| index + 1)
@@ -69,12 +73,11 @@ fn use_hover(text: &str, offset: usize, paths: ResolvePaths<'_>) -> Option<Hover
         .map(|index| offset.min(text.len()) + index)
         .unwrap_or(text.len());
 
-    let code = format!("```zeen\nuse {prefix}\n```");
+    let code = format!("```zeen\nuse {path}\n```");
 
     let resolved = match (paths.dir, paths.project()) {
         (Some(dir), Some(root)) => {
-            crate::modules::resolve_import(dir, root, paths.std, paths.packages(), &prefix)
-                .is_some()
+            crate::modules::resolve_import(dir, root, paths.std, paths.packages(), &path).is_some()
         }
         _ => false,
     };
@@ -83,7 +86,7 @@ fn use_hover(text: &str, offset: usize, paths: ResolvePaths<'_>) -> Option<Hover
     markdown.push_str("\n----\n");
 
     if resolved {
-        markdown.push_str(&format!("resolves to `{prefix}`"));
+        markdown.push_str(&format!("resolves to `{path}`"));
     } else {
         markdown.push_str("unresolved import");
     }
@@ -93,6 +96,46 @@ fn use_hover(text: &str, offset: usize, paths: ResolvePaths<'_>) -> Option<Hover
         offset: line_start,
         len: line_end - line_start,
     })
+}
+
+fn full_use_path(text: &str, offset: usize) -> Option<String> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut start = offset;
+    let mut end = offset;
+
+    while start > 0 {
+        let byte = bytes[start - 1];
+
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.' {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+
+    while end < bytes.len() {
+        let byte = bytes[end];
+
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.' {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+
+    let path = text
+        .get(start..end)?
+        .trim()
+        .trim_matches(';')
+        .trim()
+        .to_string();
+
+    if path.is_empty() {
+        return None;
+    }
+
+    Some(path)
 }
 
 fn code_block(code: &str) -> String {
@@ -353,6 +396,22 @@ fn imported_receiver_name(text: &str, analysis: &Analysis, field_start: usize) -
     receiver_ty_before(text, analysis, field_start)
 }
 
+fn imported_payload_ty(text: &str, paths: ResolvePaths<'_>, variant: &str) -> Option<String> {
+    let (dir, root) = match (paths.dir, paths.project()) {
+        (Some(dir), Some(root)) => (dir, root),
+        _ => return None,
+    };
+
+    crate::modules::variant_payload_ty(
+        dir,
+        root,
+        paths.std,
+        paths.packages(),
+        &crate::modules::use_imports(text),
+        variant,
+    )
+}
+
 fn lookup_imported_static(
     text: &str,
     paths: ResolvePaths<'_>,
@@ -562,6 +621,7 @@ fn property_hover(
     analysis: &Analysis,
     name: &str,
     occurrence: &Occurrence,
+    paths: ResolvePaths<'_>,
     filename: &str,
 ) -> HoverResult {
     let mut info = Vec::new();
@@ -600,11 +660,15 @@ fn property_hover(
 
     let payload_ty = variant_parent_before(text, occurrence.offset, occurrence.len).and_then(
         |(parent, variant)| {
-            analysis.enum_payloads.get(&parent).and_then(|variants| {
-                variants.iter().find_map(|(candidate, payload)| {
-                    (candidate == &variant).then(|| payload.clone()).flatten()
+            analysis
+                .enum_payloads
+                .get(&parent)
+                .and_then(|variants| {
+                    variants.iter().find_map(|(candidate, payload)| {
+                        (candidate == &variant).then(|| payload.clone()).flatten()
+                    })
                 })
-            })
+                .or_else(|| imported_payload_ty(text, paths, &variant))
         },
     );
 
@@ -954,6 +1018,43 @@ mod tests {
 
         assert!(markdown.contains("let buffer: Buffer"), "{markdown}");
         assert!(!markdown.contains("function"), "{markdown}");
+    }
+
+    #[test]
+    fn use_path_shows_resolution() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-use-hover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.zn"), "pub fn f() i32 {\n    return 1;\n}\n").unwrap();
+
+        let text = "use lib;\n\nfn main() {\n    @println(\"{}\", f());\n}\n";
+        let offset = text.find("use lib").unwrap() + "use l".len();
+        let paths = ResolvePaths {
+            dir: Some(dir.as_path()),
+            root: Some(dir.as_path()),
+            std: None,
+            packages: None,
+        };
+        let analysis = crate::analysis::Analysis::default();
+        let markdown = hover_markdown(text, &analysis, offset, paths, "main.zn").unwrap();
+
+        assert!(
+            markdown.markdown.contains("resolves to `lib`"),
+            "{:?}",
+            markdown.markdown
+        );
+
+        let text = "use missing;\n\nfn main() {}\n";
+        let offset = text.find("use missing").unwrap() + "use m".len();
+        let markdown = hover_markdown(text, &analysis, offset, paths, "main.zn").unwrap();
+
+        assert!(
+            markdown.markdown.contains("unresolved import"),
+            "{:?}",
+            markdown.markdown
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

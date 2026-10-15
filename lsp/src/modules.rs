@@ -430,6 +430,67 @@ pub fn variant_payload_fields(
     fields
 }
 
+pub fn variant_payload_ty(
+    open_dir: &Path,
+    project_root: &Path,
+    std_root: Option<&Path>,
+    packages: &[(String, std::path::PathBuf)],
+    imports: &[String],
+    variant_name: &str,
+) -> Option<String> {
+    for import in imports {
+        let Some((_, content)) = resolve_import(open_dir, project_root, std_root, packages, import)
+        else {
+            continue;
+        };
+
+        let filename = Rc::new(String::from("lookup.zn"));
+        let source = Arc::new(content.clone());
+        let interner = Rc::new(RefCell::new(lasso::Rodeo::default()));
+        let bump = bumpalo::Bump::new();
+        let mut tokens = zeen_lexer::tokenize(&content);
+
+        let mut parser = zeen_parser::Parser::new(
+            Rc::clone(&filename),
+            Arc::clone(&source),
+            &mut tokens,
+            &bump,
+            Rc::clone(&interner),
+        );
+
+        let Ok(program) = parser.parse_program() else {
+            continue;
+        };
+
+        let interner = interner.borrow();
+        let resolve = |spur: &lasso::Spur| interner.resolve(spur).to_string();
+
+        for decl in program {
+            let DeclarationKind::EnumDecl { variants, .. } = &decl.kind else {
+                continue;
+            };
+
+            for variant in *variants {
+                if resolve(&variant.name) != variant_name {
+                    continue;
+                }
+
+                if let Some(EnumVariantPayload::Single(ty)) = variant.payload {
+                    let start = ty.span.offset().min(content.len());
+                    let end = start.saturating_add(ty.span.len()).min(content.len());
+
+                    if let Some(spelling) = content.get(start..end).filter(|text| !text.is_empty())
+                    {
+                        return Some(spelling.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 pub fn method_source_sig(
     open_dir: &Path,
     project_root: &Path,

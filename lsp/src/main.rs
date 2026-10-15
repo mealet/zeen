@@ -1,10 +1,12 @@
 #![allow(unused)]
 
+mod actions;
 mod analysis;
 mod backend;
 mod codelens;
 mod completion;
 mod diagnostics;
+mod folding;
 mod hover;
 mod modules;
 mod position;

@@ -9,7 +9,7 @@ use std::{
 use tokio::sync::RwLock;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
-use crate::{analysis, completion, diagnostics, position, semantic, symbols, zora};
+use crate::{analysis, completion, diagnostics, folding, position, semantic, symbols, zora};
 
 const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(30);
 
@@ -19,6 +19,7 @@ pub struct Backend {
     documents: Arc<RwLock<HashMap<Uri, Document>>>,
     deps: Arc<RwLock<HashMap<PathBuf, CachedDeps>>>,
     symbols: Arc<RwLock<symbols::SymbolIndex>>,
+    repair_cache: Arc<RwLock<HashMap<(u64, u64), analysis::Analysis>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -143,6 +144,7 @@ impl Backend {
             documents: Arc::new(RwLock::new(HashMap::new())),
             deps: Arc::new(RwLock::new(HashMap::new())),
             symbols: Arc::new(RwLock::new(symbols::SymbolIndex::default())),
+            repair_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -152,6 +154,7 @@ impl Backend {
     ) -> (Vec<(String, PathBuf)>, Option<String>) {
         packages_for_cache(&self.deps, root).await
     }
+
     fn zora_root_of(&self, uri: &Uri) -> Option<PathBuf> {
         let path = diagnostics::file_uri_to_path(uri)?;
         zora::find_root(&path)
@@ -191,7 +194,24 @@ impl Backend {
         None
     }
 
-    fn retry_with_repaired(
+    fn repair_cache_key(text: &str, packages: &[(String, PathBuf)]) -> (u64, u64) {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut text_hasher = DefaultHasher::new();
+        text.hash(&mut text_hasher);
+
+        let mut packages_hasher = DefaultHasher::new();
+
+        for (name, dir) in packages {
+            name.hash(&mut packages_hasher);
+            dir.hash(&mut packages_hasher);
+        }
+
+        (text_hasher.finish(), packages_hasher.finish())
+    }
+
+    async fn retry_with_repaired(
         &self,
         uri: &Uri,
         text: &str,
@@ -199,6 +219,20 @@ impl Backend {
         paths: completion::ResolvePaths<'_>,
         branch: CompletionBranch,
     ) -> Vec<CompletionItem> {
+        let key = Self::repair_cache_key(text, paths.packages());
+
+        if let Some(cached) = self.repair_cache.read().await.get(&key) {
+            return match branch {
+                CompletionBranch::StructInit => {
+                    completion::struct_init_complete(text, cached, offset, paths)
+                }
+                CompletionBranch::Dot(dot) => completion::dot_complete(text, cached, dot, paths),
+                CompletionBranch::Call(trigger) => {
+                    completion::call_complete(text, cached, trigger, paths)
+                }
+            };
+        }
+
         let mut output = diagnostics::CheckOutput {
             diagnostics: Vec::new(),
             analysis: crate::analysis::Analysis::default(),
@@ -235,6 +269,14 @@ impl Backend {
             return Vec::new();
         }
 
+        let mut cache = self.repair_cache.write().await;
+
+        if cache.len() > 16 {
+            cache.clear();
+        }
+
+        cache.insert(key, output.analysis.clone());
+
         match branch {
             CompletionBranch::StructInit => {
                 completion::struct_init_complete(text, &output.analysis, offset, paths)
@@ -247,6 +289,7 @@ impl Backend {
             }
         }
     }
+
     async fn run_main(&self, arguments: Vec<LSPAny>) {
         let Some(uri) = arguments.first().and_then(|value| value.as_str()) else {
             return;
@@ -409,6 +452,9 @@ impl LanguageServer for Backend {
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: None,
                 }),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         crate::codelens::RUN_COMMAND.to_string(),
@@ -537,6 +583,46 @@ impl LanguageServer for Backend {
 
         Ok(Some(WorkspaceSymbolResponse::Flat(
             symbols::workspace_symbols(&index, &params.query),
+        )))
+    }
+
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let document = self
+            .documents
+            .read()
+            .await
+            .get(&params.text_document.uri)
+            .cloned();
+
+        let Some(document) = document else {
+            return Ok(None);
+        };
+
+        Ok(Some(folding::folding_ranges(
+            &document.text,
+            &document.analysis,
+        )))
+    }
+
+    async fn selection_range(
+        &self,
+        params: SelectionRangeParams,
+    ) -> Result<Option<Vec<SelectionRange>>> {
+        let document = self
+            .documents
+            .read()
+            .await
+            .get(&params.text_document.uri)
+            .cloned();
+
+        let Some(document) = document else {
+            return Ok(None);
+        };
+
+        Ok(Some(folding::selection_ranges(
+            &document.text,
+            &document.analysis,
+            &params.positions,
         )))
     }
 
@@ -873,6 +959,7 @@ impl LanguageServer for Backend {
                     paths,
                     CompletionBranch::StructInit,
                 )
+                .await
             } else {
                 items
             }
@@ -888,6 +975,7 @@ impl LanguageServer for Backend {
                     paths,
                     CompletionBranch::Call(trigger),
                 )
+                .await
             } else {
                 items
             }
@@ -902,6 +990,7 @@ impl LanguageServer for Backend {
                     paths,
                     CompletionBranch::Dot(dot),
                 )
+                .await
             } else {
                 items
             }
@@ -1051,6 +1140,79 @@ impl LanguageServer for Backend {
             let _ = client.semantic_tokens_refresh().await;
             let _ = client.inlay_hint_refresh().await;
         });
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let Some(open_path) = diagnostics::file_uri_to_path(&uri) else {
+            return Ok(None);
+        };
+
+        let Some(open_dir) = open_path.parent() else {
+            return Ok(None);
+        };
+
+        let project_root = diagnostics::project_root_for(&open_path, &document.text);
+        let zora_root = zora::find_root(&open_path);
+        let (packages, _) = self.packages_for(zora_root.as_deref()).await;
+
+        let mut roots = vec![project_root.clone()];
+
+        for (_, dir) in &packages {
+            roots.push(dir.clone());
+        }
+
+        let mut index = self.symbols.write().await;
+        index.refresh(&roots);
+
+        let mut actions = Vec::new();
+
+        for diagnostic in &params.context.diagnostics {
+            if diagnostic.code
+                != Some(NumberOrString::String(
+                    "zeen::resolver::unresolved_ident".to_string(),
+                ))
+            {
+                continue;
+            }
+
+            let start = position::position_to_offset(&document.text, diagnostic.range.start);
+            let end = position::position_to_offset(&document.text, diagnostic.range.end);
+            let Some(name) = document
+                .text
+                .get(start..end)
+                .filter(|name| !name.is_empty())
+            else {
+                continue;
+            };
+
+            actions.extend(crate::actions::missing_use_actions(
+                &document.text,
+                &uri,
+                &index,
+                open_dir,
+                Some(&project_root),
+                &packages,
+                name,
+            ));
+        }
+
+        if actions.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(
+            actions
+                .into_iter()
+                .map(CodeActionOrCommand::CodeAction)
+                .collect(),
+        ))
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {

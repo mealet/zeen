@@ -346,7 +346,7 @@ pub(crate) fn normalize_type_name(ty: &str) -> Option<String> {
         || name == "FnOnce"
         || !name
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
     {
         return None;
     }
@@ -502,6 +502,13 @@ pub fn dot_complete(
 
     let mut items = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    if push_variant_payload_members(
+        analysis, text, &lookup, &filter, paths, &mut items, &mut seen,
+    ) {
+        return items;
+    }
+
     push_type_members(
         analysis,
         text,
@@ -515,6 +522,78 @@ pub fn dot_complete(
     );
 
     items
+}
+
+fn push_variant_payload_members(
+    analysis: &Analysis,
+    text: &str,
+    lookup: &str,
+    filter: &str,
+    paths: ResolvePaths<'_>,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) -> bool {
+    let Some((_, variant_name)) = lookup.rsplit_once('.') else {
+        return false;
+    };
+
+    let mut handled = false;
+
+    if let Some(def) = find_variant_def(analysis, text, variant_name) {
+        handled = true;
+
+        if let Some(fields) = analysis.variant_fields.get(&def) {
+            let mut names: Vec<&str> = fields
+                .iter()
+                .map(String::as_str)
+                .filter(|name| name.starts_with(filter))
+                .collect();
+            names.sort();
+
+            for name in names {
+                if seen.insert(name.to_string()) {
+                    items.push(CompletionItem {
+                        label: name.to_string(),
+                        kind: Some(CompletionItemKind::FIELD),
+                        sort_text: Some(format!("0_{name}")),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
+        let mut payload = crate::modules::variant_payload_fields(
+            dir,
+            root,
+            paths.std,
+            paths.packages(),
+            &crate::modules::use_imports(text),
+            variant_name,
+        );
+        payload.sort_by(|a, b| a.name.cmp(&b.name));
+
+        for member in payload {
+            if !member.name.starts_with(filter) {
+                continue;
+            }
+
+            handled = true;
+
+            if seen.insert(member.name.clone()) {
+                items.push(CompletionItem {
+                    label: member.name.clone(),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: Some(member.module.clone()),
+                    sort_text: Some(format!("0_{}", member.name)),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    handled
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1504,8 +1583,11 @@ mod tests {
 
         let first = SIG_SAMPLE.find("p.at(1, 2)").unwrap() + "p.at(".len();
         let data = analysis.signature_at(first).unwrap();
-        assert_eq!(data.label, "at(x, y)");
-        assert_eq!(data.params, vec!["x".to_string(), "y".to_string()]);
+        assert_eq!(data.label, "at(x: i32, y: i32) i32");
+        assert_eq!(
+            data.params,
+            vec!["x: i32".to_string(), "y: i32".to_string()]
+        );
         assert_eq!(data.active, Some(0));
 
         let second = SIG_SAMPLE.find(", 2)").unwrap() + ", ".len();
@@ -1820,6 +1902,8 @@ mod tests {
 
     const CHAIN_SAMPLE: &str = "struct Inner {\n    pub v: i32,\n\n    pub fn get(*self) i32 {\n        return self.v;\n    }\n}\n\nstruct Outer {\n    pub inner: Inner,\n\n    pub fn spawn() Outer {\n        return Outer { .inner = Inner { .v = 1 } };\n    }\n}\n\nfn main() {\n    let o = Outer.spawn();\n    let g = o.inner.get();\n    let s = Outer.spawn().inner;\n    @println(\"{}\", o.inner.v);\n    @println(\"{}\", g);\n    @println(\"{}\", s.v);\n}\n";
 
+    const SWITCH_SAMPLE: &str = "enum Msg {\n    quit,\n    step: {\n        x: i32,\n        y: i32,\n    },\n    data: i32,\n}\n\nfn handle(m: Msg) i32 {\n    switch (m) {\n        .quit => 0,\n        .step (pos) => pos.x,\n        .data (d) => d,\n    }\n}\n\nfn main() {\n    @println(\"{}\", handle(Msg.quit));\n}\n";
+
     #[test]
     fn field_chain_resolves_middle_type() {
         let analysis = sample_analysis(CHAIN_SAMPLE);
@@ -1831,6 +1915,15 @@ mod tests {
         let dot = CHAIN_SAMPLE.find("o.inner.v").unwrap() + "o.inner".len();
         let items = dot_complete(CHAIN_SAMPLE, &analysis, dot, ResolvePaths::default());
         assert_eq!(labels(&items), vec!["v"]);
+    }
+    #[test]
+    fn switch_payload_field_completes() {
+        let analysis = sample_analysis(SWITCH_SAMPLE);
+        let dot = SWITCH_SAMPLE.find("pos.x").unwrap() + "pos".len();
+        let items = dot_complete(SWITCH_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["x"]);
     }
 
     #[test]

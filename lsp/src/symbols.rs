@@ -159,6 +159,7 @@ pub struct IndexedSymbol {
     pub name: String,
     pub kind: SymbolKind,
     pub container: Option<String>,
+    pub is_pub: bool,
     pub offset: usize,
     pub len: usize,
 }
@@ -178,6 +179,10 @@ pub struct SymbolIndex {
 const MAX_INDEX_FILES: usize = 500;
 
 impl SymbolIndex {
+    pub fn files(&self) -> impl Iterator<Item = (&PathBuf, &FileIndex)> {
+        self.files.iter()
+    }
+
     pub fn refresh(&mut self, roots: &[PathBuf]) {
         let mut seen = HashSet::new();
         let mut count = 0;
@@ -353,11 +358,12 @@ fn push_decl_symbols(
     let resolve = |spur: &lasso::Spur| interner.resolve(spur).to_string();
 
     match &decl.kind {
-        DeclarationKind::FnDecl { name, .. } => {
+        DeclarationKind::FnDecl { name, is_pub, .. } => {
             out.push(IndexedSymbol {
                 name: resolve(&name.0),
                 kind: SymbolKind::FUNCTION,
                 container,
+                is_pub: *is_pub,
                 offset: name.1.offset(),
                 len: name.1.len(),
             });
@@ -366,6 +372,7 @@ fn push_decl_symbols(
             name,
             fields,
             methods,
+            is_pub,
             ..
         } => {
             let struct_name = resolve(&name.0);
@@ -374,6 +381,7 @@ fn push_decl_symbols(
                 name: struct_name.clone(),
                 kind: SymbolKind::STRUCT,
                 container: container.clone(),
+                is_pub: *is_pub,
                 offset: name.1.offset(),
                 len: name.1.len(),
             });
@@ -387,6 +395,7 @@ fn push_decl_symbols(
                     name: field_name,
                     kind: SymbolKind::FIELD,
                     container: Some(struct_name.clone()),
+                    is_pub: field.is_pub,
                     offset,
                     len,
                 });
@@ -400,6 +409,7 @@ fn push_decl_symbols(
             name,
             variants,
             methods,
+            is_pub,
             ..
         } => {
             let enum_name = resolve(&name.0);
@@ -408,6 +418,7 @@ fn push_decl_symbols(
                 name: enum_name.clone(),
                 kind: SymbolKind::ENUM,
                 container: container.clone(),
+                is_pub: *is_pub,
                 offset: name.1.offset(),
                 len: name.1.len(),
             });
@@ -417,6 +428,7 @@ fn push_decl_symbols(
                     name: resolve(&variant.name),
                     kind: SymbolKind::ENUM_MEMBER,
                     container: Some(enum_name.clone()),
+                    is_pub: true,
                     offset: variant.span.offset(),
                     len: variant.span.len(),
                 });
@@ -426,13 +438,19 @@ fn push_decl_symbols(
                 push_decl_symbols(content, interner, method, Some(enum_name.clone()), out);
             }
         }
-        DeclarationKind::InterfaceDecl { name, methods, .. } => {
+        DeclarationKind::InterfaceDecl {
+            name,
+            methods,
+            is_pub,
+            ..
+        } => {
             let iface_name = resolve(&name.0);
 
             out.push(IndexedSymbol {
                 name: iface_name.clone(),
                 kind: SymbolKind::INTERFACE,
                 container: container.clone(),
+                is_pub: *is_pub,
                 offset: name.1.offset(),
                 len: name.1.len(),
             });
@@ -451,15 +469,18 @@ fn push_decl_symbols(
                 name: resolve(&alias.name.0),
                 kind: SymbolKind::STRUCT,
                 container,
+                is_pub: alias.is_pub,
                 offset: alias.name.1.offset(),
                 len: alias.name.1.len(),
             });
         }
-        DeclarationKind::GlobalVar { name, .. } | DeclarationKind::ExternVar { name, .. } => {
+        DeclarationKind::GlobalVar { name, is_pub, .. }
+        | DeclarationKind::ExternVar { name, is_pub, .. } => {
             out.push(IndexedSymbol {
                 name: resolve(&name.0),
                 kind: SymbolKind::VARIABLE,
                 container,
+                is_pub: *is_pub,
                 offset: name.1.offset(),
                 len: name.1.len(),
             });
