@@ -127,14 +127,38 @@ impl Backend {
         zora::find_root(&path)
     }
 
-    async fn resolve_sibling_text(&self, uri: &Uri, name: &str) -> Option<(Uri, String)> {
-        let sibling = diagnostics::file_uri_to_path(uri)?.parent()?.join(name);
-        let sibling_uri = Uri::from_str(&format!("file://{}", sibling.display())).ok()?;
-        if let Some(document) = self.documents.read().await.get(&sibling_uri) {
-            return Some((sibling_uri, document.text.clone()));
+    async fn resolve_target_text(&self, uri: &Uri, target_file: &str) -> Option<(Uri, String)> {
+        if let Some(sibling) = diagnostics::file_uri_to_path(uri)?
+            .parent()
+            .map(|parent| parent.join(target_file))
+            && sibling.is_file()
+        {
+            let sibling_uri = Uri::from_str(&format!("file://{}", sibling.display())).ok()?;
+
+            if let Some(document) = self.documents.read().await.get(&sibling_uri) {
+                return Some((sibling_uri, document.text.clone()));
+            }
+
+            if let Ok(text) = std::fs::read_to_string(&sibling) {
+                return Some((sibling_uri, text));
+            }
         }
-        let text = std::fs::read_to_string(&sibling).ok()?;
-        Some((sibling_uri, text))
+
+        let path = std::path::PathBuf::from(target_file);
+
+        if path.is_absolute() && path.is_file() {
+            let target_uri = Uri::from_str(&format!("file://{}", path.display())).ok()?;
+
+            if let Some(document) = self.documents.read().await.get(&target_uri) {
+                return Some((target_uri, document.text.clone()));
+            }
+
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                return Some((target_uri, text));
+            }
+        }
+
+        None
     }
 
     fn retry_with_repaired(
@@ -346,7 +370,7 @@ impl LanguageServer for Backend {
 
         let (target_uri, target_text) = match &occurence.target_file {
             Some(target_name) => {
-                let Some(resolved) = self.resolve_sibling_text(&uri, target_name).await else {
+                let Some(resolved) = self.resolve_target_text(&uri, target_name).await else {
                     return Ok(None);
                 };
                 resolved
@@ -546,6 +570,14 @@ impl LanguageServer for Backend {
                 && let Some(base) = project_root.as_deref()
             {
                 modules.extend(crate::modules::prefixed_modules(base, "root"));
+            }
+
+            for (name, dir) in &packages {
+                modules.push(name.clone());
+
+                if prefix == *name || prefix.starts_with(&format!("{name}.")) {
+                    modules.extend(crate::modules::prefixed_modules(dir, name));
+                }
             }
 
             completion::complete_use(&prefix, &modules)

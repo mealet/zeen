@@ -1603,6 +1603,19 @@ mod tests {
             crate::modules::type_members(&dir, &dir, None, &[], &["pkg".to_string()], "Indexed");
         assert!(indexed.iter().any(|member| member.name == "x"));
 
+        let through_package = crate::modules::members_of_use(
+            &dir,
+            &dir,
+            None,
+            &[("http".to_string(), dir.join("pkg"))],
+            "http",
+        );
+        assert!(
+            through_package
+                .iter()
+                .any(|member| member.name == "Indexed")
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
