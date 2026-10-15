@@ -88,6 +88,7 @@ pub struct Analysis {
     pub field_hints: Vec<FieldHint>,
     pub members: HashMap<DefId, Vec<Member>>,
     pub member_owner: HashMap<DefId, DefId>,
+    pub type_kinds: HashMap<DefId, TypeKind>,
     pub variant_fields: HashMap<DefId, Vec<String>>,
     pub scopes: Vec<Scope>,
     pub access_types: HashMap<(usize, usize), String>,
@@ -117,10 +118,34 @@ pub struct CallSite {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureData {
+    pub label: String,
+    pub params: Vec<String>,
+    pub active: Option<u32>,
+}
+
+fn short_callee_name(callee: &str) -> &str {
+    let base = callee.rsplit('.').next().unwrap_or(callee);
+
+    match base.find(['#', '[', '(']) {
+        Some(index) => &base[..index],
+        None => base,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemberKind {
     Method,
     Field,
     Variant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeKind {
+    Struct,
+    Enum,
+    Interface,
+    Alias,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +170,7 @@ pub(crate) struct RawCall {
     pub call: HirId,
     pub callee: (usize, usize),
     pub callee_name: String,
+    pub field: Option<(usize, usize)>,
     pub args: Vec<(usize, usize)>,
 }
 
@@ -256,6 +282,49 @@ impl Analysis {
         } else {
             None
         }
+    }
+
+    pub fn signature_at(&self, offset: usize) -> Option<SignatureData> {
+        for call in &self.calls {
+            let end = call
+                .args
+                .last()
+                .map(|(start, len)| start + len)
+                .unwrap_or(call.callee_offset + call.callee_len);
+
+            if offset < call.callee_offset || offset > end {
+                continue;
+            }
+
+            let takes_self = self
+                .method_calls
+                .get(&(call.callee_offset, call.callee_len))
+                .is_some_and(|def| self.method_self.contains_key(def));
+
+            let params: Vec<String> = call
+                .params
+                .iter()
+                .skip(usize::from(takes_self))
+                .map(|param| param.as_deref().unwrap_or("_").to_string())
+                .collect();
+
+            let active = if params.is_empty() {
+                None
+            } else {
+                call.args
+                    .iter()
+                    .position(|(start, len)| offset >= *start && offset <= start + len)
+                    .map(|index| index.min(params.len() - 1) as u32)
+            };
+
+            return Some(SignatureData {
+                label: format!("{}({})", short_callee_name(&call.callee), params.join(", ")),
+                params,
+                active,
+            });
+        }
+
+        None
     }
 
     pub fn apply_types(
@@ -953,6 +1022,10 @@ impl<'ctx> Walker<'ctx> {
             HirDeclKind::Struct(strukt) => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Type);
 
+                self.analysis
+                    .type_kinds
+                    .insert(decl.def_id, TypeKind::Struct);
+
                 self.emit_def(
                     strukt.name.1.offset(),
                     strukt.name.1.len(),
@@ -1000,6 +1073,10 @@ impl<'ctx> Walker<'ctx> {
             HirDeclKind::Interface(interface) => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Type);
 
+                self.analysis
+                    .type_kinds
+                    .insert(decl.def_id, TypeKind::Interface);
+
                 self.emit_def(
                     interface.name.1.offset(),
                     interface.name.1.len(),
@@ -1038,6 +1115,8 @@ impl<'ctx> Walker<'ctx> {
 
             HirDeclKind::Enum(enumeration) => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Type);
+
+                self.analysis.type_kinds.insert(decl.def_id, TypeKind::Enum);
 
                 self.emit_def(
                     enumeration.name.1.offset(),
@@ -1101,6 +1180,10 @@ impl<'ctx> Walker<'ctx> {
 
             HirDeclKind::Alias(alias) => {
                 let role = self.role_of_def(decl.def_id).unwrap_or(Role::Type);
+
+                self.analysis
+                    .type_kinds
+                    .insert(decl.def_id, TypeKind::Alias);
 
                 self.emit_def(
                     alias.name.1.offset(),
@@ -1376,6 +1459,13 @@ impl<'ctx> Walker<'ctx> {
                 generic_args,
                 ..
             } => {
+                let field = match &callee.kind {
+                    HirExprKind::FieldAccess { field, .. } => {
+                        Some((field.1.offset(), field.1.len()))
+                    }
+                    _ => None,
+                };
+
                 self.analysis.raw_calls.push(RawCall {
                     call: expr.id,
                     callee: (callee.source.span.offset(), callee.source.span.len()),
@@ -1387,6 +1477,7 @@ impl<'ctx> Walker<'ctx> {
                         )
                         .unwrap_or("")
                         .to_string(),
+                    field,
                     args: args
                         .iter()
                         .map(|arg| (arg.source.span.offset(), arg.source.span.len()))

@@ -86,7 +86,7 @@ fn package_name(manifest: &str) -> Option<String> {
     None
 }
 
-fn entry_kind(manifest: &str) -> Option<EntryKind> {
+pub(crate) fn entry_kind(manifest: &str) -> Option<EntryKind> {
     let mut in_package = false;
 
     for line in manifest.lines() {

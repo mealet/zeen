@@ -9,7 +9,7 @@ use std::{
 use tokio::sync::RwLock;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
-use crate::{analysis, completion, diagnostics, position, semantic, zora};
+use crate::{analysis, completion, diagnostics, position, semantic, symbols, zora};
 
 const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(30);
 
@@ -18,6 +18,7 @@ pub struct Backend {
     client: Client,
     documents: Arc<RwLock<HashMap<Uri, Document>>>,
     deps: Arc<RwLock<HashMap<PathBuf, CachedDeps>>>,
+    symbols: Arc<RwLock<symbols::SymbolIndex>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -39,6 +40,34 @@ enum CompletionBranch {
     StructInit,
     Dot(usize),
     Call(completion::CallTrigger),
+}
+
+async fn run_and_capture(
+    mut command: tokio::process::Command,
+    binary: std::path::PathBuf,
+) -> std::result::Result<String, String> {
+    let output = command.output().await.map_err(|err| {
+        format!("zeen binary not found or failed to start: {err} (install it into PATH)")
+    })?;
+
+    let mut report = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    if !output.status.success() {
+        report.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+
+    if report.len() > 1500 {
+        report.truncate(1500);
+        report.push_str("\n... truncated");
+    }
+
+    let _ = std::fs::remove_file(&binary);
+
+    if output.status.success() {
+        Ok(report)
+    } else {
+        Err(report)
+    }
 }
 
 async fn packages_for_cache(
@@ -113,6 +142,7 @@ impl Backend {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
             deps: Arc::new(RwLock::new(HashMap::new())),
+            symbols: Arc::new(RwLock::new(symbols::SymbolIndex::default())),
         }
     }
 
@@ -217,6 +247,133 @@ impl Backend {
             }
         }
     }
+    async fn run_main(&self, arguments: Vec<LSPAny>) {
+        let Some(uri) = arguments.first().and_then(|value| value.as_str()) else {
+            return;
+        };
+
+        let Ok(uri) = Uri::from_str(uri) else {
+            return;
+        };
+
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return;
+        };
+
+        let Some(open_path) = diagnostics::file_uri_to_path(&uri) else {
+            return;
+        };
+
+        let context = diagnostics::entry_context(&open_path, &document.text);
+
+        if context.entry != open_path {
+            self.client
+                .show_message(
+                    MessageType::WARNING,
+                    "run is only available from the entry file",
+                )
+                .await;
+            return;
+        }
+
+        if std::fs::read_to_string(&context.entry).ok().as_deref() != Some(document.text.as_str()) {
+            self.client
+                .show_message(MessageType::WARNING, "save the file first")
+                .await;
+            return;
+        }
+
+        let zora_root = context.zora.clone();
+        let (packages, _) = self.packages_for(zora_root.as_deref()).await;
+        let binary = std::env::temp_dir().join(format!("zeen-lsp-run-{}", std::process::id()));
+
+        #[cfg(windows)]
+        let binary = binary.with_extension("exe");
+
+        let mut command = tokio::process::Command::new("zeen");
+        command
+            .arg(&context.entry)
+            .arg(&binary)
+            .current_dir(&context.root);
+
+        for (name, dir) in &packages {
+            command
+                .arg("--pkg")
+                .arg(format!("{name}={}", dir.display()));
+        }
+
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            run_and_capture(command, binary.clone()),
+        )
+        .await;
+
+        match output {
+            Err(_) => {
+                self.client
+                    .show_message(MessageType::ERROR, "run timed out after 120s")
+                    .await;
+            }
+            Ok(Err(message)) => {
+                self.client.show_message(MessageType::ERROR, message).await;
+            }
+            Ok(Ok(report)) => {
+                self.client.show_message(MessageType::INFO, report).await;
+            }
+        }
+    }
+
+    async fn show_references(&self, arguments: Vec<LSPAny>) {
+        let (Some(uri), Some(offset)) = (
+            arguments.first().and_then(|value| value.as_str()),
+            arguments.get(1).and_then(|value| value.as_u64()),
+        ) else {
+            return;
+        };
+
+        let Ok(uri) = Uri::from_str(uri) else {
+            return;
+        };
+
+        let documents = self.documents.read().await;
+        let docs: Vec<crate::rename::RenameDoc<'_>> = documents
+            .iter()
+            .map(|(uri, document)| crate::rename::RenameDoc {
+                uri: uri.clone(),
+                text: &document.text,
+                analysis: &document.analysis,
+            })
+            .collect();
+
+        let spans = crate::rename::reference_spans(&docs, &uri, offset as usize);
+
+        if spans.is_empty() {
+            self.client
+                .show_message(MessageType::INFO, "no references found")
+                .await;
+            return;
+        }
+
+        let mut lines = Vec::with_capacity(spans.len().min(20));
+
+        for (uri, range) in spans.iter().take(20) {
+            lines.push(format!(
+                "{}:{}",
+                uri.as_str().rsplit('/').next().unwrap_or(uri.as_str()),
+                range.start.line + 1,
+            ));
+        }
+
+        if spans.len() > 20 {
+            lines.push(format!("... and {} more", spans.len() - 20));
+        }
+
+        self.client
+            .show_message(MessageType::INFO, lines.join("\n"))
+            .await;
+    }
 }
 
 impl LanguageServer for Backend {
@@ -237,6 +394,9 @@ impl LanguageServer for Backend {
                 ),
                 definition_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                rename_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![".".to_string(), "@".to_string()]),
@@ -244,6 +404,16 @@ impl LanguageServer for Backend {
                 }),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    ..Default::default()
+                }),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: None,
+                }),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![
+                        crate::codelens::RUN_COMMAND.to_string(),
+                        crate::codelens::REFERENCES_COMMAND.to_string(),
+                    ],
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -311,6 +481,63 @@ impl LanguageServer for Backend {
             }
             .into(),
         ))
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let document = self
+            .documents
+            .read()
+            .await
+            .get(&params.text_document.uri)
+            .cloned();
+
+        let Some(document) = document else {
+            return Ok(None);
+        };
+
+        Ok(Some(
+            symbols::document_symbols(&document.text, &document.analysis).into(),
+        ))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<WorkspaceSymbolResponse>> {
+        if params.query.is_empty() {
+            return Ok(Some(WorkspaceSymbolResponse::Flat(Vec::new())));
+        }
+
+        let mut roots = HashSet::new();
+
+        for uri in self.documents.read().await.keys() {
+            let Some(path) = diagnostics::file_uri_to_path(uri) else {
+                continue;
+            };
+
+            if let Some(root) = zora::find_root(&path) {
+                roots.insert(root);
+            } else if let Some(parent) = path.parent() {
+                roots.insert(parent.to_path_buf());
+            }
+        }
+
+        for entry in self.deps.read().await.values() {
+            for (_, dir) in &entry.packages {
+                roots.insert(dir.clone());
+            }
+        }
+
+        let roots: Vec<PathBuf> = roots.into_iter().collect();
+        let mut index = self.symbols.write().await;
+        index.refresh(&roots);
+
+        Ok(Some(WorkspaceSymbolResponse::Flat(
+            symbols::workspace_symbols(&index, &params.query),
+        )))
     }
 
     async fn semantic_tokens_range(
@@ -404,6 +631,37 @@ impl LanguageServer for Backend {
             uri: target_uri,
             range: position::span_to_range(&target_text, target_offset, target_len),
         }])))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri.clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset =
+            position::position_to_offset(&document.text, params.text_document_position.position);
+        let docs: Vec<crate::rename::RenameDoc<'_>> = documents
+            .iter()
+            .map(|(uri, document)| crate::rename::RenameDoc {
+                uri: uri.clone(),
+                text: &document.text,
+                analysis: &document.analysis,
+            })
+            .collect();
+
+        let edits = crate::rename::rename_edits(&docs, &uri, offset, &params.new_name);
+
+        if edits.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(WorkspaceEdit {
+            changes: Some(edits),
+            ..Default::default()
+        }))
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -669,48 +927,29 @@ impl LanguageServer for Backend {
 
         let offset = position::position_to_offset(&document.text, position);
 
-        for call in &document.analysis.calls {
-            let end = call
-                .args
-                .last()
-                .map(|(start, len)| start + len)
-                .unwrap_or(call.callee_offset + call.callee_len);
+        let Some(data) = document.analysis.signature_at(offset) else {
+            return Ok(None);
+        };
 
-            if offset < call.callee_offset || offset > end {
-                continue;
-            }
+        let parameters = data
+            .params
+            .iter()
+            .map(|param| ParameterInformation {
+                label: ParameterLabel::Simple(param.clone()),
+                documentation: None,
+            })
+            .collect();
 
-            let active = if call.params.is_empty() {
-                None
-            } else {
-                call.args
-                    .iter()
-                    .position(|(start, len)| offset >= *start && offset <= start + len)
-                    .map(|index| index.min(call.params.len() - 1) as u32)
-            };
-
-            let parameters = call
-                .params
-                .iter()
-                .map(|param| ParameterInformation {
-                    label: ParameterLabel::Simple(param.clone().unwrap_or_else(|| "_".to_string())),
-                    documentation: None,
-                })
-                .collect();
-
-            return Ok(Some(SignatureHelp {
-                signatures: vec![SignatureInformation {
-                    label: call.signature.clone(),
-                    documentation: None,
-                    parameters: Some(parameters),
-                    active_parameter: None,
-                }],
-                active_signature: Some(0),
-                active_parameter: active,
-            }));
-        }
-
-        Ok(None)
+        Ok(Some(SignatureHelp {
+            signatures: vec![SignatureInformation {
+                label: data.label,
+                documentation: None,
+                parameters: Some(parameters),
+                active_parameter: None,
+            }],
+            active_signature: Some(0),
+            active_parameter: data.active,
+        }))
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
@@ -823,6 +1062,66 @@ impl LanguageServer for Backend {
         self.client
             .publish_diagnostics(params.text_document.uri, Vec::new(), None)
             .await
+    }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        let uri = params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let docs: Vec<crate::rename::RenameDoc<'_>> = documents
+            .iter()
+            .map(|(uri, document)| crate::rename::RenameDoc {
+                uri: uri.clone(),
+                text: &document.text,
+                analysis: &document.analysis,
+            })
+            .collect();
+
+        let mut lenses =
+            crate::codelens::reference_lenses(&document.text, &document.analysis, &docs, &uri);
+
+        if let Some(open_path) = diagnostics::file_uri_to_path(&uri) {
+            let context = diagnostics::entry_context(&open_path, &document.text);
+            let open_is_entry = context.entry == open_path;
+            let runnable = match &context.zora {
+                Some(root) => crate::codelens::runnable(Some(root), &document.text),
+                None => crate::codelens::runnable(None, &document.text),
+            };
+
+            if let Some(lens) = crate::codelens::run_lens(
+                &document.text,
+                &document.analysis,
+                &uri,
+                open_is_entry,
+                runnable,
+            ) {
+                lenses.push(lens);
+            }
+        }
+
+        if lenses.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(lenses))
+    }
+
+    async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<LSPAny>> {
+        match params.command.as_str() {
+            crate::codelens::RUN_COMMAND => {
+                self.run_main(params.arguments).await;
+                Ok(None)
+            }
+            crate::codelens::REFERENCES_COMMAND => {
+                self.show_references(params.arguments).await;
+                Ok(None)
+            }
+            _ => Err(tower_lsp_server::jsonrpc::Error::method_not_found()),
+        }
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {

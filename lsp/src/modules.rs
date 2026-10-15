@@ -66,7 +66,7 @@ pub fn use_imports(text: &str) -> Vec<String> {
     imports
 }
 
-fn resolve_import(
+pub(crate) fn resolve_import(
     open_dir: &Path,
     project_root: &Path,
     std_root: Option<&Path>,

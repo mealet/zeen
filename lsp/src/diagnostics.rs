@@ -87,18 +87,9 @@ fn check_with(uri: &Uri, text: &str, full: bool, packages: &[(String, PathBuf)])
         text,
     };
 
-    if let Some(root) = crate::zora::find_root(&open_path) {
-        let entry_path = crate::zora::entry_for_root(&root).unwrap_or_else(|| open_path.clone());
-        return check_entry(&entry_path, open, full, packages, &root);
-    }
+    let context = entry_context(&open_path, text);
 
-    let entry_path = discover_entry(&open_path, text);
-    let project_root = entry_path
-        .parent()
-        .map(|parent| parent.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    check_entry(&entry_path, open, full, packages, &project_root)
+    check_entry(&context.entry, open, full, packages, &context.root)
 }
 
 fn check_entry(
@@ -532,17 +523,38 @@ pub(crate) fn file_uri_to_path(uri: &Uri) -> Option<PathBuf> {
     Some(PathBuf::from(decode_uri_path(stripped)))
 }
 
-pub(crate) fn project_root_for(open_path: &Path, open_text: &str) -> PathBuf {
+pub(crate) struct EntryContext {
+    pub entry: PathBuf,
+    pub root: PathBuf,
+    pub zora: Option<PathBuf>,
+}
+
+pub(crate) fn entry_context(open_path: &Path, text: &str) -> EntryContext {
     if let Some(root) = crate::zora::find_root(open_path) {
-        return root;
+        let entry = crate::zora::entry_for_root(&root).unwrap_or_else(|| open_path.to_path_buf());
+
+        return EntryContext {
+            entry,
+            root: root.clone(),
+            zora: Some(root),
+        };
     }
 
-    let entry = discover_entry(open_path, open_text);
-
-    entry
+    let entry = discover_entry(open_path, text);
+    let root = entry
         .parent()
         .map(|parent| parent.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    EntryContext {
+        entry,
+        root,
+        zora: None,
+    }
+}
+
+pub(crate) fn project_root_for(open_path: &Path, open_text: &str) -> PathBuf {
+    entry_context(open_path, open_text).root
 }
 
 fn discover_entry(open_path: &Path, open_text: &str) -> PathBuf {
@@ -581,7 +593,7 @@ fn discover_entry(open_path: &Path, open_text: &str) -> PathBuf {
     open_path.to_path_buf()
 }
 
-fn contains_main(text: &str) -> bool {
+pub(crate) fn contains_main(text: &str) -> bool {
     text.contains("fn main(")
 }
 

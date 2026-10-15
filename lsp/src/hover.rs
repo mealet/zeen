@@ -13,6 +13,10 @@ pub fn hover_markdown(
     paths: ResolvePaths<'_>,
     filename: &str,
 ) -> Option<HoverResult> {
+    if crate::completion::use_path_prefix(text, offset).is_some() {
+        return use_hover(text, offset, paths);
+    }
+
     let occurrence = analysis.at(offset)?;
     let name = text.get(occurrence.offset..occurrence.offset + occurrence.len)?;
     let key = (occurrence.offset, occurrence.len);
@@ -52,6 +56,43 @@ fn assemble(code: &str, info: &[String], occurrence: &Occurrence) -> (String, us
     }
 
     (markdown, occurrence.offset, occurrence.len)
+}
+
+fn use_hover(text: &str, offset: usize, paths: ResolvePaths<'_>) -> Option<HoverResult> {
+    let prefix = crate::completion::use_path_prefix(text, offset)?;
+    let line_start = text[..offset.min(text.len())]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let line_end = text[offset.min(text.len())..]
+        .find('\n')
+        .map(|index| offset.min(text.len()) + index)
+        .unwrap_or(text.len());
+
+    let code = format!("```zeen\nuse {prefix}\n```");
+
+    let resolved = match (paths.dir, paths.project()) {
+        (Some(dir), Some(root)) => {
+            crate::modules::resolve_import(dir, root, paths.std, paths.packages(), &prefix)
+                .is_some()
+        }
+        _ => false,
+    };
+
+    let mut markdown = code;
+    markdown.push_str("\n----\n");
+
+    if resolved {
+        markdown.push_str(&format!("resolves to `{prefix}`"));
+    } else {
+        markdown.push_str("unresolved import");
+    }
+
+    Some(HoverResult {
+        markdown,
+        offset: line_start,
+        len: line_end - line_start,
+    })
 }
 
 fn code_block(code: &str) -> String {

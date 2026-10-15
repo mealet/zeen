@@ -1496,6 +1496,31 @@ mod tests {
         output.analysis
     }
 
+    const SIG_SAMPLE: &str = "struct P {\n    pub v: i32,\n\n    pub fn at(*self, x: i32, y: i32) i32 {\n        return x;\n    }\n}\n\nfn main() {\n    let p = P { .v = 1 };\n    let q = p.at(1, 2);\n    @println(\"{}\", q);\n}\n";
+
+    #[test]
+    fn signature_skips_self_and_tracks_arg() {
+        let analysis = sample_analysis(SIG_SAMPLE);
+
+        let first = SIG_SAMPLE.find("p.at(1, 2)").unwrap() + "p.at(".len();
+        let data = analysis.signature_at(first).unwrap();
+        assert_eq!(data.label, "at(x, y)");
+        assert_eq!(data.params, vec!["x".to_string(), "y".to_string()]);
+        assert_eq!(data.active, Some(0));
+
+        let second = SIG_SAMPLE.find(", 2)").unwrap() + ", ".len();
+        let data = analysis.signature_at(second).unwrap();
+        assert_eq!(data.active, Some(1));
+    }
+
+    #[test]
+    fn struct_init_reports_field_hints() {
+        let analysis = sample_analysis(SIG_SAMPLE);
+
+        assert_eq!(analysis.field_hints.len(), 1);
+        assert_eq!(analysis.field_hints[0].ty, "i32");
+    }
+
     fn labels(items: &[CompletionItem]) -> Vec<&str> {
         items.iter().map(|item| item.label.as_str()).collect()
     }

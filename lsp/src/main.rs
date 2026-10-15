@@ -2,12 +2,15 @@
 
 mod analysis;
 mod backend;
+mod codelens;
 mod completion;
 mod diagnostics;
 mod hover;
 mod modules;
 mod position;
+mod rename;
 mod semantic;
+mod symbols;
 mod zora;
 
 use backend::Backend;
