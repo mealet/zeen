@@ -255,6 +255,36 @@ fn imported_method_static(
     field_start: usize,
     method: &str,
 ) -> Option<bool> {
+    let ty = imported_receiver_name(text, analysis, field_start)?;
+
+    lookup_imported_static(text, paths, &ty, method)
+}
+
+fn imported_method_sig(
+    text: &str,
+    analysis: &Analysis,
+    paths: ResolvePaths<'_>,
+    field_start: usize,
+    method: &str,
+) -> Option<String> {
+    let ty = imported_receiver_name(text, analysis, field_start)?;
+    let (dir, root) = match (paths.dir, paths.project()) {
+        (Some(dir), Some(root)) => (dir, root),
+        _ => return None,
+    };
+
+    crate::modules::method_source_sig(
+        dir,
+        root,
+        paths.std,
+        paths.packages(),
+        &crate::modules::use_imports(text),
+        &ty,
+        method,
+    )
+}
+
+fn imported_receiver_name(text: &str, analysis: &Analysis, field_start: usize) -> Option<String> {
     if field_start == 0 || text.as_bytes().get(field_start - 1) != Some(&b'.') {
         return None;
     }
@@ -276,12 +306,10 @@ fn imported_method_static(
         && receiver.role == Role::Type
         && let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len)
     {
-        return lookup_imported_static(text, paths, name, method);
+        return Some(name.to_string());
     }
 
-    let ty = receiver_ty_before(text, analysis, field_start)?;
-
-    lookup_imported_static(text, paths, &ty, method)
+    receiver_ty_before(text, analysis, field_start)
 }
 
 fn lookup_imported_static(
@@ -338,7 +366,8 @@ fn method_call_hover(
             info.push(method_kind_label(is_static).to_string());
         }
 
-        fn_code(analysis, fn_def, name, occurrence.ty.as_deref())
+        imported_method_sig(text, analysis, paths, key.0, name)
+            .unwrap_or_else(|| fn_code(analysis, fn_def, name, occurrence.ty.as_deref()))
     };
 
     if let Some(location) = defined_at(text, occurrence, filename) {
@@ -933,9 +962,16 @@ mod tests {
             markdown.markdown
         );
         assert!(
-            markdown.markdown.contains("fn make(...)"),
+            markdown.markdown.contains("fn make() Helper"),
             "{:?}",
             markdown.markdown
+        );
+
+        let fn_def = method_at(&output.analysis, (offset, "make".len())).unwrap();
+        let (_, _, file) = output.analysis.def_spans.get(&fn_def).cloned().unwrap();
+        assert!(
+            file.is_some_and(|file| file.ends_with("lib.zn")),
+            "imported method must carry its file"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

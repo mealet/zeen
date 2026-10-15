@@ -430,6 +430,144 @@ pub fn variant_payload_fields(
     fields
 }
 
+pub fn method_source_sig(
+    open_dir: &Path,
+    project_root: &Path,
+    std_root: Option<&Path>,
+    packages: &[(String, std::path::PathBuf)],
+    imports: &[String],
+    type_name: &str,
+    method_name: &str,
+) -> Option<String> {
+    for import in imports {
+        let Some((_, content)) = resolve_import(open_dir, project_root, std_root, packages, import)
+        else {
+            continue;
+        };
+
+        if let Some(signature) = method_sig_in_source(&content, type_name, method_name) {
+            return Some(signature);
+        }
+    }
+
+    None
+}
+
+fn method_sig_in_source(content: &str, type_name: &str, method_name: &str) -> Option<String> {
+    let filename = Rc::new(String::from("lookup.zn"));
+    let source = Arc::new(content.to_string());
+    let interner = Rc::new(RefCell::new(lasso::Rodeo::default()));
+    let bump = bumpalo::Bump::new();
+    let mut tokens = zeen_lexer::tokenize(content);
+
+    let mut parser = zeen_parser::Parser::new(
+        Rc::clone(&filename),
+        Arc::clone(&source),
+        &mut tokens,
+        &bump,
+        Rc::clone(&interner),
+    );
+
+    let program = parser.parse_program().ok()?;
+    let interner = interner.borrow();
+    let resolve = |spur: &lasso::Spur| interner.resolve(spur).to_string();
+
+    for decl in program {
+        let methods = match &decl.kind {
+            DeclarationKind::StructDecl { name, methods, .. }
+            | DeclarationKind::EnumDecl { name, methods, .. } => {
+                if resolve(&name.0) != type_name {
+                    continue;
+                }
+
+                methods
+            }
+            DeclarationKind::ImplementDecl {
+                object, methods, ..
+            } => {
+                if resolve(&object.0) != type_name {
+                    continue;
+                }
+
+                methods
+            }
+            _ => continue,
+        };
+
+        for method in *methods {
+            let DeclarationKind::FnDecl {
+                name,
+                generics,
+                params,
+                return_type,
+                ..
+            } = &method.kind
+            else {
+                continue;
+            };
+
+            if resolve(&name.0) != method_name {
+                continue;
+            }
+
+            let mut code = format!("fn {}", resolve(&name.0));
+
+            if let Some(generics) = generics {
+                let mut bounds = Vec::with_capacity(generics.len());
+
+                for generic in *generics {
+                    let mut bound = resolve(&generic.name.0);
+
+                    if let Some(interfaces) = generic.interfaces {
+                        let names: Vec<String> =
+                            interfaces.iter().map(|(spur, _)| resolve(spur)).collect();
+
+                        if !names.is_empty() {
+                            bound.push_str(": ");
+                            bound.push_str(&names.join(" + "));
+                        }
+                    }
+
+                    bounds.push(bound);
+                }
+
+                code.push('[');
+                code.push_str(&bounds.join(", "));
+                code.push(']');
+            }
+
+            let mut args = Vec::with_capacity(params.len());
+
+            for param in *params {
+                let start = param.span.offset().min(content.len());
+                let end = start.saturating_add(param.span.len()).min(content.len());
+
+                if let Some(spelling) = content.get(start..end).filter(|text| !text.is_empty()) {
+                    args.push(spelling.to_string());
+                }
+            }
+
+            code.push('(');
+            code.push_str(&args.join(", "));
+            code.push(')');
+
+            if let Some(ret) = return_type {
+                let start = ret.span.offset().min(content.len());
+                let end = start.saturating_add(ret.span.len()).min(content.len());
+
+                if let Some(spelling) = content.get(start..end).filter(|text| !text.is_empty()) {
+                    code.push(' ');
+                    code.push_str(spelling);
+                }
+            }
+
+            return Some(code);
+        }
+    }
+
+    None
+}
+
 pub fn prefixed_modules(base: &Path, prefix: &str) -> Vec<String> {
     let mut out = Vec::new();
     collect_prefixed(base, base, prefix, &mut out, 0);

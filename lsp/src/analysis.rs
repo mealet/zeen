@@ -198,23 +198,41 @@ impl Analysis {
             };
             occurrence.target_module = resolution.def_modules.get(&def).cloned();
 
-            let name = info.span.src.name();
+            record_def_span(
+                &mut walker.analysis.def_spans,
+                resolution,
+                def,
+                walker.filename,
+                walker.canonical,
+            );
+        }
 
-            if name != walker.filename && Some(name) != Some(walker.canonical) {
-                walker.analysis.def_spans.insert(
-                    def,
-                    (
-                        info.span.span.offset(),
-                        info.span.span.len(),
-                        Some(name.to_string()),
-                    ),
-                );
-            } else {
+        for def in walker
+            .analysis
+            .members
+            .keys()
+            .copied()
+            .chain(
                 walker
                     .analysis
-                    .def_spans
-                    .insert(def, (info.span.span.offset(), info.span.span.len(), None));
+                    .members
+                    .values()
+                    .flatten()
+                    .map(|member| member.def),
+            )
+            .collect::<HashSet<_>>()
+        {
+            if walker.analysis.def_spans.contains_key(&def) {
+                continue;
             }
+
+            record_def_span(
+                &mut walker.analysis.def_spans,
+                resolution,
+                def,
+                walker.filename,
+                walker.canonical,
+            );
         }
 
         walker
@@ -487,6 +505,28 @@ impl Analysis {
         }
     }
 
+    pub fn resolve_def_spans(
+        &mut self,
+        resolution: &ResolutionResult,
+        filename: &str,
+        canonical: &str,
+    ) {
+        let defs: HashSet<DefId> = self
+            .method_calls
+            .values()
+            .copied()
+            .chain(self.field_targets.values().map(|target| target.field_def))
+            .collect();
+
+        for def in defs {
+            if self.def_spans.contains_key(&def) {
+                continue;
+            }
+
+            record_def_span(&mut self.def_spans, resolution, def, filename, canonical);
+        }
+    }
+
     pub fn resolve_fields(
         &mut self,
         types: &TypeCheckResult,
@@ -569,6 +609,33 @@ fn needs_drop(types: &TypeCheckResult, id: TypeId, copy: bool) -> bool {
         }
         Type::FatFn { .. } => true,
         _ => false,
+    }
+}
+
+fn record_def_span(
+    spans: &mut HashMap<DefId, (usize, usize, Option<String>)>,
+    resolution: &ResolutionResult,
+    def: DefId,
+    filename: &str,
+    canonical: &str,
+) {
+    let Some(info) = resolution.defs.get(&def) else {
+        return;
+    };
+
+    let name = info.span.src.name();
+
+    if name != filename && Some(name) != Some(canonical) {
+        spans.insert(
+            def,
+            (
+                info.span.span.offset(),
+                info.span.span.len(),
+                Some(name.to_string()),
+            ),
+        );
+    } else {
+        spans.insert(def, (info.span.span.offset(), info.span.span.len(), None));
     }
 }
 
