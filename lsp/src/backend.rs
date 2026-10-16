@@ -24,6 +24,7 @@ pub struct Backend {
     deps: Arc<RwLock<HashMap<PathBuf, CachedDeps>>>,
     symbols: Arc<RwLock<symbols::SymbolIndex>>,
     repair_cache: Arc<RwLock<HashMap<(u64, u64), analysis::Analysis>>>,
+    document_changes: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -160,6 +161,7 @@ impl Backend {
             deps: Arc::new(RwLock::new(HashMap::new())),
             symbols: Arc::new(RwLock::new(symbols::SymbolIndex::default())),
             repair_cache: Arc::new(RwLock::new(HashMap::new())),
+            document_changes: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -583,6 +585,27 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
+        if self
+            .document_changes
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let document_changes = edits
+                .into_iter()
+                .map(|(edit_uri, text_edits)| TextDocumentEdit {
+                    text_document: OptionalVersionedTextDocumentIdentifier {
+                        version: documents.get(&edit_uri).map(|document| document.version),
+                        uri: edit_uri,
+                    },
+                    edits: text_edits.into_iter().map(OneOf::Left).collect(),
+                })
+                .collect();
+
+            return Ok(Some(WorkspaceEdit {
+                document_changes: Some(DocumentChanges::Edits(document_changes)),
+                ..Default::default()
+            }));
+        }
+
         Ok(Some(WorkspaceEdit {
             changes: Some(edits),
             ..Default::default()
@@ -726,7 +749,18 @@ impl LanguageServer for Backend {
         }
     }
 
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let document_changes = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.workspace_edit.as_ref())
+            .and_then(|workspace_edit| workspace_edit.document_changes)
+            .unwrap_or(false);
+
+        self.document_changes
+            .store(document_changes, std::sync::atomic::Ordering::Relaxed);
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -746,7 +780,10 @@ impl LanguageServer for Backend {
                 references_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
-                rename_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
