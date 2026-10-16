@@ -410,13 +410,13 @@ fn check_full(
     }
 }
 
+pub(crate) fn std_src(root: PathBuf) -> Option<PathBuf> {
+    let src = root.join("src");
+
+    src.is_dir().then_some(src)
+}
+
 pub(crate) fn resolve_std_root() -> Option<PathBuf> {
-    fn std_src(root: PathBuf) -> Option<PathBuf> {
-        let src = root.join("src");
-
-        src.is_dir().then_some(src)
-    }
-
     if let Some(env_path) = std::env::var_os("ZEEN_STD")
         && let Some(src) = std_src(PathBuf::from(env_path))
     {
@@ -658,6 +658,18 @@ mod tests {
         assert!(parses("fn main() {\n    let x = 1;\n}\n"));
         assert!(!parses("fn main() {\n    let x = foo.\n}\n"));
         assert!(!parses("fn main() {\n    let p = Point { .\n}\n"));
+    }
+
+    #[test]
+    fn std_src_enters_project_src_directory() {
+        let project = test_dir("std-src");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+
+        assert_eq!(std_src(project.clone()), Some(project.join("src")));
+
+        let bare = test_dir("std-src-bare");
+
+        assert_eq!(std_src(bare), None);
     }
 
     #[test]

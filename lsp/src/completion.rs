@@ -1699,6 +1699,25 @@ mod tests {
     }
 
     #[test]
+    fn std_modules_skip_project_src_segment() {
+        let project = std::env::temp_dir().join(format!("zeen-lsp-std-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&project);
+        std::fs::create_dir_all(project.join("src").join("c")).unwrap();
+
+        std::fs::write(project.join("src").join("alloc.zn"), "").unwrap();
+        std::fs::write(project.join("src").join("c").join("types.zn"), "").unwrap();
+
+        let src = crate::diagnostics::std_src(project.clone()).unwrap();
+        let modules = std_modules(&src);
+
+        assert!(modules.contains(&"std.alloc".to_string()));
+        assert!(modules.contains(&"std.c.types".to_string()));
+        assert!(!modules.iter().any(|module| module.contains("src")));
+
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
     fn at_trigger_suggests_macros_and_directives() {
         let analysis = Analysis::default();
 
