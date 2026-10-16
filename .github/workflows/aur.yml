@@ -50,7 +50,7 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/packaging/aur"
           sed -i "s/^pkgver=.*/pkgver=$PKGVER/" PKGBUILD
-          sed -i "s/^sha256sums=.*/sha256sums=('$SHA')/" PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('$SHA' 'SKIP')/" PKGBUILD
           makepkg --printsrcinfo > .SRCINFO
 
           export GIT_TERMINAL_PROMPT=0
