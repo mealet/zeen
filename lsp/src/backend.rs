@@ -9,7 +9,7 @@ use std::{
 use tokio::sync::RwLock;
 use tower_lsp_server::ls_types::request::{
     GotoDeclarationParams, GotoDeclarationResponse, GotoImplementationParams,
-    GotoImplementationResponse,
+    GotoImplementationResponse, GotoTypeDefinitionParams, GotoTypeDefinitionResponse,
 };
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
@@ -448,6 +448,58 @@ impl Backend {
         }])))
     }
 
+    async fn dependent_documents(
+        &self,
+        changed: &[PathBuf],
+    ) -> Vec<(Uri, String, i32, Vec<(String, PathBuf)>)> {
+        let documents = self.documents.read().await;
+        let mut out = Vec::new();
+
+        for (uri, document) in documents.iter() {
+            let Some(open_path) = diagnostics::file_uri_to_path(uri) else {
+                continue;
+            };
+
+            let canonical = std::fs::canonicalize(&open_path).unwrap_or_else(|_| open_path.clone());
+
+            let references = changed.iter().any(|source| {
+                source == &canonical
+                    || document
+                        .analysis
+                        .def_spans
+                        .values()
+                        .any(|(_, _, file)| file.as_deref() == source.to_str())
+                    || document.analysis.occurrences.iter().any(|occurrence| {
+                        occurrence.target_file.as_deref() == source.to_str()
+                            || occurrence
+                                .target_file
+                                .as_deref()
+                                .and_then(|name| open_path.parent().map(|parent| parent.join(name)))
+                                .and_then(|sibling| std::fs::canonicalize(sibling).ok())
+                                .is_some_and(|sibling| &sibling == source)
+                    })
+            });
+
+            if !references {
+                continue;
+            }
+
+            let root = zora::find_root(&open_path);
+            let packages = self.packages_for(root.as_deref()).await.0;
+
+            out.push((
+                uri.clone(),
+                document.text.clone(),
+                document.version,
+                packages,
+            ));
+        }
+
+        out
+    }
+}
+
+impl LanguageServer for Backend {
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
@@ -526,10 +578,10 @@ impl Backend {
         }))
     }
 
-    async fn type_definition(
+    async fn goto_type_definition(
         &self,
-        params: GotoDefinitionParams,
-    ) -> Result<Option<GotoDefinitionResponse>> {
+        params: GotoTypeDefinitionParams,
+    ) -> Result<Option<GotoTypeDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let documents = self.documents.read().await;
 
@@ -662,58 +714,7 @@ impl Backend {
             )),
         }
     }
-    async fn dependent_documents(
-        &self,
-        changed: &[PathBuf],
-    ) -> Vec<(Uri, String, i32, Vec<(String, PathBuf)>)> {
-        let documents = self.documents.read().await;
-        let mut out = Vec::new();
 
-        for (uri, document) in documents.iter() {
-            let Some(open_path) = diagnostics::file_uri_to_path(uri) else {
-                continue;
-            };
-
-            let canonical = std::fs::canonicalize(&open_path).unwrap_or_else(|_| open_path.clone());
-
-            let references = changed.iter().any(|source| {
-                source == &canonical
-                    || document
-                        .analysis
-                        .def_spans
-                        .values()
-                        .any(|(_, _, file)| file.as_deref() == source.to_str())
-                    || document.analysis.occurrences.iter().any(|occurrence| {
-                        occurrence.target_file.as_deref() == source.to_str()
-                            || occurrence
-                                .target_file
-                                .as_deref()
-                                .and_then(|name| open_path.parent().map(|parent| parent.join(name)))
-                                .and_then(|sibling| std::fs::canonicalize(sibling).ok())
-                                .is_some_and(|sibling| &sibling == source)
-                    })
-            });
-
-            if !references {
-                continue;
-            }
-
-            let root = zora::find_root(&open_path);
-            let packages = self.packages_for(root.as_deref()).await.0;
-
-            out.push((
-                uri.clone(),
-                document.text.clone(),
-                document.version,
-                packages,
-            ));
-        }
-
-        out
-    }
-}
-
-impl LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
