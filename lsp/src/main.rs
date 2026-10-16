@@ -7,6 +7,7 @@ mod codelens;
 mod completion;
 mod diagnostics;
 mod folding;
+mod hierarchy;
 mod hover;
 mod modules;
 mod position;

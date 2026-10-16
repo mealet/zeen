@@ -109,6 +109,7 @@ pub struct Analysis {
     pub(crate) raw_calls: Vec<RawCall>,
     pub(crate) raw_fields: Vec<RawFieldInit>,
     pub(crate) raw_access: Vec<RawAccess>,
+    pub implements: Vec<(DefId, DefId)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1149,6 +1150,10 @@ impl<'ctx> Walker<'ctx> {
             }
 
             HirDeclKind::Implement(implement) => {
+                if let (Some(interface), Some(object)) = (implement.interface, implement.object) {
+                    self.analysis.implements.push((interface, object));
+                }
+
                 for generic in &implement.generics {
                     self.walk_generic(generic);
                 }

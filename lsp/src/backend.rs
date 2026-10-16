@@ -75,6 +75,17 @@ async fn run_and_capture(
     }
 }
 
+fn hierarchy_docs(documents: &HashMap<Uri, Document>) -> Vec<crate::hierarchy::HierarchyDoc<'_>> {
+    documents
+        .iter()
+        .map(|(uri, document)| crate::hierarchy::HierarchyDoc {
+            uri: uri.clone(),
+            text: &document.text,
+            analysis: &document.analysis,
+        })
+        .collect()
+}
+
 async fn packages_for_cache(
     deps: &Arc<RwLock<HashMap<PathBuf, CachedDeps>>>,
     root: Option<&std::path::Path>,
@@ -1047,44 +1058,102 @@ impl LanguageServer for Backend {
 
     async fn prepare_call_hierarchy(
         &self,
-        _params: CallHierarchyPrepareParams,
+        params: CallHierarchyPrepareParams,
     ) -> Result<Option<Vec<CallHierarchyItem>>> {
-        Ok(None)
+        let uri = params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(
+            &document.text,
+            params.text_document_position_params.position,
+        );
+        let docs = hierarchy_docs(&documents);
+
+        Ok(crate::hierarchy::prepare(&docs, &uri, offset).map(|item| vec![item]))
     }
 
     async fn incoming_calls(
         &self,
-        _params: CallHierarchyIncomingCallsParams,
+        params: CallHierarchyIncomingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
-        Ok(None)
+        let documents = self.documents.read().await;
+        let docs = hierarchy_docs(&documents);
+        let calls = crate::hierarchy::incoming(&docs, &params.item);
+
+        if calls.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(calls))
     }
 
     async fn outgoing_calls(
         &self,
-        _params: CallHierarchyOutgoingCallsParams,
+        params: CallHierarchyOutgoingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
-        Ok(None)
+        let documents = self.documents.read().await;
+        let docs = hierarchy_docs(&documents);
+        let calls = crate::hierarchy::outgoing(&docs, &params.item);
+
+        if calls.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(calls))
     }
 
     async fn prepare_type_hierarchy(
         &self,
-        _params: TypeHierarchyPrepareParams,
+        params: TypeHierarchyPrepareParams,
     ) -> Result<Option<Vec<TypeHierarchyItem>>> {
-        Ok(None)
+        let uri = params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(
+            &document.text,
+            params.text_document_position_params.position,
+        );
+        let docs = hierarchy_docs(&documents);
+
+        Ok(crate::hierarchy::prepare_type(&docs, &uri, offset).map(|item| vec![item]))
     }
 
     async fn supertypes(
         &self,
-        _params: TypeHierarchySupertypesParams,
+        params: TypeHierarchySupertypesParams,
     ) -> Result<Option<Vec<TypeHierarchyItem>>> {
-        Ok(None)
+        let documents = self.documents.read().await;
+        let docs = hierarchy_docs(&documents);
+        let types = crate::hierarchy::supertypes(&docs, &params.item);
+
+        if types.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(types))
     }
 
     async fn subtypes(
         &self,
-        _params: TypeHierarchySubtypesParams,
+        params: TypeHierarchySubtypesParams,
     ) -> Result<Option<Vec<TypeHierarchyItem>>> {
-        Ok(None)
+        let documents = self.documents.read().await;
+        let docs = hierarchy_docs(&documents);
+        let types = crate::hierarchy::subtypes(&docs, &params.item);
+
+        if types.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(types))
     }
 
     async fn moniker(&self, _params: MonikerParams) -> Result<Option<Vec<Moniker>>> {
