@@ -82,6 +82,23 @@ pub(crate) fn resolve_import(
         return Some((import.to_string(), content.to_string()));
     }
 
+    let file_path = resolve_import_path(open_dir, project_root, std_root, packages, import)?;
+    let content = std::fs::read_to_string(&file_path).ok()?;
+
+    Some((import.to_string(), content))
+}
+
+pub(crate) fn resolve_import_path(
+    open_dir: &Path,
+    project_root: &Path,
+    std_root: Option<&Path>,
+    packages: &[(String, std::path::PathBuf)],
+    import: &str,
+) -> Option<std::path::PathBuf> {
+    if import.starts_with("core.") {
+        return None;
+    }
+
     let segments: Vec<&str> = import.split('.').collect();
 
     if segments.is_empty() {
@@ -111,10 +128,7 @@ pub(crate) fn resolve_import(
         dir_path.push(seg);
     }
 
-    let file_path = file_or_index(&dir_path)?;
-    let content = std::fs::read_to_string(&file_path).ok()?;
-
-    Some((import.to_string(), content))
+    file_or_index(&dir_path)
 }
 
 fn file_or_index(dir_path: &std::path::Path) -> Option<std::path::PathBuf> {

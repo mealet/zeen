@@ -967,11 +967,62 @@ impl LanguageServer for Backend {
         Ok(None)
     }
 
-    async fn document_link(
-        &self,
-        _params: DocumentLinkParams,
-    ) -> Result<Option<Vec<DocumentLink>>> {
-        Ok(None)
+    async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
+        let uri = params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let open_path = diagnostics::file_uri_to_path(&uri);
+        let open_dir = open_path
+            .as_ref()
+            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+        let project_root = open_path
+            .as_ref()
+            .map(|path| diagnostics::project_root_for(path, &document.text));
+        let std_root = diagnostics::resolve_std_root();
+        let zora_root = open_path.as_ref().and_then(|path| zora::find_root(path));
+        let (packages, _) = self.packages_for(zora_root.as_deref()).await;
+
+        let dir = match open_dir.as_deref() {
+            Some(dir) => dir,
+            None => return Ok(None),
+        };
+
+        let links = crate::actions::document_links(
+            &document.text,
+            Some(dir),
+            project_root.as_deref(),
+            std_root.as_deref(),
+            &packages,
+        );
+
+        if links.is_empty() {
+            return Ok(None);
+        }
+
+        let mut out = Vec::new();
+
+        for ((start, end), _path, target) in links {
+            let Ok(target_uri) = Uri::from_str(&format!("file://{}", target.display())) else {
+                continue;
+            };
+
+            out.push(DocumentLink {
+                range: position::span_to_range(&document.text, start, end - start),
+                target: Some(target_uri),
+                tooltip: None,
+                data: None,
+            });
+        }
+
+        if out.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(out))
     }
 
     async fn document_link_resolve(&self, params: DocumentLink) -> Result<DocumentLink> {

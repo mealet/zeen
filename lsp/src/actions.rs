@@ -112,7 +112,7 @@ pub fn missing_use_actions(
     index: &SymbolIndex,
     current_dir: &Path,
     project_root: Option<&Path>,
-    packages: &[(String, PathBuf)],
+    packages: &[(String, std::path::PathBuf)],
     name: &str,
 ) -> Vec<CodeAction> {
     let mut paths: Vec<String> = Vec::new();
@@ -156,6 +156,48 @@ pub fn missing_use_actions(
             ..Default::default()
         })
         .collect()
+}
+
+pub fn document_links(
+    text: &str,
+    open_dir: Option<&std::path::Path>,
+    project_root: Option<&std::path::Path>,
+    std_root: Option<&std::path::Path>,
+    packages: &[(String, std::path::PathBuf)],
+) -> Vec<((usize, usize), String, std::path::PathBuf)> {
+    let Some(dir) = open_dir else {
+        return Vec::new();
+    };
+
+    let Some(root) = project_root.or(Some(dir)) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut offset = 0;
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+
+        if let Some(rest) = trimmed
+            .strip_prefix("use ")
+            .or_else(|| trimmed.strip_prefix("use\t"))
+        {
+            let path = rest.split(';').next().unwrap_or("").trim();
+
+            if !path.is_empty()
+                && let Some(target) =
+                    crate::modules::resolve_import_path(dir, root, std_root, packages, path)
+            {
+                let start = offset + line.find(path).unwrap_or(0);
+                out.push(((start, start + path.len()), path.to_string(), target));
+            }
+        }
+
+        offset += line.len() + 1;
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -227,5 +269,23 @@ mod tests {
         assert_eq!(insert_after_uses("fn main() {}\n"), 0);
         assert_eq!(insert_after_uses("use a;\nuse b;\nfn main() {}\n"), 2);
         assert_eq!(insert_after_uses("use a;\n"), 1);
+    }
+
+    #[test]
+    fn links_point_at_resolved_files() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.zn"), "pub fn f() i32 {\n    return 1;\n}\n").unwrap();
+        std::fs::write(dir.join("main.zn"), "use lib;\n\nfn main() {}\n").unwrap();
+
+        let text = std::fs::read_to_string(dir.join("main.zn")).unwrap();
+        let links = document_links(&text, Some(dir.as_path()), Some(dir.as_path()), None, &[]);
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].1, "lib".to_string());
+        assert_eq!(links[0].2, dir.join("lib.zn"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -18,6 +18,9 @@ pub fn folding_ranges(text: &str, analysis: &Analysis) -> Vec<FoldingRange> {
         }
     }
 
+    spans.extend(comment_block_spans(text));
+    spans.extend(use_block_spans(text));
+
     spans.sort();
     spans.dedup();
 
@@ -37,6 +40,53 @@ pub fn folding_ranges(text: &str, analysis: &Analysis) -> Vec<FoldingRange> {
                 collapsed_text: None,
             });
         }
+    }
+
+    out
+}
+
+fn comment_block_spans(text: &str) -> Vec<(usize, usize)> {
+    line_group_spans(text, &|trimmed: &str| trimmed.starts_with("//"))
+}
+
+fn use_block_spans(text: &str) -> Vec<(usize, usize)> {
+    line_group_spans(text, &|trimmed: &str| {
+        trimmed.starts_with("use ") || trimmed.starts_with("use\t")
+    })
+}
+
+fn line_group_spans(text: &str, matches: &dyn Fn(&str) -> bool) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut offset = 0;
+    let mut run_start: Option<usize> = None;
+    let mut run_end = 0;
+    let mut run_count = 0;
+
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+
+        if matches(trimmed) {
+            if run_start.is_none() {
+                run_start = Some(offset);
+            }
+
+            run_end = offset + line.trim_end_matches('\n').len();
+            run_count += 1;
+        } else if let Some(start) = run_start.take() {
+            if run_count > 1 {
+                out.push((start, run_end));
+            }
+
+            run_count = 0;
+        }
+
+        offset += line.len();
+    }
+
+    if let Some(start) = run_start
+        && run_count > 1
+    {
+        out.push((start, run_end));
     }
 
     out
@@ -141,5 +191,28 @@ mod tests {
         }
 
         assert!(depth >= 2);
+    }
+
+    #[test]
+    fn groups_use_lines_and_comments() {
+        let text = "use a;\nuse b;\nuse c;\n\nfn main() {}\n";
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-folding-probe.zn".parse().unwrap();
+        let analysis = crate::diagnostics::check(&uri, text, &[]).analysis;
+        let lines: Vec<(u32, u32)> = folding_ranges(text, &analysis)
+            .iter()
+            .map(|range| (range.start_line, range.end_line))
+            .collect();
+
+        assert!(lines.contains(&(0, 2)));
+
+        let text = "// one\n// two\n// three\nfn main() {}\n";
+        let analysis = crate::diagnostics::check(&uri, text, &[]).analysis;
+        let lines: Vec<(u32, u32)> = folding_ranges(text, &analysis)
+            .iter()
+            .map(|range| (range.start_line, range.end_line))
+            .collect();
+
+        assert!(lines.contains(&(0, 2)));
     }
 }
