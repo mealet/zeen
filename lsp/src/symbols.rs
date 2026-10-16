@@ -171,9 +171,19 @@ pub struct FileIndex {
     pub symbols: Vec<IndexedSymbol>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SymbolIndex {
     files: HashMap<PathBuf, FileIndex>,
+    dirty: bool,
+}
+
+impl Default for SymbolIndex {
+    fn default() -> Self {
+        Self {
+            files: HashMap::new(),
+            dirty: true,
+        }
+    }
 }
 
 const MAX_INDEX_FILES: usize = 500;
@@ -181,6 +191,16 @@ const MAX_INDEX_FILES: usize = 500;
 impl SymbolIndex {
     pub fn files(&self) -> impl Iterator<Item = (&PathBuf, &FileIndex)> {
         self.files.iter()
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    pub fn ensure(&mut self, roots: &[PathBuf]) {
+        if self.dirty {
+            self.refresh(roots);
+        }
     }
 
     pub fn refresh(&mut self, roots: &[PathBuf]) {
@@ -217,6 +237,8 @@ impl SymbolIndex {
                 }
             }
         }
+
+        self.dirty = false;
     }
 
     fn collect(dir: &Path, seen: &mut HashSet<PathBuf>, count: &mut usize) {
@@ -580,6 +602,29 @@ mod tests {
 
         let infos = workspace_symbols(&index, "mai");
         assert!(infos.iter().any(|info| info.name == "main"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_reuses_index_until_dirty() {
+        let dir =
+            std::env::temp_dir().join(format!("zeen-lsp-symbols-lazy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.zn"), "fn alpha() {}\n").unwrap();
+
+        let mut index = SymbolIndex::default();
+        index.ensure(std::slice::from_ref(&dir));
+        assert_eq!(index.query("alpha").len(), 1);
+
+        std::fs::write(dir.join("main.zn"), "fn beta() {}\n").unwrap();
+        index.ensure(std::slice::from_ref(&dir));
+        assert!(index.query("beta").is_empty());
+
+        index.mark_dirty();
+        index.ensure(std::slice::from_ref(&dir));
+        assert_eq!(index.query("beta").len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

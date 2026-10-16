@@ -888,7 +888,7 @@ impl LanguageServer for Backend {
 
         let roots: Vec<PathBuf> = roots.into_iter().collect();
         let mut index = self.symbols.write().await;
-        index.refresh(&roots);
+        index.ensure(&roots);
 
         Ok(Some(WorkspaceSymbolResponse::Flat(
             symbols::workspace_symbols(&index, &params.query),
@@ -1618,7 +1618,7 @@ impl LanguageServer for Backend {
         }
 
         let mut index = self.symbols.write().await;
-        index.refresh(&roots);
+        index.ensure(&roots);
 
         let mut actions = Vec::new();
 
@@ -1761,6 +1761,10 @@ impl LanguageServer for Backend {
                 let canonical = std::fs::canonicalize(&path).unwrap_or(path);
                 changed_sources.push(canonical);
             }
+        }
+
+        if !params.changes.is_empty() {
+            self.symbols.write().await.mark_dirty();
         }
 
         for root in roots {
