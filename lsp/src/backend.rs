@@ -153,6 +153,16 @@ async fn packages_for_cache(
     }
 }
 
+fn is_test_file(path: &std::path::Path) -> bool {
+    let in_tests = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        == Some("tests");
+
+    in_tests && zora::find_root(path).is_some()
+}
+
 impl Backend {
     pub fn new(client: Client) -> Self {
         Self {
@@ -381,6 +391,172 @@ impl Backend {
             }
             Ok(Ok(report)) => {
                 self.client.show_message(MessageType::INFO, report).await;
+            }
+        }
+    }
+
+    async fn run_test(&self, arguments: Vec<LSPAny>) {
+        let (Some(uri), Some(name)) = (
+            arguments.first().and_then(|value| value.as_str()),
+            arguments.get(1).and_then(|value| value.as_str()),
+        ) else {
+            return;
+        };
+
+        let Ok(uri) = Uri::from_str(uri) else {
+            return;
+        };
+
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return;
+        };
+
+        let Some(open_path) = diagnostics::file_uri_to_path(&uri) else {
+            return;
+        };
+
+        let Some(root) = zora::find_root(&open_path) else {
+            self.client
+                .show_message(MessageType::WARNING, "run test requires a Zora project")
+                .await;
+            return;
+        };
+
+        if std::fs::read_to_string(&open_path).ok().as_deref() != Some(document.text.as_str()) {
+            self.client
+                .show_message(MessageType::WARNING, "save the file first")
+                .await;
+            return;
+        }
+
+        let Some(module) = open_path.file_stem().and_then(|stem| stem.to_str()) else {
+            return;
+        };
+
+        let (packages, _) = self.packages_for(Some(&root)).await;
+        let work = std::env::temp_dir().join(format!("zeen-lsp-test-{}", std::process::id()));
+
+        if let Err(err) = std::fs::create_dir_all(&work) {
+            self.client
+                .show_message(MessageType::ERROR, format!("test workspace: {err}"))
+                .await;
+            return;
+        }
+
+        let entry_path = work.join(format!("{module}_{name}.zn"));
+        let entry = format!("use tests.{module};\n\nfn main() {{\n    {name}();\n}}\n");
+
+        if let Err(err) = std::fs::write(&entry_path, entry) {
+            self.client
+                .show_message(
+                    MessageType::ERROR,
+                    format!("unable to write test entry: {err}"),
+                )
+                .await;
+            return;
+        }
+
+        let binary = work.join(format!("{module}_{name}"));
+
+        #[cfg(windows)]
+        let binary = binary.with_extension("exe");
+
+        let mut compile = tokio::process::Command::new("zeen");
+        compile
+            .arg(&entry_path)
+            .arg(&binary)
+            .arg("--mode")
+            .arg("Debug")
+            .arg("--pkg")
+            .arg(format!("tests={}", root.join("tests").display()))
+            .current_dir(&root);
+
+        for (package, dir) in &packages {
+            compile
+                .arg("--pkg")
+                .arg(format!("{package}={}", dir.display()));
+        }
+
+        let compiled =
+            tokio::time::timeout(std::time::Duration::from_secs(120), compile.output()).await;
+
+        match compiled {
+            Err(_) => {
+                self.client
+                    .show_message(MessageType::ERROR, "test compile timed out after 120s")
+                    .await;
+            }
+            Ok(Err(err)) => {
+                self.client
+                    .show_message(MessageType::ERROR, format!("zeen binary not found: {err}"))
+                    .await;
+            }
+            Ok(Ok(output)) if !output.status.success() => {
+                let report = String::from_utf8_lossy(&output.stderr).into_owned();
+                self.client
+                    .show_message(MessageType::ERROR, format!("compile failed: {report}"))
+                    .await;
+            }
+            Ok(Ok(_)) => {
+                self.finish_test_run(name, &binary).await;
+            }
+        }
+
+        let _ = std::fs::remove_file(&entry_path);
+    }
+
+    async fn finish_test_run(&self, name: &str, binary: &std::path::Path) {
+        let mut run = tokio::process::Command::new(binary);
+        run.current_dir(binary.parent().unwrap_or(std::path::Path::new(".")));
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(120), run.output()).await;
+
+        let _ = std::fs::remove_file(binary);
+
+        match result {
+            Err(_) => {
+                self.client
+                    .show_message(MessageType::ERROR, "test timed out after 120s")
+                    .await;
+            }
+            Ok(Err(err)) => {
+                self.client
+                    .show_message(MessageType::ERROR, format!("unable to run test: {err}"))
+                    .await;
+            }
+            Ok(Ok(output)) => {
+                let mut report = format!("test {name}: ");
+                report.push_str(if output.status.success() {
+                    "passed\n"
+                } else {
+                    "failed\n"
+                });
+
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+
+                if !stdout.is_empty() {
+                    report.push_str(&stdout);
+                }
+
+                if !stderr.is_empty() {
+                    report.push_str(&stderr);
+                }
+
+                if report.len() > 1500 {
+                    report.truncate(1500);
+                    report.push_str("\n... truncated");
+                }
+
+                let message_type = if output.status.success() {
+                    MessageType::INFO
+                } else {
+                    MessageType::ERROR
+                };
+
+                self.client.show_message(message_type, report).await;
             }
         }
     }
@@ -801,10 +977,12 @@ impl LanguageServer for Backend {
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+                call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         crate::codelens::RUN_COMMAND.to_string(),
                         crate::codelens::REFERENCES_COMMAND.to_string(),
+                        crate::codelens::TEST_COMMAND.to_string(),
                     ],
                     ..Default::default()
                 }),
@@ -1733,6 +1911,10 @@ impl LanguageServer for Backend {
             crate::codelens::reference_lenses(&document.text, &document.analysis, &docs, &uri);
 
         if let Some(open_path) = diagnostics::file_uri_to_path(&uri) {
+            if is_test_file(&open_path) {
+                lenses.extend(crate::codelens::test_lenses(&document.text, &uri));
+            }
+
             let context = diagnostics::entry_context(&open_path, &document.text);
             let open_is_entry = context.entry == open_path;
             let runnable = match &context.zora {
@@ -1766,6 +1948,10 @@ impl LanguageServer for Backend {
             }
             crate::codelens::REFERENCES_COMMAND => {
                 self.show_references(params.arguments).await;
+                Ok(None)
+            }
+            crate::codelens::TEST_COMMAND => {
+                self.run_test(params.arguments).await;
                 Ok(None)
             }
             _ => Err(tower_lsp_server::jsonrpc::Error::method_not_found()),
