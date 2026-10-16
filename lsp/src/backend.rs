@@ -7,6 +7,10 @@ use std::{
 };
 
 use tokio::sync::RwLock;
+use tower_lsp_server::ls_types::request::{
+    GotoDeclarationParams, GotoDeclarationResponse, GotoImplementationParams,
+    GotoImplementationResponse,
+};
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 
 use crate::{analysis, completion, diagnostics, folding, position, semantic, symbols, zora};
@@ -946,6 +950,104 @@ impl LanguageServer for Backend {
             }
             .into(),
         ))
+    }
+
+    async fn goto_declaration(
+        &self,
+        _params: GotoDeclarationParams,
+    ) -> Result<Option<GotoDeclarationResponse>> {
+        Ok(None)
+    }
+
+    async fn goto_implementation(
+        &self,
+        _params: GotoImplementationParams,
+    ) -> Result<Option<GotoImplementationResponse>> {
+        Ok(None)
+    }
+
+    async fn document_link(
+        &self,
+        _params: DocumentLinkParams,
+    ) -> Result<Option<Vec<DocumentLink>>> {
+        Ok(None)
+    }
+
+    async fn document_link_resolve(&self, params: DocumentLink) -> Result<DocumentLink> {
+        Ok(params)
+    }
+
+    async fn completion_resolve(&self, params: CompletionItem) -> Result<CompletionItem> {
+        Ok(params)
+    }
+
+    async fn code_lens_resolve(&self, params: CodeLens) -> Result<CodeLens> {
+        Ok(params)
+    }
+
+    async fn symbol_resolve(&self, params: WorkspaceSymbol) -> Result<WorkspaceSymbol> {
+        Ok(params)
+    }
+
+    async fn inlay_hint_resolve(&self, params: InlayHint) -> Result<InlayHint> {
+        Ok(params)
+    }
+
+    async fn prepare_call_hierarchy(
+        &self,
+        _params: CallHierarchyPrepareParams,
+    ) -> Result<Option<Vec<CallHierarchyItem>>> {
+        Ok(None)
+    }
+
+    async fn incoming_calls(
+        &self,
+        _params: CallHierarchyIncomingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
+        Ok(None)
+    }
+
+    async fn outgoing_calls(
+        &self,
+        _params: CallHierarchyOutgoingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
+        Ok(None)
+    }
+
+    async fn prepare_type_hierarchy(
+        &self,
+        _params: TypeHierarchyPrepareParams,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>> {
+        Ok(None)
+    }
+
+    async fn supertypes(
+        &self,
+        _params: TypeHierarchySupertypesParams,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>> {
+        Ok(None)
+    }
+
+    async fn subtypes(
+        &self,
+        _params: TypeHierarchySubtypesParams,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>> {
+        Ok(None)
+    }
+
+    async fn moniker(&self, _params: MonikerParams) -> Result<Option<Vec<Moniker>>> {
+        Ok(None)
+    }
+
+    async fn inline_value(&self, _params: InlineValueParams) -> Result<Option<Vec<InlineValue>>> {
+        Ok(None)
+    }
+
+    async fn linked_editing_range(
+        &self,
+        _params: LinkedEditingRangeParams,
+    ) -> Result<Option<LinkedEditingRanges>> {
+        Ok(None)
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
