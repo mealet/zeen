@@ -1,0 +1,20 @@
+// ==| USAGE |==
+// This module is an index exporter, but it's empty.
+// To use library consider importing separated modules.
+// Example: `use std.collections.map`
+//
+// ==| VERSIONING |==
+// Standard library versioning is separated from compiler. It's form looks like:
+/*
+  v1.2.3
+      │
+      ▼
+  ┌─┐┌─┐┌─┐
+  │1││2││3│
+  └┬┘└┬┘└┬┘
+   └──┼──┼► Compiler's major version
+      │  │
+      └──┼► Compiler's minor version
+         │
+         └► Library's revision
+ */

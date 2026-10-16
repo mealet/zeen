@@ -1,0 +1,6 @@
+
+fn main() {
+    @println("Hello, Zeen!");
+    @println("2 + 2 = {}", 2 + 2);
+}
+
