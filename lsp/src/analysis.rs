@@ -111,6 +111,7 @@ pub struct Analysis {
     pub(crate) raw_fields: Vec<RawFieldInit>,
     pub(crate) raw_access: Vec<RawAccess>,
     pub implements: Vec<(DefId, DefId)>,
+    pub interfaces: HashMap<String, Vec<Member>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +211,10 @@ impl Analysis {
             methods: resolution.impls.values().flatten().copied().collect(),
             analysis: Analysis::default(),
         };
+
+        for decl in &module.decls {
+            walker.walk_cross_file(decl);
+        }
 
         for decl in &module.decls {
             walker.walk_decl(decl);
@@ -1073,32 +1078,61 @@ impl<'ctx> Walker<'ctx> {
         self.analysis.scopes.push(Scope { start, end, owner });
     }
 
-    fn collect_method(&mut self, owner: DefId, method: &HirDecl) {
+    fn method_member(&self, method: &HirDecl) -> Option<Member> {
         let HirDeclKind::Fn(func) = &method.kind else {
-            return;
+            return None;
         };
 
-        let start = func.name.1.offset().min(self.text.len());
-        let end = start.saturating_add(func.name.1.len()).min(self.text.len());
+        Some(Member {
+            name: self.interner.resolve(&func.name.0).to_string(),
+            kind: MemberKind::Method,
+            def: method.def_id,
+            signature: None,
+            is_static: !hir_fn_takes_self(func),
+            is_pub: func.is_pub,
+        })
+    }
 
-        let Some(name) = self.text.get(start..end) else {
+    fn collect_interface(&mut self, name: String, methods: &[Rc<HirDecl>], source: &str) {
+        for method in methods {
+            let HirDeclKind::Fn(func) = &method.kind else {
+                continue;
+            };
+
+            if let Some(member) = self.method_member(method) {
+                self.analysis
+                    .interfaces
+                    .entry(name.clone())
+                    .or_default()
+                    .push(member);
+            }
+
+            self.record_fn_source_sig(source, func, method.def_id);
+        }
+    }
+
+    fn collect_method(&mut self, owner: DefId, method: &HirDecl) {
+        let Some(member) = self.method_member(method) else {
             return;
         };
 
         self.analysis.member_owner.insert(method.def_id, owner);
 
-        self.analysis
-            .members
-            .entry(owner)
-            .or_default()
-            .push(Member {
-                name: name.to_string(),
-                kind: MemberKind::Method,
-                def: method.def_id,
-                signature: None,
-                is_static: !hir_fn_takes_self(func),
-                is_pub: func.is_pub,
-            });
+        self.analysis.members.entry(owner).or_default().push(member);
+    }
+
+    fn walk_cross_file(&mut self, decl: &HirDecl) {
+        if self.file_matches(decl.source.src.name()) {
+            return;
+        }
+
+        let HirDeclKind::Interface(interface) = &decl.kind else {
+            return;
+        };
+
+        let name = self.interner.resolve(&interface.name.0).to_string();
+        let source = decl.source.src.inner().as_str();
+        self.collect_interface(name, &interface.methods, source);
     }
 
     fn walk_decl(&mut self, decl: &HirDecl) {
@@ -1193,6 +1227,10 @@ impl<'ctx> Walker<'ctx> {
                 for generic in &interface.generics {
                     self.walk_generic(generic);
                 }
+
+                let name = self.interner.resolve(&interface.name.0).to_string();
+                let text = self.text;
+                self.collect_interface(name, &interface.methods, text);
 
                 for method in &interface.methods {
                     self.walk_decl(method);
@@ -1330,13 +1368,13 @@ impl<'ctx> Walker<'ctx> {
         }
     }
 
-    fn record_fn_source_sig(&mut self, func: &HirFn, def_id: DefId) {
-        let name_start = func.name.1.offset().min(self.text.len());
+    fn record_fn_source_sig(&mut self, source: &str, func: &HirFn, def_id: DefId) {
+        let name_start = func.name.1.offset().min(source.len());
         let name_end = name_start
             .saturating_add(func.name.1.len())
-            .min(self.text.len());
+            .min(source.len());
 
-        let Some(name) = self.text.get(name_start..name_end) else {
+        let Some(name) = source.get(name_start..name_end) else {
             return;
         };
 
@@ -1344,10 +1382,10 @@ impl<'ctx> Walker<'ctx> {
             return;
         }
 
-        let limit = self.text.len().min(name_end.saturating_add(160));
+        let limit = source.len().min(name_end.saturating_add(160));
         let mut paren = name_end;
 
-        while paren < limit && self.text.as_bytes()[paren] != b'(' {
+        while paren < limit && source.as_bytes()[paren] != b'(' {
             paren += 1;
         }
 
@@ -1355,19 +1393,14 @@ impl<'ctx> Walker<'ctx> {
             return;
         }
 
-        let generics = self
-            .text
-            .get(name_end..paren)
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let generics = source.get(name_end..paren).unwrap_or("").trim().to_string();
         let mut args = Vec::with_capacity(func.params.len());
 
         for param in &func.params {
-            let start = param.span.offset().min(self.text.len());
-            let end = start.saturating_add(param.span.len()).min(self.text.len());
+            let start = param.span.offset().min(source.len());
+            let end = start.saturating_add(param.span.len()).min(source.len());
 
-            if let Some(spelling) = self.text.get(start..end).filter(|text| !text.is_empty()) {
+            if let Some(spelling) = source.get(start..end).filter(|text| !text.is_empty()) {
                 args.push(spelling.to_string());
             }
         }
@@ -1375,12 +1408,12 @@ impl<'ctx> Walker<'ctx> {
         let mut code = format!("fn {name}{generics}({})", args.join(", "));
 
         if let Some(ret) = &func.return_type {
-            let start = ret.source.span.offset().min(self.text.len());
+            let start = ret.source.span.offset().min(source.len());
             let end = start
                 .saturating_add(ret.source.span.len())
-                .min(self.text.len());
+                .min(source.len());
 
-            if let Some(spelling) = self.text.get(start..end).filter(|text| !text.is_empty()) {
+            if let Some(spelling) = source.get(start..end).filter(|text| !text.is_empty()) {
                 code.push(' ');
                 code.push_str(spelling);
             }
@@ -1402,7 +1435,8 @@ impl<'ctx> Walker<'ctx> {
 
         self.analysis.fn_params.insert(def_id, params);
 
-        self.record_fn_source_sig(func, def_id);
+        let text = self.text;
+        self.record_fn_source_sig(text, func, def_id);
 
         if !func.generics.is_empty() {
             self.analysis.fn_generics.insert(

@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
+use tower_lsp_server::ls_types::{
+    CompletionItem, CompletionItemKind, CompletionItemLabelDetails, InsertTextFormat,
+};
 use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
@@ -257,6 +259,19 @@ pub fn complete(
         });
     }
 
+    for member in crate::modules::core_members() {
+        if !member.name.starts_with(prefix) || !seen.insert(member.name.clone()) {
+            continue;
+        }
+
+        items.push(CompletionItem {
+            label: member.name.clone(),
+            kind: Some(module_kind(&member.kind)),
+            detail: Some(member.module.clone()),
+            ..Default::default()
+        });
+    }
+
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
         for import in crate::modules::use_imports(text) {
             for member in
@@ -274,6 +289,261 @@ pub fn complete(
                 });
             }
         }
+    }
+
+    items
+}
+
+enum FrameKind {
+    Implement(String),
+    Other,
+}
+
+struct Frame {
+    kind: FrameKind,
+    body_start: usize,
+}
+
+fn skip_string(bytes: &[u8], mut cursor: usize) -> usize {
+    cursor += 1;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\\' => cursor += 2,
+            b'"' => return cursor + 1,
+            _ => cursor += 1,
+        }
+    }
+
+    bytes.len()
+}
+
+fn skip_line(bytes: &[u8], mut cursor: usize) -> usize {
+    while cursor < bytes.len() && bytes[cursor] != b'\n' {
+        cursor += 1;
+    }
+
+    cursor
+}
+
+fn skip_block_comment(bytes: &[u8], mut cursor: usize) -> usize {
+    cursor += 2;
+
+    while cursor + 1 < bytes.len() {
+        if bytes[cursor] == b'*' && bytes[cursor + 1] == b'/' {
+            return cursor + 2;
+        }
+
+        cursor += 1;
+    }
+
+    bytes.len()
+}
+
+fn implement_name(header: &str) -> Option<String> {
+    let rest = header.trim_start().strip_prefix("implement")?;
+
+    if !rest.is_empty() && !rest.starts_with([' ', '\t', '[']) {
+        return None;
+    }
+
+    let rest = rest.trim_start();
+    let rest = match rest.strip_prefix('[') {
+        Some(after) => after.get(after.find(']')? + 1..)?.trim_start(),
+        None => rest,
+    };
+
+    let name: String = rest
+        .chars()
+        .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+        .collect();
+
+    (!name.is_empty()).then_some(name)
+}
+
+fn scan_frames(text: &str, upto: usize) -> Vec<Frame> {
+    let bytes = text.as_bytes();
+    let limit = upto.min(bytes.len());
+    let mut frames = Vec::new();
+    let mut segment = 0usize;
+    let mut cursor = 0usize;
+
+    while cursor < limit {
+        match bytes[cursor] {
+            b'"' => cursor = skip_string(bytes, cursor),
+            b'/' if bytes.get(cursor + 1) == Some(&b'/') => cursor = skip_line(bytes, cursor),
+            b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
+                cursor = skip_block_comment(bytes, cursor)
+            }
+            b'{' => {
+                let header = text.get(segment..cursor).unwrap_or("");
+                let kind = implement_name(header)
+                    .map(FrameKind::Implement)
+                    .unwrap_or(FrameKind::Other);
+
+                frames.push(Frame {
+                    kind,
+                    body_start: cursor + 1,
+                });
+                segment = cursor + 1;
+                cursor += 1;
+            }
+            b'}' => {
+                frames.pop();
+                segment = cursor + 1;
+                cursor += 1;
+            }
+            _ => cursor += 1,
+        }
+    }
+
+    frames
+}
+
+fn has_fn_keyword(text: &str, offset: usize, typed: &str) -> bool {
+    let end = offset.min(text.len()).saturating_sub(typed.len());
+    let Some(before) = text.get(..end) else {
+        return false;
+    };
+    let trimmed = before.trim_end_matches([' ', '\t']);
+    let Some(rest) = trimmed.strip_suffix("fn") else {
+        return false;
+    };
+
+    rest.is_empty()
+        || !rest.ends_with(|character: char| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn implemented_methods(text: &str, body_start: usize) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut names = Vec::new();
+    let mut depth = 0i32;
+    let mut cursor = body_start;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'"' => cursor = skip_string(bytes, cursor),
+            b'/' if bytes.get(cursor + 1) == Some(&b'/') => cursor = skip_line(bytes, cursor),
+            b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
+                cursor = skip_block_comment(bytes, cursor)
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+
+                if depth < 0 {
+                    break;
+                }
+            }
+            b'f' if depth == 0 => {
+                let boundary = cursor == 0
+                    || !(bytes[cursor - 1].is_ascii_alphanumeric() || bytes[cursor - 1] == b'_');
+
+                if boundary
+                    && let Some(after) = text.get(cursor + 2..)
+                    && text[cursor..].starts_with("fn")
+                    && after.starts_with([' ', '\t'])
+                {
+                    let name: String = after
+                        .trim_start()
+                        .chars()
+                        .take_while(|character| {
+                            character.is_ascii_alphanumeric() || *character == '_'
+                        })
+                        .collect();
+
+                    if !name.is_empty() {
+                        names.push(name);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        cursor += 1;
+    }
+
+    names
+}
+
+pub fn implement_complete(text: &str, analysis: &Analysis, offset: usize) -> Vec<CompletionItem> {
+    let frames = scan_frames(text, offset);
+    let Some(index) = frames
+        .iter()
+        .rposition(|frame| matches!(frame.kind, FrameKind::Implement(_)))
+    else {
+        return Vec::new();
+    };
+
+    if index + 1 != frames.len() {
+        return Vec::new();
+    }
+
+    let FrameKind::Implement(interface) = &frames[index].kind else {
+        return Vec::new();
+    };
+
+    let Some(members) = analysis.interfaces.get(interface) else {
+        return Vec::new();
+    };
+
+    let implemented = implemented_methods(text, frames[index].body_start);
+    let typed = ident_prefix(text, offset);
+    let has_fn = has_fn_keyword(text, offset, typed);
+    let prefix = if typed == "fn" || typed == "pub" {
+        ""
+    } else {
+        typed
+    };
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut items = Vec::new();
+
+    for member in members {
+        if member.kind != MemberKind::Method {
+            continue;
+        }
+
+        if implemented.iter().any(|name| name == &member.name) {
+            continue;
+        }
+
+        if !prefix.is_empty() && !member.name.starts_with(prefix) {
+            continue;
+        }
+
+        if !seen.insert(member.name.clone()) {
+            continue;
+        }
+
+        let signature = analysis.fn_source_sig.get(&member.def).cloned();
+        let insert_text = signature.as_ref().map(|signature| {
+            let signature = if has_fn {
+                signature.strip_prefix("fn ").unwrap_or(signature)
+            } else {
+                signature
+            };
+
+            format!("{signature} {{\n\t$0\n}}")
+        });
+        let label_detail = signature
+            .as_deref()
+            .and_then(|signature| signature.strip_prefix("fn "))
+            .and_then(|signature| signature.strip_prefix(member.name.as_str()))
+            .map(|suffix| suffix.to_string());
+
+        items.push(CompletionItem {
+            label: member.name.clone(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: signature,
+            label_details: label_detail.map(|detail| CompletionItemLabelDetails {
+                detail: Some(detail),
+                description: None,
+            }),
+            insert_text_format: insert_text.as_ref().map(|_| InsertTextFormat::SNIPPET),
+            insert_text,
+            ..Default::default()
+        });
     }
 
     items
@@ -2159,5 +2429,111 @@ mod tests {
         assert_eq!(names, vec!["dir"]);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const IMPLEMENT_BLOCK: &str = "interface Describe {\n    fn kind(*const self) i32;\n    fn label(*const self) i32;\n}\n\nstruct Point {\n    pub x: i32,\n}\n\nimplement Describe : Point {\n}\n";
+
+    fn loose_analysis(text: &str) -> crate::analysis::Analysis {
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-implement-probe.zn".parse().unwrap();
+        crate::diagnostics::check(&uri, text, &[]).analysis
+    }
+
+    #[test]
+    fn implement_block_suggests_missing_methods() {
+        let analysis = loose_analysis(IMPLEMENT_BLOCK);
+        let anchor = "implement Describe : Point {";
+        let offset = IMPLEMENT_BLOCK.find(anchor).unwrap() + anchor.len();
+        let items = implement_complete(IMPLEMENT_BLOCK, &analysis, offset);
+        let mut names = labels(&items);
+        names.sort();
+
+        assert_eq!(names, vec!["kind", "label"]);
+
+        let kind = items.iter().find(|item| item.label == "kind").unwrap();
+        assert_eq!(
+            kind.insert_text.as_deref(),
+            Some("fn kind(*const self) i32 {\n\t$0\n}")
+        );
+    }
+
+    #[test]
+    fn implement_block_hides_implemented_methods() {
+        let text = "interface Describe {\n    fn kind(*const self) i32;\n    fn label(*const self) i32;\n}\n\nstruct Point {\n    pub x: i32,\n}\n\nimplement Describe : Point {\n    fn kind(*const self) i32 {\n        return self.x;\n    }\n\n}\n";
+        let analysis = loose_analysis(text);
+        let offset = text.rfind('}').unwrap() - 1;
+        let items = implement_complete(text, &analysis, offset);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["label"]);
+
+        let inside = text.find("self.x").unwrap();
+        assert!(implement_complete(text, &analysis, inside).is_empty());
+    }
+
+    #[test]
+    fn implement_block_offers_core_interface_methods() {
+        let text = "struct P {\n    pub x: i32,\n}\n\nimplement Display : P {\n}\n";
+        let analysis = loose_analysis(text);
+        let anchor = "implement Display : P {";
+        let offset = text.find(anchor).unwrap() + anchor.len();
+        let items = implement_complete(text, &analysis, offset);
+        let names = labels(&items);
+
+        assert!(names.contains(&"display"));
+    }
+
+    #[test]
+    fn implement_block_fires_while_typing_fn_name() {
+        let valid = "struct P {\n    pub x: i32,\n}\n\nimplement Display : P {\n}\n";
+        let analysis = loose_analysis(valid);
+        let typing = "struct P {\n    pub x: i32,\n}\n\nimplement Display : P {\n    fn di";
+        let items = implement_complete(typing, &analysis, typing.len());
+        let names = labels(&items);
+
+        assert!(names.contains(&"display"));
+    }
+
+    #[test]
+    fn implement_block_omits_fn_when_already_typed() {
+        let valid = "struct P {\n    pub x: i32,\n}\n\nimplement Drop : P {\n}\n";
+        let analysis = loose_analysis(valid);
+        let typing = "struct P {\n    pub x: i32,\n}\n\nimplement Drop : P {\n    fn dr";
+        let items = implement_complete(typing, &analysis, typing.len());
+        let insert = items
+            .iter()
+            .find(|item| item.label == "drop")
+            .and_then(|item| item.insert_text.clone())
+            .expect("drop must be suggested");
+
+        assert!(insert.starts_with("drop("), "got {insert:?}");
+    }
+
+    #[test]
+    fn implement_block_keeps_fn_on_fresh_line() {
+        let valid = "struct P {\n    pub x: i32,\n}\n\nimplement Drop : P {\n}\n";
+        let analysis = loose_analysis(valid);
+        let typing = "struct P {\n    pub x: i32,\n}\n\nimplement Drop : P {\n    ";
+        let items = implement_complete(typing, &analysis, typing.len());
+        let insert = items
+            .iter()
+            .find(|item| item.label == "drop")
+            .and_then(|item| item.insert_text.clone())
+            .expect("drop must be suggested");
+
+        assert!(insert.starts_with("fn drop("), "got {insert:?}");
+    }
+
+    #[test]
+    fn general_completion_includes_core_members() {
+        let text = "fn main() {\n    \n}\n";
+        let analysis = sample_analysis(text);
+        let offset = text.find("    \n").unwrap() + 4;
+        let items = complete(text, &analysis, offset, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"Option"), "core Option must be offered");
+        assert!(names.contains(&"Result"), "core Result must be offered");
+        assert!(names.contains(&"Display"), "core Display must be offered");
     }
 }

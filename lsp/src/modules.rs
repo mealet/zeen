@@ -164,6 +164,20 @@ pub fn members_of_use(
     members_of_source(&content, &module)
 }
 
+pub fn core_members() -> &'static [ModuleMember] {
+    static CACHE: std::sync::OnceLock<Vec<ModuleMember>> = std::sync::OnceLock::new();
+
+    CACHE.get_or_init(|| {
+        let mut members = Vec::new();
+
+        for file in zeen_driver::CORE_FILES {
+            members.extend(members_of_source(file.value, file.name));
+        }
+
+        members
+    })
+}
+
 pub fn type_members(
     open_dir: &Path,
     project_root: &Path,

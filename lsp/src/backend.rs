@@ -1659,7 +1659,14 @@ impl LanguageServer for Backend {
                 items
             }
         } else {
-            completion::complete(&document.text, &document.analysis, offset, paths)
+            let implement_items =
+                completion::implement_complete(&document.text, &document.analysis, offset);
+
+            if implement_items.is_empty() {
+                completion::complete(&document.text, &document.analysis, offset, paths)
+            } else {
+                implement_items
+            }
         };
 
         Ok(Some(CompletionResponse::Array(items)))
