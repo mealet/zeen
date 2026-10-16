@@ -3,11 +3,12 @@ set -eu
 
 # Assembles the release archive for one asset.
 #
-# usage: ci/package.sh <asset> <path to binary> [path to lsp binary]
+# usage: ci/package.sh <asset> <binary> [lsp binary] [zora binary]
 
-ASSET="${1:?usage: ci/package.sh <asset> <binary> [lsp binary]}"
-BIN="${2:?usage: ci/package.sh <asset> <binary> [lsp binary]}"
+ASSET="${1:?usage: ci/package.sh <asset> <binary> [lsp binary] [zora binary]}"
+BIN="${2:?usage: ci/package.sh <asset> <binary> [lsp binary] [zora binary]}"
 LSP_BIN="${3:-}"
+ZORA_BIN="${4:-}"
 
 cd "$(dirname "$0")/.."
 
@@ -59,6 +60,27 @@ if [ -n "$LSP_BIN" ]; then
     if command -v ldd >/dev/null 2>&1 && ldd "$LSP_DEST" | grep -q "not found"; then
         ldd "$LSP_DEST" | grep "not found" >&2
         echo "the packaged lsp binary has unresolved shared libraries" >&2
+        exit 1
+    fi
+fi
+
+if [ -n "$ZORA_BIN" ]; then
+    if [ ! -f "$ZORA_BIN" ]; then
+        echo "zora binary not found: $ZORA_BIN" >&2
+        exit 1
+    fi
+
+    ZORA_DEST="$OUT/$ROOT/bin/zora"
+    case "$ZORA_BIN" in
+        (*.exe)
+            ZORA_DEST="$OUT/$ROOT/bin/zora.exe"
+            ;;
+    esac
+    cp "$ZORA_BIN" "$ZORA_DEST"
+
+    if command -v ldd >/dev/null 2>&1 && ldd "$ZORA_DEST" | grep -q "not found"; then
+        ldd "$ZORA_DEST" | grep "not found" >&2
+        echo "the packaged zora binary has unresolved shared libraries" >&2
         exit 1
     fi
 fi

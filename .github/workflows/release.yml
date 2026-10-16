@@ -79,8 +79,11 @@ jobs:
       - name: Build LSP
         run: ci/build-lsp.sh
 
+      - name: Build Zora
+        run: ci/build-zora.sh
+
       - name: Package
-        run: ci/package.sh "${{ matrix.asset }}" compiler/target/release/zeen lsp/target/release/zeen-lsp
+        run: ci/package.sh "${{ matrix.asset }}" compiler/target/release/zeen lsp/target/release/zeen-lsp dist/zora/bin/zora
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -115,7 +118,8 @@ jobs:
                 zlib-dev zstd-dev libffi-dev libxml2-dev libedit-dev ncurses-dev z3-dev
               sh ci/build.sh
               sh ci/build-lsp.sh
-              sh ci/package.sh linux-x86_64-musl compiler/target/release/zeen lsp/target/release/zeen-lsp
+              sh ci/build-zora.sh
+              sh ci/package.sh linux-x86_64-musl compiler/target/release/zeen lsp/target/release/zeen-lsp dist/zora/bin/zora
             '
 
       - name: Upload
@@ -158,8 +162,11 @@ jobs:
       - name: Build LSP
         run: ci/build-lsp.sh
 
+      - name: Build Zora
+        run: ci/build-zora.sh
+
       - name: Package
-        run: ci/package.sh darwin-aarch64 compiler/target/release/zeen lsp/target/release/zeen-lsp
+        run: ci/package.sh darwin-aarch64 compiler/target/release/zeen lsp/target/release/zeen-lsp dist/zora/bin/zora
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -205,8 +212,11 @@ jobs:
       - name: Build LSP
         run: ci/build-lsp.sh
 
+      - name: Build Zora
+        run: ci/build-zora.sh
+
       - name: Package
-        run: ci/package.sh darwin-x86_64 compiler/target/release/zeen lsp/target/release/zeen-lsp
+        run: ci/package.sh darwin-x86_64 compiler/target/release/zeen lsp/target/release/zeen-lsp dist/zora/bin/zora
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -254,9 +264,13 @@ jobs:
         shell: bash
         run: ci/build-lsp.sh
 
+      - name: Build Zora
+        shell: bash
+        run: ci/build-zora.sh
+
       - name: Package
         shell: bash
-        run: ci/package.sh windows-x86_64 compiler/target/release/zeen.exe lsp/target/release/zeen-lsp.exe
+        run: ci/package.sh windows-x86_64 compiler/target/release/zeen.exe lsp/target/release/zeen-lsp.exe dist/zora/bin/zora.exe
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -283,11 +297,12 @@ jobs:
         with:
           release: "14"
           envs: ZEEN_VERSION
-          prepare: pkg install -y rust llvm22
+          prepare: pkg install -y rust llvm22 git
           run: |
             sh ci/build.sh
             sh ci/build-lsp.sh
-            sh ci/package.sh freebsd-x86_64 compiler/target/release/zeen lsp/target/release/zeen-lsp
+            sh ci/build-zora.sh
+            sh ci/package.sh freebsd-x86_64 compiler/target/release/zeen lsp/target/release/zeen-lsp dist/zora/bin/zora
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
