@@ -191,24 +191,36 @@ ROOT="$(find "$TMP/unpack" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 echo "installing into $PREFIX"
 
 mkdir -p "$PREFIX/bin" "$PREFIX/share/zeen"
+
+# drop previous binaries, the std library and bundled libs so the result is fresh
+rm -f "$PREFIX/bin/zeen" "$PREFIX/bin/zeen.exe" \
+      "$PREFIX/bin/zeen-lsp" "$PREFIX/bin/zeen-lsp.exe" \
+      "$PREFIX/bin/zora" "$PREFIX/bin/zora.exe"
+rm -rf "$PREFIX/share/zeen/std" "$PREFIX/lib/zeen"
+
 if [ -e "$ROOT/bin/zeen.exe" ]; then
     cp "$ROOT/bin/zeen.exe" "$PREFIX/bin/"
 else
     cp "$ROOT/bin/zeen" "$PREFIX/bin/"
 fi
 
-if [ -e "$ROOT/bin/zeen-lsp.exe" ]; then
-    cp "$ROOT/bin/zeen-lsp.exe" "$PREFIX/bin/"
-elif [ -e "$ROOT/bin/zeen-lsp" ]; then
-    cp "$ROOT/bin/zeen-lsp" "$PREFIX/bin/"
-fi
+for name in zeen-lsp zora; do
+    if [ -e "$ROOT/bin/$name.exe" ]; then
+        cp "$ROOT/bin/$name.exe" "$PREFIX/bin/"
+    elif [ -e "$ROOT/bin/$name" ]; then
+        cp "$ROOT/bin/$name" "$PREFIX/bin/"
+    fi
+done
 
-rm -rf "$PREFIX/share/zeen/std"
 cp -R "$ROOT/share/zeen/std" "$PREFIX/share/zeen/std"
 
 if [ -d "$ROOT/lib/zeen" ]; then
     mkdir -p "$PREFIX/lib/zeen"
     cp -R "$ROOT/lib/zeen/." "$PREFIX/lib/zeen/"
+fi
+
+if [ ! -d "$PREFIX/share/zeen/std/src" ]; then
+    echo "warning: the installed std library has no src directory" >&2
 fi
 
 "$PREFIX/bin/zeen" --version

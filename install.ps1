@@ -97,19 +97,31 @@ try {
     $LibDir = Join-Path $Prefix 'lib\zeen'
 
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
-    if (Test-Path $StdDir) { Remove-Item -Recurse -Force $StdDir }
     New-Item -ItemType Directory -Path $ShareDir -Force | Out-Null
 
+    foreach ($exe in @('zeen.exe', 'zeen-lsp.exe', 'zora.exe')) {
+        Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $BinDir $exe)
+    }
+    foreach ($dir in @($StdDir, $LibDir)) {
+        if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+    }
+
     Copy-Item -Path (Join-Path $Root.FullName 'bin\zeen.exe') -Destination $BinDir -Force
-    $LspExe = Join-Path $Root.FullName 'bin\zeen-lsp.exe'
-    if (Test-Path $LspExe) {
-        Copy-Item -Path $LspExe -Destination $BinDir -Force
+    foreach ($exe in @('zeen-lsp.exe', 'zora.exe')) {
+        $exePath = Join-Path $Root.FullName "bin\$exe"
+        if (Test-Path $exePath) {
+            Copy-Item -Path $exePath -Destination $BinDir -Force
+        }
     }
     Copy-Item -Path (Join-Path $Root.FullName 'share\zeen\std') -Destination $StdDir -Recurse -Force
 
     if (Test-Path (Join-Path $Root.FullName 'lib\zeen')) {
         New-Item -ItemType Directory -Path $LibDir -Force | Out-Null
         Copy-Item -Path (Join-Path $Root.FullName 'lib\zeen\*') -Destination $LibDir -Recurse -Force
+    }
+
+    if (-not (Test-Path (Join-Path $StdDir 'src'))) {
+        Write-Warning 'the installed std library has no src directory'
     }
 
     $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
