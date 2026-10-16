@@ -95,6 +95,7 @@ pub struct Analysis {
     pub full_spans: HashMap<DefId, (usize, usize)>,
     pub access_types: HashMap<(usize, usize), String>,
     pub call_types: HashMap<(usize, usize), String>,
+    pub call_generics: HashMap<(usize, usize), String>,
     pub method_calls: HashMap<(usize, usize), DefId>,
     pub field_targets: HashMap<(usize, usize), FieldTarget>,
     pub fn_generics: HashMap<DefId, Vec<String>>,
@@ -120,6 +121,7 @@ pub struct CallSite {
     pub signature: String,
     pub args: Vec<(usize, usize)>,
     pub params: Vec<Option<String>>,
+    pub param_types: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +178,7 @@ pub(crate) struct RawCall {
     pub callee: (usize, usize),
     pub callee_name: String,
     pub field: Option<(usize, usize)>,
+    pub explicit_generics: bool,
     pub args: Vec<(usize, usize)>,
 }
 
@@ -409,14 +412,33 @@ impl Analysis {
         let mut calls = Vec::with_capacity(self.raw_calls.len());
 
         for raw in &self.raw_calls {
-            let Some(resolution) = types.call_resolutions.get(&raw.call) else {
+            let Some(call_res) = types.call_resolutions.get(&raw.call) else {
                 continue;
             };
 
-            self.method_calls.insert(raw.callee, resolution.fn_def);
+            self.method_calls.insert(raw.callee, call_res.fn_def);
 
-            let Some(params) = self.fn_params.get(&resolution.fn_def) else {
+            let Some(params) = self.fn_params.get(&call_res.fn_def) else {
                 continue;
+            };
+
+            let skip = usize::from(self.method_self.contains_key(&call_res.fn_def));
+            let param_types = match types.def_types.get(&call_res.fn_def) {
+                Some(id) => match types.interner.get(*id) {
+                    Type::Fn { params, .. } => params
+                        .iter()
+                        .skip(skip)
+                        .map(|param| {
+                            Some(
+                                types
+                                    .interner
+                                    .display_type(*param, interner.clone(), resolution),
+                            )
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                },
+                None => Vec::new(),
             };
 
             calls.push(CallSite {
@@ -434,6 +456,7 @@ impl Analysis {
                 ),
                 args: raw.args.clone(),
                 params: params.clone(),
+                param_types,
             });
         }
 
@@ -450,6 +473,33 @@ impl Analysis {
                     .interner
                     .display_type(id, interner.clone(), resolution),
             );
+        }
+
+        for raw in &self.raw_calls {
+            if raw.explicit_generics {
+                continue;
+            }
+
+            let Some(resolved) = types.call_resolutions.get(&raw.call) else {
+                continue;
+            };
+
+            if resolved.generic_args.is_empty() {
+                continue;
+            }
+
+            let rendered: Vec<String> = resolved
+                .generic_args
+                .iter()
+                .map(|id| {
+                    types
+                        .interner
+                        .display_type(*id, interner.clone(), resolution)
+                })
+                .collect();
+
+            self.call_generics
+                .insert(raw.callee, format!("[{}]", rendered.join(", ")));
         }
 
         for raw in &self.raw_access {
@@ -1538,6 +1588,7 @@ impl<'ctx> Walker<'ctx> {
                         .unwrap_or("")
                         .to_string(),
                     field,
+                    explicit_generics: !generic_args.is_empty(),
                     args: args
                         .iter()
                         .map(|arg| (arg.source.span.offset(), arg.source.span.len()))
@@ -1903,5 +1954,46 @@ fn walk_syntax_decl(decl: &Declaration<'_>, method: bool, occurrences: &mut Vec<
         | DeclarationKind::ExternLink { .. }
         | DeclarationKind::ExternInclude { .. }
         | DeclarationKind::ConditionalBlock(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower_lsp_server::ls_types::Uri;
+
+    const GENERIC_CALL: &str = "fn max[T](a: T, b: T) T {\n    return a;\n}\n\nfn main() {\n    let m = max(1, 2);\n    @println(\"{}\", m);\n}\n";
+
+    #[test]
+    fn records_inferred_generics_at_call_sites() {
+        let uri: Uri = "file:///tmp/zeen-lsp-analysis-generics.zn".parse().unwrap();
+        let output = crate::diagnostics::check(&uri, GENERIC_CALL, &[]);
+        assert!(output.diagnostics.is_empty());
+
+        let call_at = GENERIC_CALL.rfind("max(").unwrap();
+        let key = (call_at, "max".len());
+        assert_eq!(
+            output.analysis.call_generics.get(&key).map(String::as_str),
+            Some("[i32]")
+        );
+    }
+
+    const UNNAMED_PARAM: &str = "fn put(i32) {\n}\n\nfn main() {\n    put(5);\n}\n";
+
+    #[test]
+    fn records_parameter_types_for_unnamed_params() {
+        let uri: Uri = "file:///tmp/zeen-lsp-analysis-unnamed.zn".parse().unwrap();
+        let output = crate::diagnostics::check(&uri, UNNAMED_PARAM, &[]);
+        assert!(output.diagnostics.is_empty());
+
+        let call = output
+            .analysis
+            .calls
+            .iter()
+            .find(|call| call.callee == "put")
+            .unwrap();
+
+        assert_eq!(call.params, vec![None]);
+        assert_eq!(call.param_types, vec![Some("i32".to_string())]);
     }
 }

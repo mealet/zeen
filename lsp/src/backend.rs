@@ -1239,14 +1239,42 @@ impl LanguageServer for Backend {
                 continue;
             }
 
-            for (arg, param) in call.args.iter().zip(call.params.iter()) {
-                let Some(name) = param else {
-                    continue;
+            if let Some(generics) = document
+                .analysis
+                .call_generics
+                .get(&(call.callee_offset, call.callee_len))
+            {
+                hints.push(InlayHint {
+                    position: position::offset_to_position(
+                        &document.text,
+                        call.callee_offset + call.callee_len,
+                    ),
+                    label: InlayHintLabel::String(generics.clone()),
+                    kind: Some(InlayHintKind::TYPE),
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: None,
+                    padding_right: None,
+                    data: None,
+                });
+            }
+
+            for (index, &(arg, _)) in call.args.iter().enumerate() {
+                let name = call.params.get(index).and_then(|param| param.as_deref());
+                let ty = call
+                    .param_types
+                    .get(index)
+                    .and_then(|param| param.as_deref());
+
+                let label = match (name, ty) {
+                    (Some(name), _) => format!("{name}:"),
+                    (None, Some(ty)) => format!(": {ty}"),
+                    (None, None) => continue,
                 };
 
                 hints.push(InlayHint {
-                    position: position::offset_to_position(&document.text, arg.0),
-                    label: InlayHintLabel::String(format!("{name}:")),
+                    position: position::offset_to_position(&document.text, arg),
+                    label: InlayHintLabel::String(label),
                     kind: Some(InlayHintKind::PARAMETER),
                     text_edits: None,
                     tooltip: None,
