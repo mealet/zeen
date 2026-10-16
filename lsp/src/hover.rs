@@ -17,6 +17,10 @@ pub fn hover_markdown(
         return use_hover(text, offset, paths);
     }
 
+    if let Some(result) = at_macro_hover(text, offset) {
+        return Some(result);
+    }
+
     let occurrence = analysis.at(offset)?;
     let name = text.get(occurrence.offset..occurrence.offset + occurrence.len)?;
     let key = (occurrence.offset, occurrence.len);
@@ -96,6 +100,127 @@ fn use_hover(text: &str, offset: usize, paths: ResolvePaths<'_>) -> Option<Hover
         offset: line_start,
         len: line_end - line_start,
     })
+}
+
+fn at_macro_hover(text: &str, offset: usize) -> Option<HoverResult> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut start = offset;
+    let mut end = offset;
+
+    while start > 0 && {
+        let byte = bytes[start - 1];
+        byte.is_ascii_alphanumeric() || byte == b'_'
+    } {
+        start -= 1;
+    }
+
+    while end < bytes.len() && {
+        let byte = bytes[end];
+        byte.is_ascii_alphanumeric() || byte == b'_'
+    } {
+        end += 1;
+    }
+
+    if start == 0 || bytes[start - 1] != b'@' {
+        return None;
+    }
+
+    let name = text.get(start..end)?;
+
+    if name.is_empty() {
+        return None;
+    }
+
+    let (usage, info) = macro_docs(name)?;
+
+    Some(HoverResult {
+        markdown: format!("```zeen\n{usage}\n```\n----\n{info}"),
+        offset: start - 1,
+        len: end - start + 1,
+    })
+}
+
+fn macro_docs(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "as" => Some((
+            "@as(T, expr)",
+            "compiler macro: casts between compatible concrete types",
+        )),
+        "sizeof" => Some(("@sizeof(T)", "compiler macro: size of the type in bytes")),
+        "alignof" => Some((
+            "@alignof(T)",
+            "compiler macro: alignment of the type in bytes",
+        )),
+        "typename" => Some(("@typename(T)", "compiler macro: string name of the type")),
+        "print" => Some((
+            "@print(format, args...)",
+            "compiler macro: prints without a trailing newline",
+        )),
+        "println" => Some((
+            "@println(format, args...)",
+            "compiler macro: prints with a trailing newline",
+        )),
+        "format" => Some((
+            "@format(format, args...)",
+            "compiler macro: returns a heap String",
+        )),
+        "panic" => Some((
+            "@panic(format, args...)",
+            "compiler macro: aborts with a message",
+        )),
+        "unreachable" => Some((
+            "@unreachable()",
+            "compiler macro: lowers to panic, marks unreachable code",
+        )),
+        "todo" => Some((
+            "@todo()",
+            "compiler macro: lowers to panic, marks unfinished code",
+        )),
+        "dbg" => Some((
+            "@dbg(expr)",
+            "compiler macro: prints `[file:line] name = value`, returns expr",
+        )),
+        "uninit" => Some((
+            "@uninit() any",
+            "compiler macro: uninitialized value, reading it is UB",
+        )),
+        "void" => Some(("@void()", "compiler macro: builds the void value")),
+        "enumTag" => Some((
+            "@enumTag(expr)",
+            "compiler macro: runtime tag of an enum value as u8",
+        )),
+        "os" => Some((
+            "@os[...]",
+            "conditional compilation: keeps the branch matching the target os",
+        )),
+        "arch" => Some((
+            "@arch[...]",
+            "conditional compilation: keeps the branch matching the target arch",
+        )),
+        "env" => Some((
+            "@env[...]",
+            "conditional compilation: keeps the branch matching the target env",
+        )),
+        "target" => Some((
+            "@target[...]",
+            "conditional compilation: keeps the branch matching the full triple",
+        )),
+        "family" => Some((
+            "@family[...]",
+            "conditional compilation: keeps the branch matching the target family",
+        )),
+        "debug" => Some(("@debug", "conditional compilation: kept in Debug builds")),
+        "release" => Some((
+            "@release",
+            "conditional compilation: kept in Release builds",
+        )),
+        "var" => Some((
+            "@var[...]",
+            "target constant: replaced by a literal before resolve",
+        )),
+        _ => None,
+    }
 }
 
 fn full_use_path(text: &str, offset: usize) -> Option<String> {
@@ -1055,6 +1180,43 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn at_macro_shows_docs() {
+        let analysis = crate::analysis::Analysis::default();
+        let text = "fn main() {\n    @println(\"{}\", 1);\n}\n";
+        let offset = text.find("@println").unwrap() + 1;
+        let markdown = hover_markdown(
+            text,
+            &analysis,
+            offset,
+            crate::completion::ResolvePaths::default(),
+            "test.zn",
+        )
+        .unwrap()
+        .markdown;
+
+        assert!(markdown.contains("@println"), "{markdown}");
+        assert!(markdown.contains("```zeen"), "{markdown}");
+    }
+
+    #[test]
+    fn at_directive_shows_docs() {
+        let analysis = crate::analysis::Analysis::default();
+        let text = "@os[linux] {\n}\n";
+        let offset = text.find("os[").unwrap();
+        let markdown = hover_markdown(
+            text,
+            &analysis,
+            offset,
+            crate::completion::ResolvePaths::default(),
+            "test.zn",
+        )
+        .unwrap()
+        .markdown;
+
+        assert!(markdown.contains("@os"), "{markdown}");
     }
 
     #[test]

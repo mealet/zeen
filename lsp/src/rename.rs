@@ -276,6 +276,45 @@ pub fn decl_position(docs: &[RenameDoc<'_>], uri: &Uri, offset: usize) -> Option
     ))
 }
 
+pub fn rename_range(docs: &[RenameDoc<'_>], uri: &Uri, offset: usize) -> Option<Range> {
+    let home = docs.iter().position(|doc| doc.uri == *uri)?;
+    let analysis = docs[home].analysis;
+    let occurrence = analysis.at(offset)?;
+    let _ = rename_target(docs, home, offset)?;
+
+    Some(position::span_to_range(
+        docs[home].text,
+        occurrence.offset,
+        occurrence.len,
+    ))
+}
+
+pub fn highlight_spans(docs: &[RenameDoc<'_>], uri: &Uri, offset: usize) -> Vec<(Range, bool)> {
+    let Some(home) = docs.iter().position(|doc| doc.uri == *uri) else {
+        return Vec::new();
+    };
+
+    let Some((old, def)) = rename_target(docs, home, offset) else {
+        return Vec::new();
+    };
+
+    let write = decl_span(docs, def);
+
+    collect_spans(docs, old, def)
+        .into_iter()
+        .filter(|(index, _)| *index == home)
+        .map(|(index, span)| {
+            let is_write =
+                write.is_some_and(|(decl_doc, decl_span)| decl_doc == index && decl_span == span);
+
+            (
+                position::span_to_range(docs[index].text, span.0, span.1),
+                is_write,
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -54,6 +54,7 @@ pub struct Occurrence {
     pub hir: Option<HirId>,
     pub def: Option<DefId>,
     pub owner: Option<DefId>,
+    pub type_def: Option<DefId>,
     pub ty: Option<String>,
     pub caps: Option<String>,
     pub is_pub: Option<bool>,
@@ -387,6 +388,13 @@ impl Analysis {
                         .display_type(id, interner.clone(), resolution),
                 );
                 occurrence.caps = Some(caps_display(types, id));
+
+                match types.interner.get(id) {
+                    Type::Struct { def_id, .. } | Type::Enum { def_id, .. } => {
+                        occurrence.type_def = Some(*def_id);
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -811,6 +819,7 @@ impl<'ctx> Walker<'ctx> {
             hir,
             def,
             owner: None,
+            type_def: None,
             ty: None,
             caps: None,
             is_pub: None,
@@ -1815,6 +1824,7 @@ fn push_syntax(occurrences: &mut Vec<Occurrence>, offset: usize, len: usize, rol
         hir: None,
         def: None,
         owner: None,
+        type_def: None,
         ty: None,
         caps: None,
         is_pub: None,

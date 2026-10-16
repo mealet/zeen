@@ -417,6 +417,296 @@ impl Backend {
             .show_message(MessageType::INFO, lines.join("\n"))
             .await;
     }
+    async fn jump_to_def(
+        &self,
+        uri: &Uri,
+        document: &Document,
+        def: zeen_resolve::DefId,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let Some((target_offset, target_len, target_file)) = document.analysis.def_spans.get(&def)
+        else {
+            return Ok(None);
+        };
+
+        let (target_uri, target_text) = match target_file {
+            Some(target_name) => {
+                let Some(resolved) = self.resolve_target_text(uri, target_name).await else {
+                    return Ok(None);
+                };
+                resolved
+            }
+            None => (uri.clone(), document.text.clone()),
+        };
+
+        Ok(Some(GotoDefinitionResponse::Array(vec![Location {
+            uri: target_uri,
+            range: position::span_to_range(&target_text, *target_offset, *target_len),
+        }])))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(
+            &document.text,
+            params.text_document_position_params.position,
+        );
+
+        let Some(occurence) = document.analysis.at(offset) else {
+            return Ok(None);
+        };
+
+        let key = (occurence.offset, occurence.len);
+        if let Some(fn_def) = crate::hover::method_at(&document.analysis, key) {
+            return self.jump_to_def(&uri, document, fn_def).await;
+        }
+
+        let (Some(target_offset), Some(target_len)) =
+            (occurence.target_offset, occurence.target_len)
+        else {
+            return Ok(None);
+        };
+
+        let (target_uri, target_text) = match &occurence.target_file {
+            Some(target_name) => {
+                let Some(resolved) = self.resolve_target_text(&uri, target_name).await else {
+                    return Ok(None);
+                };
+                resolved
+            }
+            None => (uri.clone(), document.text.clone()),
+        };
+
+        Ok(Some(GotoDefinitionResponse::Array(vec![Location {
+            uri: target_uri,
+            range: position::span_to_range(&target_text, target_offset, target_len),
+        }])))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri.clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset =
+            position::position_to_offset(&document.text, params.text_document_position.position);
+        let docs: Vec<crate::rename::RenameDoc<'_>> = documents
+            .iter()
+            .map(|(uri, document)| crate::rename::RenameDoc {
+                uri: uri.clone(),
+                text: &document.text,
+                analysis: &document.analysis,
+            })
+            .collect();
+
+        let edits = crate::rename::rename_edits(&docs, &uri, offset, &params.new_name);
+
+        if edits.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(WorkspaceEdit {
+            changes: Some(edits),
+            ..Default::default()
+        }))
+    }
+
+    async fn type_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(
+            &document.text,
+            params.text_document_position_params.position,
+        );
+
+        let Some(occurrence) = document.analysis.at(offset) else {
+            return Ok(None);
+        };
+
+        let Some(def) = occurrence.type_def else {
+            return Ok(None);
+        };
+
+        self.jump_to_def(&uri, document, def).await
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri.clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset =
+            position::position_to_offset(&document.text, params.text_document_position.position);
+        let docs: Vec<crate::rename::RenameDoc<'_>> = documents
+            .iter()
+            .map(|(uri, document)| crate::rename::RenameDoc {
+                uri: uri.clone(),
+                text: &document.text,
+                analysis: &document.analysis,
+            })
+            .collect();
+
+        let spans = crate::rename::reference_spans(&docs, &uri, offset);
+
+        if spans.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(
+            spans
+                .into_iter()
+                .map(|(uri, range)| Location { uri, range })
+                .collect(),
+        ))
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(
+            &document.text,
+            params.text_document_position_params.position,
+        );
+        let docs: Vec<crate::rename::RenameDoc<'_>> = documents
+            .iter()
+            .map(|(uri, document)| crate::rename::RenameDoc {
+                uri: uri.clone(),
+                text: &document.text,
+                analysis: &document.analysis,
+            })
+            .collect();
+
+        let highlights = crate::rename::highlight_spans(&docs, &uri, offset);
+
+        if highlights.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(
+            highlights
+                .into_iter()
+                .map(|(range, write)| DocumentHighlight {
+                    range,
+                    kind: Some(if write {
+                        DocumentHighlightKind::WRITE
+                    } else {
+                        DocumentHighlightKind::READ
+                    }),
+                })
+                .collect(),
+        ))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let documents = self.documents.read().await;
+
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+
+        let offset = position::position_to_offset(&document.text, params.position);
+        let docs: Vec<crate::rename::RenameDoc<'_>> = documents
+            .iter()
+            .map(|(uri, document)| crate::rename::RenameDoc {
+                uri: uri.clone(),
+                text: &document.text,
+                analysis: &document.analysis,
+            })
+            .collect();
+
+        match crate::rename::rename_range(&docs, &params.text_document.uri, offset) {
+            Some(range) => Ok(Some(PrepareRenameResponse::Range(range))),
+            None => Err(tower_lsp_server::jsonrpc::Error::invalid_params(
+                "nothing renameable here",
+            )),
+        }
+    }
+    async fn dependent_documents(
+        &self,
+        changed: &[PathBuf],
+    ) -> Vec<(Uri, String, i32, Vec<(String, PathBuf)>)> {
+        let documents = self.documents.read().await;
+        let mut out = Vec::new();
+
+        for (uri, document) in documents.iter() {
+            let Some(open_path) = diagnostics::file_uri_to_path(uri) else {
+                continue;
+            };
+
+            let canonical = std::fs::canonicalize(&open_path).unwrap_or_else(|_| open_path.clone());
+
+            let references = changed.iter().any(|source| {
+                source == &canonical
+                    || document
+                        .analysis
+                        .def_spans
+                        .values()
+                        .any(|(_, _, file)| file.as_deref() == source.to_str())
+                    || document.analysis.occurrences.iter().any(|occurrence| {
+                        occurrence.target_file.as_deref() == source.to_str()
+                            || occurrence
+                                .target_file
+                                .as_deref()
+                                .and_then(|name| open_path.parent().map(|parent| parent.join(name)))
+                                .and_then(|sibling| std::fs::canonicalize(sibling).ok())
+                                .is_some_and(|sibling| &sibling == source)
+                    })
+            });
+
+            if !references {
+                continue;
+            }
+
+            let root = zora::find_root(&open_path);
+            let packages = self.packages_for(root.as_deref()).await.0;
+
+            out.push((
+                uri.clone(),
+                document.text.clone(),
+                document.version,
+                packages,
+            ));
+        }
+
+        out
+    }
 }
 
 impl LanguageServer for Backend {
@@ -436,6 +726,9 @@ impl LanguageServer for Backend {
                     .into(),
                 ),
                 definition_provider: Some(OneOf::Left(true)),
+                type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+                references_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 rename_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
@@ -477,7 +770,7 @@ impl LanguageServer for Backend {
             .log_message(MessageType::INFO, "zeen-lsp ready")
             .await;
 
-        let watchers = [zora::MANIFEST, zora::LOCKFILE]
+        let watchers = [zora::MANIFEST, zora::LOCKFILE, "*.zn"]
             .into_iter()
             .map(|file| FileSystemWatcher {
                 glob_pattern: GlobPattern::String(format!("**/{file}")),
@@ -653,101 +946,6 @@ impl LanguageServer for Backend {
             }
             .into(),
         ))
-    }
-
-    async fn goto_definition(
-        &self,
-        params: GotoDefinitionParams,
-    ) -> Result<Option<GotoDefinitionResponse>> {
-        let uri = params.text_document_position_params.text_document.uri;
-        let documents = self.documents.read().await;
-
-        let Some(document) = documents.get(&uri) else {
-            return Ok(None);
-        };
-
-        let offset = position::position_to_offset(
-            &document.text,
-            params.text_document_position_params.position,
-        );
-
-        let Some(occurence) = document.analysis.at(offset) else {
-            return Ok(None);
-        };
-
-        let key = (occurence.offset, occurence.len);
-
-        if let Some(fn_def) = crate::hover::method_at(&document.analysis, key)
-            && let Some((target_offset, target_len, target_file)) =
-                document.analysis.def_spans.get(&fn_def)
-        {
-            let (target_uri, target_text) = match target_file {
-                Some(target_name) => {
-                    let Some(resolved) = self.resolve_target_text(&uri, target_name).await else {
-                        return Ok(None);
-                    };
-                    resolved
-                }
-                None => (uri.clone(), document.text.clone()),
-            };
-
-            return Ok(Some(GotoDefinitionResponse::Array(vec![Location {
-                uri: target_uri,
-                range: position::span_to_range(&target_text, *target_offset, *target_len),
-            }])));
-        }
-
-        let (Some(target_offset), Some(target_len)) =
-            (occurence.target_offset, occurence.target_len)
-        else {
-            return Ok(None);
-        };
-
-        let (target_uri, target_text) = match &occurence.target_file {
-            Some(target_name) => {
-                let Some(resolved) = self.resolve_target_text(&uri, target_name).await else {
-                    return Ok(None);
-                };
-                resolved
-            }
-            None => (uri.clone(), document.text.clone()),
-        };
-
-        Ok(Some(GotoDefinitionResponse::Array(vec![Location {
-            uri: target_uri,
-            range: position::span_to_range(&target_text, target_offset, target_len),
-        }])))
-    }
-
-    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
-        let uri = params.text_document_position.text_document.uri.clone();
-        let documents = self.documents.read().await;
-
-        let Some(document) = documents.get(&uri) else {
-            return Ok(None);
-        };
-
-        let offset =
-            position::position_to_offset(&document.text, params.text_document_position.position);
-        let docs: Vec<crate::rename::RenameDoc<'_>> = documents
-            .iter()
-            .map(|(uri, document)| crate::rename::RenameDoc {
-                uri: uri.clone(),
-                text: &document.text,
-                analysis: &document.analysis,
-            })
-            .collect();
-
-        let edits = crate::rename::rename_edits(&docs, &uri, offset, &params.new_name);
-
-        if edits.is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(WorkspaceEdit {
-            changes: Some(edits),
-            ..Default::default()
-        }))
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -1288,6 +1486,7 @@ impl LanguageServer for Backend {
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         let mut roots = HashSet::new();
+        let mut changed_sources: Vec<PathBuf> = Vec::new();
 
         for change in &params.changes {
             let Some(path) = diagnostics::file_uri_to_path(&change.uri) else {
@@ -1299,8 +1498,17 @@ impl LanguageServer for Backend {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name == zora::MANIFEST || name == zora::LOCKFILE);
 
-            if is_manifest && let Some(parent) = path.parent() {
-                roots.insert(parent.to_path_buf());
+            if is_manifest {
+                if let Some(parent) = path.parent() {
+                    roots.insert(parent.to_path_buf());
+                }
+
+                continue;
+            }
+
+            if path.extension().and_then(|ext| ext.to_str()) == Some("zn") {
+                let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+                changed_sources.push(canonical);
             }
         }
 
@@ -1348,6 +1556,29 @@ impl LanguageServer for Backend {
                     .publish_diagnostics(uri, output.diagnostics, None)
                     .await;
             }
+        }
+
+        if changed_sources.is_empty() {
+            return;
+        }
+
+        let dependents = self.dependent_documents(&changed_sources).await;
+
+        for (uri, text, version, packages) in dependents {
+            let output = diagnostics::check(&uri, &text, &packages);
+
+            self.documents.write().await.insert(
+                uri.clone(),
+                Document {
+                    version,
+                    text,
+                    analysis: output.analysis,
+                },
+            );
+
+            self.client
+                .publish_diagnostics(uri, output.diagnostics, None)
+                .await;
         }
     }
 }
