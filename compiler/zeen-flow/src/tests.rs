@@ -24,7 +24,7 @@ fn flow_errors(src: &str) -> Vec<FlowError> {
         paths: PathsConfig {
             project_root: std::path::PathBuf::from("/"),
             std_root: Some(
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std"),
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src"),
             ),
             linked: HashSet::new(),
             packages: Vec::new(),

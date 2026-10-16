@@ -1195,7 +1195,7 @@ mod tests {
         let mut context = CompilationContext {
             paths: PathsConfig {
                 project_root: PathBuf::from("/"),
-                std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")),
+                std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")),
                 linked: HashSet::new(),
                 packages: Vec::new(),
             },

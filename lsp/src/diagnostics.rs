@@ -411,19 +411,24 @@ fn check_full(
 }
 
 pub(crate) fn resolve_std_root() -> Option<PathBuf> {
-    if let Some(env_path) = std::env::var_os("ZEEN_STD") {
-        let path = PathBuf::from(env_path);
-        if path.is_dir() {
-            return Some(path);
-        }
+    fn std_src(root: PathBuf) -> Option<PathBuf> {
+        let src = root.join("src");
+
+        src.is_dir().then_some(src)
     }
 
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        let path = PathBuf::from(home).join(".zeen").join("std");
-        if path.is_dir() {
-            return Some(path);
-        }
+    if let Some(env_path) = std::env::var_os("ZEEN_STD")
+        && let Some(src) = std_src(PathBuf::from(env_path))
+    {
+        return Some(src);
     }
+
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+        && let Some(src) = std_src(PathBuf::from(home).join(".zeen").join("std"))
+    {
+        return Some(src);
+    }
+
     None
 }
 

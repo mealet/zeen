@@ -51,33 +51,38 @@ fn parse_pkg_flags(flags: &[String]) -> Vec<(String, std::path::PathBuf)> {
 fn resolve_std_root(explicit: Option<&Path>) -> Result<Option<std::path::PathBuf>, String> {
     const REPO: &str = "https://github.com/mealet/zeen";
 
+    fn std_src(root: &Path) -> Option<std::path::PathBuf> {
+        let src = root.join("src");
+
+        src.is_dir().then_some(src)
+    }
+
     if let Some(path) = explicit {
-        return if path.is_dir() {
-            Ok(Some(path.to_path_buf()))
-        } else {
-            Err(format!(
-                "std library directory not found at `{}` (set by --std); install the std library, see {REPO}",
+        return match std_src(path) {
+            Some(src) => Ok(Some(src)),
+            None => Err(format!(
+                "std library directory not found at `{}` (set by --std); the std project root must contain a `src` directory, see {REPO}",
                 path.display()
-            ))
+            )),
         };
     }
 
     if let Some(env_path) = env::var_os("ZEEN_STD") {
         let path = std::path::PathBuf::from(env_path);
-        return if path.is_dir() {
-            Ok(Some(path))
-        } else {
-            Err(format!(
-                "`ZEEN_STD` points to `{}` which does not exist or is not a directory; see {REPO}",
+
+        return match std_src(&path) {
+            Some(src) => Ok(Some(src)),
+            None => Err(format!(
+                "`ZEEN_STD` points to `{}` which has no `src` directory; see {REPO}",
                 path.display()
-            ))
+            )),
         };
     }
 
     let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
     if let Some(path) = home
         .map(|home| Path::new(&home).join(".zeen").join("std"))
-        .filter(|path| path.is_dir())
+        .and_then(|path| std_src(&path))
     {
         return Ok(Some(path));
     }
@@ -89,7 +94,7 @@ fn resolve_std_root(explicit: Option<&Path>) -> Result<Option<std::path::PathBuf
                 .parent()
                 .map(|prefix| prefix.join("share").join("zeen").join("std"))
         })
-        .filter(|path| path.is_dir());
+        .and_then(|path| std_src(&path));
 
     Ok(next_to_exe)
 }

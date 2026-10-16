@@ -7954,7 +7954,7 @@ mod tests {
             paths: PathsConfig {
                 project_root: std::env::temp_dir(),
                 std_root: full.then(|| {
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std")
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")
                 }),
                 linked: HashSet::new(),
                 packages: Vec::new(),
