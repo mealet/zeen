@@ -504,7 +504,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 .iter()
                 .map(|&t| self.map_basic_type(t).into())
                 .collect();
-            let ret = self.map_ret_type(decl.ret_ty);
+            let ret = match self.c_register_return_type(decl.ret_ty) {
+                Some(coerced) => coerced,
+                None => self.map_ret_type(decl.ret_ty),
+            };
             let fn_type = self.make_fn_type(ret, &param_types, decl.is_variadic);
             if self.module.get_function(&decl.symbol_name).is_none() {
                 self.module.add_function(
@@ -782,6 +785,90 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         match self.typecheck.interner.get(ty) {
             Type::Void | Type::Never => self.context.void_type().into(),
             _ => self.map_type(ty),
+        }
+    }
+
+    fn c_register_return_type(&self, ty: TypeId) -> Option<AnyTypeEnum<'ctx>> {
+        if !matches!(self.typecheck.interner.get(ty), Type::Struct { .. }) {
+            return None;
+        }
+        let struct_ty = *self.struct_types.get(&ty)?;
+        let size = self.target_data.get_abi_size(&struct_ty);
+        if size == 0 || size > 16 {
+            return None;
+        }
+        let num_eightbytes = size.div_ceil(8) as usize;
+        let mut filled = vec![0u64; num_eightbytes];
+        let mut all_sse = vec![true; num_eightbytes];
+        let mut has_double = vec![false; num_eightbytes];
+        let mut offset = 0u64;
+        for field in struct_ty.get_field_types() {
+            let fsize = self.target_data.get_abi_size(&field);
+            let falign = u64::from(self.target_data.get_abi_alignment(&field));
+            offset = (offset + falign - 1) & !(falign - 1);
+            if fsize == 0 {
+                continue;
+            }
+            let is_float = matches!(field, BasicTypeEnum::FloatType(_));
+            let is_double = matches!(field, BasicTypeEnum::FloatType(f) if f.get_bit_width() == 64);
+            for byte in offset..offset + fsize {
+                let eb = (byte / 8) as usize;
+                if eb >= num_eightbytes {
+                    break;
+                }
+                filled[eb] += 1;
+                if !is_float {
+                    all_sse[eb] = false;
+                }
+                if is_double {
+                    has_double[eb] = true;
+                }
+            }
+            offset += fsize;
+        }
+        let mut parts: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(num_eightbytes);
+        for (eb, part) in filled.iter().enumerate() {
+            let bytes = (size - (eb as u64) * 8).min(8);
+            let eightbyte_ty = if *part > 0 && all_sse[eb] {
+                if has_double[eb] {
+                    self.context.f64_type().into()
+                } else if bytes >= 8 {
+                    self.context.f32_type().vec_type(2).into()
+                } else {
+                    self.context.f32_type().into()
+                }
+            } else {
+                self.integer_type_for_bytes(bytes)
+            };
+            parts.push(eightbyte_ty);
+        }
+        if parts.len() == 1 {
+            Some(self.any_from_basic(parts[0]))
+        } else {
+            Some(self.context.struct_type(&parts, false).into())
+        }
+    }
+
+    fn integer_type_for_bytes(&self, bytes: u64) -> BasicTypeEnum<'ctx> {
+        match bytes {
+            0 | 1 => self.context.i8_type().into(),
+            2 => self.context.i16_type().into(),
+            3 | 4 => self.context.i32_type().into(),
+            _ => self.context.i64_type().into(),
+        }
+    }
+
+    fn basic_from_any(&self, ty: AnyTypeEnum<'ctx>) -> BasicTypeEnum<'ctx> {
+        match ty {
+            AnyTypeEnum::ArrayType(t) => t.into(),
+            AnyTypeEnum::FloatType(t) => t.into(),
+            AnyTypeEnum::IntType(t) => t.into(),
+            AnyTypeEnum::PointerType(t) => t.into(),
+            AnyTypeEnum::StructType(t) => t.into(),
+            AnyTypeEnum::VectorType(t) => t.into(),
+            AnyTypeEnum::ScalableVectorType(t) => t.into(),
+            AnyTypeEnum::FunctionType(_) => panic!("function type used as a value type"),
+            AnyTypeEnum::VoidType(_) => panic!("void used as a value type"),
         }
     }
 
@@ -2452,7 +2539,37 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         };
 
         match call.try_as_basic_value() {
-            ValueKind::Basic(value) => self.store_place(destination, value, func),
+            ValueKind::Basic(value) => {
+                let extern_ret = match target {
+                    CallTarget::Extern(idx) => Some(self.program.extern_fns[*idx].ret_ty),
+                    _ => None,
+                };
+                let coerced = extern_ret.and_then(|ret_ty| {
+                    self.c_register_return_type(ret_ty)
+                        .map(|coerced| (ret_ty, coerced))
+                });
+                match coerced {
+                    Some((ret_ty, coerced)) => {
+                        let struct_ty = self.map_basic_type(ret_ty);
+                        let slot = self
+                            .builder
+                            .build_alloca(self.basic_from_any(coerced), "cret")
+                            .unwrap();
+                        self.builder.build_store(slot, value).unwrap();
+                        let casted = self
+                            .builder
+                            .build_pointer_cast(
+                                slot,
+                                self.context.ptr_type(AddressSpace::default()),
+                                "cret.ptr",
+                            )
+                            .unwrap();
+                        let loaded = self.builder.build_load(struct_ty, casted, "").unwrap();
+                        self.store_place(destination, loaded, func);
+                    }
+                    None => self.store_place(destination, value, func),
+                }
+            }
             ValueKind::Instruction(_) => {}
         }
 
