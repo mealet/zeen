@@ -1114,6 +1114,89 @@ fn extern_fn_call_uses_declared_symbol() {
 }
 
 #[test]
+fn extern_struct_params_follow_sysv_abi() {
+    let mut fx = Fixture::new();
+    let i8 = fx.i8();
+    let i32 = fx.i32();
+    let void = fx.void();
+
+    let small_def = fx.def("Small", DefKind::Struct);
+    let small_fields: Vec<_> = (0..4)
+        .map(|i| fx.def(&format!("a{i}"), DefKind::Field))
+        .collect();
+    let small = fx.ty(Type::Struct {
+        def_id: small_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_struct_layout(
+        small,
+        StructLayout {
+            def_id: small_def,
+            generic_args: Vec::new(),
+            fields: small_fields
+                .iter()
+                .map(|&def_id| StructFieldLayout { def_id, ty: i8 })
+                .collect(),
+        },
+    );
+
+    let large_def = fx.def("Large", DefKind::Struct);
+    let large_fields: Vec<_> = (0..5)
+        .map(|i| fx.def(&format!("b{i}"), DefKind::Field))
+        .collect();
+    let large = fx.ty(Type::Struct {
+        def_id: large_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_struct_layout(
+        large,
+        StructLayout {
+            def_id: large_def,
+            generic_args: Vec::new(),
+            fields: large_fields
+                .iter()
+                .map(|&def_id| StructFieldLayout { def_id, ty: i32 })
+                .collect(),
+        },
+    );
+
+    fx.add_extern_fn("small_c", vec![small], i32, false);
+    fx.add_extern_fn("large_c", vec![large], void, false);
+
+    let caller_def = fx.def("caller", DefKind::Function);
+    let mut f = fx.fn_builder("caller", caller_def, void);
+    let s = f.local("s", small);
+    let l = f.local("l", large);
+    let r = f.temp(i32);
+    let rv = f.temp(void);
+    f.entry("bb0");
+    f.block("bb1");
+    f.block("bb2");
+    f.set_current("bb0");
+    f.call(
+        CallTarget::Extern(0),
+        vec![Operand::Copy(place(s), None)],
+        r,
+        Some("bb1"),
+    );
+    f.set_current("bb1");
+    f.call(
+        CallTarget::Extern(1),
+        vec![Operand::Copy(place(l), None)],
+        rv,
+        Some("bb2"),
+    );
+    f.set_current("bb2");
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("declare i32 @small_c(i32)"), "{ir}");
+    assert!(ir.contains("declare void @large_c(ptr byval("), "{ir}");
+}
+
+#[test]
 fn struct_field_store_and_load() {
     let mut fx = Fixture::new();
     let struct_def = fx.def("Pair", DefKind::Struct);

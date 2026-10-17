@@ -7,6 +7,7 @@ use std::{
 
 use inkwell::{
     AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel,
+    attributes::{Attribute, AttributeLoc},
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
@@ -15,7 +16,10 @@ use inkwell::{
         CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetMachine,
         TargetTriple,
     },
-    types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType},
+    types::{
+        AnyType, AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType,
+        StructType,
+    },
     values::{
         BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue,
         ValueKind,
@@ -502,19 +506,36 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = decl
                 .param_types
                 .iter()
-                .map(|&t| self.map_basic_type(t).into())
+                .map(|&t| {
+                    if let Some(coerced) = self.c_abi_coerce_type(t) {
+                        self.basic_from_any(coerced).into()
+                    } else if self.c_abi_param_byval(t).is_some() {
+                        self.context.ptr_type(AddressSpace::default()).into()
+                    } else {
+                        self.map_basic_type(t).into()
+                    }
+                })
                 .collect();
-            let ret = match self.c_register_return_type(decl.ret_ty) {
+            let ret = match self.c_abi_coerce_type(decl.ret_ty) {
                 Some(coerced) => coerced,
                 None => self.map_ret_type(decl.ret_ty),
             };
             let fn_type = self.make_fn_type(ret, &param_types, decl.is_variadic);
             if self.module.get_function(&decl.symbol_name).is_none() {
-                self.module.add_function(
+                let function = self.module.add_function(
                     &decl.symbol_name,
                     fn_type,
                     Some(inkwell::module::Linkage::External),
                 );
+                for (idx, &t) in decl.param_types.iter().enumerate() {
+                    if let Some(struct_ty) = self.c_abi_param_byval(t) {
+                        let kind = Attribute::get_named_enum_kind_id("byval");
+                        let attr = self
+                            .context
+                            .create_type_attribute(kind, struct_ty.as_any_type_enum());
+                        function.add_attribute(AttributeLoc::Param(idx as u32), attr);
+                    }
+                }
             }
         }
     }
@@ -788,7 +809,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
-    fn c_register_return_type(&self, ty: TypeId) -> Option<AnyTypeEnum<'ctx>> {
+    fn c_abi_coerce_type(&self, ty: TypeId) -> Option<AnyTypeEnum<'ctx>> {
         if !matches!(self.typecheck.interner.get(ty), Type::Struct { .. }) {
             return None;
         }
@@ -847,6 +868,17 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         } else {
             Some(self.context.struct_type(&parts, false).into())
         }
+    }
+
+    fn c_abi_param_byval(&self, ty: TypeId) -> Option<StructType<'ctx>> {
+        if !matches!(self.typecheck.interner.get(ty), Type::Struct { .. }) {
+            return None;
+        }
+        let struct_ty = *self.struct_types.get(&ty)?;
+        if self.target_data.get_abi_size(&struct_ty) <= 16 {
+            return None;
+        }
+        Some(struct_ty)
     }
 
     fn integer_type_for_bytes(&self, bytes: u64) -> BasicTypeEnum<'ctx> {
@@ -2449,6 +2481,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
         };
 
+        let is_extern = matches!(target, CallTarget::Extern(_));
         let is_variadic_extern = match target {
             CallTarget::Extern(idx) => self.program.extern_fns[*idx].is_variadic,
             _ => false,
@@ -2465,6 +2498,23 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                         return self.cast_op(arg, *param_ty, func).into();
                     }
                     let value = self.operand_value(arg, Some(*param_ty), func);
+                    if is_extern && let Some(struct_ty) = self.c_abi_param_byval(*param_ty) {
+                        let slot = self.entry_alloca(struct_ty.into(), "abi.arg.byval");
+                        self.builder.build_store(slot, value).unwrap();
+                        return slot.into();
+                    }
+                    if is_extern && let Some(coerced) = self.c_abi_coerce_type(*param_ty) {
+                        let coerced = self.basic_from_any(coerced);
+                        if coerced != value.get_type() {
+                            let slot = self.entry_alloca(value.get_type(), "abi.arg.slot");
+                            self.builder.build_store(slot, value).unwrap();
+                            return self
+                                .builder
+                                .build_load(coerced, slot, "abi.arg")
+                                .unwrap()
+                                .into();
+                        }
+                    }
                     return value.into();
                 }
 
@@ -2545,7 +2595,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     _ => None,
                 };
                 let coerced = extern_ret.and_then(|ret_ty| {
-                    self.c_register_return_type(ret_ty)
+                    self.c_abi_coerce_type(ret_ty)
                         .map(|coerced| (ret_ty, coerced))
                 });
                 match coerced {
