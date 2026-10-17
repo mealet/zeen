@@ -3200,6 +3200,29 @@ impl<'ctx> MirLowering<'ctx> {
                     }
                 }
 
+                if let HirExprKind::Literal(lit) = &inner.kind {
+                    let folded = match op {
+                        UnaryOp::Neg => match lit {
+                            Literal::Int(n) => Some(ConstValue::Int(-(*n as i128))),
+                            Literal::Float(f) => Some(ConstValue::Float(-*f)),
+                            _ => None,
+                        },
+                        UnaryOp::BitNot => match lit {
+                            Literal::Int(n) => Some(ConstValue::Int(!(*n as i128))),
+                            _ => None,
+                        },
+                        UnaryOp::Not => match lit {
+                            Literal::Bool(b) => Some(ConstValue::Bool(!*b)),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+
+                    if let Some(value) = folded {
+                        return (block, Operand::Constant(value, Some(expr.source.clone())));
+                    }
+                }
+
                 let (block, inner_op) = self.lower_expr_to_operand(fb, inner, block);
 
                 let result_ty = self.expr_type(fb, expr);

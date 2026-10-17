@@ -1,0 +1,9 @@
+fn main() i32 {
+    let a: f32 = -2.0 * 3.0;
+    let b: i32 = -2 * 3;
+    let c: f32 = 3.0 * -2.0;
+    let d: f32 = if (a < -1.0) { -1.0 } else { a };
+    let e: i32 = -1;
+    @println("{} {} {} {} {}", a, b, c, d, e);
+    return 0;
+}
