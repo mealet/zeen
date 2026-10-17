@@ -590,6 +590,9 @@ fn compile(args: cli::Args) {
                 linker.with_linker(program);
             }
 
+            linker.with_link_libs(&args.link);
+            linker.with_link_dirs(&args.link_dir);
+
             let object_file = tempfile::Builder::new()
                 .prefix("zeen-")
                 .suffix(&format!(".{}", linker.object_extension()))

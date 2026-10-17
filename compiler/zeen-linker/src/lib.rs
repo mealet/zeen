@@ -82,11 +82,26 @@ impl Toolchain {
         }
     }
 
-    fn build_command(&self, objects: &[PathBuf], extra: &[PathBuf], output: &Path) -> Command {
+    fn build_command(
+        &self,
+        objects: &[PathBuf],
+        extra: &[PathBuf],
+        output: &Path,
+        link_dirs: &[PathBuf],
+        link_libs: &[String],
+    ) -> Command {
         match self {
             Toolchain::Command { program, args } => {
                 let mut command = Command::new(program);
                 command.args(objects).args(extra).args(args);
+
+                for dir in link_dirs {
+                    command.arg(format!("-L{}", dir.display()));
+                }
+                for lib in link_libs {
+                    command.arg(format!("-l{lib}"));
+                }
+
                 command.arg("-o").arg(output);
                 command
             }
@@ -97,6 +112,14 @@ impl Toolchain {
             } => {
                 let mut command = Command::new(program);
                 command.args(objects).args(extra).args(args);
+
+                for dir in link_dirs {
+                    command.arg(format!("-L{}", dir.display()));
+                }
+                for lib in link_libs {
+                    command.arg(format!("-l{lib}"));
+                }
+
                 command.arg("-target").arg(triple);
                 command.arg("-o").arg(output);
                 command
@@ -108,9 +131,14 @@ impl Toolchain {
             } => {
                 let mut command = Command::new(link);
                 command.args(objects).args(extra);
+
                 for lib_path in lib_paths {
                     command.arg(format!("/LIBPATH:{}", lib_path.display()));
                 }
+                for dir in link_dirs {
+                    command.arg(format!("/LIBPATH:{}", dir.display()));
+                }
+
                 command
                     .arg(format!("/OUT:{}", output.display()))
                     .arg("/SUBSYSTEM:CONSOLE")
@@ -120,6 +148,11 @@ impl Toolchain {
                     .arg("libcmt.lib")
                     .arg("kernel32.lib")
                     .arg("user32.lib");
+
+                for lib in link_libs {
+                    command.arg(format!("{lib}.lib"));
+                }
+
                 command
             }
         }
@@ -130,6 +163,8 @@ impl Toolchain {
 pub struct ObjectLinker {
     target: Target,
     toolchain: Toolchain,
+    link_libs: Vec<String>,
+    link_dirs: Vec<PathBuf>,
 }
 
 impl ObjectLinker {
@@ -137,7 +172,20 @@ impl ObjectLinker {
         let target = Target::parse(triple);
         let toolchain = Self::resolve(&target)?;
 
-        Ok(Self { target, toolchain })
+        Ok(Self {
+            target,
+            toolchain,
+            link_libs: Vec::new(),
+            link_dirs: Vec::new(),
+        })
+    }
+
+    pub fn with_link_libs(&mut self, libs: &[String]) {
+        self.link_libs.extend(libs.iter().cloned());
+    }
+
+    pub fn with_link_dirs(&mut self, dirs: &[PathBuf]) {
+        self.link_dirs.extend(dirs.iter().cloned());
     }
 
     pub fn name(&self) -> String {
@@ -204,7 +252,7 @@ impl ObjectLinker {
         let name = self.toolchain.display_name();
         let result = self
             .toolchain
-            .build_command(objects, extra, &output)
+            .build_command(objects, extra, &output, &self.link_dirs, &self.link_libs)
             .output()
             .map_err(|err| format!("failed to spawn linker `{name}`: {err}"))?;
 
@@ -221,7 +269,9 @@ impl ObjectLinker {
         if Self::missing_atomics(&body)
             && let Some(toolchain) = self.toolchain.with_late_arg("-latomic")
         {
-            let retry = toolchain.build_command(objects, extra, &output).output();
+            let retry = toolchain
+                .build_command(objects, extra, &output, &self.link_dirs, &self.link_libs)
+                .output();
             if retry.map(|output| output.status.success()).unwrap_or(false) {
                 return Ok(output);
             };
@@ -800,5 +850,62 @@ mod tests {
             b"collect2: error: ld returned 1 exit status"
         ));
         assert!(!ObjectLinker::missing_atomics(b""));
+    }
+
+    fn command_args(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn gnu_toolchain_appends_link_libs_and_dirs() {
+        let toolchain = Toolchain::command("cc", &["-lm"]);
+        let command = toolchain.build_command(
+            &[PathBuf::from("a.o")],
+            &[],
+            Path::new("out"),
+            &[PathBuf::from("/opt/raylib/lib")],
+            &["raylib".to_owned()],
+        );
+        let args = command_args(&command);
+        assert!(args.contains(&"-L/opt/raylib/lib".to_owned()));
+        assert!(args.contains(&"-lraylib".to_owned()));
+    }
+
+    #[test]
+    fn clang_toolchain_appends_link_libs_and_dirs() {
+        let toolchain = Toolchain::clang("clang", "x86_64-unknown-linux-gnu", &["-lm"]);
+        let command = toolchain.build_command(
+            &[PathBuf::from("a.o")],
+            &[],
+            Path::new("out"),
+            &[PathBuf::from("/opt/raylib/lib")],
+            &["raylib".to_owned()],
+        );
+        let args = command_args(&command);
+        assert!(args.contains(&"-L/opt/raylib/lib".to_owned()));
+        assert!(args.contains(&"-lraylib".to_owned()));
+    }
+
+    #[test]
+    fn msvc_toolchain_appends_link_libs_and_dirs() {
+        let toolchain = Toolchain::msvc(
+            PathBuf::from("link.exe"),
+            vec![PathBuf::from("C:/libs")],
+            "x64",
+        );
+        let command = toolchain.build_command(
+            &[PathBuf::from("a.obj")],
+            &[],
+            Path::new("out.exe"),
+            &[PathBuf::from("C:/raylib/lib")],
+            &["raylib".to_owned()],
+        );
+        let args = command_args(&command);
+        assert!(args.contains(&"/LIBPATH:C:/libs".to_owned()));
+        assert!(args.contains(&"/LIBPATH:C:/raylib/lib".to_owned()));
+        assert!(args.contains(&"raylib.lib".to_owned()));
     }
 }

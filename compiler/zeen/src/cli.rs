@@ -70,6 +70,20 @@ pub struct Args {
     )]
     pub linker_path: Option<PathBuf>,
 
+    #[arg(
+        long = "link",
+        value_name = "LIB",
+        help = "Link an extra native library, e.g. `raylib` (repeatable)"
+    )]
+    pub link: Vec<String>,
+
+    #[arg(
+        long = "link-dir",
+        value_name = "PATH",
+        help = "Add a native library search directory (repeatable)"
+    )]
+    pub link_dir: Vec<PathBuf>,
+
     /// `--pkg` flag to map a package name to a source directory
     #[arg(
         long = "pkg",
