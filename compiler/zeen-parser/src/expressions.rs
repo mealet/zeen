@@ -35,7 +35,7 @@ pub enum Precedence {
 impl Precedence {
     pub fn next(self) -> Self {
         let next_val = (self as u8).saturating_add(1);
-        let max_allowed = Precedence::Multiplicative as u8;
+        let max_allowed = Precedence::NonBinary as u8;
 
         Precedence::from_repr(next_val.min(max_allowed)).unwrap()
     }
@@ -1878,6 +1878,40 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn binary_multiplicative_is_left_associative() {
+        const SRC: &str = "8 / 2 * 4";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let expr = expr_parser.parse().unwrap();
+
+        let ExpressionKind::Binary { lhs, op, rhs } = &expr.kind else {
+            panic!("expected binary expression");
+        };
+
+        assert!(matches!(*op, expressions::BinaryOp::Mul));
+
+        assert!(matches!(
+            &rhs.kind,
+            ExpressionKind::Literal(expressions::Literal::Int(4))
+        ));
+
+        let ExpressionKind::Binary { lhs, op, rhs } = &lhs.kind else {
+            panic!("expected binary expression");
+        };
+
+        assert!(matches!(*op, expressions::BinaryOp::Div));
+        assert!(matches!(
+            &lhs.kind,
+            ExpressionKind::Literal(expressions::Literal::Int(8))
+        ));
+        assert!(matches!(
+            &rhs.kind,
+            ExpressionKind::Literal(expressions::Literal::Int(2))
+        ));
     }
 
     #[test]
