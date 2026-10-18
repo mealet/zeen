@@ -252,7 +252,7 @@ fn check_full(
             }
             return CheckOutput {
                 diagnostics: diags,
-                analysis: analysis::build_syntax_fallback(program),
+                analysis: analysis::build_syntax_fallback(program, text),
             };
         }
     };

@@ -241,6 +241,13 @@ pub fn complete(
             continue;
         }
 
+        if matches!(occurrence.role, Role::Variable | Role::Parameter)
+            && let Some((start, end)) = occurrence.scope
+            && !(start <= offset && offset <= end)
+        {
+            continue;
+        }
+
         if matches!(
             occurrence.role,
             Role::Property | Role::Method | Role::Function
@@ -878,18 +885,28 @@ fn push_type_members(
     items: &mut Vec<CompletionItem>,
     seen: &mut std::collections::HashSet<String>,
 ) {
-    if let Some(def) = find_type_def(analysis, text, lookup)
-        && let Some(members) = analysis.members.get(&def)
-    {
-        let allow_private = scope_covers(analysis, def, cursor);
-        let mut local: Vec<&Member> = members
+    if let Some(def) = find_type_def(analysis, text, lookup) {
+        let mut owners = vec![def];
+
+        if let Some(bounds) = analysis.generic_bounds.get(&def) {
+            owners.extend(bounds.iter().copied());
+        }
+
+        let allow_private = owners
             .iter()
-            .filter(|member| {
-                (member.is_pub || allow_private)
-                    && keep_local_member(member, static_context)
-                    && member.name.starts_with(filter)
-            })
-            .collect();
+            .any(|owner| scope_covers(analysis, *owner, cursor));
+        let mut local: Vec<&Member> = Vec::new();
+
+        for owner in &owners {
+            if let Some(members) = analysis.members.get(owner) {
+                local.extend(members.iter().filter(|member| {
+                    (member.is_pub || member.is_interface || allow_private)
+                        && keep_local_member(member, static_context)
+                        && member.name.starts_with(filter)
+                }));
+            }
+        }
+
         local.sort_by(|a, b| a.name.cmp(&b.name));
 
         for member in local {
@@ -1473,6 +1490,79 @@ fn repair_impl(text: &str, offset: usize, extra_closes: usize, semi: bool) -> Op
     Some(repaired)
 }
 
+pub fn repair_for_plain(text: &str, offset: usize, semi: bool) -> Option<String> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut stack: Vec<u8> = Vec::new();
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'"' => cursor = skip_string(bytes, cursor),
+            b'/' if bytes.get(cursor + 1) == Some(&b'/') => cursor = skip_line(bytes, cursor),
+            b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
+                cursor = skip_block_comment(bytes, cursor)
+            }
+            b'(' => {
+                stack.push(b')');
+                cursor += 1;
+            }
+            b'[' => {
+                stack.push(b']');
+                cursor += 1;
+            }
+            b'{' => {
+                stack.push(b'}');
+                cursor += 1;
+            }
+            b')' | b']' | b'}' => {
+                stack.pop();
+                cursor += 1;
+            }
+            _ => cursor += 1,
+        }
+    }
+
+    let before = text.get(..offset).unwrap_or("").trim_end();
+
+    if stack.is_empty() {
+        if !semi || before.is_empty() || before.ends_with([';', '{', '}', '(', ',', '[']) {
+            return None;
+        }
+
+        let mut repaired = String::with_capacity(text.len() + 1);
+        repaired.push_str(&text[..offset]);
+        repaired.push(';');
+        repaired.push_str(&text[offset..]);
+
+        return Some(repaired);
+    }
+
+    let mut repaired = String::with_capacity(text.len() + stack.len() + 1);
+    repaired.push_str(&text[..offset]);
+
+    for (index, close) in stack.iter().rev().enumerate() {
+        if semi
+            && index == 0
+            && *close == b'}'
+            && !before.is_empty()
+            && !before.ends_with([';', '{', '}'])
+        {
+            repaired.push(';');
+        }
+
+        repaired.push(*close as char);
+
+        if semi && index == 0 && matches!(*close, b')' | b']') {
+            repaired.push(';');
+        }
+    }
+
+    repaired.push_str(&text[offset..]);
+
+    Some(repaired)
+}
+
 pub fn receiver_dot_before(text: &str, offset: usize) -> Option<usize> {
     let offset = offset.min(text.len());
     let bytes = text.as_bytes();
@@ -1862,6 +1952,29 @@ mod tests {
             output.diagnostics
         );
         output.analysis
+    }
+
+    fn plain_analysis(text: &str, offset: usize) -> crate::analysis::Analysis {
+        let uri: tower_lsp_server::ls_types::Uri = "file:///tmp/zeen-lsp-completion-plain-probe.zn"
+            .parse()
+            .unwrap();
+        let first = crate::diagnostics::check_completion(&uri, text, &[]);
+
+        if !first.analysis.occurrences.is_empty() {
+            return first.analysis;
+        }
+
+        for semi in [false, true] {
+            if let Some(candidate) = repair_for_plain(text, offset, semi) {
+                let output = crate::diagnostics::check_completion(&uri, &candidate, &[]);
+
+                if !output.analysis.occurrences.is_empty() {
+                    return output.analysis;
+                }
+            }
+        }
+
+        crate::analysis::build_text_fallback(text, offset)
     }
 
     const SIG_SAMPLE: &str = "struct P {\n    pub v: i32,\n\n    pub fn at(*self, x: i32, y: i32) i32 {\n        return x;\n    }\n}\n\nfn main() {\n    let p = P { .v = 1 };\n    let q = p.at(1, 2);\n    @println(\"{}\", q);\n}\n";
@@ -2554,5 +2667,141 @@ mod tests {
         assert!(names.contains(&"Option"), "core Option must be offered");
         assert!(names.contains(&"Result"), "core Result must be offered");
         assert!(names.contains(&"Display"), "core Display must be offered");
+    }
+
+    const SCOPE_SAMPLE: &str = "fn alpha() i32 {\n    let alpha_local = 1;\n    let alpha_other = alpha_local + 1;\n    return alpha_other;\n}\n\nfn beta() i32 {\n    let beta_local = 2;\n    return beta_local;\n}\n\nfn main() {\n    @println(\"{}\", alpha() + beta());\n}\n";
+
+    #[test]
+    fn completion_filters_locals_by_scope() {
+        let analysis = sample_analysis(SCOPE_SAMPLE);
+        let offset = SCOPE_SAMPLE.find("let alpha_other = ").unwrap() + "let alpha_other = ".len();
+        let items = complete(SCOPE_SAMPLE, &analysis, offset, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"alpha_local"));
+        assert!(!names.contains(&"beta_local"));
+        assert!(!names.contains(&"alpha_other"));
+    }
+
+    const RESOLVE_ERROR_SAMPLE: &str = "fn alpha() i32 {\n    let alpha_local = 1;\n    let broken = missing_name;\n    let alpha_other = 2;\n    alpha_local\n}\n\nfn main() {\n    @println(\"{}\", alpha());\n}\n";
+
+    #[test]
+    fn completion_keeps_locals_when_resolve_fails() {
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-resolve-probe.zn"
+                .parse()
+                .unwrap();
+        let output = crate::diagnostics::check_completion(&uri, RESOLVE_ERROR_SAMPLE, &[]);
+        assert!(!output.diagnostics.is_empty());
+        assert!(!output.analysis.occurrences.is_empty());
+
+        let offset =
+            RESOLVE_ERROR_SAMPLE.find("let alpha_other = ").unwrap() + "let alpha_other = ".len();
+        let items = complete(
+            RESOLVE_ERROR_SAMPLE,
+            &output.analysis,
+            offset,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert!(names.contains(&"alpha_local"));
+        assert!(!names.contains(&"beta_local"));
+    }
+
+    const PARSE_ERROR_SAMPLE: &str = "fn add(a: i32, b: i32) i32 {\n    return a + b;\n}\n\nfn alpha() i32 {\n    let alpha_local = 1;\n    let alpha_other = 2;\n    let sum = add(";
+
+    #[test]
+    fn completion_keeps_locals_when_parsing_fails() {
+        let offset = PARSE_ERROR_SAMPLE.len();
+
+        assert!(!crate::diagnostics::parses(PARSE_ERROR_SAMPLE));
+        assert!(repair_for_plain(PARSE_ERROR_SAMPLE, offset, true).is_some());
+
+        let analysis = plain_analysis(PARSE_ERROR_SAMPLE, offset);
+        let items = complete(
+            PARSE_ERROR_SAMPLE,
+            &analysis,
+            offset,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert!(names.contains(&"alpha_local"));
+        assert!(names.contains(&"alpha_other"));
+    }
+
+    const INTERFACE_SAMPLE: &str = "interface Describe {\n    pub fn label() []const char;\n    pub fn kind(*const self) []const char;\n}\n\nstruct Point {\n    pub x: i32,\n}\n\nimplement Describe : Point {\n    fn label() []const char {\n        \"point\"\n    }\n\n    fn kind(*const self) []const char {\n        \"kind\"\n    }\n}\n\nfn use_point(p: *const Point) []const char {\n    return p.kind();\n}\n\nfn main() {\n    let p = Point { .x = 1 };\n    @println(\"{} {}\", p.kind(), Point.label());\n}\n";
+
+    #[test]
+    fn implement_methods_complete_through_interface() {
+        let analysis = sample_analysis(INTERFACE_SAMPLE);
+
+        let probe = INTERFACE_SAMPLE.replacen("return p.kind();", "return p.      ;", 1);
+        let dot = probe.find("p.      ;").unwrap() + "p".len();
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"kind"));
+        assert!(names.contains(&"x"));
+        assert!(!names.contains(&"label"));
+
+        let probe = INTERFACE_SAMPLE.replacen("Point.label()", "Point.        ()", 1);
+        let dot = probe.find("Point.        ()").unwrap() + "Point".len();
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"label"));
+        assert!(!names.contains(&"kind"));
+        assert!(!names.contains(&"x"));
+    }
+
+    const INTERFACE_RECEIVER_SAMPLE: &str = "interface Describe {\n    pub fn kind(*const self) i32;\n}\n\nfn describe(d: Describe) i32 {\n    return 0;\n}\n\nfn main() {\n    @println(\"{}\", 1);\n}\n";
+
+    #[test]
+    fn interface_typed_receiver_completes_interface_methods() {
+        let analysis = sample_analysis(INTERFACE_RECEIVER_SAMPLE);
+        let probe = INTERFACE_RECEIVER_SAMPLE.replacen(
+            "fn describe(d: Describe)",
+            "fn describe(d.          Describe)",
+            1,
+        );
+        let dot = probe.find("d.          Describe").unwrap() + "d".len();
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"kind"));
+    }
+
+    const GENERIC_BOUND_SAMPLE: &str = "interface Describe {\n    pub fn kind(*const self) i32;\n}\n\nstruct Point {\n    pub x: i32,\n}\n\nimplement Describe : Point {\n    fn kind(*const self) i32 {\n        return self.x;\n    }\n}\n\nfn show[T: Describe](x: *const T) i32 {\n    return (*x).kind();\n}\n\nfn main() {\n    let p = Point { .x = 1 };\n    @println(\"{}\", show(&p));\n}\n";
+
+    #[test]
+    fn generic_bound_receiver_completes_bound_methods() {
+        let analysis = sample_analysis(GENERIC_BOUND_SAMPLE);
+        let probe = GENERIC_BOUND_SAMPLE.replacen("(*x).kind()", "(*x.          )", 1);
+        let dot = probe.find("x.          )").unwrap() + "x".len();
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"kind"));
+    }
+
+    #[test]
+    fn imported_impl_methods_ignore_privacy() {
+        let dir = import_project("implprivacy");
+        std::fs::write(
+            dir.join("lib.zn"),
+            "pub interface Describe {\n    pub fn kind(*const self) i32;\n}\n\npub struct Boxed {\n    pub v: i32,\n}\n\nimplement Describe : Boxed {\n    fn kind(*const self) i32 {\n        return self.v;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let members =
+            crate::modules::type_members(&dir, &dir, None, &[], &["lib".to_string()], "Boxed");
+        let names: Vec<&str> = members.iter().map(|member| member.name.as_str()).collect();
+
+        assert!(names.contains(&"kind"));
+        assert!(names.contains(&"v"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

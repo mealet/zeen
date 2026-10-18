@@ -7,6 +7,8 @@ use std::{
 use lasso::{Rodeo, Spur};
 use miette::SourceSpan;
 
+use zeen_ast::expressions::{Expression, ExpressionKind, Pattern};
+use zeen_ast::statements::{Statement, StatementKind};
 use zeen_ast::{Declaration, DeclarationKind};
 use zeen_hir::{
     HirDecl, HirDeclKind, HirEnumVariantPayload, HirExpr, HirExprKind, HirFn, HirGenericParam,
@@ -60,6 +62,7 @@ pub struct Occurrence {
     pub is_pub: Option<bool>,
     pub is_const: Option<bool>,
     pub type_hint: bool,
+    pub scope: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +115,7 @@ pub struct Analysis {
     pub(crate) raw_access: Vec<RawAccess>,
     pub implements: Vec<(DefId, DefId)>,
     pub interfaces: HashMap<String, Vec<Member>>,
+    pub generic_bounds: HashMap<DefId, Vec<DefId>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +168,7 @@ pub struct Member {
     pub signature: Option<String>,
     pub is_static: bool,
     pub is_pub: bool,
+    pub is_interface: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +215,8 @@ impl Analysis {
             canonical,
             methods: resolution.impls.values().flatten().copied().collect(),
             analysis: Analysis::default(),
+            block_ends: Vec::new(),
+            local_scopes: HashMap::new(),
         };
 
         for decl in &module.decls {
@@ -845,6 +852,8 @@ struct Walker<'ctx> {
     canonical: &'ctx str,
     methods: HashSet<DefId>,
     analysis: Analysis,
+    block_ends: Vec<usize>,
+    local_scopes: HashMap<DefId, (usize, usize)>,
 }
 
 impl<'ctx> Walker<'ctx> {
@@ -864,6 +873,8 @@ impl<'ctx> Walker<'ctx> {
             return None;
         }
 
+        let scope = def.and_then(|def| self.local_scopes.get(&def).copied());
+
         self.analysis.occurrences.push(Occurrence {
             offset,
             len,
@@ -881,6 +892,7 @@ impl<'ctx> Walker<'ctx> {
             is_pub: None,
             is_const: None,
             type_hint: false,
+            scope,
         });
 
         Some((offset, len))
@@ -1064,6 +1076,14 @@ impl<'ctx> Walker<'ctx> {
         }
     }
 
+    fn block_end(&self) -> usize {
+        self.block_ends
+            .last()
+            .copied()
+            .unwrap_or(self.text.len())
+            .min(self.text.len())
+    }
+
     fn record_method_scope(&mut self, owner: DefId, method: &HirDecl) {
         let start = method.source.span.offset();
         let end = start.saturating_add(method.source.span.len());
@@ -1078,7 +1098,7 @@ impl<'ctx> Walker<'ctx> {
         self.analysis.scopes.push(Scope { start, end, owner });
     }
 
-    fn method_member(&self, method: &HirDecl) -> Option<Member> {
+    fn method_member(&self, method: &HirDecl, is_interface: bool) -> Option<Member> {
         let HirDeclKind::Fn(func) = &method.kind else {
             return None;
         };
@@ -1090,6 +1110,7 @@ impl<'ctx> Walker<'ctx> {
             signature: None,
             is_static: !hir_fn_takes_self(func),
             is_pub: func.is_pub,
+            is_interface,
         })
     }
 
@@ -1099,7 +1120,7 @@ impl<'ctx> Walker<'ctx> {
                 continue;
             };
 
-            if let Some(member) = self.method_member(method) {
+            if let Some(member) = self.method_member(method, true) {
                 self.analysis
                     .interfaces
                     .entry(name.clone())
@@ -1111,8 +1132,8 @@ impl<'ctx> Walker<'ctx> {
         }
     }
 
-    fn collect_method(&mut self, owner: DefId, method: &HirDecl) {
-        let Some(member) = self.method_member(method) else {
+    fn collect_method(&mut self, owner: DefId, method: &HirDecl, is_interface: bool) {
+        let Some(member) = self.method_member(method, is_interface) else {
             return;
         };
 
@@ -1133,6 +1154,10 @@ impl<'ctx> Walker<'ctx> {
         let name = self.interner.resolve(&interface.name.0).to_string();
         let source = decl.source.src.inner().as_str();
         self.collect_interface(name, &interface.methods, source);
+
+        for method in &interface.methods {
+            self.collect_method(decl.def_id, method, true);
+        }
     }
 
     fn walk_decl(&mut self, decl: &HirDecl) {
@@ -1198,13 +1223,14 @@ impl<'ctx> Walker<'ctx> {
                             signature: None,
                             is_static: false,
                             is_pub: field.is_pub,
+                            is_interface: false,
                         });
 
                     self.walk_type(&field.ty);
                 }
 
                 for method in &strukt.methods {
-                    self.collect_method(decl.def_id, method);
+                    self.collect_method(decl.def_id, method, false);
                     self.record_method_scope(decl.def_id, method);
                     self.walk_decl(method);
                 }
@@ -1233,6 +1259,8 @@ impl<'ctx> Walker<'ctx> {
                 self.collect_interface(name, &interface.methods, text);
 
                 for method in &interface.methods {
+                    self.collect_method(decl.def_id, method, true);
+                    self.record_method_scope(decl.def_id, method);
                     self.walk_decl(method);
                 }
             }
@@ -1252,7 +1280,7 @@ impl<'ctx> Walker<'ctx> {
 
                 for method in &implement.methods {
                     if let Some(owner) = implement.object {
-                        self.collect_method(owner, method);
+                        self.collect_method(owner, method, true);
                         self.record_method_scope(owner, method);
                         self.record_impl_scope(owner, decl);
                     }
@@ -1300,6 +1328,7 @@ impl<'ctx> Walker<'ctx> {
                             signature: None,
                             is_static: true,
                             is_pub: true,
+                            is_interface: false,
                         });
 
                     match &variant.payload {
@@ -1320,7 +1349,7 @@ impl<'ctx> Walker<'ctx> {
                 }
 
                 for method in &enumeration.methods {
-                    self.collect_method(decl.def_id, method);
+                    self.collect_method(decl.def_id, method, false);
                     self.record_method_scope(decl.def_id, method);
                     self.walk_decl(method);
                 }
@@ -1467,6 +1496,19 @@ impl<'ctx> Walker<'ctx> {
             self.walk_generic(generic);
         }
 
+        if let Some(body) = &func.body {
+            let start = body.source.span.offset().min(self.text.len());
+            let end = start
+                .saturating_add(body.source.span.len())
+                .min(self.text.len());
+
+            for param in &func.params {
+                if let Some(def_id) = param.def_id {
+                    self.local_scopes.insert(def_id, (start, end));
+                }
+            }
+        }
+
         for param in &func.params {
             if let Some(name) = param.name {
                 let role = param
@@ -1496,6 +1538,12 @@ impl<'ctx> Walker<'ctx> {
             Role::Type,
             Some(generic.def_id),
         );
+
+        if !generic.bounds.is_empty() {
+            self.analysis
+                .generic_bounds
+                .insert(generic.def_id, generic.bounds.clone());
+        }
     }
 
     fn walk_stmt(&mut self, stmt: &HirStmt) {
@@ -1508,6 +1556,15 @@ impl<'ctx> Walker<'ctx> {
                 ..
             } => {
                 let role = self.role_of_def(*def_id).unwrap_or(Role::Variable);
+                let start = stmt
+                    .source
+                    .span
+                    .offset()
+                    .saturating_add(stmt.source.span.len())
+                    .min(self.text.len());
+                let end = self.block_end();
+
+                self.local_scopes.insert(*def_id, (start, end));
 
                 if self
                     .emit_named(stmt.source.span, *name, role, Some(*def_id), None)
@@ -1554,6 +1611,19 @@ impl<'ctx> Walker<'ctx> {
                 ..
             } => {
                 let role = self.role_of_def(*def_id).unwrap_or(Role::Variable);
+                let start = varname
+                    .1
+                    .offset()
+                    .saturating_add(varname.1.len())
+                    .min(self.text.len());
+                let end = block
+                    .source
+                    .span
+                    .offset()
+                    .saturating_add(block.source.span.len())
+                    .min(self.text.len());
+
+                self.local_scopes.insert(*def_id, (start, end));
 
                 if self
                     .emit_target(varname.1.offset(), varname.1.len(), role, *def_id, None)
@@ -1663,7 +1733,15 @@ impl<'ctx> Walker<'ctx> {
                 self.walk_expr(object);
 
                 for arm in arms {
-                    self.walk_pattern(&arm.pattern);
+                    let scope_end = arm
+                        .body
+                        .source
+                        .span
+                        .offset()
+                        .saturating_add(arm.body.source.span.len())
+                        .min(self.text.len());
+
+                    self.walk_pattern(&arm.pattern, scope_end);
 
                     if let Some(guard) = &arm.guard {
                         self.walk_expr(guard);
@@ -1739,6 +1817,15 @@ impl<'ctx> Walker<'ctx> {
             }
 
             HirExprKind::Block { stmts, trailing } => {
+                let end = expr
+                    .source
+                    .span
+                    .offset()
+                    .saturating_add(expr.source.span.len())
+                    .min(self.text.len());
+
+                self.block_ends.push(end);
+
                 for stmt in stmts {
                     self.walk_stmt(stmt);
                 }
@@ -1746,6 +1833,8 @@ impl<'ctx> Walker<'ctx> {
                 if let Some(trailing) = trailing {
                     self.walk_expr(trailing);
                 }
+
+                self.block_ends.pop();
             }
 
             HirExprKind::Type(ty) => self.walk_type(ty),
@@ -1764,11 +1853,11 @@ impl<'ctx> Walker<'ctx> {
         }
     }
 
-    fn walk_pattern(&mut self, pattern: &HirPattern) {
+    fn walk_pattern(&mut self, pattern: &HirPattern, scope_end: usize) {
         match pattern {
             HirPattern::Literal(_) | HirPattern::Wildcard | HirPattern::Range { .. } => {}
 
-            HirPattern::Binding(binding) => self.walk_binding(binding),
+            HirPattern::Binding(binding) => self.walk_binding(binding, scope_end),
 
             HirPattern::Enum {
                 variant_span,
@@ -1783,20 +1872,27 @@ impl<'ctx> Walker<'ctx> {
                 );
 
                 if let Some(binding) = binding {
-                    self.walk_binding(binding);
+                    self.walk_binding(binding, scope_end);
                 }
             }
 
             HirPattern::Or(patterns) => {
                 for pattern in patterns {
-                    self.walk_pattern(pattern);
+                    self.walk_pattern(pattern, scope_end);
                 }
             }
         }
     }
 
-    fn walk_binding(&mut self, binding: &HirPatternBinding) {
+    fn walk_binding(&mut self, binding: &HirPatternBinding, scope_end: usize) {
         let role = self.role_of_def(binding.def_id).unwrap_or(Role::Variable);
+        let start = binding
+            .span
+            .offset()
+            .saturating_add(binding.span.len())
+            .min(self.text.len());
+
+        self.local_scopes.insert(binding.def_id, (start, scope_end));
 
         if self
             .emit_target(
@@ -1883,11 +1979,11 @@ impl<'ctx> Walker<'ctx> {
     }
 }
 
-pub fn build_syntax_fallback(program: &[&Declaration<'_>]) -> Analysis {
+pub fn build_syntax_fallback(program: &[&Declaration<'_>], text: &str) -> Analysis {
     let mut occurrences = Vec::new();
 
     for decl in program {
-        walk_syntax_decl(decl, false, &mut occurrences);
+        walk_syntax_decl(decl, false, text, &mut occurrences);
     }
 
     occurrences.sort_by_key(|item| (item.offset, item.len));
@@ -1898,7 +1994,17 @@ pub fn build_syntax_fallback(program: &[&Declaration<'_>]) -> Analysis {
     }
 }
 
-fn push_syntax(occurrences: &mut Vec<Occurrence>, offset: usize, len: usize, role: Role) {
+fn span_end(span: SourceSpan) -> usize {
+    span.offset().saturating_add(span.len())
+}
+
+fn push_syntax(
+    occurrences: &mut Vec<Occurrence>,
+    offset: usize,
+    len: usize,
+    role: Role,
+    scope: Option<(usize, usize)>,
+) {
     if len == 0 {
         return;
     }
@@ -1920,26 +2026,128 @@ fn push_syntax(occurrences: &mut Vec<Occurrence>, offset: usize, len: usize, rol
         is_pub: None,
         is_const: None,
         type_hint: false,
+        scope,
     });
 }
 
-fn walk_syntax_decl(decl: &Declaration<'_>, method: bool, occurrences: &mut Vec<Occurrence>) {
+fn syntax_param_name(text: &str, span: SourceSpan) -> Option<(usize, usize)> {
+    let start = span.offset().min(text.len());
+    let end = span_end(span).min(text.len());
+    let slice = text.get(start..end)?;
+    let bytes = slice.as_bytes();
+    let mut cursor = 0;
+
+    while cursor < bytes.len() && !is_ident_byte(bytes[cursor]) {
+        cursor += 1;
+    }
+
+    let name_start = cursor;
+
+    while cursor < bytes.len() && is_ident_byte(bytes[cursor]) {
+        cursor += 1;
+    }
+
+    if cursor == name_start {
+        return None;
+    }
+
+    let mut rest = cursor;
+
+    while rest < bytes.len() && bytes[rest].is_ascii_whitespace() {
+        rest += 1;
+    }
+
+    if bytes.get(rest) != Some(&b':') {
+        return None;
+    }
+
+    Some((start + name_start, cursor - name_start))
+}
+
+fn syntax_let_name(text: &str, span: SourceSpan) -> Option<(usize, usize)> {
+    let start = span.offset().min(text.len());
+    let end = span_end(span).min(text.len());
+    let slice = text.get(start..end)?;
+    let bytes = slice.as_bytes();
+    let mut cursor = 0;
+
+    while cursor + 3 <= bytes.len() {
+        let is_let = &bytes[cursor..cursor + 3] == b"let"
+            && (cursor == 0 || !is_ident_byte(bytes[cursor - 1]))
+            && (cursor + 3 == bytes.len() || !is_ident_byte(bytes[cursor + 3]));
+
+        if is_let {
+            cursor += 3;
+
+            while cursor < bytes.len() && !is_ident_byte(bytes[cursor]) {
+                cursor += 1;
+            }
+
+            let name_start = cursor;
+
+            while cursor < bytes.len() && is_ident_byte(bytes[cursor]) {
+                cursor += 1;
+            }
+
+            if cursor > name_start {
+                return Some((start + name_start, cursor - name_start));
+            }
+
+            return None;
+        }
+
+        cursor += 1;
+    }
+
+    None
+}
+
+fn walk_syntax_decl(
+    decl: &Declaration<'_>,
+    method: bool,
+    text: &str,
+    occurrences: &mut Vec<Occurrence>,
+) {
     match &decl.kind {
-        DeclarationKind::FnDecl { name, .. } => {
+        DeclarationKind::FnDecl {
+            name, params, body, ..
+        } => {
             push_syntax(
                 occurrences,
                 name.1.offset(),
                 name.1.len(),
                 if method { Role::Method } else { Role::Function },
+                None,
             );
+
+            let Some(body) = body else {
+                return;
+            };
+
+            let start = body.span.offset().min(text.len());
+            let end = span_end(body.span).min(text.len());
+
+            for param in *params {
+                if let Some((offset, len)) = syntax_param_name(text, param.span) {
+                    push_syntax(
+                        occurrences,
+                        offset,
+                        len,
+                        Role::Parameter,
+                        Some((start, end)),
+                    );
+                }
+            }
+
+            walk_syntax_stmt(body, end, text, occurrences);
         }
 
         DeclarationKind::StructDecl { name, methods, .. }
         | DeclarationKind::InterfaceDecl { name, methods, .. } => {
-            push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type);
+            push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type, None);
 
             for method in *methods {
-                walk_syntax_decl(method, true, occurrences);
+                walk_syntax_decl(method, true, text, occurrences);
             }
         }
 
@@ -1949,7 +2157,7 @@ fn walk_syntax_decl(decl: &Declaration<'_>, method: bool, occurrences: &mut Vec<
             methods,
             ..
         } => {
-            push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type);
+            push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type, None);
 
             for variant in *variants {
                 push_syntax(
@@ -1957,22 +2165,29 @@ fn walk_syntax_decl(decl: &Declaration<'_>, method: bool, occurrences: &mut Vec<
                     variant.span.offset(),
                     variant.span.len(),
                     Role::EnumMember,
+                    None,
                 );
             }
 
             for method in *methods {
-                walk_syntax_decl(method, true, occurrences);
+                walk_syntax_decl(method, true, text, occurrences);
             }
         }
 
         DeclarationKind::ImplementDecl { methods, .. } => {
             for method in *methods {
-                walk_syntax_decl(method, true, occurrences);
+                walk_syntax_decl(method, true, text, occurrences);
             }
         }
 
         DeclarationKind::ExternVar { name, .. } | DeclarationKind::GlobalVar { name, .. } => {
-            push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Variable);
+            push_syntax(
+                occurrences,
+                name.1.offset(),
+                name.1.len(),
+                Role::Variable,
+                None,
+            );
         }
 
         DeclarationKind::Alias(alias) => {
@@ -1981,6 +2196,7 @@ fn walk_syntax_decl(decl: &Declaration<'_>, method: bool, occurrences: &mut Vec<
                 alias.name.1.offset(),
                 alias.name.1.len(),
                 Role::Type,
+                None,
             );
         }
 
@@ -1989,6 +2205,559 @@ fn walk_syntax_decl(decl: &Declaration<'_>, method: bool, occurrences: &mut Vec<
         | DeclarationKind::ExternInclude { .. }
         | DeclarationKind::ConditionalBlock(_) => {}
     }
+}
+
+fn walk_syntax_stmt(
+    stmt: &Statement<'_>,
+    block_end: usize,
+    text: &str,
+    occurrences: &mut Vec<Occurrence>,
+) {
+    match &stmt.kind {
+        StatementKind::Let { value, .. } => {
+            if let Some((offset, len)) = syntax_let_name(text, stmt.span) {
+                let start = span_end(stmt.span).min(text.len());
+
+                push_syntax(
+                    occurrences,
+                    offset,
+                    len,
+                    Role::Variable,
+                    Some((start, block_end.min(text.len()))),
+                );
+            }
+
+            if let Some(value) = value {
+                walk_syntax_expr(value, text, occurrences);
+            }
+        }
+
+        StatementKind::Assign { object, value }
+        | StatementKind::CompoundAssign { object, value, .. } => {
+            walk_syntax_expr(object, text, occurrences);
+            walk_syntax_expr(value, text, occurrences);
+        }
+
+        StatementKind::Return { value } => {
+            if let Some(value) = value {
+                walk_syntax_expr(value, text, occurrences);
+            }
+        }
+
+        StatementKind::Break | StatementKind::Continue => {}
+
+        StatementKind::While { condition, block } => {
+            walk_syntax_expr(condition, text, occurrences);
+            walk_syntax_stmt(block, block_end, text, occurrences);
+        }
+
+        StatementKind::For {
+            varname,
+            iterator,
+            block,
+        } => {
+            let start = span_end(varname.1).min(text.len());
+            let end = span_end(block.span).min(text.len());
+
+            push_syntax(
+                occurrences,
+                varname.1.offset(),
+                varname.1.len(),
+                Role::Variable,
+                Some((start, end)),
+            );
+
+            walk_syntax_expr(iterator, text, occurrences);
+            walk_syntax_stmt(block, end, text, occurrences);
+        }
+
+        StatementKind::Expr(expr) | StatementKind::TrailingExpr(expr) => {
+            walk_syntax_expr(expr, text, occurrences);
+        }
+
+        StatementKind::FnDecl(decl) => walk_syntax_decl(decl, true, text, occurrences),
+
+        StatementKind::ConditionalBlock(_) => {}
+    }
+}
+
+fn walk_syntax_expr(expr: &Expression<'_>, text: &str, occurrences: &mut Vec<Occurrence>) {
+    match &expr.kind {
+        ExpressionKind::Block { stmts, trailing } => {
+            let end = span_end(expr.span).min(text.len());
+
+            for stmt in *stmts {
+                walk_syntax_stmt(stmt, end, text, occurrences);
+            }
+
+            if let Some(trailing) = trailing {
+                walk_syntax_expr(trailing, text, occurrences);
+            }
+        }
+
+        ExpressionKind::If {
+            condition,
+            then_block,
+            else_block,
+        } => {
+            walk_syntax_expr(condition, text, occurrences);
+            walk_syntax_stmt(then_block, span_end(then_block.span), text, occurrences);
+
+            if let Some(else_block) = else_block {
+                walk_syntax_stmt(else_block, span_end(else_block.span), text, occurrences);
+            }
+        }
+
+        ExpressionKind::Switch { object, arms } => {
+            walk_syntax_expr(object, text, occurrences);
+
+            for arm in *arms {
+                let end = span_end(arm.body.span).min(text.len());
+
+                walk_syntax_pattern(&arm.pattern, end, occurrences);
+
+                if let Some(guard) = arm.guard {
+                    walk_syntax_expr(guard, text, occurrences);
+                }
+
+                walk_syntax_expr(arm.body, text, occurrences);
+            }
+        }
+
+        ExpressionKind::Closure { params, body, .. } => {
+            let start = body.span.offset().min(text.len());
+            let end = span_end(body.span).min(text.len());
+
+            for param in *params {
+                if let Some((offset, len)) = syntax_param_name(text, param.span) {
+                    push_syntax(
+                        occurrences,
+                        offset,
+                        len,
+                        Role::Parameter,
+                        Some((start, end)),
+                    );
+                }
+            }
+
+            walk_syntax_stmt(body, end, text, occurrences);
+        }
+
+        ExpressionKind::Call { callee, args } => {
+            walk_syntax_expr(callee, text, occurrences);
+
+            for arg in *args {
+                walk_syntax_expr(arg, text, occurrences);
+            }
+        }
+
+        ExpressionKind::MacroCall { args, .. } => {
+            for arg in *args {
+                walk_syntax_expr(arg, text, occurrences);
+            }
+        }
+
+        ExpressionKind::Binary { lhs, rhs, .. } => {
+            walk_syntax_expr(lhs, text, occurrences);
+            walk_syntax_expr(rhs, text, occurrences);
+        }
+
+        ExpressionKind::Unary { expr, .. } => walk_syntax_expr(expr, text, occurrences),
+
+        ExpressionKind::FieldAccess { object, .. } => {
+            walk_syntax_expr(object, text, occurrences);
+        }
+
+        ExpressionKind::SliceAccess { object, index } => {
+            walk_syntax_expr(object, text, occurrences);
+            walk_syntax_expr(index, text, occurrences);
+        }
+
+        ExpressionKind::StructInit { ty, fields } => {
+            walk_syntax_expr(ty, text, occurrences);
+
+            if let Some(fields) = fields {
+                for field in *fields {
+                    walk_syntax_expr(field.value, text, occurrences);
+                }
+            }
+        }
+
+        ExpressionKind::ArrayInit { elements } => {
+            for element in *elements {
+                walk_syntax_expr(element, text, occurrences);
+            }
+        }
+
+        ExpressionKind::ArrayRepeatInit { element, len } => {
+            walk_syntax_expr(element, text, occurrences);
+            walk_syntax_expr(len, text, occurrences);
+        }
+
+        ExpressionKind::Range { start, end, .. } => {
+            if let Some(start) = start {
+                walk_syntax_expr(start, text, occurrences);
+            }
+
+            if let Some(end) = end {
+                walk_syntax_expr(end, text, occurrences);
+            }
+        }
+
+        ExpressionKind::Literal(_)
+        | ExpressionKind::Ident { .. }
+        | ExpressionKind::Type(_)
+        | ExpressionKind::TargetVar(_)
+        | ExpressionKind::ConditionalBlock(_) => {}
+    }
+}
+
+fn walk_syntax_pattern(pattern: &Pattern<'_>, scope_end: usize, occurrences: &mut Vec<Occurrence>) {
+    match pattern {
+        Pattern::Named { span, .. } => {
+            let start = span_end(*span);
+
+            push_syntax(
+                occurrences,
+                span.offset(),
+                span.len(),
+                Role::Variable,
+                Some((start, scope_end)),
+            );
+        }
+
+        Pattern::EnumVariant {
+            binding: Some((_, span)),
+            ..
+        } => {
+            let start = span_end(*span);
+
+            push_syntax(
+                occurrences,
+                span.offset(),
+                span.len(),
+                Role::Variable,
+                Some((start, scope_end)),
+            );
+        }
+
+        Pattern::Or(patterns) => {
+            for pattern in *patterns {
+                walk_syntax_pattern(pattern, scope_end, occurrences);
+            }
+        }
+
+        Pattern::Literal(_)
+        | Pattern::EnumVariant { .. }
+        | Pattern::Range { .. }
+        | Pattern::Wildcard => {}
+    }
+}
+
+pub fn build_text_fallback(text: &str, offset: usize) -> Analysis {
+    let offset = offset.min(text.len());
+    let Some((header_start, body_start, body_end)) = enclosing_fn_body(text, offset) else {
+        return Analysis::default();
+    };
+
+    let pairs = brace_pairs(text);
+    let mut occurrences = Vec::new();
+
+    if let Some(open) = text
+        .get(header_start..body_start)
+        .and_then(|header| header.rfind('('))
+        .map(|position| header_start + position)
+        && let Some(close) = paren_close(text, open)
+    {
+        let mut depth = 0i32;
+        let mut segment = open + 1;
+
+        for cursor in open + 1..=close {
+            match text.as_bytes().get(cursor) {
+                Some(b'[') | Some(b'(') | Some(b'{') => depth += 1,
+                Some(b']') | Some(b')') | Some(b'}') => depth -= 1,
+                Some(b',') if depth == 0 => {
+                    push_text_param(
+                        text,
+                        segment,
+                        cursor,
+                        body_start,
+                        body_end,
+                        &mut occurrences,
+                    );
+                    segment = cursor + 1;
+                }
+                _ => {}
+            }
+        }
+
+        push_text_param(text, segment, close, body_start, body_end, &mut occurrences);
+    }
+
+    let mut stack: Vec<usize> = vec![body_start];
+    let mut cursor = body_start;
+    let limit = offset.min(body_end);
+
+    while cursor < limit {
+        match text.as_bytes()[cursor] {
+            b'"' => cursor = text_skip_string(text, cursor),
+            b'/' if text.as_bytes().get(cursor + 1) == Some(&b'/') => {
+                cursor = text_skip_line(text, cursor)
+            }
+            b'/' if text.as_bytes().get(cursor + 1) == Some(&b'*') => {
+                cursor = text_skip_comment(text, cursor)
+            }
+            b'{' => {
+                stack.push(cursor);
+                cursor += 1;
+            }
+            b'}' => {
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+
+                cursor += 1;
+            }
+            b'l' if text
+                .get(cursor..)
+                .is_some_and(|rest| rest.starts_with("let"))
+                && (cursor == 0 || !is_ident_byte(text.as_bytes()[cursor - 1]))
+                && text
+                    .as_bytes()
+                    .get(cursor + 3)
+                    .is_some_and(|byte| !is_ident_byte(*byte)) =>
+            {
+                let mut name_start = cursor + 3;
+
+                while name_start < text.len() && !is_ident_byte(text.as_bytes()[name_start]) {
+                    name_start += 1;
+                }
+
+                let mut name_end = name_start;
+
+                while name_end < text.len() && is_ident_byte(text.as_bytes()[name_end]) {
+                    name_end += 1;
+                }
+
+                if name_end > name_start {
+                    let block_end = stack
+                        .last()
+                        .and_then(|open| pairs.get(open))
+                        .copied()
+                        .unwrap_or(body_end)
+                        .min(body_end);
+                    let mut statement_end = name_end;
+
+                    while statement_end < block_end
+                        && !matches!(text.as_bytes()[statement_end], b';' | b'\n')
+                    {
+                        statement_end += 1;
+                    }
+
+                    let start = if text.as_bytes().get(statement_end) == Some(&b';') {
+                        statement_end + 1
+                    } else {
+                        statement_end
+                    };
+
+                    push_syntax(
+                        &mut occurrences,
+                        name_start,
+                        name_end - name_start,
+                        Role::Variable,
+                        Some((start, block_end)),
+                    );
+                }
+
+                cursor = name_end.max(cursor + 3);
+            }
+            _ => cursor += 1,
+        }
+    }
+
+    occurrences.sort_by_key(|item| (item.offset, item.len));
+
+    Analysis {
+        occurrences,
+        ..Default::default()
+    }
+}
+
+fn push_text_param(
+    text: &str,
+    start: usize,
+    end: usize,
+    scope_start: usize,
+    scope_end: usize,
+    occurrences: &mut Vec<Occurrence>,
+) {
+    let end = end.min(text.len());
+    let Some(slice) = text.get(start.min(end)..end) else {
+        return;
+    };
+    let bytes = slice.as_bytes();
+    let mut colon = None;
+    let mut depth = 0i32;
+
+    for (index, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'[' | b'(' | b'{' => depth += 1,
+            b']' | b')' | b'}' => depth -= 1,
+            b':' if depth == 0 => {
+                colon = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let Some(colon) = colon else {
+        return;
+    };
+
+    let mut cursor = colon;
+
+    while cursor > 0 && text.as_bytes()[start + cursor - 1].is_ascii_whitespace() {
+        cursor -= 1;
+    }
+
+    let name_end = cursor;
+
+    while cursor > 0 && is_ident_byte(text.as_bytes()[start + cursor - 1]) {
+        cursor -= 1;
+    }
+
+    if name_end > cursor {
+        push_syntax(
+            occurrences,
+            start + cursor,
+            name_end - cursor,
+            Role::Parameter,
+            Some((scope_start, scope_end)),
+        );
+    }
+}
+
+fn enclosing_fn_body(text: &str, offset: usize) -> Option<(usize, usize, usize)> {
+    let pairs = brace_pairs(text);
+    let mut candidates: Vec<(usize, usize)> = pairs
+        .iter()
+        .filter(|(open, close)| **open < offset && offset <= **close)
+        .map(|(open, close)| (*open, *close))
+        .collect();
+
+    candidates.sort_by_key(|(open, _)| std::cmp::Reverse(*open));
+
+    for (open, close) in candidates {
+        let header_start = text
+            .get(..open)
+            .and_then(|head| head.rfind('}'))
+            .map(|position| position + 1)
+            .unwrap_or(0);
+
+        if let Some(header) = text.get(header_start..open)
+            && header.contains("fn ")
+        {
+            return Some((header_start, open, close));
+        }
+    }
+
+    None
+}
+
+fn paren_close(text: &str, open: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut cursor = open;
+
+    while cursor < text.len() {
+        match text.as_bytes()[cursor] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+
+                if depth == 0 {
+                    return Some(cursor);
+                }
+            }
+            _ => {}
+        }
+
+        cursor += 1;
+    }
+
+    None
+}
+
+fn brace_pairs(text: &str) -> HashMap<usize, usize> {
+    let bytes = text.as_bytes();
+    let mut stack = Vec::new();
+    let mut pairs = HashMap::new();
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'"' => cursor = text_skip_string(text, cursor),
+            b'/' if bytes.get(cursor + 1) == Some(&b'/') => cursor = text_skip_line(text, cursor),
+            b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
+                cursor = text_skip_comment(text, cursor)
+            }
+            b'{' => {
+                stack.push(cursor);
+                cursor += 1;
+            }
+            b'}' => {
+                if let Some(open) = stack.pop() {
+                    pairs.insert(open, cursor);
+                }
+
+                cursor += 1;
+            }
+            _ => cursor += 1,
+        }
+    }
+
+    pairs
+}
+
+fn text_skip_string(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut cursor = start + 1;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\\' => cursor += 2,
+            b'"' => return cursor + 1,
+            _ => cursor += 1,
+        }
+    }
+
+    bytes.len()
+}
+
+fn text_skip_line(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut cursor = start;
+
+    while cursor < bytes.len() && bytes[cursor] != b'\n' {
+        cursor += 1;
+    }
+
+    cursor
+}
+
+fn text_skip_comment(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut cursor = start + 2;
+
+    while cursor + 1 < bytes.len() {
+        if bytes[cursor] == b'*' && bytes[cursor + 1] == b'/' {
+            return cursor + 2;
+        }
+
+        cursor += 1;
+    }
+
+    bytes.len()
 }
 
 #[cfg(test)]

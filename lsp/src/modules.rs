@@ -367,13 +367,7 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                 }
 
                 for method in *methods {
-                    if let DeclarationKind::FnDecl {
-                        name,
-                        params,
-                        is_pub: true,
-                        ..
-                    } = &method.kind
-                    {
+                    if let DeclarationKind::FnDecl { name, params, .. } = &method.kind {
                         members.push(ModuleMember {
                             module: module.to_string(),
                             name: resolve(&name.0),

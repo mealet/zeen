@@ -46,6 +46,7 @@ enum CompletionBranch {
     StructInit,
     Dot(usize),
     Call(completion::CallTrigger),
+    Plain,
 }
 
 async fn run_and_capture(
@@ -257,6 +258,7 @@ impl Backend {
                 CompletionBranch::Call(trigger) => {
                     completion::call_complete(text, cached, trigger, paths)
                 }
+                CompletionBranch::Plain => completion::complete(text, cached, offset, paths),
             };
         }
 
@@ -272,10 +274,16 @@ impl Backend {
                     break;
                 }
 
-                let candidate = if extra == 0 && !semi {
-                    completion::repair_for_completion(text, offset)
-                } else {
-                    completion::repair_for_completion_semi(text, offset, extra, semi)
+                let candidate = match branch {
+                    CompletionBranch::Plain => {
+                        if extra == 0 {
+                            completion::repair_for_plain(text, offset, semi)
+                        } else {
+                            None
+                        }
+                    }
+                    _ if extra == 0 && !semi => completion::repair_for_completion(text, offset),
+                    _ => completion::repair_for_completion_semi(text, offset, extra, semi),
                 };
 
                 if let Some(next) = candidate
@@ -293,6 +301,14 @@ impl Backend {
         }
 
         if output.analysis.occurrences.is_empty() {
+            if matches!(branch, CompletionBranch::Plain) {
+                let fallback = crate::analysis::build_text_fallback(text, offset);
+
+                if !fallback.occurrences.is_empty() {
+                    return completion::complete(text, &fallback, offset, paths);
+                }
+            }
+
             return Vec::new();
         }
 
@@ -314,6 +330,7 @@ impl Backend {
             CompletionBranch::Call(trigger) => {
                 completion::call_complete(text, &output.analysis, trigger, paths)
             }
+            CompletionBranch::Plain => completion::complete(text, &output.analysis, offset, paths),
         }
     }
 
@@ -1662,10 +1679,19 @@ impl LanguageServer for Backend {
             let implement_items =
                 completion::implement_complete(&document.text, &document.analysis, offset);
 
-            if implement_items.is_empty() {
-                completion::complete(&document.text, &document.analysis, offset, paths)
-            } else {
+            if !implement_items.is_empty() {
                 implement_items
+            } else if document.analysis.occurrences.is_empty() {
+                self.retry_with_repaired(
+                    &uri,
+                    &document.text,
+                    offset,
+                    paths,
+                    CompletionBranch::Plain,
+                )
+                .await
+            } else {
+                completion::complete(&document.text, &document.analysis, offset, paths)
             }
         };
 
