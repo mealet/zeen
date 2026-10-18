@@ -16,9 +16,14 @@ use crate::codegen::{CodeGen, CodegenOptions};
 use crate::fixtures::*;
 
 fn compile(fx: &Fixture, mode: CompilationMode) -> String {
+    compile_for(fx, mode, None)
+}
+
+fn compile_for(fx: &Fixture, mode: CompilationMode, target: Option<&str>) -> String {
     let context = Context::create();
     let options = CodegenOptions {
         mode,
+        target: target.map(str::to_string),
         main_fn: fx.main_fn,
         ..Default::default()
     };
@@ -1195,6 +1200,160 @@ fn extern_struct_params_follow_sysv_abi() {
     assert!(ir.contains("declare i32 @small_c(i32)"), "{ir}");
     assert!(ir.contains("declare void @large_c(ptr byval("), "{ir}");
     assert!(ir.contains("call void @large_c(ptr byval("), "{ir}");
+}
+
+#[test]
+fn extern_large_struct_return_uses_sret() {
+    let mut fx = Fixture::new();
+    let i32 = fx.i32();
+    let void = fx.void();
+
+    let large_def = fx.def("Large", DefKind::Struct);
+    let large_fields: Vec<_> = (0..5)
+        .map(|i| fx.def(&format!("b{i}"), DefKind::Field))
+        .collect();
+    let large = fx.ty(Type::Struct {
+        def_id: large_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_struct_layout(
+        large,
+        StructLayout {
+            def_id: large_def,
+            generic_args: Vec::new(),
+            fields: large_fields
+                .iter()
+                .map(|&def_id| StructFieldLayout { def_id, ty: i32 })
+                .collect(),
+        },
+    );
+
+    fx.add_extern_fn("large_ret", Vec::new(), large, false);
+
+    let caller_def = fx.def("caller", DefKind::Function);
+    let mut f = fx.fn_builder("caller", caller_def, void);
+    let out = f.temp(large);
+    f.entry("bb0");
+    f.block("bb1");
+    f.set_current("bb0");
+    f.call(CallTarget::Extern(0), Vec::new(), out, Some("bb1"));
+    f.set_current("bb1");
+    f.ret_void();
+    f.finish();
+
+    let ir = compile(&fx, CompilationMode::Debug);
+
+    assert!(ir.contains("declare void @large_ret(ptr sret("), "{ir}");
+    assert!(ir.contains("call void @large_ret(ptr"), "{ir}");
+}
+
+#[test]
+fn extern_large_struct_params_use_plain_pointer_on_aarch64() {
+    let mut fx = Fixture::new();
+    let i32 = fx.i32();
+    let void = fx.void();
+
+    let large_def = fx.def("Large", DefKind::Struct);
+    let large_fields: Vec<_> = (0..5)
+        .map(|i| fx.def(&format!("p{i}"), DefKind::Field))
+        .collect();
+    let large = fx.ty(Type::Struct {
+        def_id: large_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_struct_layout(
+        large,
+        StructLayout {
+            def_id: large_def,
+            generic_args: Vec::new(),
+            fields: large_fields
+                .iter()
+                .map(|&def_id| StructFieldLayout { def_id, ty: i32 })
+                .collect(),
+        },
+    );
+
+    fx.add_extern_fn("large_param", vec![large], void, false);
+
+    let caller_def = fx.def("caller", DefKind::Function);
+    let mut f = fx.fn_builder("caller", caller_def, void);
+    let value = f.local("value", large);
+    let out = f.temp(void);
+    f.entry("bb0");
+    f.block("bb1");
+    f.set_current("bb0");
+    f.call(
+        CallTarget::Extern(0),
+        vec![Operand::Copy(place(value), None)],
+        out,
+        Some("bb1"),
+    );
+    f.set_current("bb1");
+    f.ret_void();
+    f.finish();
+
+    let ir = compile_for(&fx, CompilationMode::Debug, Some("aarch64-linux-android"));
+
+    assert!(ir.contains("declare void @large_param(ptr)"), "{ir}");
+    assert!(ir.contains("call void @large_param(ptr"), "{ir}");
+    assert!(!ir.contains("byval(%"), "{ir}");
+}
+
+#[test]
+fn extern_hfa_struct_follows_aapcs_on_aarch64() {
+    let mut fx = Fixture::new();
+    let f32_ty = fx.f32();
+    let void = fx.void();
+
+    let point_def = fx.def("Point", DefKind::Struct);
+    let point_fields: Vec<_> = (0..2)
+        .map(|i| fx.def(&format!("p{i}"), DefKind::Field))
+        .collect();
+    let point = fx.ty(Type::Struct {
+        def_id: point_def,
+        generic_args: Vec::new(),
+    });
+    fx.add_struct_layout(
+        point,
+        StructLayout {
+            def_id: point_def,
+            generic_args: Vec::new(),
+            fields: point_fields
+                .iter()
+                .map(|&def_id| StructFieldLayout { def_id, ty: f32_ty })
+                .collect(),
+        },
+    );
+
+    fx.add_extern_fn("take_point", vec![point], void, false);
+    fx.add_extern_fn("get_point", vec![], point, false);
+
+    let caller_def = fx.def("caller", DefKind::Function);
+    let mut f = fx.fn_builder("caller", caller_def, void);
+    let value = f.local("value", point);
+    let result = f.temp(point);
+    let rv = f.temp(void);
+    f.entry("bb0");
+    f.block("bb1");
+    f.block("bb2");
+    f.set_current("bb0");
+    f.call(
+        CallTarget::Extern(0),
+        vec![Operand::Copy(place(value), None)],
+        rv,
+        Some("bb1"),
+    );
+    f.set_current("bb1");
+    f.call(CallTarget::Extern(1), vec![], result, Some("bb2"));
+    f.set_current("bb2");
+    f.ret_void();
+    f.finish();
+
+    let ir = compile_for(&fx, CompilationMode::Debug, Some("aarch64-linux-android"));
+
+    assert!(ir.contains("declare void @take_point([2 x float])"), "{ir}");
+    assert!(ir.contains("declare [2 x float] @get_point()"), "{ir}");
+    assert!(!ir.contains("byval(%"), "{ir}");
 }
 
 #[test]

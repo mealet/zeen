@@ -82,6 +82,7 @@ pub struct CodeGen<'ctx, 'prog> {
     module: Module<'ctx>,
     machine: TargetMachine,
     target_data: TargetData,
+    target_triple: String,
 
     program: &'prog MirProgram,
     typecheck: &'prog TypeCheckResult,
@@ -126,6 +127,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             Some(user) => TargetMachine::normalize_triple(user),
             None => TargetMachine::get_default_triple(),
         };
+        let target_triple = triple.as_str().to_string_lossy().into_owned();
         if cfg!(target_os = "windows") {
             std::mem::forget(user_triple);
         }
@@ -175,6 +177,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             module,
             machine,
             target_data,
+            target_triple,
             program,
             typecheck,
             resolution,
@@ -503,22 +506,31 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
     fn declare_externs(&mut self) {
         for decl in &self.program.extern_fns {
-            let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = decl
-                .param_types
-                .iter()
-                .map(|&t| {
-                    if let Some(coerced) = self.c_abi_coerce_type(t) {
-                        self.basic_from_any(coerced).into()
-                    } else if self.c_abi_param_byval(t).is_some() {
-                        self.context.ptr_type(AddressSpace::default()).into()
-                    } else {
-                        self.map_basic_type(t).into()
-                    }
-                })
-                .collect();
-            let ret = match self.c_abi_coerce_type(decl.ret_ty) {
-                Some(coerced) => coerced,
-                None => self.map_ret_type(decl.ret_ty),
+            let sret = self.c_abi_param_byval(decl.ret_ty);
+            let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> = Vec::new();
+            if sret.is_some() {
+                param_types.push(self.context.ptr_type(AddressSpace::default()).into());
+            }
+            param_types.extend(
+                decl.param_types
+                    .iter()
+                    .map(|&t| -> BasicMetadataTypeEnum<'ctx> {
+                        if let Some(coerced) = self.c_abi_coerce_type(t) {
+                            self.basic_from_any(coerced).into()
+                        } else if self.c_abi_param_byval(t).is_some() {
+                            self.context.ptr_type(AddressSpace::default()).into()
+                        } else {
+                            self.map_basic_type(t).into()
+                        }
+                    }),
+            );
+            let ret = if sret.is_some() {
+                self.context.void_type().into()
+            } else {
+                match self.c_abi_coerce_type(decl.ret_ty) {
+                    Some(coerced) => coerced,
+                    None => self.map_ret_type(decl.ret_ty),
+                }
             };
             let fn_type = self.make_fn_type(ret, &param_types, decl.is_variadic);
             if self.module.get_function(&decl.symbol_name).is_none() {
@@ -527,13 +539,25 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     fn_type,
                     Some(inkwell::module::Linkage::External),
                 );
+                let offset = if let Some(struct_ty) = sret {
+                    let kind = Attribute::get_named_enum_kind_id("sret");
+                    let attr = self
+                        .context
+                        .create_type_attribute(kind, struct_ty.as_any_type_enum());
+                    function.add_attribute(AttributeLoc::Param(0), attr);
+                    1
+                } else {
+                    0
+                };
                 for (idx, &t) in decl.param_types.iter().enumerate() {
-                    if let Some(struct_ty) = self.c_abi_param_byval(t) {
+                    if self.c_struct_args_byval()
+                        && let Some(struct_ty) = self.c_abi_param_byval(t)
+                    {
                         let kind = Attribute::get_named_enum_kind_id("byval");
                         let attr = self
                             .context
                             .create_type_attribute(kind, struct_ty.as_any_type_enum());
-                        function.add_attribute(AttributeLoc::Param(idx as u32), attr);
+                        function.add_attribute(AttributeLoc::Param((idx + offset) as u32), attr);
                     }
                 }
             }
@@ -815,7 +839,24 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
         let struct_ty = *self.struct_types.get(&ty)?;
         let size = self.target_data.get_abi_size(&struct_ty);
-        if size == 0 || size > 16 {
+        if size == 0 {
+            return None;
+        }
+
+        if self.target_is_aarch64() {
+            if let Some((elem, count)) = self.c_abi_hfa(ty) {
+                return Some(elem.array_type(count as u32).into());
+            }
+            if size > 16 {
+                return None;
+            }
+            if size <= 8 {
+                return Some(self.context.i64_type().into());
+            }
+            return Some(self.context.i64_type().array_type(2).into());
+        }
+
+        if size > 16 {
             return None;
         }
         let num_eightbytes = size.div_ceil(8) as usize;
@@ -870,15 +911,63 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         }
     }
 
+    fn c_abi_hfa(&self, ty: TypeId) -> Option<(BasicTypeEnum<'ctx>, usize)> {
+        if !matches!(self.typecheck.interner.get(ty), Type::Struct { .. }) {
+            return None;
+        }
+        let struct_ty = *self.struct_types.get(&ty)?;
+        let fields = struct_ty.get_field_types();
+        if fields.is_empty() || fields.len() > 4 {
+            return None;
+        }
+        let BasicTypeEnum::FloatType(first) = fields[0] else {
+            return None;
+        };
+        let bits = first.get_bit_width();
+        if bits != 32 && bits != 64 {
+            return None;
+        }
+        if !fields
+            .iter()
+            .all(|field| matches!(field, BasicTypeEnum::FloatType(f) if f.get_bit_width() == bits))
+        {
+            return None;
+        }
+        let size = self.target_data.get_abi_size(&struct_ty);
+        if size != (fields.len() as u64) * u64::from(bits / 8) {
+            return None;
+        }
+        let elem = if bits == 32 {
+            self.context.f32_type().into()
+        } else {
+            self.context.f64_type().into()
+        };
+        Some((elem, fields.len()))
+    }
+
+    fn target_is_aarch64(&self) -> bool {
+        self.target_triple.starts_with("aarch64") || self.target_triple.starts_with("arm64")
+    }
+
     fn c_abi_param_byval(&self, ty: TypeId) -> Option<StructType<'ctx>> {
         if !matches!(self.typecheck.interner.get(ty), Type::Struct { .. }) {
             return None;
         }
         let struct_ty = *self.struct_types.get(&ty)?;
+        if self.target_is_aarch64() && self.c_abi_hfa(ty).is_some() {
+            return None;
+        }
         if self.target_data.get_abi_size(&struct_ty) <= 16 {
             return None;
         }
         Some(struct_ty)
+    }
+
+    fn c_struct_args_byval(&self) -> bool {
+        if self.target_triple.starts_with("aarch64") {
+            return false;
+        }
+        !(self.target_triple.starts_with("x86_64") && self.target_triple.contains("windows"))
     }
 
     fn integer_type_for_bytes(&self, bytes: u64) -> BasicTypeEnum<'ctx> {
@@ -2487,7 +2576,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             _ => false,
         };
 
-        let arg_values: Vec<BasicMetadataValueEnum<'ctx>> = args
+        let mut arg_values: Vec<BasicMetadataValueEnum<'ctx>> = args
             .iter()
             .enumerate()
             .map(|(i, arg)| {
@@ -2506,8 +2595,16 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     if is_extern && let Some(coerced) = self.c_abi_coerce_type(*param_ty) {
                         let coerced = self.basic_from_any(coerced);
                         if coerced != value.get_type() {
-                            let slot = self.entry_alloca(value.get_type(), "abi.arg.slot");
-                            self.builder.build_store(slot, value).unwrap();
+                            let slot = self.entry_alloca(coerced, "abi.arg.slot");
+                            let struct_ptr = self
+                                .builder
+                                .build_pointer_cast(
+                                    slot,
+                                    self.context.ptr_type(AddressSpace::default()),
+                                    "abi.arg.struct",
+                                )
+                                .unwrap();
+                            self.builder.build_store(struct_ptr, value).unwrap();
                             return self
                                 .builder
                                 .build_load(coerced, slot, "abi.arg")
@@ -2541,6 +2638,14 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                 self.operand_value(arg, ty, func).into()
             })
             .collect();
+
+        if let CallTarget::Extern(idx) = target
+            && self
+                .c_abi_param_byval(self.program.extern_fns[*idx].ret_ty)
+                .is_some()
+        {
+            arg_values.insert(0, self.place_ptr(destination, func).into());
+        }
 
         let call = match target {
             CallTarget::Direct(id) => {
@@ -2590,7 +2695,9 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
         if is_extern {
             for (idx, &param_ty) in param_types.iter().enumerate() {
-                if let Some(struct_ty) = self.c_abi_param_byval(param_ty) {
+                if self.c_struct_args_byval()
+                    && let Some(struct_ty) = self.c_abi_param_byval(param_ty)
+                {
                     let kind = Attribute::get_named_enum_kind_id("byval");
                     let attr = self
                         .context
