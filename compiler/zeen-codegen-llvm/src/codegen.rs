@@ -2588,6 +2588,18 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             }
         };
 
+        if is_extern {
+            for (idx, &param_ty) in param_types.iter().enumerate() {
+                if let Some(struct_ty) = self.c_abi_param_byval(param_ty) {
+                    let kind = Attribute::get_named_enum_kind_id("byval");
+                    let attr = self
+                        .context
+                        .create_type_attribute(kind, struct_ty.as_any_type_enum());
+                    call.add_attribute(AttributeLoc::Param(idx as u32), attr);
+                }
+            }
+        }
+
         match call.try_as_basic_value() {
             ValueKind::Basic(value) => {
                 let extern_ret = match target {

@@ -1194,6 +1194,7 @@ fn extern_struct_params_follow_sysv_abi() {
 
     assert!(ir.contains("declare i32 @small_c(i32)"), "{ir}");
     assert!(ir.contains("declare void @large_c(ptr byval("), "{ir}");
+    assert!(ir.contains("call void @large_c(ptr byval("), "{ir}");
 }
 
 #[test]
