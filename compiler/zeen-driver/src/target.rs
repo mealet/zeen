@@ -71,9 +71,8 @@ impl Target {
 
     fn derive_family(os: &str, arch: &str) -> String {
         match os {
-            "linux" | "macos" | "darwin" | "freebsd" | "openbsd" | "netbsd" | "dragonfly" => {
-                "unix".into()
-            }
+            "linux" | "macos" | "darwin" | "freebsd" | "openbsd" | "netbsd" | "dragonfly"
+            | "android" => "unix".into(),
             "windows" => "windows".into(),
             _ if arch == "wasm32" || arch == "wasm64" => "wasm".into(),
             _ => String::new(),
@@ -131,6 +130,12 @@ mod tests {
     #[test]
     fn linux_family_is_unix() {
         let target = Target::parse("x86_64-unknown-linux-gnu");
+        assert_eq!(target.family, "unix");
+    }
+
+    #[test]
+    fn android_family_is_unix() {
+        let target = Target::parse("aarch64-linux-android");
         assert_eq!(target.family, "unix");
     }
 
