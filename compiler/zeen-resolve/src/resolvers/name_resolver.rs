@@ -116,6 +116,8 @@ impl<'ctx> NameResolver {
             self.result.root_module = display.clone();
         }
 
+        self.result.rebuild_def_index();
+
         Ok(self.result)
     }
 

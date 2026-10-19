@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{OnceCell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
 };
@@ -83,6 +83,8 @@ pub struct TypeChecker<'res> {
     extracting_typename: bool,
 
     type_names_as_values: HashMap<HirId, (DefId, Source)>,
+
+    range_def: OnceCell<Option<DefId>>,
 }
 
 struct FnSignature {
@@ -180,6 +182,7 @@ impl<'res> TypeChecker<'res> {
             method_owning_interface: HashMap::new(),
             extracting_typename: false,
             type_names_as_values: HashMap::new(),
+            range_def: OnceCell::new(),
         }
     }
 
@@ -2522,7 +2525,7 @@ impl<'res> TypeChecker<'res> {
                     self.check_expr(end, usize_ty, false);
                 }
 
-                let range_def = match self.find_struct_def("Range") {
+                let range_def = match self.range_def() {
                     Some(def) => def,
                     None => {
                         self.report(TypeError::DanglingDefId {
@@ -2615,12 +2618,8 @@ impl<'res> TypeChecker<'res> {
     // >> Macros
 
     fn resolve_string_type(&mut self) -> Option<TypeId> {
-        let string_def = self.resolution.defs.iter().find_map(|(def, info)| {
-            matches!(info.kind, DefKind::Struct)
-                .then(|| self.interner.borrow().resolve(&info.name) == "String")
-                .filter(|found| *found)
-                .map(|_| *def)
-        })?;
+        let name = self.interner.borrow().get("String")?;
+        let string_def = self.resolution.type_def_by_name(name, &[DefKind::Struct])?;
 
         Some(self.result.interner.intern(Type::Struct {
             def_id: string_def,
@@ -4364,15 +4363,12 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn find_struct_def(&self, struct_name: &str) -> Option<DefId> {
-        self.resolution.defs.iter().find_map(|(def, info)| {
-            if matches!(info.kind, DefKind::Struct)
-                && self.interner.borrow().resolve(&info.name) == struct_name
-            {
-                Some(*def)
-            } else {
-                None
-            }
-        })
+        let name = self.interner.borrow().get(struct_name)?;
+        self.resolution.type_def_by_name(name, &[DefKind::Struct])
+    }
+
+    fn range_def(&self) -> Option<DefId> {
+        *self.range_def.get_or_init(|| self.find_struct_def("Range"))
     }
 
     fn lookup_def_type(&mut self, def_id: DefId, source: Source) -> TypeId {
@@ -7804,7 +7800,7 @@ impl<'res> TypeChecker<'res> {
         expr_id: HirId,
         source: &Source,
     ) -> TypeId {
-        let range_ty = match self.find_struct_def("Range") {
+        let range_ty = match self.range_def() {
             Some(def) => self.result.interner.intern(Type::Struct {
                 def_id: def,
                 generic_args: vec![],

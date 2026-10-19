@@ -1,4 +1,5 @@
 use lasso::Spur;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 
 use zeen_ast::{
@@ -73,7 +74,7 @@ pub struct DefInfo {
     pub is_pub: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DefKind {
     Function,
     Struct,
@@ -99,6 +100,7 @@ pub struct ResolutionResult {
     /// Generic bindings of `implement` decls -> Resolution (indexed by slot)
     pub implement_generic_bindings: HashMap<BindingSlotKey, Resolution>,
     pub defs: HashMap<DefId, DefInfo>,
+    pub defs_by_name: HashMap<Spur, SmallVec<[DefId; 1]>>,
 
     /// (struct, interface) -> methods
     pub impls: HashMap<(DefId, DefId), Vec<DefId>>,
@@ -118,6 +120,39 @@ pub struct ResolutionResult {
 }
 
 impl ResolutionResult {
+    pub fn rebuild_def_index(&mut self) {
+        self.defs_by_name.clear();
+        for (id, info) in &self.defs {
+            self.defs_by_name.entry(info.name).or_default().push(*id);
+        }
+        for ids in self.defs_by_name.values_mut() {
+            ids.sort_unstable();
+        }
+    }
+
+    pub fn type_def_by_name(&self, name: Spur, kinds: &[DefKind]) -> Option<DefId> {
+        if self.defs_by_name.is_empty() {
+            return self
+                .defs
+                .iter()
+                .filter(|(_, info)| info.name == name && kinds.contains(&info.kind))
+                .map(|(id, _)| *id)
+                .min();
+        }
+
+        for id in self.defs_by_name.get(&name)? {
+            if self
+                .defs
+                .get(id)
+                .map(|info| kinds.contains(&info.kind))
+                .unwrap_or(false)
+            {
+                return Some(*id);
+            }
+        }
+        None
+    }
+
     pub fn resolution_of_expr(&self, expr: &Expression) -> Option<Resolution> {
         self.expr_bindings.get(&NodeKey::from_expr(expr)).copied()
     }

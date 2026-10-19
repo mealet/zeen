@@ -1582,25 +1582,13 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn find_struct_def(&self, struct_name: &str) -> Option<DefId> {
-        for (def, info) in &self.resolution.defs {
-            if matches!(info.kind, DefKind::Struct)
-                && self.rodeo.borrow().resolve(&info.name) == struct_name
-            {
-                return Some(*def);
-            }
-        }
-        None
+        let name = self.rodeo.borrow().get(struct_name)?;
+        self.resolution.type_def_by_name(name, &[DefKind::Struct])
     }
 
     fn find_enum_def(&self, enum_name: &str) -> Option<DefId> {
-        for (def, info) in &self.resolution.defs {
-            if matches!(info.kind, DefKind::Enum)
-                && self.rodeo.borrow().resolve(&info.name) == enum_name
-            {
-                return Some(*def);
-            }
-        }
-        None
+        let name = self.rodeo.borrow().get(enum_name)?;
+        self.resolution.type_def_by_name(name, &[DefKind::Enum])
     }
 
     fn option_variants(&self, option_def: DefId) -> (DefId, DefId) {
@@ -6835,12 +6823,10 @@ impl<'ctx> MirLowering<'ctx> {
             return self.format_string;
         }
 
-        let struct_def = self.resolution.defs.iter().find_map(|(def, info)| {
-            matches!(info.kind, DefKind::Struct)
-                .then(|| self.rodeo.borrow().resolve(&info.name) == "String")
-                .filter(|found| *found)
-                .map(|_| *def)
-        })?;
+        let struct_def = {
+            let name = self.rodeo.borrow().get("String")?;
+            self.resolution.type_def_by_name(name, &[DefKind::Struct])?
+        };
 
         let ty = self.typecheck.interner.intern(Type::Struct {
             def_id: struct_def,
@@ -6983,12 +6969,10 @@ impl<'ctx> MirLowering<'ctx> {
             return self.outstream;
         }
 
-        let struct_def = self.resolution.defs.iter().find_map(|(def, info)| {
-            matches!(info.kind, DefKind::Struct)
-                .then(|| self.rodeo.borrow().resolve(&info.name) == "OutStream")
-                .filter(|found| *found)
-                .map(|_| *def)
-        })?;
+        let struct_def = {
+            let name = self.rodeo.borrow().get("OutStream")?;
+            self.resolution.type_def_by_name(name, &[DefKind::Struct])?
+        };
 
         let ty = self.typecheck.interner.intern(Type::Struct {
             def_id: struct_def,

@@ -91,16 +91,7 @@ impl<'res> HirLowering<'res> {
 
     fn lookup_type_def_by_name(&self, name: Spur) -> Option<DefId> {
         self.resolution
-            .defs
-            .iter()
-            .find(|(_, info)| {
-                info.name == name
-                    && matches!(
-                        info.kind,
-                        DefKind::Interface | DefKind::Struct | DefKind::Enum
-                    )
-            })
-            .map(|(id, _)| *id)
+            .type_def_by_name(name, &[DefKind::Interface, DefKind::Struct, DefKind::Enum])
     }
 
     fn struct_init_path_def(&self, expr: &Expression) -> (Option<DefId>, Option<Spur>) {
