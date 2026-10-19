@@ -55,6 +55,8 @@ pub struct NameResolver {
     current_module: String,
     current_canon: PathBuf,
     def_canon: HashMap<DefId, PathBuf>,
+    own_values: HashMap<PathBuf, HashMap<Spur, DefId>>,
+    own_types: HashMap<PathBuf, HashMap<Spur, DefId>>,
 
     visible: HashMap<PathBuf, ScopeContent>,
     ambiguous_values: HashMap<PathBuf, HashSet<Spur>>,
@@ -100,6 +102,8 @@ impl<'ctx> NameResolver {
             current_module: String::new(),
             current_canon: PathBuf::new(),
             def_canon: HashMap::new(),
+            own_values: HashMap::new(),
+            own_types: HashMap::new(),
 
             visible: HashMap::new(),
             ambiguous_values: HashMap::new(),
@@ -330,19 +334,24 @@ impl<'ctx> NameResolver {
     }
 
     fn own_pub_items(&self, canon: &PathBuf, value_ns: bool) -> Vec<(Spur, DefId)> {
-        self.result
-            .defs
+        let table = if value_ns {
+            &self.own_values
+        } else {
+            &self.own_types
+        };
+        let Some(items) = table.get(canon) else {
+            return Vec::new();
+        };
+        items
             .iter()
-            .filter(|(id, info)| {
-                self.def_canon.get(id) == Some(canon)
-                    && info.is_pub
-                    && if value_ns {
-                        Self::is_value_kind(&info.kind)
-                    } else {
-                        Self::is_type_kind(&info.kind)
-                    }
+            .filter(|(_, id)| {
+                self.result
+                    .defs
+                    .get(id)
+                    .map(|info| info.is_pub)
+                    .unwrap_or(false)
             })
-            .map(|(id, info)| (info.name, *id))
+            .map(|(name, id)| (*name, *id))
             .collect()
     }
 
@@ -359,6 +368,8 @@ impl<'ctx> NameResolver {
                 own_types.entry(canon).or_default().insert(info.name, *id);
             }
         }
+        self.own_values = own_values;
+        self.own_types = own_types;
 
         let mut core_values: HashMap<Spur, DefId> = HashMap::new();
         let mut core_types: HashMap<Spur, DefId> = HashMap::new();
@@ -433,13 +444,13 @@ impl<'ctx> NameResolver {
 
             let mut own_keys_values: HashSet<Spur> = HashSet::new();
             let mut own_keys_types: HashSet<Spur> = HashSet::new();
-            if let Some(items) = own_values.get(canon) {
+            if let Some(items) = self.own_values.get(canon) {
                 for (name, id) in items {
                     content.values.insert(*name, *id);
                     own_keys_values.insert(*name);
                 }
             }
-            if let Some(items) = own_types.get(canon) {
+            if let Some(items) = self.own_types.get(canon) {
                 for (name, id) in items {
                     content.types.insert(*name, *id);
                     own_keys_types.insert(*name);
@@ -570,17 +581,22 @@ impl<'ctx> NameResolver {
         let Some(edges) = self.graph.uses.get(&self.current_canon) else {
             return false;
         };
+        let table = if value_ns {
+            &self.own_values
+        } else {
+            &self.own_types
+        };
         edges.iter().any(|edge| {
-            self.result.defs.iter().any(|(id, info)| {
-                self.def_canon.get(id) == Some(&edge.target)
-                    && !info.is_pub
-                    && info.name == name
-                    && if value_ns {
-                        Self::is_value_kind(&info.kind)
-                    } else {
-                        Self::is_type_kind(&info.kind)
-                    }
-            })
+            table
+                .get(&edge.target)
+                .and_then(|items| items.get(&name))
+                .is_some_and(|id| {
+                    self.result
+                        .defs
+                        .get(id)
+                        .map(|info| !info.is_pub)
+                        .unwrap_or(false)
+                })
         })
     }
 
