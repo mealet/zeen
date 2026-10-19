@@ -1,6 +1,6 @@
+use rustc_hash::FxHashSet as HashSet;
 use std::{
     cell::RefCell,
-    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     rc::Rc,
@@ -54,7 +54,7 @@ fn compile(src: &str) -> Result<Compiled, Vec<String>> {
         paths: PathsConfig {
             project_root: PathBuf::from("/"),
             std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")),
-            linked: HashSet::new(),
+            linked: HashSet::default(),
             packages: Vec::new(),
         },
         core_files: core_files(),
@@ -1439,7 +1439,7 @@ fn main() {
         !targets.iter().any(|t| t == "%0.i"),
         "must not drop the whole live `Inner`, got: {targets:?}"
     );
-    let prefixes: std::collections::HashSet<String> = targets
+    let prefixes: rustc_hash::FxHashSet<String> = targets
         .iter()
         .map(|t| {
             let mut parts = t.splitn(3, '.');

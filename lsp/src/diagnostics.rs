@@ -1,7 +1,8 @@
 use std::str::FromStr;
+
+use rustc_hash::FxHashSet as HashSet;
 use std::{
     cell::RefCell,
-    collections::HashSet,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -223,7 +224,7 @@ fn check_full(
         paths: zeen_driver::PathsConfig {
             project_root: project_root.to_path_buf(),
             std_root: resolve_std_root(),
-            linked: HashSet::new(),
+            linked: HashSet::default(),
             packages: packages.to_vec(),
         },
         core_files: zeen_driver::CORE_FILES

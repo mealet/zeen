@@ -1,6 +1,6 @@
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     rc::Rc,
@@ -92,9 +92,9 @@ impl<'ctx> IncludeResolver<'ctx> {
             src,
             filename,
 
-            modules: HashMap::new(),
+            modules: HashMap::default(),
             root: None,
-            edges: HashMap::new(),
+            edges: HashMap::default(),
             errors: Vec::new(),
         }
     }
@@ -641,7 +641,7 @@ impl<'ctx> IncludeResolver<'ctx> {
             if touched.is_empty() {
                 break;
             }
-            let mut visiting = HashSet::new();
+            let mut visiting = HashSet::default();
             for key in &touched {
                 let decls = self.modules[key].decls;
                 self.load_uses(key, decls, &mut visiting);
@@ -671,7 +671,7 @@ impl<'ctx> IncludeResolver<'ctx> {
             },
         );
 
-        let mut visiting: HashSet<PathBuf> = HashSet::new();
+        let mut visiting: HashSet<PathBuf> = HashSet::default();
         visiting.insert(root_canonical.clone());
         self.load_links(&root_canonical, root_decls);
         self.load_uses(&root_canonical, root_decls, &mut visiting);
@@ -687,7 +687,7 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
 
         let mut merged: Vec<&'ctx Declaration<'ctx>> = Vec::new();
-        let mut visited_merge: HashSet<PathBuf> = HashSet::new();
+        let mut visited_merge: HashSet<PathBuf> = HashSet::default();
 
         self.merge_module(&root_canonical, true, &mut merged, &mut visited_merge);
 
@@ -962,7 +962,7 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
 
         let mut seen: HashMap<(NamespaceTag, Spur), (SourceSpan, &'ctx Declaration<'ctx>)> =
-            HashMap::new();
+            HashMap::default();
 
         for decl in merged {
             let entry: (NamespaceTag, Spur, SourceSpan, bool) = match decl.kind {

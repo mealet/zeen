@@ -8,6 +8,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+rustc-hash = "1.1.0"
 bumpalo = "3.20.2"
 lasso = "0.7.3"
 miette = "7.6.0"

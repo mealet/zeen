@@ -1,10 +1,10 @@
 use lasso::{Rodeo, Spur};
 use miette::{NamedSource, SourceSpan};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use smol_str::SmolStr;
 
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -93,7 +93,7 @@ impl<'ctx> NameResolver {
             capture_stack: Vec::new(),
             current_fn_def: None,
             closure_counter: 0,
-            global_deps: HashMap::new(),
+            global_deps: HashMap::default(),
 
             next_def_id: 0,
             current_src: NamedSource::new(filename.as_str(), src.clone()),
@@ -101,13 +101,13 @@ impl<'ctx> NameResolver {
             graph,
             current_module: String::new(),
             current_canon: PathBuf::new(),
-            def_canon: HashMap::new(),
-            own_values: HashMap::new(),
-            own_types: HashMap::new(),
+            def_canon: HashMap::default(),
+            own_values: HashMap::default(),
+            own_types: HashMap::default(),
 
-            visible: HashMap::new(),
-            ambiguous_values: HashMap::new(),
-            ambiguous_types: HashMap::new(),
+            visible: HashMap::default(),
+            ambiguous_values: HashMap::default(),
+            ambiguous_types: HashMap::default(),
         }
     }
 
@@ -356,8 +356,8 @@ impl<'ctx> NameResolver {
     }
 
     fn build_module_tables(&mut self) {
-        let mut own_values: HashMap<PathBuf, HashMap<Spur, DefId>> = HashMap::new();
-        let mut own_types: HashMap<PathBuf, HashMap<Spur, DefId>> = HashMap::new();
+        let mut own_values: HashMap<PathBuf, HashMap<Spur, DefId>> = HashMap::default();
+        let mut own_types: HashMap<PathBuf, HashMap<Spur, DefId>> = HashMap::default();
         for (id, info) in &self.result.defs {
             let Some(canon) = self.def_canon.get(id).cloned() else {
                 continue;
@@ -371,8 +371,8 @@ impl<'ctx> NameResolver {
         self.own_values = own_values;
         self.own_types = own_types;
 
-        let mut core_values: HashMap<Spur, DefId> = HashMap::new();
-        let mut core_types: HashMap<Spur, DefId> = HashMap::new();
+        let mut core_values: HashMap<Spur, DefId> = HashMap::default();
+        let mut core_types: HashMap<Spur, DefId> = HashMap::default();
         for (id, info) in &self.result.defs {
             let Some(canon) = self.def_canon.get(id) else {
                 continue;
@@ -387,8 +387,8 @@ impl<'ctx> NameResolver {
             }
         }
 
-        let mut re_values: HashMap<PathBuf, HashSet<(Spur, DefId)>> = HashMap::new();
-        let mut re_types: HashMap<PathBuf, HashSet<(Spur, DefId)>> = HashMap::new();
+        let mut re_values: HashMap<PathBuf, HashSet<(Spur, DefId)>> = HashMap::default();
+        let mut re_types: HashMap<PathBuf, HashSet<(Spur, DefId)>> = HashMap::default();
         for canon in self.graph.display.keys() {
             re_values.insert(
                 canon.clone(),
@@ -430,9 +430,9 @@ impl<'ctx> NameResolver {
             }
         }
 
-        let mut visible: HashMap<PathBuf, ScopeContent> = HashMap::new();
-        let mut ambiguous_values: HashMap<PathBuf, HashSet<Spur>> = HashMap::new();
-        let mut ambiguous_types: HashMap<PathBuf, HashSet<Spur>> = HashMap::new();
+        let mut visible: HashMap<PathBuf, ScopeContent> = HashMap::default();
+        let mut ambiguous_values: HashMap<PathBuf, HashSet<Spur>> = HashMap::default();
+        let mut ambiguous_types: HashMap<PathBuf, HashSet<Spur>> = HashMap::default();
         for canon in self.graph.display.keys() {
             let mut content = ScopeContent::default();
             content
@@ -442,8 +442,8 @@ impl<'ctx> NameResolver {
                 .types
                 .extend(core_types.iter().map(|(k, v)| (*k, *v)));
 
-            let mut own_keys_values: HashSet<Spur> = HashSet::new();
-            let mut own_keys_types: HashSet<Spur> = HashSet::new();
+            let mut own_keys_values: HashSet<Spur> = HashSet::default();
+            let mut own_keys_types: HashSet<Spur> = HashSet::default();
             if let Some(items) = self.own_values.get(canon) {
                 for (name, id) in items {
                     content.values.insert(*name, *id);
@@ -1226,7 +1226,7 @@ impl<'ctx> NameResolver {
     }
 
     fn check_global_var_cycles(&mut self) {
-        let mut state: HashMap<DefId, u8> = HashMap::new();
+        let mut state: HashMap<DefId, u8> = HashMap::default();
         let mut stack: Vec<DefId> = Vec::new();
 
         let mut nodes: Vec<DefId> = self.global_deps.keys().copied().collect();

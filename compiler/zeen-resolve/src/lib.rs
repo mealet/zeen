@@ -84,9 +84,9 @@ mod tests {
     use super::*;
     use crate::error::ResolveError;
     use lasso::Rodeo;
+    use rustc_hash::FxHashSet as HashSet;
     use std::{
         cell::RefCell,
-        collections::HashSet,
         path::{Path, PathBuf},
         rc::Rc,
         sync::Arc,
@@ -127,7 +127,7 @@ mod tests {
             paths: PathsConfig {
                 project_root: PathBuf::from("/"),
                 std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")),
-                linked: HashSet::new(),
+                linked: HashSet::default(),
                 packages: Vec::new(),
             },
             core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
@@ -210,7 +210,7 @@ mod tests {
             paths: PathsConfig {
                 project_root: dir,
                 std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")),
-                linked: HashSet::new(),
+                linked: HashSet::default(),
                 packages: Vec::new(),
             },
             core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use zeen_mir::{LocalId, Place, PlaceElem};
 use zeen_resolve::DefId;
@@ -21,7 +21,7 @@ pub struct PartialMoveState {
 impl Default for PartialMoveState {
     fn default() -> Self {
         Self {
-            fields: HashMap::new(),
+            fields: HashMap::default(),
             untracked: ValueState::Initialized,
         }
     }
@@ -34,7 +34,7 @@ impl PartialMoveState {
 
     pub fn of_rebuild() -> Self {
         Self {
-            fields: HashMap::new(),
+            fields: HashMap::default(),
             untracked: ValueState::Uninitialized,
         }
     }

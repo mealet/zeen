@@ -1,6 +1,6 @@
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::{
     cell::{OnceCell, RefCell},
-    collections::{HashMap, HashSet},
     rc::Rc,
 };
 
@@ -165,23 +165,23 @@ impl<'res> TypeChecker<'res> {
             errors: Vec::new(),
             expect_assign_interface: false,
             found_main_fn: false,
-            bodies_checked: HashSet::new(),
-            bodies_in_progress: HashSet::new(),
+            bodies_checked: HashSet::default(),
+            bodies_in_progress: HashSet::default(),
             interner,
-            fn_sigs: HashMap::new(),
+            fn_sigs: HashMap::default(),
             interface_registry,
-            interface_methods: HashMap::new(),
-            interface_generics: HashMap::new(),
-            struct_generics: HashMap::new(),
-            struct_methods: HashMap::new(),
-            enum_variants: HashMap::new(),
-            enum_generics: HashMap::new(),
-            type_aliases: HashMap::new(),
-            in_progress_aliases: HashSet::new(),
-            all_generic_bounds: HashMap::new(),
-            method_owning_interface: HashMap::new(),
+            interface_methods: HashMap::default(),
+            interface_generics: HashMap::default(),
+            struct_generics: HashMap::default(),
+            struct_methods: HashMap::default(),
+            enum_variants: HashMap::default(),
+            enum_generics: HashMap::default(),
+            type_aliases: HashMap::default(),
+            in_progress_aliases: HashSet::default(),
+            all_generic_bounds: HashMap::default(),
+            method_owning_interface: HashMap::default(),
             extracting_typename: false,
-            type_names_as_values: HashMap::new(),
+            type_names_as_values: HashMap::default(),
             range_def: OnceCell::new(),
         }
     }
@@ -1231,7 +1231,7 @@ impl<'res> TypeChecker<'res> {
                     .map(|info| info.variants.iter().map(|v| v.payload.clone()).collect())
                     .unwrap_or_default();
 
-                let mut anon_payload_copy: HashMap<DefId, bool> = HashMap::new();
+                let mut anon_payload_copy: HashMap<DefId, bool> = HashMap::default();
 
                 for payload in &variant_payloads {
                     if let Some(VariantPayload::Struct(payload_ty)) = payload
@@ -1453,8 +1453,8 @@ impl<'res> TypeChecker<'res> {
             }
         });
 
-        let mut generic_bindings = HashMap::new();
-        let mut generic_bounds = HashMap::new();
+        let mut generic_bindings = HashMap::default();
+        let mut generic_bounds = HashMap::default();
 
         for generic in &sig_generics {
             let ty = self.result.interner.intern(Type::GenericParam(*generic));
@@ -1582,7 +1582,7 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn finalize_fat_types(&mut self) {
-        let mut resolved: HashMap<DefId, TypeId> = HashMap::new();
+        let mut resolved: HashMap<DefId, TypeId> = HashMap::default();
         let candidates: Vec<(DefId, Vec<(HirId, Source)>)> = self
             .result
             .fat_return_candidates
@@ -1591,7 +1591,7 @@ impl<'res> TypeChecker<'res> {
             .collect();
 
         for (fn_def, exprs) in candidates {
-            if self.resolve_fn_fat_return(fn_def, &exprs, &mut resolved, &mut HashSet::new()) {
+            if self.resolve_fn_fat_return(fn_def, &exprs, &mut resolved, &mut HashSet::default()) {
                 continue;
             }
         }
@@ -1608,7 +1608,8 @@ impl<'res> TypeChecker<'res> {
             if !self.is_fat_bound(ty) {
                 continue;
             }
-            if let Some(storage) = self.resolve_fat_def(def_id, &mut resolved, &mut HashSet::new())
+            if let Some(storage) =
+                self.resolve_fat_def(def_id, &mut resolved, &mut HashSet::default())
             {
                 self.result.def_types.insert(def_id, storage);
             }
@@ -1625,7 +1626,7 @@ impl<'res> TypeChecker<'res> {
                 continue;
             }
             if let Some(storage) =
-                self.resolve_fat_expr(expr_id, &mut resolved, &mut HashSet::new())
+                self.resolve_fat_expr(expr_id, &mut resolved, &mut HashSet::default())
             {
                 self.result.expr_types.insert(expr_id, storage);
             }
@@ -3412,7 +3413,7 @@ impl<'res> TypeChecker<'res> {
             .map(|info| info.fields.clone())
             .unwrap_or_default();
 
-        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
 
         if let Some(expected) = expected
             && let Type::Struct {
@@ -3456,8 +3457,10 @@ impl<'res> TypeChecker<'res> {
         }
 
         let expected_names: HashSet<Spur> = field_table.iter().map(|info| info.name).collect();
-        let mut provided_names: HashSet<Spur> = HashSet::with_capacity(fields.len());
-        let mut field_value_types: HashMap<Spur, TypeId> = HashMap::with_capacity(fields.len());
+        let mut provided_names: HashSet<Spur> =
+            HashSet::with_capacity_and_hasher(fields.len(), Default::default());
+        let mut field_value_types: HashMap<Spur, TypeId> =
+            HashMap::with_capacity_and_hasher(fields.len(), Default::default());
 
         for f in fields {
             provided_names.insert(f.name);
@@ -3852,8 +3855,8 @@ impl<'res> TypeChecker<'res> {
 
         let mut acc: Option<(TypeId, &HirExpr)> = None;
         let mut covered_all = false;
-        let mut seen: HashSet<SwitchValue> = HashSet::new();
-        let mut seen_variants: HashSet<DefId> = HashSet::new();
+        let mut seen: HashSet<SwitchValue> = HashSet::default();
+        let mut seen_variants: HashSet<DefId> = HashSet::default();
 
         for arm in arms {
             if covered_all {
@@ -4578,7 +4581,7 @@ impl<'res> TypeChecker<'res> {
             });
         }
 
-        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
 
         for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
             let ty = self.lower_hir_type(explicit);
@@ -4749,7 +4752,7 @@ impl<'res> TypeChecker<'res> {
             &sig_params[..]
         };
 
-        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
         for (param_ty, arg) in user_params.iter().zip(args.iter()) {
             let param_ty = self.substitute_self(*param_ty, obj_ty);
             self.infer_or_check_arg(param_ty, arg, &mut bindings, source.clone());
@@ -5337,7 +5340,7 @@ impl<'res> TypeChecker<'res> {
         }
 
         let enum_generics = self.type_member_generics(enum_def);
-        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
 
         if let Some(expected) = expected
             && let Type::Enum {
@@ -5588,7 +5591,7 @@ impl<'res> TypeChecker<'res> {
         };
 
         let enum_generics = self.type_member_generics(enum_def);
-        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
 
         if let Some(expected) = expected
             && let Type::Enum {
@@ -5625,8 +5628,10 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        let mut provided_names: HashSet<Spur> = HashSet::with_capacity(fields.len());
-        let mut field_value_types: HashMap<Spur, TypeId> = HashMap::with_capacity(fields.len());
+        let mut provided_names: HashSet<Spur> =
+            HashSet::with_capacity_and_hasher(fields.len(), Default::default());
+        let mut field_value_types: HashMap<Spur, TypeId> =
+            HashMap::with_capacity_and_hasher(fields.len(), Default::default());
 
         for f in fields {
             provided_names.insert(f.name);
@@ -5782,7 +5787,7 @@ impl<'res> TypeChecker<'res> {
             });
         }
 
-        let mut bindings: HashMap<DefId, TypeId> = HashMap::new();
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
 
         let bind_order: Vec<DefId> = type_generics
             .iter()
@@ -6740,7 +6745,7 @@ impl<'res> TypeChecker<'res> {
             _ => Vec::new(),
         };
 
-        let mut generic_subst: HashMap<DefId, TypeId> = HashMap::new();
+        let mut generic_subst: HashMap<DefId, TypeId> = HashMap::default();
 
         let struct_generics: Vec<DefId> = match self.result.interner.get(self_struct_ty) {
             Type::Struct { def_id, .. } => self
@@ -6754,7 +6759,7 @@ impl<'res> TypeChecker<'res> {
             _ => Vec::new(),
         };
 
-        let mut impl_subst: HashMap<DefId, TypeId> = HashMap::new();
+        let mut impl_subst: HashMap<DefId, TypeId> = HashMap::default();
         if sig_ctx.is_specialized {
             for (struct_g, arg) in struct_generics.iter().zip(sig_ctx.object_args.iter()) {
                 impl_subst.insert(*struct_g, *arg);
@@ -6802,7 +6807,7 @@ impl<'res> TypeChecker<'res> {
             &all_iface_generics,
             &mut generic_subst,
         );
-        let mut instantiation_params: HashSet<DefId> = HashSet::new();
+        let mut instantiation_params: HashSet<DefId> = HashSet::default();
         instantiation_params.extend(struct_generics.iter().copied());
         instantiation_params.extend(sig_ctx.imp_generics.iter().copied());
         for (iface_g, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
@@ -6980,14 +6985,14 @@ impl<'res> TypeChecker<'res> {
             })
         };
 
-        let mut impl_method_names: HashMap<String, DefId> = HashMap::new();
+        let mut impl_method_names: HashMap<String, DefId> = HashMap::default();
         for method in &imp.methods {
             if let Some(name) = self.def_name(method.def_id) {
                 impl_method_names.insert(name, method.def_id);
             }
         }
 
-        let mut matched_names: HashSet<String> = HashSet::new();
+        let mut matched_names: HashSet<String> = HashSet::default();
 
         for &iface_method_def in &interface_methods {
             let Some(method_name) = self.def_name(iface_method_def) else {
@@ -7883,7 +7888,8 @@ fn format_error_to_diagnostic(err: &FormatParseError, format_source: &Source) ->
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::HashSet, path::Path, rc::Rc, sync::Arc};
+    use rustc_hash::FxHashSet as HashSet;
+    use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc};
 
     use bumpalo::Bump;
     use lasso::Rodeo;
@@ -7952,7 +7958,7 @@ mod tests {
                 std_root: full.then(|| {
                     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")
                 }),
-                linked: HashSet::new(),
+                linked: HashSet::default(),
                 packages: Vec::new(),
             },
             core_files,

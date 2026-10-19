@@ -1,6 +1,6 @@
 use lasso::Spur;
+use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
-use std::collections::HashMap;
 
 use zeen_ast::{
     Declaration, Expression, Source, Statement, TypeExpr,

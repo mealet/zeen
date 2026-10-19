@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use smol_str::SmolStr;
 use zeen_ast::Source;

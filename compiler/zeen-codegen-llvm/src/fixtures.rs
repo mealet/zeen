@@ -17,7 +17,8 @@
 
 #![allow(dead_code)]
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use rustc_hash::FxHashMap as HashMap;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use lasso::Spur;
 use miette::{NamedSource, SourceOffset, SourceSpan};
@@ -192,8 +193,8 @@ impl Fixture {
                 ret_ty,
                 is_drop_impl: false,
             },
-            name_to_local: HashMap::new(),
-            name_to_block: HashMap::new(),
+            name_to_local: HashMap::default(),
+            name_to_block: HashMap::default(),
             current: BlockId(0),
         }
     }

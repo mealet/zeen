@@ -1,4 +1,5 @@
-use std::{collections::HashSet, path::PathBuf};
+use rustc_hash::FxHashSet as HashSet;
+use std::path::PathBuf;
 
 mod target;
 

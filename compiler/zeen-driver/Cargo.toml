@@ -8,5 +8,6 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+rustc-hash = "1.1.0"
 clap = { version = "4.6.2", features = ["derive"] }
 miette = { version = "7.6.0", features = ["fancy"] }

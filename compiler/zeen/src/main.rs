@@ -1,8 +1,6 @@
 use clap::{CommandFactory, Parser};
-use std::{
-    cell::RefCell, collections::HashSet, env, io::Write, path::Path, process::exit, rc::Rc,
-    sync::Arc,
-};
+use rustc_hash::FxHashSet as HashSet;
+use std::{cell::RefCell, env, io::Write, path::Path, process::exit, rc::Rc, sync::Arc};
 use zeen_driver::{CORE_FILES, CompilationContext, CompilationOutput, MietteDriver, PathsConfig};
 
 mod cli;
@@ -259,7 +257,7 @@ fn compile(args: cli::Args) {
         paths: PathsConfig {
             project_root,
             std_root,
-            linked: HashSet::new(),
+            linked: HashSet::default(),
             packages: parse_pkg_flags(&args.pkg),
         },
         core_files: CORE_FILES.iter().map(|file| file.to_basic()).collect(),
