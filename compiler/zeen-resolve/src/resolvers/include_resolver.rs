@@ -64,6 +64,8 @@ pub struct IncludeResolver<'ctx> {
     modules: HashMap<PathBuf, RawModule<'ctx>>,
     root: Option<PathBuf>,
     edges: HashMap<PathBuf, Vec<ModuleUseEdge>>,
+    decl_owner: HashMap<usize, u32>,
+    module_ids: Vec<PathBuf>,
 
     src: Arc<String>,
     filename: Rc<String>,
@@ -95,6 +97,8 @@ impl<'ctx> IncludeResolver<'ctx> {
             modules: HashMap::default(),
             root: None,
             edges: HashMap::default(),
+            decl_owner: HashMap::default(),
+            module_ids: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -955,6 +959,8 @@ impl<'ctx> IncludeResolver<'ctx> {
     }
 
     fn check_collisions(&mut self, merged: &[&'ctx Declaration<'ctx>]) {
+        self.build_decl_index();
+
         #[derive(Eq, Hash, PartialEq, Clone, Copy)]
         enum NamespaceTag {
             Value,
@@ -1103,32 +1109,43 @@ impl<'ctx> IncludeResolver<'ctx> {
         graph
     }
 
+    fn build_decl_index(&mut self) {
+        self.decl_owner.clear();
+        self.module_ids.clear();
+        for skip_root in [true, false] {
+            for (path, module) in &self.modules {
+                if skip_root && self.root.as_ref() == Some(&module.canonical_path) {
+                    continue;
+                }
+                let id = self.module_ids.len() as u32;
+                self.module_ids.push(path.clone());
+                for decl in module.decls {
+                    self.decl_owner
+                        .entry(*decl as *const Declaration as usize)
+                        .or_insert(id);
+                }
+            }
+        }
+    }
+
     fn module_source_of(
         &self,
         decl: &'ctx Declaration<'ctx>,
     ) -> (bool, PathBuf, NamedSource<Arc<String>>) {
         let target_ptr = decl as *const Declaration as usize;
 
-        let find_in = |skip_root: bool| {
-            for module in self.modules.values() {
-                if skip_root && Some(&module.canonical_path) == self.root.as_ref() {
-                    continue;
-                }
-                for d in module.decls {
-                    if (*d as *const Declaration as usize) == target_ptr {
-                        return Some((
-                            module.is_core,
-                            module.canonical_path.clone(),
-                            module.named_src.clone(),
-                        ));
-                    }
-                }
-            }
-            None
-        };
+        let module = self
+            .decl_owner
+            .get(&target_ptr)
+            .and_then(|id| self.module_ids.get(*id as usize))
+            .and_then(|path| self.modules.get(path));
 
-        if let Some(found) = find_in(true).or_else(|| find_in(false)) {
-            return found;
+        if let Some(module) = module {
+            return (
+                module.is_core,
+                module.canonical_path.clone(),
+                module.named_src.clone(),
+            );
         }
 
         (false, PathBuf::new(), self.named_src())
