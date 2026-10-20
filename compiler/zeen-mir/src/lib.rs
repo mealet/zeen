@@ -186,7 +186,7 @@ pub enum MirStatement {
     Nop,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Place {
     pub local: LocalId,
     pub projection: Vec<PlaceElem>,
@@ -234,7 +234,7 @@ pub fn place_is_global(place: &Place) -> bool {
     matches!(place.projection.first(), Some(PlaceElem::Global(_)))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlaceElem {
     Field(DefId),
     Index(LocalId),

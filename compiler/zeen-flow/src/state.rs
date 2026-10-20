@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use zeen_mir::{LocalId, Place, PlaceElem};
 use zeen_resolve::DefId;
@@ -76,7 +76,7 @@ pub enum ReadOutcome {
 #[derive(Debug, Clone, Default)]
 pub struct FunctionState {
     locals: HashMap<LocalId, LocalState>,
-    freed: Vec<Place>,
+    freed: HashSet<Place>,
 }
 
 impl FunctionState {
@@ -100,12 +100,10 @@ impl FunctionState {
     }
 
     pub fn mark_freed(&mut self, place: Place) {
-        if !self.freed.contains(&place) {
-            self.freed.push(place);
-        };
+        self.freed.insert(place);
     }
 
-    pub fn freed_places(&self) -> &[Place] {
+    pub fn freed_places(&self) -> &HashSet<Place> {
         &self.freed
     }
 
@@ -196,31 +194,36 @@ impl FunctionState {
     }
 
     pub fn merge(&mut self, other: &Self) -> bool {
-        let mut keys: Vec<LocalId> = self.locals.keys().copied().collect();
-        for local in other.locals.keys().copied() {
-            if !keys.contains(&local) {
-                keys.push(local);
-            }
+        let mut changed = false;
+        for (local, right) in &other.locals {
+            let left = self
+                .locals
+                .get(local)
+                .cloned()
+                .unwrap_or(LocalState::Whole(ValueState::Uninitialized));
+            let joined = join_local(*local, &left, right);
+            if joined != left {
+                changed = true;
+                self.locals.insert(*local, joined);
+            };
         }
 
-        let mut changed = false;
-        for local in keys {
+        let current_keys: Vec<LocalId> = self.locals.keys().copied().collect();
+        let uninit = LocalState::Whole(ValueState::Uninitialized);
+        for local in current_keys {
+            if other.locals.contains_key(&local) {
+                continue;
+            };
             let left = self
                 .locals
                 .get(&local)
                 .cloned()
                 .unwrap_or(LocalState::Whole(ValueState::Uninitialized));
-            let right = other
-                .locals
-                .get(&local)
-                .cloned()
-                .unwrap_or(LocalState::Whole(ValueState::Uninitialized));
-
-            let joined = join_local(local, &left, &right);
+            let joined = join_local(local, &left, &uninit);
             if joined != left {
                 changed = true;
                 self.locals.insert(local, joined);
-            }
+            };
         }
 
         let before = self.freed.len();

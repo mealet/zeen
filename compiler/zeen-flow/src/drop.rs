@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use smol_str::SmolStr;
 use zeen_ast::Source;
@@ -254,8 +254,21 @@ pub fn collect_scope_drops(
 
     for i in 0..function.locals.len() {
         let local = LocalId(i as u32);
+        let decl = function.local(local);
+        if !type_needs_drop(interner, typecheck, decl.ty) {
+            continue;
+        };
+        let local_state = state.state_of(local);
         collect_local_drops(
-            function, local, state, interner, typecheck, tainted, &mut drops, errors,
+            function,
+            local,
+            &local_state,
+            state.freed_places(),
+            interner,
+            typecheck,
+            tainted,
+            &mut drops,
+            errors,
         );
     }
 
@@ -266,7 +279,8 @@ pub fn collect_scope_drops(
 pub fn collect_local_drops(
     function: &MirFunction,
     local: LocalId,
-    state: &FunctionState,
+    local_state: &LocalState,
+    freed: &HashSet<Place>,
     interner: &TypeInterner,
     typecheck: &TypeCheckResult,
     tainted: &HashMap<LocalId, Taint>,
@@ -277,9 +291,9 @@ pub fn collect_local_drops(
     if !type_needs_drop(interner, typecheck, decl.ty) {
         return;
     }
-    match state.state_of(local) {
+    match local_state {
         LocalState::Whole(ValueState::Initialized) => {
-            if check_taint(local, state, tainted, errors) {
+            if check_taint(local, freed, tainted, errors) {
                 return;
             };
             expand_live_drops(
@@ -292,7 +306,7 @@ pub fn collect_local_drops(
             );
         }
         LocalState::PartiallyMoved(partial) => {
-            if check_taint(local, state, tainted, errors) {
+            if check_taint(local, freed, tainted, errors) {
                 return;
             };
             expand_partial_drops(
@@ -300,7 +314,7 @@ pub fn collect_local_drops(
                 typecheck,
                 &Place::from_local(local),
                 decl.ty,
-                &partial,
+                partial,
                 &mut drops.places,
             );
         }
@@ -313,19 +327,14 @@ pub fn collect_local_drops(
 
 fn check_taint(
     local: LocalId,
-    state: &FunctionState,
+    freed: &HashSet<Place>,
     tainted: &HashMap<LocalId, Taint>,
     errors: &mut Vec<crate::error::FlowError>,
 ) -> bool {
     let Some(taint) = tainted.get(&local) else {
         return false;
     };
-    if !taint.tokens.is_empty()
-        && taint
-            .tokens
-            .iter()
-            .all(|token| state.freed_places().contains(token))
-    {
+    if !taint.tokens.is_empty() && taint.tokens.iter().all(|token| freed.contains(token)) {
         return false;
     };
     if let Some(load) = &taint.load {

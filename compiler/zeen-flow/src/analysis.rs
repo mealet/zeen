@@ -35,6 +35,11 @@ struct LocalInfo {
     source: Option<Source>,
 }
 
+struct ScopePoint {
+    local_state: LocalState,
+    freed: HashSet<Place>,
+}
+
 pub struct DataFlow<'ctx> {
     program: &'ctx mut MirProgram,
     typecheck: &'ctx mut TypeCheckResult,
@@ -47,7 +52,7 @@ pub struct DataFlow<'ctx> {
     current: FunctionState,
     block_in_states: HashMap<BlockId, FunctionState>,
     exit_states: HashMap<BlockId, FunctionState>,
-    storage_states: HashMap<(BlockId, usize), FunctionState>,
+    storage_states: HashMap<(BlockId, usize), ScopePoint>,
     read_locals: HashSet<LocalId>,
     snapshot: Option<FunctionSnapshot>,
     current_source: Option<Source>,
@@ -175,8 +180,27 @@ impl<'ctx> DataFlow<'ctx> {
 
             self.apply_terminator(&block.terminator);
 
-            let after = self.current.clone();
             let succ_ids = successors.get(&block_id).cloned().unwrap_or_default();
+            if succ_ids.is_empty() {
+                continue;
+            };
+            if succ_ids.len() == 1 {
+                let succ = succ_ids[0];
+                match self.block_in_states.entry(succ) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(std::mem::take(&mut self.current));
+                        worklist.push(succ);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        if entry.get_mut().merge(&self.current) {
+                            worklist.push(succ);
+                        };
+                    }
+                };
+                continue;
+            };
+
+            let after = std::mem::take(&mut self.current);
             for succ in succ_ids {
                 if let std::collections::hash_map::Entry::Vacant(entry) =
                     self.block_in_states.entry(succ)
@@ -467,9 +491,25 @@ impl<'ctx> DataFlow<'ctx> {
                     .set_state(*local, LocalState::Whole(ValueState::Uninitialized));
             }
             MirStatement::StorageDead(local) => {
-                self.storage_states
-                    .insert((self.active_block, stmt_index), self.current.clone());
                 self.current_source = None;
+                let ty = self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.locals.get(local.0 as usize))
+                    .map(|info| info.ty);
+                let needs_drop = ty.is_some_and(|ty| {
+                    drop::type_needs_drop(&self.typecheck.interner, self.typecheck, ty)
+                });
+                if needs_drop {
+                    let local_state = self.current.state_of(*local);
+                    self.storage_states.insert(
+                        (self.active_block, stmt_index),
+                        ScopePoint {
+                            local_state,
+                            freed: self.current.freed_places().clone(),
+                        },
+                    );
+                };
                 self.current.mark_moved(*local);
             }
             MirStatement::Nop => {
@@ -527,7 +567,7 @@ impl<'ctx> DataFlow<'ctx> {
                 self.current_source = None;
                 self.consume_operand(operand);
                 self.exit_states
-                    .insert(self.active_block, self.current.clone());
+                    .insert(self.active_block, std::mem::take(&mut self.current));
             }
         }
     }
@@ -799,26 +839,23 @@ impl<'ctx> DataFlow<'ctx> {
             };
             let function = self.program.functions.get(&function_id).unwrap();
 
-            for ((block, stmt_index), state) in &storage_states {
+            for ((block, stmt_index), point) in &storage_states {
                 let Some(MirStatement::StorageDead(local)) = snapshot.blocks[block.0 as usize]
                     .statements
                     .get(*stmt_index)
                 else {
                     continue;
                 };
-                let info = &snapshot.locals[local.0 as usize];
-                if !drop::type_needs_drop(&self.typecheck.interner, self.typecheck, info.ty) {
-                    continue;
-                }
 
-                match state.state_of(*local) {
+                match &point.local_state {
                     LocalState::Whole(ValueState::Initialized) | LocalState::PartiallyMoved(_) => {
                         let mut drops = DropSet::default();
                         let mut taint_errors = Vec::new();
                         drop::collect_local_drops(
                             function,
                             *local,
-                            state,
+                            &point.local_state,
+                            &point.freed,
                             &self.typecheck.interner,
                             self.typecheck,
                             &self.tainted,
