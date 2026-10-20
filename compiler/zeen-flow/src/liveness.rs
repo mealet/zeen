@@ -272,9 +272,11 @@ pub fn insert_prompt_drops(
 
     let mut live_in: Vec<HashSet<LocalId>> = vec![HashSet::default(); count];
     let mut live_out: Vec<HashSet<LocalId>> = vec![HashSet::default(); count];
+    let mut queued: Vec<bool> = vec![true; count];
     let mut worklist: Vec<BlockId> = (0..count as u32).map(BlockId).collect();
     while let Some(block) = worklist.pop() {
         let idx = block.0 as usize;
+        queued[idx] = false;
         let mut out: HashSet<LocalId> = HashSet::default();
         for succ in &successors[idx] {
             out.extend(live_in[succ.0 as usize].iter().copied());
@@ -287,7 +289,8 @@ pub fn insert_prompt_drops(
             live_in[idx] = inn;
             live_out[idx] = out;
             for pred in &predecessors[idx] {
-                if !worklist.contains(pred) {
+                if !queued[pred.0 as usize] {
+                    queued[pred.0 as usize] = true;
                     worklist.push(*pred);
                 };
             }
@@ -476,9 +479,11 @@ pub fn insert_prompt_drops(
             *dom = all_blocks.clone();
         };
     }
+    let mut dom_queued: Vec<bool> = vec![true; count];
     let mut dom_worklist: Vec<BlockId> = (0..count as u32).map(BlockId).collect();
     while let Some(block) = dom_worklist.pop() {
         let idx = block.0 as usize;
+        dom_queued[idx] = false;
         if block == entry {
             continue;
         };
@@ -502,7 +507,8 @@ pub fn insert_prompt_drops(
         if dom != dominators[idx] {
             dominators[idx] = dom;
             for succ in &successors[idx] {
-                if !dom_worklist.contains(succ) {
+                if !dom_queued[succ.0 as usize] {
+                    dom_queued[succ.0 as usize] = true;
                     dom_worklist.push(*succ);
                 };
             }
