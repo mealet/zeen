@@ -1,9 +1,5 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    path::Path,
-    rc::Rc,
-};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::{cell::RefCell, path::Path, rc::Rc};
 
 use inkwell::{
     AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel,
@@ -183,16 +179,16 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             resolution,
             rodeo,
             options,
-            functions: HashMap::new(),
-            struct_types: HashMap::new(),
-            enum_types: HashMap::new(),
-            strings: HashMap::new(),
+            functions: HashMap::default(),
+            struct_types: HashMap::default(),
+            enum_types: HashMap::default(),
+            strings: HashMap::default(),
             str_counter: 0,
-            enum_tables: HashMap::new(),
+            enum_tables: HashMap::default(),
             enum_table_counter: 0,
-            global_vars: HashMap::new(),
-            locals: HashMap::new(),
-            blocks: HashMap::new(),
+            global_vars: HashMap::default(),
+            locals: HashMap::default(),
+            blocks: HashMap::default(),
             current_entry: None,
         })
     }
@@ -284,7 +280,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn register_struct_layouts(&mut self) {
-        let mut by_name: HashMap<String, inkwell::types::StructType<'ctx>> = HashMap::new();
+        let mut by_name: HashMap<String, inkwell::types::StructType<'ctx>> = HashMap::default();
         for &ty in self.program.struct_layouts.keys() {
             let name = self.mangle_struct_name(ty);
             let opaque = if let Some(existing) = by_name.get(&name) {
@@ -314,7 +310,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn register_enum_layouts(&mut self) {
-        let mut by_name: HashMap<String, inkwell::types::StructType<'ctx>> = HashMap::new();
+        let mut by_name: HashMap<String, inkwell::types::StructType<'ctx>> = HashMap::default();
         for &ty in self.program.enum_layouts.keys() {
             let has_payload = self.program.enum_layouts[&ty]
                 .variants
@@ -339,7 +335,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let mut pending: Vec<TypeId> = self.program.enum_layouts.keys().copied().collect();
         pending.sort_by_key(|ty| ty.0);
 
-        let mut filled: HashSet<TypeId> = HashSet::new();
+        let mut filled: HashSet<TypeId> = HashSet::default();
         loop {
             let mut progressed = false;
             pending.retain(|&ty| {

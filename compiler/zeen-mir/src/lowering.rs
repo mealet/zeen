@@ -1,8 +1,5 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
-};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::{cell::RefCell, rc::Rc};
 
 use lasso::{Rodeo, Spur};
 use miette::SourceSpan;
@@ -226,8 +223,8 @@ impl FnBuilder {
                 ret_ty,
                 is_drop_impl: false,
             },
-            locals_by_def: HashMap::new(),
-            captured_places: HashMap::new(),
+            locals_by_def: HashMap::default(),
+            captured_places: HashMap::default(),
             loop_stack: Vec::new(),
             bindings,
             fat_bindings: Vec::new(),
@@ -308,20 +305,20 @@ impl<'ctx> MirLowering<'ctx> {
             mono_cache: MonoCache::new(),
             hir_fns_by_def,
             fn_stack: Vec::new(),
-            fat_adapter_cache: HashMap::new(),
-            fat_extern_adapter_cache: HashMap::new(),
-            fat_pointer_adapter_cache: HashMap::new(),
-            fat_drop_cache: HashMap::new(),
-            enum_drop_cache: HashMap::new(),
-            fat_free_cache: HashMap::new(),
-            env_drop_cache: HashMap::new(),
+            fat_adapter_cache: HashMap::default(),
+            fat_extern_adapter_cache: HashMap::default(),
+            fat_pointer_adapter_cache: HashMap::default(),
+            fat_drop_cache: HashMap::default(),
+            enum_drop_cache: HashMap::default(),
+            fat_free_cache: HashMap::default(),
+            env_drop_cache: HashMap::default(),
             env_drop_noop: None,
-            closure_envs: HashMap::new(),
+            closure_envs: HashMap::default(),
             errors: Vec::new(),
             warnings: Vec::new(),
             mode,
             globals: Vec::new(),
-            globals_by_def: HashMap::new(),
+            globals_by_def: HashMap::default(),
             outstream: None,
             format_string: None,
             allocator_struct: None,
@@ -468,7 +465,13 @@ impl<'ctx> MirLowering<'ctx> {
 
         let void_ty = self.typecheck.interner.intern(Type::Void);
         let entry = BlockId(0);
-        let mut fb = FnBuilder::new(DefId(u32::MAX), Vec::new(), entry, void_ty, HashMap::new());
+        let mut fb = FnBuilder::new(
+            DefId(u32::MAX),
+            Vec::new(),
+            entry,
+            void_ty,
+            HashMap::default(),
+        );
         fb.new_block();
 
         for def_id in ordered {
@@ -518,7 +521,7 @@ impl<'ctx> MirLowering<'ctx> {
 
     fn globals_in_init_order(&self) -> Vec<DefId> {
         let mut order = Vec::with_capacity(self.globals.len());
-        let mut visited = HashSet::new();
+        let mut visited = HashSet::default();
         for global in &self.globals {
             self.visit_global_init(global.def_id, &mut visited, &mut order);
         }
@@ -714,7 +717,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
         }
 
-        let mut seen: HashSet<(DefId, Vec<TypeId>)> = HashSet::new();
+        let mut seen: HashSet<(DefId, Vec<TypeId>)> = HashSet::default();
         for (ty, struct_def, generic_args) in candidate_types {
             let is_new = seen.insert((struct_def, generic_args.clone()));
             if !is_new {
@@ -781,7 +784,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
         }
 
-        let mut seen: HashSet<TypeId> = HashSet::new();
+        let mut seen: HashSet<TypeId> = HashSet::default();
         for ty in candidate_types {
             if !seen.insert(ty) {
                 continue;
@@ -1582,25 +1585,13 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn find_struct_def(&self, struct_name: &str) -> Option<DefId> {
-        for (def, info) in &self.resolution.defs {
-            if matches!(info.kind, DefKind::Struct)
-                && self.rodeo.borrow().resolve(&info.name) == struct_name
-            {
-                return Some(*def);
-            }
-        }
-        None
+        let name = self.rodeo.borrow().get(struct_name)?;
+        self.resolution.type_def_by_name(name, &[DefKind::Struct])
     }
 
     fn find_enum_def(&self, enum_name: &str) -> Option<DefId> {
-        for (def, info) in &self.resolution.defs {
-            if matches!(info.kind, DefKind::Enum)
-                && self.rodeo.borrow().resolve(&info.name) == enum_name
-            {
-                return Some(*def);
-            }
-        }
-        None
+        let name = self.rodeo.borrow().get(enum_name)?;
+        self.resolution.type_def_by_name(name, &[DefKind::Enum])
     }
 
     fn option_variants(&self, option_def: DefId) -> (DefId, DefId) {
@@ -2765,7 +2756,7 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn register_reachable_slice_layouts(&mut self) {
-        let mut visited: HashSet<TypeId> = HashSet::new();
+        let mut visited: HashSet<TypeId> = HashSet::default();
         let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
         for layout_ty in struct_keys {
             let fields: Vec<TypeId> = self.program.struct_layouts[&layout_ty]
@@ -6835,12 +6826,10 @@ impl<'ctx> MirLowering<'ctx> {
             return self.format_string;
         }
 
-        let struct_def = self.resolution.defs.iter().find_map(|(def, info)| {
-            matches!(info.kind, DefKind::Struct)
-                .then(|| self.rodeo.borrow().resolve(&info.name) == "String")
-                .filter(|found| *found)
-                .map(|_| *def)
-        })?;
+        let struct_def = {
+            let name = self.rodeo.borrow().get("String")?;
+            self.resolution.type_def_by_name(name, &[DefKind::Struct])?
+        };
 
         let ty = self.typecheck.interner.intern(Type::Struct {
             def_id: struct_def,
@@ -6983,12 +6972,10 @@ impl<'ctx> MirLowering<'ctx> {
             return self.outstream;
         }
 
-        let struct_def = self.resolution.defs.iter().find_map(|(def, info)| {
-            matches!(info.kind, DefKind::Struct)
-                .then(|| self.rodeo.borrow().resolve(&info.name) == "OutStream")
-                .filter(|found| *found)
-                .map(|_| *def)
-        })?;
+        let struct_def = {
+            let name = self.rodeo.borrow().get("OutStream")?;
+            self.resolution.type_def_by_name(name, &[DefKind::Struct])?
+        };
 
         let ty = self.typecheck.interner.intern(Type::Struct {
             def_id: struct_def,
@@ -8311,7 +8298,7 @@ impl<'ctx> MirLowering<'ctx> {
 
             bindings
         } else {
-            HashMap::new()
+            HashMap::default()
         };
 
         let fn_ty = self
@@ -8343,7 +8330,13 @@ impl<'ctx> MirLowering<'ctx> {
         };
 
         let entry = BlockId(0);
-        let mut fb = FnBuilder::new(def_id, generic_args.to_vec(), entry, ret_ty, HashMap::new());
+        let mut fb = FnBuilder::new(
+            def_id,
+            generic_args.to_vec(),
+            entry,
+            ret_ty,
+            HashMap::default(),
+        );
         fb.new_block();
         let mut fat_bound_count = 0usize;
 

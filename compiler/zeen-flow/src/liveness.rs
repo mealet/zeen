@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use zeen_mir::{
     BlockId, CallTarget, LocalId, LocalKind, MirFunction, MirStatement, Operand, Place, Rvalue,
@@ -164,10 +164,10 @@ pub fn insert_prompt_drops(
     tainted: &HashMap<LocalId, Taint>,
 ) {
     let count = function.blocks.len();
-    let mut uses: Vec<HashSet<LocalId>> = vec![HashSet::new(); count];
-    let mut defs: Vec<HashSet<LocalId>> = vec![HashSet::new(); count];
-    let mut complex: HashSet<LocalId> = HashSet::new();
-    let mut moved: HashSet<LocalId> = HashSet::new();
+    let mut uses: Vec<HashSet<LocalId>> = vec![HashSet::default(); count];
+    let mut defs: Vec<HashSet<LocalId>> = vec![HashSet::default(); count];
+    let mut complex: HashSet<LocalId> = HashSet::default();
+    let mut moved: HashSet<LocalId> = HashSet::default();
 
     for block in function.blocks.iter() {
         for stmt in &block.statements {
@@ -177,7 +177,7 @@ pub fn insert_prompt_drops(
     }
 
     for (index, block) in function.blocks.iter().enumerate() {
-        let mut defined: HashSet<LocalId> = HashSet::new();
+        let mut defined: HashSet<LocalId> = HashSet::default();
         for stmt in &block.statements {
             for used in stmt_uses(stmt) {
                 if !defined.contains(&used) {
@@ -270,12 +270,14 @@ pub fn insert_prompt_drops(
         }
     }
 
-    let mut live_in: Vec<HashSet<LocalId>> = vec![HashSet::new(); count];
-    let mut live_out: Vec<HashSet<LocalId>> = vec![HashSet::new(); count];
+    let mut live_in: Vec<HashSet<LocalId>> = vec![HashSet::default(); count];
+    let mut live_out: Vec<HashSet<LocalId>> = vec![HashSet::default(); count];
+    let mut queued: Vec<bool> = vec![true; count];
     let mut worklist: Vec<BlockId> = (0..count as u32).map(BlockId).collect();
     while let Some(block) = worklist.pop() {
         let idx = block.0 as usize;
-        let mut out: HashSet<LocalId> = HashSet::new();
+        queued[idx] = false;
+        let mut out: HashSet<LocalId> = HashSet::default();
         for succ in &successors[idx] {
             out.extend(live_in[succ.0 as usize].iter().copied());
         }
@@ -287,14 +289,15 @@ pub fn insert_prompt_drops(
             live_in[idx] = inn;
             live_out[idx] = out;
             for pred in &predecessors[idx] {
-                if !worklist.contains(pred) {
+                if !queued[pred.0 as usize] {
+                    queued[pred.0 as usize] = true;
                     worklist.push(*pred);
                 };
             }
         };
     }
 
-    let mut addr_src: HashMap<LocalId, LocalId> = HashMap::new();
+    let mut addr_src: HashMap<LocalId, LocalId> = HashMap::default();
     for _ in 0..64 {
         let mut changed = false;
         for block in function.blocks.iter() {
@@ -400,13 +403,13 @@ pub fn insert_prompt_drops(
         )
     }
 
-    let mut borrows: HashMap<LocalId, HashSet<LocalId>> = HashMap::new();
+    let mut borrows: HashMap<LocalId, HashSet<LocalId>> = HashMap::default();
     for block in function.blocks.iter() {
         for stmt in &block.statements {
             if let MirStatement::Assign { place, rvalue, .. } = stmt
                 && place.projection.is_empty()
             {
-                let mut sources = HashSet::new();
+                let mut sources = HashSet::default();
                 let mut check = |operand: &Operand| {
                     if let Some(source) = borrow_source(operand, &addr_src) {
                         sources.insert(source);
@@ -439,7 +442,7 @@ pub fn insert_prompt_drops(
             | Terminator::MacroCall {
                 destination, args, ..
             } if destination.projection.is_empty() => {
-                let mut sources = HashSet::new();
+                let mut sources = HashSet::default();
                 for arg in args {
                     if let Some(source) = borrow_source(arg, &addr_src) {
                         sources.insert(source);
@@ -453,7 +456,7 @@ pub fn insert_prompt_drops(
         };
     }
 
-    let mut defpos: HashMap<LocalId, (BlockId, Option<usize>)> = HashMap::new();
+    let mut defpos: HashMap<LocalId, (BlockId, Option<usize>)> = HashMap::default();
     for (index, block) in function.blocks.iter().enumerate() {
         let bid = BlockId(index as u32);
         for (stmt_index, stmt) in block.statements.iter().enumerate() {
@@ -468,7 +471,7 @@ pub fn insert_prompt_drops(
 
     let entry = function.entry_block;
     let all_blocks: HashSet<BlockId> = (0..count as u32).map(BlockId).collect();
-    let mut dominators: Vec<HashSet<BlockId>> = vec![HashSet::new(); count];
+    let mut dominators: Vec<HashSet<BlockId>> = vec![HashSet::default(); count];
     for (index, dom) in dominators.iter_mut().enumerate() {
         if BlockId(index as u32) == entry {
             dom.insert(entry);
@@ -476,9 +479,11 @@ pub fn insert_prompt_drops(
             *dom = all_blocks.clone();
         };
     }
+    let mut dom_queued: Vec<bool> = vec![true; count];
     let mut dom_worklist: Vec<BlockId> = (0..count as u32).map(BlockId).collect();
     while let Some(block) = dom_worklist.pop() {
         let idx = block.0 as usize;
+        dom_queued[idx] = false;
         if block == entry {
             continue;
         };
@@ -502,7 +507,8 @@ pub fn insert_prompt_drops(
         if dom != dominators[idx] {
             dominators[idx] = dom;
             for succ in &successors[idx] {
-                if !dom_worklist.contains(succ) {
+                if !dom_queued[succ.0 as usize] {
+                    dom_queued[succ.0 as usize] = true;
                     dom_worklist.push(*succ);
                 };
             }
@@ -518,7 +524,7 @@ pub fn insert_prompt_drops(
         for used in terminator_uses(&block.terminator) {
             live.insert(used);
         }
-        let mut sets: Vec<HashSet<LocalId>> = vec![HashSet::new(); block.statements.len()];
+        let mut sets: Vec<HashSet<LocalId>> = vec![HashSet::default(); block.statements.len()];
         for (stmt_index, stmt) in block.statements.iter().enumerate().rev() {
             sets[stmt_index] = live.clone();
             for used in stmt_uses(stmt) {
@@ -581,9 +587,9 @@ fn derived_set(
     addr_src: &HashMap<LocalId, LocalId>,
     borrows: &HashMap<LocalId, HashSet<LocalId>>,
 ) -> HashSet<LocalId> {
-    let mut out = HashSet::new();
+    let mut out = HashSet::default();
     let mut stack = vec![temp];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(current) = stack.pop() {
         if !seen.insert(current) {
             continue;

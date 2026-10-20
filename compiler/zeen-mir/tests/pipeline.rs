@@ -1,6 +1,6 @@
+use rustc_hash::FxHashSet as HashSet;
 use std::{
     cell::RefCell,
-    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     rc::Rc,
@@ -45,7 +45,7 @@ fn compile_mode(src: &str, mode: CompilationMode) -> Result<String, Vec<String>>
         paths: PathsConfig {
             project_root: PathBuf::from("/"),
             std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")),
-            linked: HashSet::new(),
+            linked: HashSet::default(),
             packages: Vec::new(),
         },
         core_files: core_files(),

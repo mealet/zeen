@@ -30,7 +30,7 @@ fn compile_mir_mode(
             std_root: Some(
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src"),
             ),
-            linked: HashSet::new(),
+            linked: HashSet::default(),
             packages: Vec::new(),
         },
         core_files: vec![
@@ -1747,7 +1747,7 @@ fn print_mir_ok(src: &str) -> String {
             std_root: Some(
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src"),
             ),
-            linked: HashSet::new(),
+            linked: HashSet::default(),
             packages: Vec::new(),
         },
         core_files: vec![

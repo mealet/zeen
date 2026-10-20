@@ -1,4 +1,5 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use rustc_hash::FxHashMap as HashMap;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use lasso::{Rodeo, Spur};
 use smol_str::SmolStr;
@@ -91,16 +92,7 @@ impl<'res> HirLowering<'res> {
 
     fn lookup_type_def_by_name(&self, name: Spur) -> Option<DefId> {
         self.resolution
-            .defs
-            .iter()
-            .find(|(_, info)| {
-                info.name == name
-                    && matches!(
-                        info.kind,
-                        DefKind::Interface | DefKind::Struct | DefKind::Enum
-                    )
-            })
-            .map(|(id, _)| *id)
+            .type_def_by_name(name, &[DefKind::Interface, DefKind::Struct, DefKind::Enum])
     }
 
     fn struct_init_path_def(&self, expr: &Expression) -> (Option<DefId>, Option<Spur>) {
@@ -1083,9 +1075,9 @@ mod tests {
     use crate::types::HirTypeKind;
     use bumpalo::Bump;
     use lasso::Rodeo;
+    use rustc_hash::FxHashSet as HashSet;
     use std::{
         cell::RefCell,
-        collections::HashSet,
         path::{Path, PathBuf},
         rc::Rc,
         sync::Arc,
@@ -1196,7 +1188,7 @@ mod tests {
             paths: PathsConfig {
                 project_root: PathBuf::from("/"),
                 std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")),
-                linked: HashSet::new(),
+                linked: HashSet::default(),
                 packages: Vec::new(),
             },
             core_files: vec![("core.ops", CORE_OPS)],

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::rc::Rc;
 
 use zeen_hir::{
@@ -9,7 +9,7 @@ use zeen_hir::{
 use zeen_resolve::DefId;
 
 pub fn collect_hir_fns(module: &HirModule) -> HashMap<DefId, Rc<HirFn>> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
 
     for decl in &module.decls {
         collect_from_decl(decl, &mut map);

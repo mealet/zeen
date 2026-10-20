@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use zeen_hir::{HirDeclKind, HirExpr, HirExprKind, HirModule, HirStmt, HirStmtKind};
 use zeen_resolve::DefId;
@@ -30,10 +30,10 @@ pub fn analyze_closures(
 ) -> HashMap<DefId, ClosureAllocKind> {
     let mut analyzer = Analyzer {
         captures,
-        locals: HashMap::new(),
+        locals: HashMap::default(),
         scope: Vec::new(),
-        sites: HashMap::new(),
-        allocs: HashMap::new(),
+        sites: HashMap::default(),
+        allocs: HashMap::default(),
     };
 
     for decl in &module.decls {
@@ -72,7 +72,7 @@ struct Analyzer<'a> {
 
 impl<'a> Analyzer<'a> {
     fn fn_body(&mut self, body: &Option<std::rc::Rc<HirStmt>>) {
-        self.scope.push(HashSet::new());
+        self.scope.push(HashSet::default());
         if let Some(body) = body {
             self.stmt_fate(body, &Fate::Escaping);
         }
@@ -172,7 +172,7 @@ impl<'a> Analyzer<'a> {
                     }
                 }
 
-                self.scope.push(HashSet::new());
+                self.scope.push(HashSet::default());
                 if let Some(body) = &def.body {
                     self.stmt_fate(body, &Fate::Escaping);
                 }
@@ -207,7 +207,7 @@ impl<'a> Analyzer<'a> {
             }
 
             HirExprKind::Block { stmts, trailing } => {
-                self.scope.push(HashSet::new());
+                self.scope.push(HashSet::default());
                 for stmt in stmts {
                     self.stmt(stmt);
                 }

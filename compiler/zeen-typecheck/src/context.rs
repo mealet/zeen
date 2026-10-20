@@ -1,4 +1,5 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use rustc_hash::FxHashMap as HashMap;
+use std::{cell::RefCell, rc::Rc};
 
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_types::TypeId;
@@ -93,7 +94,7 @@ impl InterfaceRegistry {
         self.by_name.get(name).copied()
     }
 
-    pub fn into_name_map(self) -> std::collections::HashMap<String, DefId> {
+    pub fn into_name_map(self) -> rustc_hash::FxHashMap<String, DefId> {
         self.by_name
     }
 }
@@ -101,7 +102,8 @@ impl InterfaceRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+    use rustc_hash::FxHashMap as HashMap;
+    use std::{cell::RefCell, rc::Rc, sync::Arc};
 
     use lasso::Rodeo;
     use miette::NamedSource;
@@ -121,8 +123,8 @@ mod tests {
             return_type,
             self_type: None,
             struct_def: None,
-            generic_bindings: HashMap::new(),
-            generic_bounds: HashMap::new(),
+            generic_bindings: HashMap::default(),
+            generic_bounds: HashMap::default(),
             loop_depth: 0,
         }
     }

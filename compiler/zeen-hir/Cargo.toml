@@ -8,6 +8,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+rustc-hash = "1.1.0"
 lasso = "0.7.3"
 miette = "7.6.0"
 strum = { version = "0.28.0", features = ["derive"] }

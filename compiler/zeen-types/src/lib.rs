@@ -1,4 +1,5 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use rustc_hash::FxHashMap as HashMap;
+use std::{cell::RefCell, rc::Rc};
 
 use lasso::Spur;
 
@@ -582,7 +583,8 @@ pub fn substitute_generics(
 mod tests {
     use super::*;
 
-    use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+    use rustc_hash::FxHashMap as HashMap;
+    use std::{cell::RefCell, rc::Rc, sync::Arc};
 
     use lasso::Rodeo;
     use miette::NamedSource;
@@ -1049,7 +1051,7 @@ mod tests {
         let mut interner = TypeInterner::new();
         let generic = DefId(1);
         let ty = interner.intern(Type::GenericParam(generic));
-        let bindings = HashMap::new();
+        let bindings = HashMap::default();
 
         assert_eq!(substitute_generics(&mut interner, ty, &bindings), ty);
     }
@@ -1060,7 +1062,7 @@ mod tests {
         let generic = DefId(1);
         let ty = interner.intern(Type::GenericParam(generic));
         let replacement = interner.intern(Type::Builtin(BuiltinType::i32));
-        let mut bindings = HashMap::new();
+        let mut bindings = HashMap::default();
         bindings.insert(generic, replacement);
 
         assert_eq!(
@@ -1078,7 +1080,7 @@ mod tests {
             inner,
             is_const: false,
         });
-        let mut bindings = HashMap::new();
+        let mut bindings = HashMap::default();
         bindings.insert(generic, inner);
 
         assert_eq!(substitute_generics(&mut interner, ptr, &bindings), ptr);
@@ -1094,7 +1096,7 @@ mod tests {
             is_const: false,
         });
         let replacement = interner.intern(Type::Builtin(BuiltinType::u8));
-        let mut bindings = HashMap::new();
+        let mut bindings = HashMap::default();
         bindings.insert(generic, replacement);
 
         let rewritten = substitute_generics(&mut interner, ptr, &bindings);
@@ -1124,7 +1126,7 @@ mod tests {
             ret: void,
         });
         let replacement = interner.intern(Type::Builtin(BuiltinType::i64));
-        let mut bindings = HashMap::new();
+        let mut bindings = HashMap::default();
         bindings.insert(generic, replacement);
 
         let new_struct = substitute_generics(&mut interner, struct_ty, &bindings);

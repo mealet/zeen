@@ -532,6 +532,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b50b8869d9fc858ce7266cce0194bd74df58b9d0e3f6df3a9fc8eb470d95c09d"
 
 [[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
+
+[[package]]
 name = "rustix"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -793,6 +799,7 @@ dependencies = [
  "inkwell",
  "lasso",
  "miette",
+ "rustc-hash",
  "tempfile",
  "thiserror",
  "zeen-ast",
@@ -826,6 +833,7 @@ dependencies = [
  "inkwell",
  "lasso",
  "miette",
+ "rustc-hash",
  "thiserror",
  "zeen-ast",
  "zeen-driver",
@@ -842,6 +850,7 @@ version = "0.4.0"
 dependencies = [
  "clap",
  "miette",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -851,6 +860,7 @@ dependencies = [
  "bumpalo",
  "lasso",
  "miette",
+ "rustc-hash",
  "smol_str",
  "thiserror",
  "zeen-ast",
@@ -871,6 +881,7 @@ dependencies = [
  "bumpalo",
  "lasso",
  "miette",
+ "rustc-hash",
  "smol_str",
  "strum",
  "thiserror",
@@ -905,6 +916,7 @@ dependencies = [
  "bumpalo",
  "lasso",
  "miette",
+ "rustc-hash",
  "smol_str",
  "thiserror",
  "zeen-ast",
@@ -955,6 +967,7 @@ dependencies = [
  "bumpalo",
  "lasso",
  "miette",
+ "rustc-hash",
  "smallvec",
  "smol_str",
  "thiserror",
@@ -972,6 +985,7 @@ dependencies = [
  "bumpalo",
  "lasso",
  "miette",
+ "rustc-hash",
  "smol_str",
  "thiserror",
  "zeen-ast",
@@ -989,6 +1003,7 @@ version = "0.4.0"
 dependencies = [
  "lasso",
  "miette",
+ "rustc-hash",
  "zeen-ast",
  "zeen-hir",
  "zeen-resolve",

@@ -1,5 +1,5 @@
 use lasso::Spur;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::resolution::DefId;
 
@@ -140,8 +140,8 @@ impl SymbolTable {
         self.current_mut().types.insert(name, id);
     }
 
-    pub fn enclosing_defs(&self) -> std::collections::HashSet<DefId> {
-        let mut out = std::collections::HashSet::new();
+    pub fn enclosing_defs(&self) -> rustc_hash::FxHashSet<DefId> {
+        let mut out = rustc_hash::FxHashSet::default();
 
         for scope in self.scopes.iter().rev() {
             match scope.kind {
@@ -156,8 +156,8 @@ impl SymbolTable {
         out
     }
 
-    pub fn closure_capture_candidates(&self) -> std::collections::HashSet<DefId> {
-        let mut out = std::collections::HashSet::new();
+    pub fn closure_capture_candidates(&self) -> rustc_hash::FxHashSet<DefId> {
+        let mut out = rustc_hash::FxHashSet::default();
 
         let mut scopes = self.scopes.iter().rev();
         scopes.next();
