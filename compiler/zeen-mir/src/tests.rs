@@ -601,8 +601,8 @@ fn explicit_discard_and_void_statements_do_not_warn() {
 }
 
 #[test]
-fn discard_drop_payload_warns() {
-    let mir = compile_mir_ok(
+fn discard_drop_payload_errors() {
+    let errors = compile_mir(
         "struct Resource { handle: i32 } \
          implement Drop : Resource { fn drop(self) {} } \
          pub enum Val { N, R: Resource, \
@@ -610,11 +610,15 @@ fn discard_drop_payload_warns() {
          fn main() i32 { let v = Val.R(Resource { .handle = 1 }); if (v.check()) { return 0; }; return 1; }",
     );
 
+    let messages = match errors {
+        Err(messages) => messages,
+        Ok(_) => panic!("expected MIR lowering to fail for `.R(_)` over a Drop payload"),
+    };
+
     assert_eq!(
-        mir.warnings.len(),
+        messages.len(),
         1,
-        "expected one warning for `.R(_)` over a Drop payload, got {:?}",
-        mir.warnings
+        "expected exactly one discard_drop_payload error, got {messages:?}"
     );
 }
 

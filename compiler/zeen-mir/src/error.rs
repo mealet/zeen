@@ -15,6 +15,21 @@ pub enum MirError {
         span: SourceSpan,
     },
 
+    #[error("discarding a value that needs dropping with `_`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::mir::discard_drop_payload),
+        help(
+            "`_` moves the payload out and frees the container; bind it by reference instead: `&_`"
+        )
+    )]
+    DiscardDropPayload {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("a value `Fn` pointer cannot be converted into a fat `Fn`/`FnOnce` value at runtime")]
     #[diagnostic(
         severity(Error),
@@ -40,19 +55,6 @@ pub enum MirWarning {
     UnusedExpressionResult {
         what: SmolStr,
 
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label]
-        span: SourceSpan,
-    },
-
-    #[error("discarding a value that needs dropping with `_`")]
-    #[diagnostic(
-        severity(Warning),
-        code(zeen::mir::discard_drop_payload),
-        help("bind it by reference instead: `&_`")
-    )]
-    DiscardDropPayload {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label]
