@@ -164,6 +164,9 @@ pub enum HirMacroKind {
     EnumTag, // @enumTag(enum value) -> u8
     Void,    // @void() -> void
 
+    VariantNames,
+    VariantCount,
+
     Unknown, // Unknown macro fallback
 }
 
@@ -187,6 +190,9 @@ impl HirMacroKind {
             HirMacroKind::Uninit => Some("uninit"),
             HirMacroKind::EnumTag => Some("enumTag"),
             HirMacroKind::Void => Some("void"),
+
+            HirMacroKind::VariantNames => Some("variantNames"),
+            HirMacroKind::VariantCount => Some("variantCount"),
 
             HirMacroKind::Unknown => None,
         }

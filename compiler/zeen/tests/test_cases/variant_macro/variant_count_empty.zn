@@ -1,0 +1,13 @@
+enum Op {
+    one,
+    two,
+    three,
+}
+
+fn main() i32 {
+    let n: i32 = @variantCount(Op);
+    let m = n * 2 + 1;
+    @println("n={} m={}", n, m);
+    @println("names0={}", @variantNames(Op)[..][0]);
+    return 0;
+}

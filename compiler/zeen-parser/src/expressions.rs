@@ -936,7 +936,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
         if matches!(
             ident_slice.as_str(),
-            "as" | "sizeof" | "alignof" | "typename"
+            "as" | "sizeof" | "alignof" | "typename" | "variantNames" | "variantCount"
         ) {
             let mut tp = crate::type_parser::TypeParser::new(self.p);
             let parsed_type = tp.parse()?;

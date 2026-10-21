@@ -4050,6 +4050,92 @@ impl<'ctx> MirLowering<'ctx> {
                     )
                 }
 
+                HirMacroKind::VariantNames => {
+                    let result_ty = self.expr_type(fb, expr);
+                    let variant_count = match self.typecheck.interner.get(result_ty).clone() {
+                        Type::Array { len: Some(n), .. } => n as usize,
+                        _ => 0,
+                    };
+
+                    let enum_names = match &args[0].kind {
+                        HirExprKind::Type(_) => {
+                            let target_ty = self.expr_type(fb, &args[0]);
+                            match self.typecheck.interner.get(target_ty).clone() {
+                                Type::Enum { def_id, .. } => self
+                                    .typecheck
+                                    .enum_variants
+                                    .get(&def_id)
+                                    .map(|variants| {
+                                        variants
+                                            .iter()
+                                            .map(|&variant| self.resolution.defs[&variant].name)
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .unwrap_or_default(),
+                                _ => {
+                                    panic!("typechecker validated @variantNames arg as an enum")
+                                }
+                            }
+                        }
+                        _ => panic!("typechecker validated @variantNames arg as a type expr"),
+                    };
+
+                    let operands: Vec<Operand> = enum_names
+                        .into_iter()
+                        .take(variant_count)
+                        .map(|name| {
+                            Operand::Constant(ConstValue::Str(name), Some(expr.source.clone()))
+                        })
+                        .collect();
+
+                    let temp = fb.new_temp(result_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Aggregate {
+                                kind: AggregateKind::Array,
+                                operands,
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+
+                    (
+                        block,
+                        self.place_to_operand(
+                            Place::from_local(temp),
+                            result_ty,
+                            Some(expr.source.clone()),
+                        ),
+                    )
+                }
+
+                HirMacroKind::VariantCount => {
+                    let count = match &args[0].kind {
+                        HirExprKind::Type(_) => {
+                            let target_ty = self.expr_type(fb, &args[0]);
+                            match self.typecheck.interner.get(target_ty).clone() {
+                                Type::Enum { def_id, .. } => self
+                                    .typecheck
+                                    .enum_variants
+                                    .get(&def_id)
+                                    .map(|variants| variants.len() as i128)
+                                    .unwrap_or(0),
+                                _ => {
+                                    panic!("typechecker validated @variantCount arg as an enum")
+                                }
+                            }
+                        }
+                        _ => panic!("typechecker validated @variantCount arg as a type expr"),
+                    };
+
+                    (
+                        block,
+                        Operand::Constant(ConstValue::Int(count), Some(expr.source.clone())),
+                    )
+                }
+
                 HirMacroKind::Dbg if self.mode == CompilationMode::Release => {
                     let value = args
                         .first()

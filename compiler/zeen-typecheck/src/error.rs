@@ -24,6 +24,18 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("`{name}` requires an enum type, found `{ty_name}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::macro_arg_not_enum))]
+    MacroArgNotEnum {
+        name: SmolStr,
+        ty_name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("expected type `{expected}`, but found `{found}`")]
     #[diagnostic(severity(Error), code(zeen::typechecker::mismatch))]
     Mismatch {

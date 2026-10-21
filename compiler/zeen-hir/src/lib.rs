@@ -146,6 +146,9 @@ impl<'res> HirLowering<'res> {
             "enumTag" => HirMacroKind::EnumTag,
             "void" => HirMacroKind::Void,
 
+            "variantNames" => HirMacroKind::VariantNames,
+            "variantCount" => HirMacroKind::VariantCount,
+
             _ => HirMacroKind::Unknown,
         }
     }

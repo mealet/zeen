@@ -2896,6 +2896,72 @@ impl<'res> TypeChecker<'res> {
                 })
             }
 
+            HirMacroKind::VariantNames | HirMacroKind::VariantCount => {
+                if args.len() != 1 {
+                    self.report(TypeError::ArgCountMismatch {
+                        expected: 1,
+                        found: args.len(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    return self.result.interner.error();
+                }
+
+                let target_ty = match &args[0].kind {
+                    HirExprKind::Type(ty_expr) => {
+                        let ty = self.lower_hir_type(ty_expr);
+                        self.result.record_expr_type(args[0].id, ty);
+                        ty
+                    }
+                    _ => {
+                        self.synth_expr(&args[0]);
+
+                        let err = self.result.interner.error();
+                        self.result.record_expr_type(args[0].id, err);
+
+                        err
+                    }
+                };
+
+                let Some(enum_def) = (match self.result.interner.get(target_ty).clone() {
+                    Type::Enum { def_id, .. } => Some(def_id),
+                    _ => None,
+                }) else {
+                    self.report(TypeError::MacroArgNotEnum {
+                        name: match kind.0 {
+                            HirMacroKind::VariantNames => "@variantNames".into(),
+                            _ => "@variantCount".into(),
+                        },
+                        ty_name: self.display_type(target_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                };
+
+                if kind.0 == HirMacroKind::VariantCount {
+                    return self.result.interner.int_literal();
+                }
+
+                let variant_count = self
+                    .enum_variants
+                    .get(&enum_def)
+                    .map(|variants| variants.len() as u64)
+                    .unwrap_or(0);
+
+                let char_ty = self.result.interner.builtin(BuiltinType::char);
+                let name_ty = self.result.interner.intern(Type::Slice {
+                    element: char_ty,
+                    is_const: true,
+                });
+
+                self.result.interner.intern(Type::Array {
+                    element: name_ty,
+                    len: Some(variant_count),
+                })
+            }
+
             HirMacroKind::Unknown => {
                 for arg in args {
                     self.synth_expr(arg);

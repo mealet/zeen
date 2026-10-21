@@ -1,0 +1,17 @@
+enum Shape {
+    circle: {
+        r: i32,
+    },
+    square,
+    none,
+}
+
+fn main() i32 {
+    let names = @variantNames(Shape);
+    let count: usize = @variantCount(Shape);
+    @println("count={} names={}={}", count, names[..].len, names[..][2]);
+    for (name : names) {
+        @println("{}", name);
+    }
+    return 0;
+}
