@@ -21,6 +21,20 @@ pub fn builtin_is_float(b: BuiltinType) -> bool {
     matches!(b, BuiltinType::f32 | BuiltinType::f64)
 }
 
+pub fn int_literal_fits(b: BuiltinType, n: i64) -> bool {
+    match b {
+        BuiltinType::i8 => n >= i64::from(i8::MIN) && n <= i64::from(i8::MAX),
+        BuiltinType::i16 => n >= i64::from(i16::MIN) && n <= i64::from(i16::MAX),
+        BuiltinType::i32 => n >= i64::from(i32::MIN) && n <= i64::from(i32::MAX),
+        BuiltinType::i64 | BuiltinType::isize => true,
+        BuiltinType::u8 => n >= 0 && n <= i64::from(u8::MAX),
+        BuiltinType::u16 => n >= 0 && n <= i64::from(u16::MAX),
+        BuiltinType::u32 => n >= 0 && n <= i64::from(u32::MAX),
+        BuiltinType::u64 | BuiltinType::usize => n >= 0,
+        _ => true,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoerceResult {
     /// Identical types, no conversion needed

@@ -2117,6 +2117,25 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
                     return self.const_value(c, Some(target), func);
                 }
 
+                match (c, self.typecheck.interner.get(target).clone()) {
+                    (ConstValue::Int(n), Type::Builtin(b)) if builtin_is_integer(b) => {
+                        return self.const_value(c, Some(target), func);
+                    }
+                    (ConstValue::Float(_), Type::Builtin(b)) if builtin_is_float(b) => {
+                        return self.const_value(c, Some(target), func);
+                    }
+                    (ConstValue::Int(n), Type::Builtin(b)) if builtin_is_float(b) => {
+                        let wide = self.context.i64_type().const_int(*n as u64, true);
+                        let float_ty = self.map_basic_type(target).into_float_type();
+                        return self
+                            .builder
+                            .build_signed_int_to_float(wide, float_ty, "")
+                            .unwrap()
+                            .into();
+                    }
+                    _ => {}
+                }
+
                 let value = self.const_value(c, None, func);
                 self.cast_value(value, &src_ty, target)
             }

@@ -8,6 +8,22 @@ use zeen_ast::expressions::{BinaryOp, UnaryOp};
 
 #[derive(Debug, Error, Diagnostic, Clone)]
 pub enum TypeError {
+    #[error("integer literal `{n}` does not fit into `{expected}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::int_literal_out_of_range),
+        help("annotate the value or use a type it can fit into")
+    )]
+    IntLiteralOutOfRange {
+        n: i64,
+        expected: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("expected type `{expected}`, but found `{found}`")]
     #[diagnostic(severity(Error), code(zeen::typechecker::mismatch))]
     Mismatch {

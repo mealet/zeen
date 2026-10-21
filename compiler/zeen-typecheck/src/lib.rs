@@ -3724,6 +3724,20 @@ impl<'res> TypeChecker<'res> {
         let source = expr.source.clone();
         let id = expr.id;
 
+        if let HirExprKind::Literal(Literal::Int(n)) = &expr.kind
+            && let Type::Builtin(b) = self.result.interner.get(expected).clone()
+            && coerce::builtin_is_integer(b)
+            && !coerce::int_literal_fits(b, *n)
+        {
+            self.report(TypeError::IntLiteralOutOfRange {
+                n: *n,
+                expected: self.display_type(expected).into(),
+                src: source.src(),
+                span: source.span,
+            });
+            return expected;
+        }
+
         match try_coerce(&mut self.result.interner, actual, expected) {
             CoerceResult::Identity => actual,
             CoerceResult::ErrorRecovery => expected,
