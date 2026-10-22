@@ -4305,32 +4305,43 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let mut capture_args: Vec<TypeId> = Vec::new();
                 let mut closure_bindings: Option<HashMap<DefId, TypeId>> = None;
-                if !captures.is_empty() && !fb.bindings.is_empty() {
-                    let substituted: Vec<TypeId> = captures
+                if !fb.bindings.is_empty() {
+                    let raw_captures: Vec<TypeId> = captures
                         .iter()
                         .map(|captured| {
-                            let raw = self
-                                .typecheck
+                            self.typecheck
                                 .def_types
                                 .get(captured)
                                 .copied()
-                                .expect("captured value must have a type");
-                            self.substitute_fn_type(fb, raw)
+                                .expect("captured value must have a type")
                         })
                         .collect();
+                    let substituted: Vec<TypeId> = raw_captures
+                        .iter()
+                        .map(|&raw| self.substitute_fn_type(fb, raw))
+                        .collect();
 
-                    let generic_involved = captures.iter().enumerate().any(|(index, captured)| {
-                        let raw = self
-                            .typecheck
-                            .def_types
-                            .get(captured)
-                            .copied()
-                            .expect("captured value must have a type");
-                        raw != substituted[index]
+                    let captures_generic = raw_captures
+                        .iter()
+                        .zip(substituted.iter())
+                        .any(|(raw, subst)| raw != subst);
+
+                    let raw_sig = self.typecheck.def_types.get(def_id).copied();
+                    let sig_generic = raw_sig.is_some_and(|raw| {
+                        let subst = self.substitute_fn_type(fb, raw);
+                        raw != subst
                     });
 
-                    if generic_involved {
+                    if captures_generic || sig_generic {
                         capture_args = substituted;
+                        if capture_args.is_empty()
+                            && let Some(Type::Fn { params, ret, .. }) = raw_sig
+                                .map(|raw| self.substitute_fn_type(fb, raw))
+                                .map(|subst| self.typecheck.interner.get(subst).clone())
+                        {
+                            capture_args = params;
+                            capture_args.push(ret);
+                        }
                         closure_bindings = Some(fb.bindings.clone());
                     }
                 }
