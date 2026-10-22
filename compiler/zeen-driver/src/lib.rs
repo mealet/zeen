@@ -2,9 +2,11 @@ use rustc_hash::FxHashSet as HashSet;
 use std::path::PathBuf;
 
 mod target;
+mod warnings;
 
 use miette::GraphicalTheme;
 pub use target::Target;
+pub use warnings::source_disables_warnings;
 
 include!(concat!(env!("OUT_DIR"), "/core_files.rs"));
 

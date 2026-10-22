@@ -10,7 +10,7 @@ use zeen_mir::{
     BasicBlock, BlockId, CallTarget, LocalId, LocalKind, MirFunctionId, MirProgram, MirStatement,
     Operand, Place, PlaceElem, Rvalue, Terminator, place_is_global,
 };
-use zeen_resolve::{DefId, ResolutionResult};
+use zeen_resolve::{DefId, DefKind, Resolution, ResolutionResult};
 use zeen_typecheck::result::TypeCheckResult;
 use zeen_types::{Type, TypeId};
 
@@ -97,6 +97,9 @@ impl<'ctx> DataFlow<'ctx> {
         }
 
         self.check_escaping_borrows();
+        self.detect_unreachable_code();
+        self.detect_unused_functions();
+        self.detect_unused_consts();
     }
 
     fn analyze_function(&mut self, function_id: MirFunctionId) {
@@ -1345,6 +1348,162 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
+    fn detect_unreachable_code(&mut self) {
+        let mut warnings = Vec::new();
+
+        for function in self.program.functions.values() {
+            let mut reachable: HashSet<BlockId> = HashSet::default();
+            let mut worklist = vec![function.entry_block];
+
+            while let Some(block_id) = worklist.pop() {
+                if !reachable.insert(block_id) {
+                    continue;
+                }
+
+                worklist.extend(terminator_successors(&function.block(block_id).terminator));
+            }
+
+            for (block_id, block) in function.blocks.iter().enumerate() {
+                let block_id = BlockId(block_id as u32);
+
+                if reachable.contains(&block_id) {
+                    continue;
+                }
+
+                let Some(source) = block
+                    .statements
+                    .iter()
+                    .find_map(stmt_source)
+                    .or_else(|| terminator_source(&block.terminator))
+                else {
+                    continue;
+                };
+
+                warnings.push(FlowError::UnreachableCode {
+                    src: source.src(),
+                    span: source.span,
+                });
+            }
+        }
+
+        self.diagnostics.extend(warnings);
+    }
+
+    fn detect_unused_functions(&mut self) {
+        let mut used: HashSet<DefId> = HashSet::default();
+
+        for call_resolution in self.typecheck.call_resolutions.values() {
+            used.insert(call_resolution.fn_def);
+        }
+        for operator_resolution in self.typecheck.operator_resolutions.values() {
+            used.insert(operator_resolution.method_def);
+        }
+        used.extend(self.typecheck.format_arg_resolutions.values().copied());
+        used.extend(self.typecheck.for_iterator_next_methods.values().copied());
+        for entries in self.typecheck.impl_registry.values() {
+            for entry in entries {
+                used.extend(entry.methods.iter().copied());
+            }
+        }
+        for resolution in self
+            .resolution
+            .expr_bindings
+            .values()
+            .chain(self.resolution.type_bindings.values())
+        {
+            if let Resolution::Def(def_id) = resolution {
+                used.insert(*def_id);
+            }
+        }
+
+        let mut warnings = Vec::new();
+
+        for (def_id, def_info) in self.resolution.defs.iter() {
+            if def_info.kind != DefKind::Function {
+                continue;
+            }
+
+            if Some(*def_id) == self.typecheck.main_fn_def {
+                continue;
+            }
+
+            if used.contains(def_id) || def_info.is_pub {
+                continue;
+            }
+
+            if self.resolution.nested_fn_parents.contains_key(def_id) {
+                continue;
+            }
+
+            if self.is_outside_root_module(*def_id) {
+                continue;
+            }
+
+            let name = self.resolve_name(def_info.name);
+
+            warnings.push(FlowError::UnusedFunction {
+                name,
+                src: def_info.span.src(),
+                span: def_info.span.span,
+            });
+        }
+
+        self.diagnostics.extend(warnings);
+    }
+
+    fn detect_unused_consts(&mut self) {
+        let mut referenced: HashSet<DefId> = HashSet::default();
+
+        for resolution in self
+            .resolution
+            .expr_bindings
+            .values()
+            .chain(self.resolution.type_bindings.values())
+        {
+            if let Resolution::Def(def_id) = resolution {
+                referenced.insert(*def_id);
+            }
+        }
+
+        for def_id in &self.resolution.arm_const_defs {
+            referenced.insert(*def_id);
+        }
+
+        let mut warnings = Vec::new();
+
+        for (def_id, def_info) in &self.resolution.defs {
+            if !is_const_def_kind(&def_info.kind) {
+                continue;
+            }
+
+            if referenced.contains(def_id) || def_info.is_pub {
+                continue;
+            }
+
+            if self.is_outside_root_module(*def_id) {
+                continue;
+            }
+
+            let name = self.resolve_name(def_info.name);
+
+            warnings.push(FlowError::UnusedConst {
+                name,
+                src: def_info.span.src(),
+                span: def_info.span.span,
+            });
+        }
+
+        self.diagnostics.extend(warnings);
+    }
+
+    fn is_outside_root_module(&self, def_id: DefId) -> bool {
+        self.resolution
+            .def_modules
+            .get(&def_id)
+            .map(|module| module.as_str() != self.resolution.root_module.as_str())
+            .unwrap_or(true)
+    }
+
     pub fn finish(self) -> Result<FlowResult, Vec<FlowError>> {
         let mut result = FlowResult::default();
 
@@ -1368,4 +1527,47 @@ impl<'ctx> DataFlow<'ctx> {
 
 fn is_error(diagnostic: &FlowError) -> bool {
     !matches!(diagnostic.severity(), Some(Severity::Warning))
+}
+
+fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
+    match terminator {
+        Terminator::Goto(target) => vec![*target],
+        Terminator::SwitchInt {
+            targets, otherwise, ..
+        } => targets
+            .iter()
+            .map(|(_, target)| *target)
+            .chain(std::iter::once(*otherwise))
+            .collect(),
+        Terminator::Call {
+            target: Some(target),
+            ..
+        }
+        | Terminator::MacroCall {
+            target: Some(target),
+            ..
+        } => vec![*target],
+        _ => Vec::new(),
+    }
+}
+
+fn stmt_source(statement: &MirStatement) -> Option<Source> {
+    match statement {
+        MirStatement::Assign { source, .. } => source.clone(),
+        _ => None,
+    }
+}
+
+fn terminator_source(terminator: &Terminator) -> Option<Source> {
+    match terminator {
+        Terminator::Call { source, .. } | Terminator::MacroCall { source, .. } => source.clone(),
+        _ => None,
+    }
+}
+
+fn is_const_def_kind(kind: &DefKind) -> bool {
+    matches!(
+        kind,
+        DefKind::Variable { is_const: true } | DefKind::GlobalVar { is_const: true }
+    )
 }

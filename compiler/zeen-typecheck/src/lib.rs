@@ -2575,7 +2575,7 @@ impl<'res> TypeChecker<'res> {
                 None => self.synth_expr(expr),
             },
             None => {
-                let diverges = stmts.last().is_some_and(|s| self.stmt_diverges(s));
+                let diverges = stmts.iter().any(|s| self.stmt_diverges(s));
                 let actual = if diverges {
                     self.result.interner.never()
                 } else {

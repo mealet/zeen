@@ -206,6 +206,7 @@ pub struct FnBuilder {
     bindings: HashMap<DefId, TypeId>,
     fat_bindings: Vec<(DefId, TypeId)>,
     scope_stack: Vec<Vec<LocalId>>,
+    diverged: bool,
 }
 
 impl FnBuilder {
@@ -233,6 +234,7 @@ impl FnBuilder {
             bindings,
             fat_bindings: Vec::new(),
             scope_stack: Vec::new(),
+            diverged: false,
         }
     }
 
@@ -288,6 +290,15 @@ impl FnBuilder {
             self.func.block(block).terminator,
             Terminator::Unreachable // placeholder for a block that still needs a terminator
         )
+    }
+
+    fn reroute_after_flow_cut(&mut self, block: BlockId) -> BlockId {
+        if self.block_is_open(block) {
+            block
+        } else {
+            self.diverged = true;
+            self.new_block()
+        }
     }
 }
 
@@ -4246,7 +4257,10 @@ impl<'ctx> MirLowering<'ctx> {
                 }
 
                 let (cur, operand) = match trailing {
-                    Some(t) => self.lower_expr_to_operand(fb, t, cur),
+                    Some(t) => {
+                        let cur = fb.reroute_after_flow_cut(cur);
+                        self.lower_expr_to_operand(fb, t, cur)
+                    }
                     None => (cur, Operand::Constant(ConstValue::Void, None)),
                 };
 
@@ -7509,7 +7523,10 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> (BlockId, Operand) {
         match &stmt.kind {
-            HirStmtKind::Expr(block_expr) => self.lower_expr_to_operand(fb, block_expr, block),
+            HirStmtKind::Expr(block_expr) => {
+                let block = fb.reroute_after_flow_cut(block);
+                self.lower_expr_to_operand(fb, block_expr, block)
+            }
             _ => {
                 let block = self.lower_stmt(fb, stmt, block);
                 (block, Operand::Constant(ConstValue::Void, None))
@@ -7518,6 +7535,7 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn lower_stmt(&mut self, fb: &mut FnBuilder, stmt: &HirStmt, block: BlockId) -> BlockId {
+        let block = fb.reroute_after_flow_cut(block);
         match &stmt.kind {
             HirStmtKind::Let {
                 name,
@@ -8673,6 +8691,7 @@ impl<'ctx> MirLowering<'ctx> {
 
                     match trailing {
                         Some(t) => {
+                            let cur = fb.reroute_after_flow_cut(cur);
                             let (block, operand) = self.lower_expr_to_operand(&mut fb, t, cur);
 
                             let cur_diverges = matches!(
@@ -8694,7 +8713,9 @@ impl<'ctx> MirLowering<'ctx> {
                         }
 
                         None => {
-                            if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
+                            if !fb.diverged
+                                && matches!(fb.func.block(cur).terminator, Terminator::Unreachable)
+                            {
                                 fb.set_terminator(
                                     cur,
                                     Terminator::Return(Operand::Constant(ConstValue::Void, None)),
@@ -8705,7 +8726,9 @@ impl<'ctx> MirLowering<'ctx> {
                     }
                 } else {
                     let cur = self.lower_stmt(&mut fb, body, entry);
-                    if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
+                    if !fb.diverged
+                        && matches!(fb.func.block(cur).terminator, Terminator::Unreachable)
+                    {
                         fb.set_terminator(
                             cur,
                             Terminator::Return(Operand::Constant(ConstValue::Void, None)),
@@ -8717,7 +8740,8 @@ impl<'ctx> MirLowering<'ctx> {
 
             _ => {
                 let cur = self.lower_stmt(&mut fb, body, entry);
-                if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
+                if !fb.diverged && matches!(fb.func.block(cur).terminator, Terminator::Unreachable)
+                {
                     fb.set_terminator(
                         cur,
                         Terminator::Return(Operand::Constant(ConstValue::Void, None)),

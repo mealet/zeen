@@ -975,11 +975,8 @@ mod tests {
         let uri: tower_lsp_server::ls_types::Uri =
             "file:///tmp/zeen-lsp-hover-probe.zn".parse().unwrap();
         let output = crate::diagnostics::check(&uri, text, &[]);
-        assert!(
-            output.diagnostics.is_empty(),
-            "sample must check cleanly: {:?}",
-            output.diagnostics
-        );
+        let errors = crate::diagnostics::only_errors(&output.diagnostics);
+        assert!(errors.is_empty(), "sample must check cleanly: {:?}", errors);
 
         let offset = text.find(marker).unwrap() + marker.len();
         let result = hover_markdown(
@@ -1264,11 +1261,8 @@ mod tests {
                 .parse()
                 .unwrap();
         let output = crate::diagnostics::check(&uri, text, &[]);
-        assert!(
-            output.diagnostics.is_empty(),
-            "sample must check cleanly: {:?}",
-            output.diagnostics
-        );
+        let errors = crate::diagnostics::only_errors(&output.diagnostics);
+        assert!(errors.is_empty(), "sample must check cleanly: {:?}", errors);
 
         let paths = ResolvePaths {
             dir: Some(dir.as_path()),

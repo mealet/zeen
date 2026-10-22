@@ -2,6 +2,7 @@ use std::{cell::RefCell, collections::HashSet, path::Path, rc::Rc, sync::Arc};
 
 use bumpalo::Bump;
 use lasso::Rodeo;
+use miette::Diagnostic as _;
 use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
 use zeen_parser::Parser;
 
@@ -15,6 +16,19 @@ const CORE_IO: &str = include_str!("../../../lib/core/io.zn");
 const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
 
 fn flow_errors(src: &str) -> Vec<FlowError> {
+    flow_diagnostics(src)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity() != Some(miette::Severity::Warning))
+        .collect()
+}
+
+fn has_escaping_borrow(errors: &[FlowError]) -> bool {
+    errors
+        .iter()
+        .any(|e| matches!(e, FlowError::EscapingBorrow { .. }))
+}
+
+fn flow_diagnostics(src: &str) -> Vec<FlowError> {
     let rodeo = Rc::new(RefCell::new(Rodeo::default()));
     let bump = Bump::default();
     let content = Arc::new(src.to_string());
@@ -96,15 +110,13 @@ fn flow_errors(src: &str) -> Vec<FlowError> {
         &resolution_result,
         Rc::clone(&rodeo),
     ) {
-        Ok(result) => result.errors,
+        Ok(result) => {
+            let mut all = result.errors;
+            all.extend(result.warnings);
+            all
+        }
         Err(errors) => errors,
     }
-}
-
-fn has_escaping_borrow(errors: &[FlowError]) -> bool {
-    errors
-        .iter()
-        .any(|e| matches!(e, FlowError::EscapingBorrow { .. }))
 }
 
 #[test]
@@ -300,5 +312,160 @@ fn take_then_free_is_accepted() {
     assert!(
         !has_aliased_drop(&errors),
         "take-then-free must not report aliased-drop, got {errors:?}"
+    );
+}
+
+fn has_warning(diagnostics: &[FlowError], check: impl Fn(&FlowError) -> bool) -> bool {
+    diagnostics.iter().any(check)
+}
+
+#[test]
+fn unused_function_in_root_module_is_warned() {
+    let diagnostics = flow_diagnostics(
+        "fn helper() i32 { \
+             return 1; \
+         } \
+         fn main() i32 { \
+             return 0; \
+         }",
+    );
+
+    assert!(
+        has_warning(
+            &diagnostics,
+            |e| matches!(e, FlowError::UnusedFunction { name, .. } if name == "helper")
+        ),
+        "expected unused-fn warning for `helper`, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn used_function_is_not_warned() {
+    let diagnostics = flow_diagnostics(
+        "fn helper() i32 { \
+             return 1; \
+         } \
+         fn main() i32 { \
+             return helper(); \
+         }",
+    );
+
+    assert!(
+        !has_warning(&diagnostics, |e| matches!(
+            e,
+            FlowError::UnusedFunction { .. }
+        )),
+        "used function must not be flagged, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn pub_function_is_not_warned() {
+    let diagnostics = flow_diagnostics(
+        "pub fn helper() i32 { \
+             return 1; \
+         } \
+         fn main() i32 { \
+             return 0; \
+         }",
+    );
+
+    assert!(
+        !has_warning(&diagnostics, |e| matches!(
+            e,
+            FlowError::UnusedFunction { .. }
+        )),
+        "pub function must not be flagged, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn unreachable_code_after_return_is_warned() {
+    let diagnostics = flow_diagnostics(
+        "fn main() void { \
+             @println(\"a\"); \
+             return; \
+             @println(\"b\"); \
+         }",
+    );
+
+    assert!(
+        has_warning(&diagnostics, |e| matches!(
+            e,
+            FlowError::UnreachableCode { .. }
+        )),
+        "expected unreachable-code warning, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn reachable_code_is_not_warned_unreachable() {
+    let diagnostics = flow_diagnostics(
+        "fn main() void { \
+             @println(\"a\"); \
+             @println(\"b\"); \
+         }",
+    );
+
+    assert!(
+        !has_warning(&diagnostics, |e| matches!(
+            e,
+            FlowError::UnreachableCode { .. }
+        )),
+        "reachable statements must not be flagged, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn unused_const_is_warned() {
+    let diagnostics = flow_diagnostics(
+        "const LIMIT: i32 = 10; \
+         fn main() i32 { \
+             return 0; \
+         }",
+    );
+
+    assert!(
+        has_warning(
+            &diagnostics,
+            |e| matches!(e, FlowError::UnusedConst { name, .. } if name == "LIMIT")
+        ),
+        "expected unused-const warning for `LIMIT`, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn used_const_is_not_warned() {
+    let diagnostics = flow_diagnostics(
+        "const LIMIT: i32 = 10; \
+         fn main() i32 { \
+             return LIMIT; \
+         }",
+    );
+
+    assert!(
+        !has_warning(&diagnostics, |e| matches!(e, FlowError::UnusedConst { .. })),
+        "used constant must not be flagged, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn switch_arm_const_use_is_not_warned() {
+    let diagnostics = flow_diagnostics(
+        "const A: i32 = 1; \
+         fn main() void { \
+             switch (get()) { \
+                 A => @println(\"arm\"), \
+                 _ => @println(\"other\"), \
+             }; \
+         } \
+         fn get() i32 { \
+             return 1; \
+         }",
+    );
+
+    assert!(
+        !has_warning(&diagnostics, |e| matches!(e, FlowError::UnusedConst { .. })),
+        "switch arm const reference must keep the constant used, got {diagnostics:?}"
     );
 }

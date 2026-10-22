@@ -25,6 +25,13 @@ pub struct CheckOutput {
     pub analysis: Analysis,
 }
 
+pub(crate) fn only_errors(diagnostics: &[Diagnostic]) -> Vec<&Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity != Some(DiagnosticSeverity::WARNING))
+        .collect()
+}
+
 struct OpenFile<'a> {
     uri: &'a Uri,
     path: Option<PathBuf>,
@@ -378,7 +385,11 @@ fn check_full(
         }
     };
 
-    for warning in lowered.warnings.iter() {
+    for warning in lowered
+        .warnings
+        .iter()
+        .filter(|warning| !warning_module_disables(warning.source_code()))
+    {
         push_diagnostic(&mut diags, &open, warning);
     }
 
@@ -389,7 +400,11 @@ fn check_full(
         Rc::clone(&interner),
     ) {
         Ok(flow_result) => {
-            for warning in flow_result.warnings.iter() {
+            for warning in flow_result
+                .warnings
+                .iter()
+                .filter(|warning| !warning_module_disables(warning.source_code()))
+            {
                 push_diagnostic(&mut diags, &open, warning);
             }
 
@@ -409,6 +424,10 @@ fn check_full(
             }
         }
     }
+}
+
+fn warning_module_disables(source: Option<&miette::NamedSource<Arc<String>>>) -> bool {
+    source.is_some_and(zeen_driver::source_disables_warnings)
 }
 
 pub(crate) fn std_src(root: PathBuf) -> Option<PathBuf> {
@@ -652,6 +671,25 @@ mod tests {
         assert!(contains_main("fn main() i32 {\nreturn 0;\n}"));
         assert!(!contains_main("fn helper() {}"));
         assert!(!contains_main(""));
+    }
+
+    #[test]
+    fn module_marker_silences_warnings() {
+        let unsuppressed =
+            "fn helper() i32 {\n    return 1;\n}\n\nfn main() i32 {\n    return 0;\n}\n";
+        let suppressed = format!("// @no-warnings\n{unsuppressed}");
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-marker.zn").unwrap();
+
+        let without_marker = check(&uri, unsuppressed, &[]);
+        assert!(
+            without_marker
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unused function"))
+        );
+
+        let with_marker = check(&uri, &suppressed, &[]);
+        assert!(with_marker.diagnostics.is_empty());
     }
 
     #[test]

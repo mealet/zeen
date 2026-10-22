@@ -61,3 +61,11 @@ pub enum MirWarning {
         span: SourceSpan,
     },
 }
+
+impl MirWarning {
+    pub fn source_code(&self) -> Option<&NamedSource<Arc<String>>> {
+        match self {
+            Self::UnusedExpressionResult { src, .. } => Some(src),
+        }
+    }
+}

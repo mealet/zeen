@@ -1,0 +1,19 @@
+fn foo() i32 {
+  return 123;
+
+  let a = 123;
+  @println("never");
+}
+
+fn bar() i32 {
+  let x = 10;
+
+  return x;
+  let b = 11;
+}
+
+fn main() {
+  @println("{}", foo());
+  @println("{}", bar());
+  return;
+}

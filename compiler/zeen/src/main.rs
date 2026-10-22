@@ -6,6 +6,10 @@ use zeen_driver::{CORE_FILES, CompilationContext, CompilationOutput, MietteDrive
 mod cli;
 mod targets;
 
+fn warning_module_disables(source: Option<&miette::NamedSource<Arc<String>>>) -> bool {
+    source.is_some_and(zeen_driver::source_disables_warnings)
+}
+
 fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
     if path
         .extension()
@@ -392,13 +396,21 @@ fn compile(args: cli::Args) {
         Ok(result) => {
             if !args.no_warns {
                 let mut warnings = Vec::new();
-                warnings.extend(
-                    lowered_mir
-                        .warnings
-                        .iter()
-                        .map(|w| w as &dyn miette::Diagnostic),
-                );
-                warnings.extend(result.warnings.iter().map(|w| w as &dyn miette::Diagnostic));
+
+                for warning in lowered_mir.warnings.iter() {
+                    if warning_module_disables(warning.source_code()) {
+                        continue;
+                    }
+
+                    warnings.push(warning as &dyn miette::Diagnostic);
+                }
+                for warning in result.warnings.iter() {
+                    if warning_module_disables(warning.source_code()) {
+                        continue;
+                    }
+
+                    warnings.push(warning as &dyn miette::Diagnostic);
+                }
 
                 let count = warnings.len();
                 for warning in warnings {

@@ -1,0 +1,17 @@
+fn helper() i32 {
+  return 1;
+  @println("never");
+  return 2;
+}
+
+fn dropzone() void {
+  return;
+  @println("skipped");
+}
+
+fn main() {
+  @println("{}", helper());
+  dropzone();
+  return;
+  @println("skipped");
+}
