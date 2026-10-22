@@ -28,12 +28,7 @@ pub struct Args {
     pub check: bool,
 
     /// `--no-warns` flag to disable compiler's warnings
-    #[arg(
-        long = "no-warnings",
-        alias = "no-warns",
-        action,
-        help = "Disable compiler's warnings"
-    )]
+    #[arg(long = "no-warns", action, help = "Disable compiler's warnings")]
     pub no_warns: bool,
 
     /// `--no-color` flag to disable coloring on output
