@@ -190,6 +190,14 @@ fn macro_docs(name: &str) -> Option<(&'static str, &'static str)> {
             "@enumTag(expr)",
             "compiler macro: runtime tag of an enum value as u8",
         )),
+        "variantNames" => Some((
+            "@variantNames(T)",
+            "compiler macro: array of enum variant names, requires an enum type",
+        )),
+        "variantCount" => Some((
+            "@variantCount(T)",
+            "compiler macro: number of enum variants, requires an enum type",
+        )),
         "os" => Some((
             "@os[...]",
             "conditional compilation: keeps the branch matching the target os",
@@ -1199,6 +1207,25 @@ mod tests {
 
         assert!(markdown.contains("@println"), "{markdown}");
         assert!(markdown.contains("```zeen"), "{markdown}");
+    }
+
+    #[test]
+    fn at_variant_macro_shows_docs() {
+        let analysis = crate::analysis::Analysis::default();
+        let text = "fn main() {\n    @println(\"{}\", @variantCount(Color));\n}\n";
+        let offset = text.find("@variantCount").unwrap() + 1;
+        let markdown = hover_markdown(
+            text,
+            &analysis,
+            offset,
+            crate::completion::ResolvePaths::default(),
+            "test.zn",
+        )
+        .unwrap()
+        .markdown;
+
+        assert!(markdown.contains("@variantCount(T)"), "{markdown}");
+        assert!(markdown.contains("number of enum variants"), "{markdown}");
     }
 
     #[test]
