@@ -177,8 +177,6 @@ impl<'ctx> NameResolver {
             return true;
         }
 
-        let mut captured = false;
-
         let mut captured_by = Vec::new();
 
         for layer in self.capture_stack.iter().rev() {
@@ -215,11 +213,6 @@ impl<'ctx> NameResolver {
 
         for closure_def in captured_by {
             self.record_capture(closure_def, def_id);
-            captured = true;
-        }
-
-        if captured {
-            return self.check_capturable(def_id, span);
         }
 
         true
@@ -236,23 +229,6 @@ impl<'ctx> NameResolver {
         if !captures.contains(&captured) {
             captures.push(captured);
         }
-    }
-
-    fn check_capturable(&mut self, def_id: DefId, span: SourceSpan) -> bool {
-        if matches!(
-            self.result.defs.get(&def_id).map(|info| &info.kind),
-            Some(DefKind::GenericParam)
-        ) {
-            self.report(ResolveError::DisabledFeature {
-                reason: "closures cannot capture generic parameters yet".into(),
-                src: self.named_src(),
-                span,
-            });
-
-            return false;
-        }
-
-        true
     }
 
     fn named_src(&self) -> miette::NamedSource<Arc<String>> {

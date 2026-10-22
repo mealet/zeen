@@ -37,6 +37,7 @@ use crate::{
 
 const CLOSURE_SYNTH_BASE: u32 = 1 << 30;
 const CLOSURE_SYNTH_STRIDE: u32 = 1024;
+const CLOSURE_ENV_MONO_BASE: u32 = 1 << 31;
 
 pub struct MirLoweringResult {
     pub program: MirProgram,
@@ -142,7 +143,8 @@ pub struct MirLowering<'ctx> {
     fat_free_cache: HashMap<TypeId, MirFunctionId>,
     env_drop_cache: HashMap<TypeId, MirFunctionId>,
     env_drop_noop: Option<MirFunctionId>,
-    closure_envs: HashMap<DefId, TypeId>,
+    closure_envs: HashMap<(DefId, Vec<TypeId>), (TypeId, Vec<DefId>)>,
+    env_mono_next: u32,
 
     mode: CompilationMode,
 
@@ -314,6 +316,7 @@ impl<'ctx> MirLowering<'ctx> {
             env_drop_cache: HashMap::default(),
             env_drop_noop: None,
             closure_envs: HashMap::default(),
+            env_mono_next: CLOSURE_ENV_MONO_BASE,
             errors: Vec::new(),
             warnings: Vec::new(),
             mode,
@@ -2243,12 +2246,7 @@ impl<'ctx> MirLowering<'ctx> {
         closure_fn: MirFunctionId,
         source_expr: &HirExpr,
     ) -> (BlockId, Operand) {
-        let captures = self
-            .resolution
-            .closure_captures
-            .get(&closure_def)
-            .cloned()
-            .unwrap_or_default();
+        let captures = self.value_captures(closure_def);
 
         self.register_fat_layout(fat_ty);
 
@@ -2259,7 +2257,7 @@ impl<'ctx> MirLowering<'ctx> {
             return self.fat_envelope_no_env(fb, block, fat_ty, adapter, source_expr);
         }
 
-        let env_ty = self.env_struct_type(closure_def);
+        let (env_ty, _) = self.env_struct_type(&fb.bindings, closure_def);
         let Type::Struct {
             def_id: env_def, ..
         } = self.typecheck.interner.get(env_ty).clone()
@@ -2406,46 +2404,79 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
-    fn env_struct_type(&mut self, closure_def: DefId) -> TypeId {
-        if let Some(&ty) = self.closure_envs.get(&closure_def) {
-            return ty;
+    fn env_struct_type(
+        &mut self,
+        bindings: &HashMap<DefId, TypeId>,
+        closure_def: DefId,
+    ) -> (TypeId, Vec<DefId>) {
+        let captures = self.value_captures(closure_def);
+
+        let raw_captures: Vec<TypeId> = captures
+            .iter()
+            .map(|captured| {
+                self.typecheck
+                    .def_types
+                    .get(captured)
+                    .copied()
+                    .expect("captured value must have a type")
+            })
+            .collect();
+
+        let capture_types: Vec<TypeId> = raw_captures
+            .iter()
+            .map(|&raw| {
+                if bindings.is_empty() {
+                    raw
+                } else {
+                    zeen_types::substitute_generics(&mut self.typecheck.interner, raw, bindings)
+                }
+            })
+            .collect();
+
+        if let Some(&(env_ty, ref field_defs)) =
+            self.closure_envs.get(&(closure_def, capture_types.clone()))
+        {
+            return (env_ty, field_defs.clone());
         }
 
-        let captures = self
-            .resolution
-            .closure_captures
-            .get(&closure_def)
-            .cloned()
-            .unwrap_or_default();
-        let env_def = self.closure_env_def(closure_def);
+        let generic = raw_captures
+            .iter()
+            .zip(capture_types.iter())
+            .any(|(raw, subst)| raw != subst);
+
+        let env_def = if generic {
+            let def = DefId(self.env_mono_next);
+            self.env_mono_next += CLOSURE_SYNTH_STRIDE;
+            def
+        } else {
+            self.closure_env_def(closure_def)
+        };
+
         let env_ty = self.typecheck.interner.intern(Type::Struct {
             def_id: env_def,
             generic_args: Vec::new(),
         });
 
+        let field_defs: Vec<DefId> = (0..captures.len())
+            .map(|index| DefId(env_def.0 + index as u32 + 1))
+            .collect();
+
         let mut info_fields = Vec::with_capacity(captures.len());
         let mut layout_fields = Vec::with_capacity(captures.len());
         {
             let mut rodeo = self.rodeo.borrow_mut();
-            for (index, captured) in captures.iter().enumerate() {
+            for (index, field_ty) in capture_types.iter().enumerate() {
                 let name = rodeo.get_or_intern(format!("$env{index}"));
-                let field_def = self.closure_env_field_def(closure_def, index);
-                let field_ty = self
-                    .typecheck
-                    .def_types
-                    .get(captured)
-                    .copied()
-                    .expect("captured value must have a type");
                 info_fields.push(zeen_types::StructFieldInfo {
                     name,
-                    field_def,
-                    field_ty,
+                    field_def: field_defs[index],
+                    field_ty: *field_ty,
                     struct_def: env_def,
                     is_pub: false,
                 });
                 layout_fields.push(StructFieldLayout {
-                    def_id: field_def,
-                    ty: field_ty,
+                    def_id: field_defs[index],
+                    ty: *field_ty,
                 });
             }
         }
@@ -2467,16 +2498,30 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        self.closure_envs.insert(closure_def, env_ty);
-        env_ty
+        self.closure_envs
+            .insert((closure_def, capture_types), (env_ty, field_defs.clone()));
+        (env_ty, field_defs)
     }
 
     fn closure_env_def(&self, closure_def: DefId) -> DefId {
         DefId(CLOSURE_SYNTH_BASE + closure_def.0 * CLOSURE_SYNTH_STRIDE)
     }
 
-    fn closure_env_field_def(&self, closure_def: DefId, index: usize) -> DefId {
-        DefId(CLOSURE_SYNTH_BASE + closure_def.0 * CLOSURE_SYNTH_STRIDE + index as u32 + 1)
+    fn value_captures(&self, closure_def: DefId) -> Vec<DefId> {
+        self.resolution
+            .closure_captures
+            .get(&closure_def)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|captured| {
+                self.resolution
+                    .defs
+                    .get(captured)
+                    .map(|info| info.kind != DefKind::GenericParam)
+                    .unwrap_or(true)
+            })
+            .collect()
     }
 
     fn fat_envelope_no_env(
@@ -4224,9 +4269,53 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Type(_) => unreachable!(),
 
             HirExprKind::Closure { def_id, .. } => {
-                let closure_ty = self.expr_type(fb, expr);
+                let recorded_ty = self.expr_type(fb, expr);
+                let closure_ty = self.substitute_fn_type(fb, recorded_ty);
 
-                let mir_id = self.monomorphize_fn(*def_id, Vec::new(), None, &[]);
+                let captures = self.value_captures(*def_id);
+
+                let mut capture_args: Vec<TypeId> = Vec::new();
+                let mut closure_bindings: Option<HashMap<DefId, TypeId>> = None;
+                if !captures.is_empty() && !fb.bindings.is_empty() {
+                    let substituted: Vec<TypeId> = captures
+                        .iter()
+                        .map(|captured| {
+                            let raw = self
+                                .typecheck
+                                .def_types
+                                .get(captured)
+                                .copied()
+                                .expect("captured value must have a type");
+                            self.substitute_fn_type(fb, raw)
+                        })
+                        .collect();
+
+                    let generic_involved = captures.iter().enumerate().any(|(index, captured)| {
+                        let raw = self
+                            .typecheck
+                            .def_types
+                            .get(captured)
+                            .copied()
+                            .expect("captured value must have a type");
+                        raw != substituted[index]
+                    });
+
+                    if generic_involved {
+                        capture_args = substituted;
+                        closure_bindings = Some(fb.bindings.clone());
+                    }
+                }
+
+                let mir_id = match closure_bindings {
+                    Some(override_bindings) => self.monomorphize_fn_with_bindings(
+                        *def_id,
+                        capture_args,
+                        None,
+                        &[],
+                        Some(override_bindings),
+                    ),
+                    None => self.monomorphize_fn(*def_id, Vec::new(), None, &[]),
+                };
 
                 match self.typecheck.interner.get(closure_ty).clone() {
                     Type::Fn { .. } => (
@@ -8181,6 +8270,23 @@ impl<'ctx> MirLowering<'ctx> {
         owner_struct: Option<DefId>,
         fat_args: &[TypeId],
     ) -> MirFunctionId {
+        self.monomorphize_fn_with_bindings(
+            def_id,
+            generic_args,
+            owner_struct,
+            fat_args,
+            Option::<HashMap<DefId, TypeId>>::None,
+        )
+    }
+
+    fn monomorphize_fn_with_bindings(
+        &mut self,
+        def_id: DefId,
+        generic_args: Vec<TypeId>,
+        owner_struct: Option<DefId>,
+        fat_args: &[TypeId],
+        bindings_override: Option<HashMap<DefId, TypeId>>,
+    ) -> MirFunctionId {
         let hir_fn = self.hir_fns_by_def[&def_id].clone();
         let key = (def_id, generic_args.clone(), fat_args.to_vec());
 
@@ -8214,7 +8320,14 @@ impl<'ctx> MirLowering<'ctx> {
             readable_name: display_name,
         });
 
-        let mir_func = self.lower_fn_body(def_id, &hir_fn, &generic_args, owner_struct, fat_args);
+        let mir_func = self.lower_fn_body(
+            def_id,
+            &hir_fn,
+            &generic_args,
+            owner_struct,
+            fat_args,
+            bindings_override,
+        );
         for local in &mir_func.locals {
             match self.typecheck.interner.get(local.ty).clone() {
                 Type::Slice { .. } => self.register_slice_layout(local.ty),
@@ -8310,21 +8423,65 @@ impl<'ctx> MirLowering<'ctx> {
         generic_args: &[TypeId],
         owner_struct: Option<DefId>,
         fat_args: &[TypeId],
+        bindings_override: Option<HashMap<DefId, TypeId>>,
     ) -> MirFunction {
         let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
-        let bindings: HashMap<DefId, TypeId> = if !generic_defs.is_empty() {
-            if let Some(owner) = owner_struct {
-                let owner_generics = self.owner_generics(owner);
-                let owner_count = owner_generics.len();
-                let struct_args: Vec<TypeId> =
-                    generic_args.iter().take(owner_count).copied().collect();
-                let method_args: Vec<TypeId> =
-                    generic_args.iter().skip(owner_count).copied().collect();
+        let bindings: HashMap<DefId, TypeId> = match bindings_override {
+            Some(override_bindings) => override_bindings,
+            _ if !generic_defs.is_empty() => {
+                if let Some(owner) = owner_struct {
+                    let owner_generics = self.owner_generics(owner);
+                    let owner_count = owner_generics.len();
+                    let struct_args: Vec<TypeId> =
+                        generic_args.iter().take(owner_count).copied().collect();
+                    let method_args: Vec<TypeId> =
+                        generic_args.iter().skip(owner_count).copied().collect();
 
+                    let mut bindings: HashMap<DefId, TypeId> = owner_generics
+                        .iter()
+                        .copied()
+                        .zip(struct_args.iter().copied())
+                        .collect();
+
+                    for entries in self.typecheck.impl_registry.values() {
+                        for entry in entries {
+                            if !entry.methods.contains(&def_id) {
+                                continue;
+                            }
+
+                            for (arg, &struct_g) in
+                                entry.object_args.iter().zip(owner_generics.iter())
+                            {
+                                if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
+                                    && let Some(&concrete) = bindings.get(&struct_g)
+                                {
+                                    bindings.insert(*imp_g, concrete);
+                                }
+                            }
+                        }
+                    }
+
+                    bindings.extend(
+                        generic_defs
+                            .iter()
+                            .copied()
+                            .zip(method_args.iter().copied()),
+                    );
+                    bindings
+                } else {
+                    generic_defs
+                        .iter()
+                        .copied()
+                        .zip(generic_args.iter().copied())
+                        .collect()
+                }
+            }
+            _ if let Some(owner) = owner_struct => {
+                let owner_generics = self.owner_generics(owner);
                 let mut bindings: HashMap<DefId, TypeId> = owner_generics
                     .iter()
                     .copied()
-                    .zip(struct_args.iter().copied())
+                    .zip(generic_args.iter().copied())
                     .collect();
 
                 for entries in self.typecheck.impl_registry.values() {
@@ -8344,47 +8501,9 @@ impl<'ctx> MirLowering<'ctx> {
                     }
                 }
 
-                bindings.extend(
-                    generic_defs
-                        .iter()
-                        .copied()
-                        .zip(method_args.iter().copied()),
-                );
                 bindings
-            } else {
-                generic_defs
-                    .iter()
-                    .copied()
-                    .zip(generic_args.iter().copied())
-                    .collect()
             }
-        } else if let Some(owner) = owner_struct {
-            let owner_generics = self.owner_generics(owner);
-            let mut bindings: HashMap<DefId, TypeId> = owner_generics
-                .iter()
-                .copied()
-                .zip(generic_args.iter().copied())
-                .collect();
-
-            for entries in self.typecheck.impl_registry.values() {
-                for entry in entries {
-                    if !entry.methods.contains(&def_id) {
-                        continue;
-                    }
-
-                    for (arg, &struct_g) in entry.object_args.iter().zip(owner_generics.iter()) {
-                        if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
-                            && let Some(&concrete) = bindings.get(&struct_g)
-                        {
-                            bindings.insert(*imp_g, concrete);
-                        }
-                    }
-                }
-            }
-
-            bindings
-        } else {
-            HashMap::default()
+            _ => HashMap::default(),
         };
 
         let fn_ty = self
@@ -8406,11 +8525,13 @@ impl<'ctx> MirLowering<'ctx> {
             self.typecheck.interner.get(ret_ty),
             Type::FatFn { erased: true, .. }
         ) {
-            self.typecheck
+            let finalized = self
+                .typecheck
                 .fn_return_fats
                 .get(&def_id)
                 .copied()
-                .unwrap_or(ret_ty)
+                .unwrap_or(ret_ty);
+            zeen_types::substitute_generics(&mut self.typecheck.interner, finalized, &bindings)
         } else {
             ret_ty
         };
@@ -8421,20 +8542,15 @@ impl<'ctx> MirLowering<'ctx> {
             generic_args.to_vec(),
             entry,
             ret_ty,
-            HashMap::default(),
+            bindings.clone(),
         );
         fb.new_block();
         let mut fat_bound_count = 0usize;
 
-        let captures = self
-            .resolution
-            .closure_captures
-            .get(&def_id)
-            .cloned()
-            .unwrap_or_default();
+        let captures = self.value_captures(def_id);
 
         if !captures.is_empty() {
-            let env_ty = self.env_struct_type(def_id);
+            let (env_ty, field_defs) = self.env_struct_type(&bindings, def_id);
             let env_ptr_ty = self.typecheck.interner.intern(Type::Pointer {
                 inner: env_ty,
                 is_const: true,
@@ -8445,10 +8561,7 @@ impl<'ctx> MirLowering<'ctx> {
             let env_place = Place::from_local(env_param);
 
             for (index, captured) in captures.iter().enumerate() {
-                let field_place = env_place
-                    .clone()
-                    .deref()
-                    .field(self.closure_env_field_def(def_id, index));
+                let field_place = env_place.clone().deref().field(field_defs[index]);
                 fb.captured_places.insert(*captured, field_place);
             }
         }

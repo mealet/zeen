@@ -1,0 +1,13 @@
+fn capture_in_generic[T: Copy](v: T) T {
+    let c = fn() T { return v; };
+    return c();
+}
+
+fn main() i32 {
+    let a = capture_in_generic(40);
+    let b = capture_in_generic(1.5);
+
+    @println("a={}", a);
+    @println("b={}", b);
+    return 0;
+}

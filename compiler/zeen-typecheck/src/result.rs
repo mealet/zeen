@@ -241,7 +241,7 @@ impl TypeCheckResult {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CallResolution {
     pub fn_def: DefId,
     pub generic_args: Vec<TypeId>,

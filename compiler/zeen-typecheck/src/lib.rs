@@ -1719,11 +1719,21 @@ impl<'res> TypeChecker<'res> {
             return Some(recorded);
         }
 
-        if let Some(res) = self.result.call_resolutions.get(&expr_id) {
+        if let Some(res) = self.result.call_resolutions.get(&expr_id).cloned() {
             let fn_def = res.fn_def;
             let candidates = self.result.fat_return_candidates.get(&fn_def)?.clone();
             if self.resolve_fn_fat_return(fn_def, &candidates, resolved, resolving) {
-                resolved.get(&fn_def).copied()
+                let resolved_ty = resolved.get(&fn_def).copied()?;
+                let Some(signature) = self.fn_sigs.get(&fn_def) else {
+                    return Some(resolved_ty);
+                };
+                let bindings: HashMap<DefId, TypeId> = signature
+                    .generics
+                    .iter()
+                    .copied()
+                    .zip(res.generic_args.iter().copied())
+                    .collect();
+                Some(self.substitute_generics(resolved_ty, &bindings))
             } else {
                 None
             }
@@ -1985,26 +1995,25 @@ impl<'res> TypeChecker<'res> {
             .closure_captures
             .get(&def_id)
             .cloned()
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .filter(|captured| {
+                self.resolution
+                    .defs
+                    .get(captured)
+                    .map(|info| info.kind != DefKind::GenericParam)
+                    .unwrap_or(true)
+            })
+            .collect::<Vec<_>>();
 
         if captures.is_empty() {
             return fn_ty;
         }
 
-        for captured in &captures {
-            let cap_ty = self.lookup_def_type(*captured, source.clone());
-            if self.type_contains_generic(cap_ty) {
-                self.report(TypeError::ClosureGenericCapture {
-                    src: source.src(),
-                    span: source.span,
-                });
-                return self.result.interner.error();
-            }
-        }
-
         let once = captures.iter().any(|captured| {
             let cap_ty = self.lookup_def_type(*captured, source.clone());
-            !self.type_is_copy(cap_ty)
+            !self.capture_is_copy(cap_ty)
         });
 
         self.result.interner.intern(Type::FatFn {
@@ -4572,6 +4581,21 @@ impl<'res> TypeChecker<'res> {
             }
             _ => true,
         }
+    }
+
+    fn capture_is_copy(&self, ty: TypeId) -> bool {
+        if let Type::GenericParam(generic) = self.result.interner.get(ty).clone() {
+            let Some(copy_iface) = self.interface_registry.get("Copy") else {
+                return false;
+            };
+            return self
+                .all_generic_bounds
+                .get(&generic)
+                .map(|bounds| bounds.contains(&copy_iface))
+                .unwrap_or(false);
+        }
+
+        self.type_is_copy(ty)
     }
 
     fn check_call(

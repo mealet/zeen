@@ -923,13 +923,16 @@ mod tests {
     }
 
     #[test]
-    fn closure_capturing_generic_param_is_reported() {
-        let errs = resolve_full("fn generic[T](v: T) void { let c = fn(x: T) T { return x; }; }")
-            .unwrap_err();
+    fn closure_capturing_generic_param_is_recorded() {
+        let fx = resolve_ok("fn generic[T](v: T) T { let c = fn() T { return v; }; return c(); }");
 
-        assert!(
-            errs.iter()
-                .any(|e| matches!(e, ResolveError::DisabledFeature { .. }))
+        let closure = fx
+            .def_id_by_name("closure0")
+            .expect("closure0 def must be defined");
+
+        assert_eq!(
+            fx.captured_names(closure),
+            vec!["T".to_string(), "v".to_string()]
         );
     }
 

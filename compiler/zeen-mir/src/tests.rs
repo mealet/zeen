@@ -1183,14 +1183,30 @@ fn zero_capture_closure_lowered_to_fn_const_call() {
 }
 
 #[test]
-fn generic_typed_capture_is_rejected() {
-    let errors = compile_mir("fn generic[T](v: T) void { let c = fn() T { return v; }; }")
-        .err()
-        .expect("generic-typed capture must be rejected");
+fn generic_typed_capture_lowers_env_instance() {
+    let mir = compile_mir_ok(
+        "fn generic[T: Copy](v: T) T { let c = fn() T { return v; }; return c(); } \
+         fn main() i32 { return @as(i32, generic(3)); }",
+    );
 
     assert!(
-        errors.iter().any(|e| e.contains("generic")),
-        "expected generic capture error, got: {errors:?}"
+        mir.program
+            .function_names
+            .values()
+            .any(|name| name.as_str().contains("closure")),
+        "capturing closure must be monomorphized, got: {:?}",
+        mir.program.function_names
+    );
+
+    let has_env_instance = mir
+        .program
+        .struct_layouts
+        .values()
+        .any(|layout| layout.fields.len() == 1);
+
+    assert!(
+        has_env_instance,
+        "generic capture must lower into a monomorphized single-field env struct"
     );
 }
 

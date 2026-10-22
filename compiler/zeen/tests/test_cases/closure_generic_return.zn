@@ -1,0 +1,12 @@
+fn make_fn[T: Copy](v: T) Fn() T {
+    return fn() T { return v; };
+}
+
+fn main() i32 {
+    let fi = make_fn(40);
+    let ff = make_fn(1.5);
+
+    @println("fi={}", fi());
+    @println("ff={}", ff());
+    return 0;
+}
