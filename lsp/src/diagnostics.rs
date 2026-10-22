@@ -674,6 +674,25 @@ mod tests {
     }
 
     #[test]
+    fn module_marker_silences_warnings() {
+        let unsuppressed =
+            "fn helper() i32 {\n    return 1;\n}\n\nfn main() i32 {\n    return 0;\n}\n";
+        let suppressed = format!("// @no-warnings\n{unsuppressed}");
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-marker.zn").unwrap();
+
+        let without_marker = check(&uri, unsuppressed, &[]);
+        assert!(
+            without_marker
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unused function"))
+        );
+
+        let with_marker = check(&uri, &suppressed, &[]);
+        assert!(with_marker.diagnostics.is_empty());
+    }
+
+    #[test]
     fn parses_accepts_valid_and_rejects_dangling_dot() {
         assert!(parses("fn main() {\n    let x = 1;\n}\n"));
         assert!(!parses("fn main() {\n    let x = foo.\n}\n"));
