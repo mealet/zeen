@@ -206,6 +206,7 @@ pub struct FnBuilder {
     bindings: HashMap<DefId, TypeId>,
     fat_bindings: Vec<(DefId, TypeId)>,
     scope_stack: Vec<Vec<LocalId>>,
+    diverged: bool,
 }
 
 impl FnBuilder {
@@ -233,6 +234,7 @@ impl FnBuilder {
             bindings,
             fat_bindings: Vec::new(),
             scope_stack: Vec::new(),
+            diverged: false,
         }
     }
 
@@ -294,6 +296,7 @@ impl FnBuilder {
         if self.block_is_open(block) {
             block
         } else {
+            self.diverged = true;
             self.new_block()
         }
     }
@@ -8710,7 +8713,9 @@ impl<'ctx> MirLowering<'ctx> {
                         }
 
                         None => {
-                            if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
+                            if !fb.diverged
+                                && matches!(fb.func.block(cur).terminator, Terminator::Unreachable)
+                            {
                                 fb.set_terminator(
                                     cur,
                                     Terminator::Return(Operand::Constant(ConstValue::Void, None)),
@@ -8721,7 +8726,9 @@ impl<'ctx> MirLowering<'ctx> {
                     }
                 } else {
                     let cur = self.lower_stmt(&mut fb, body, entry);
-                    if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
+                    if !fb.diverged
+                        && matches!(fb.func.block(cur).terminator, Terminator::Unreachable)
+                    {
                         fb.set_terminator(
                             cur,
                             Terminator::Return(Operand::Constant(ConstValue::Void, None)),
@@ -8733,7 +8740,8 @@ impl<'ctx> MirLowering<'ctx> {
 
             _ => {
                 let cur = self.lower_stmt(&mut fb, body, entry);
-                if matches!(fb.func.block(cur).terminator, Terminator::Unreachable) {
+                if !fb.diverged && matches!(fb.func.block(cur).terminator, Terminator::Unreachable)
+                {
                     fb.set_terminator(
                         cur,
                         Terminator::Return(Operand::Constant(ConstValue::Void, None)),
