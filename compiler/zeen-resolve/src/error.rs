@@ -7,7 +7,7 @@ use thiserror::Error;
 #[derive(Debug, Error, Diagnostic, Clone)]
 pub enum ResolveError {
     // Transparent Errors
-    #[error("parser error in included module")]
+    #[error(transparent)]
     #[diagnostic(transparent)]
     ModuleParseError(#[from] zeen_parser::error::ParserError),
 
