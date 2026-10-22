@@ -289,6 +289,14 @@ impl FnBuilder {
             Terminator::Unreachable // placeholder for a block that still needs a terminator
         )
     }
+
+    fn reroute_after_flow_cut(&mut self, block: BlockId) -> BlockId {
+        if self.block_is_open(block) {
+            block
+        } else {
+            self.new_block()
+        }
+    }
 }
 
 impl<'ctx> MirLowering<'ctx> {
@@ -4246,7 +4254,10 @@ impl<'ctx> MirLowering<'ctx> {
                 }
 
                 let (cur, operand) = match trailing {
-                    Some(t) => self.lower_expr_to_operand(fb, t, cur),
+                    Some(t) => {
+                        let cur = fb.reroute_after_flow_cut(cur);
+                        self.lower_expr_to_operand(fb, t, cur)
+                    }
                     None => (cur, Operand::Constant(ConstValue::Void, None)),
                 };
 
@@ -7509,7 +7520,10 @@ impl<'ctx> MirLowering<'ctx> {
         block: BlockId,
     ) -> (BlockId, Operand) {
         match &stmt.kind {
-            HirStmtKind::Expr(block_expr) => self.lower_expr_to_operand(fb, block_expr, block),
+            HirStmtKind::Expr(block_expr) => {
+                let block = fb.reroute_after_flow_cut(block);
+                self.lower_expr_to_operand(fb, block_expr, block)
+            }
             _ => {
                 let block = self.lower_stmt(fb, stmt, block);
                 (block, Operand::Constant(ConstValue::Void, None))
@@ -7518,6 +7532,7 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn lower_stmt(&mut self, fb: &mut FnBuilder, stmt: &HirStmt, block: BlockId) -> BlockId {
+        let block = fb.reroute_after_flow_cut(block);
         match &stmt.kind {
             HirStmtKind::Let {
                 name,
@@ -8673,6 +8688,7 @@ impl<'ctx> MirLowering<'ctx> {
 
                     match trailing {
                         Some(t) => {
+                            let cur = fb.reroute_after_flow_cut(cur);
                             let (block, operand) = self.lower_expr_to_operand(&mut fb, t, cur);
 
                             let cur_diverges = matches!(
