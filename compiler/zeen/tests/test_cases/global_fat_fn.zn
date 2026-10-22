@@ -1,0 +1,10 @@
+fn make(n: i32) FnOnce() i32 {
+    return fn() i32 { return n + 1; };
+}
+
+let f: FnOnce() i32 = make(41);
+
+fn main() i32 {
+    @println("f: {}", f());
+    return 0;
+}

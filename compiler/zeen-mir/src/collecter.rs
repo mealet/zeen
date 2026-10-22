@@ -47,11 +47,9 @@ fn collect_from_decl(decl: &HirDecl, map: &mut HashMap<DefId, Rc<HirFn>>) {
                 collect_from_decl(method, map);
             }
         }
-        HirDeclKind::Alias(_)
-        | HirDeclKind::ExternVar { .. }
-        | HirDeclKind::GlobalVar { .. }
-        | HirDeclKind::ExternLink
-        | HirDeclKind::ExternInclude => {}
+        HirDeclKind::Alias(_) => {}
+        HirDeclKind::GlobalVar { value, .. } => collect_from_expr(value, map),
+        HirDeclKind::ExternVar { .. } | HirDeclKind::ExternLink | HirDeclKind::ExternInclude => {}
     }
 }
 

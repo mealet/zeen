@@ -38,6 +38,7 @@ use crate::{
 const CLOSURE_SYNTH_BASE: u32 = 1 << 30;
 const CLOSURE_SYNTH_STRIDE: u32 = 1024;
 const CLOSURE_ENV_MONO_BASE: u32 = 1 << 31;
+const GLOBAL_INIT_FN_DEF: DefId = DefId(0xEFFF_FFF0);
 
 pub struct MirLoweringResult {
     pub program: MirProgram,
@@ -145,6 +146,7 @@ pub struct MirLowering<'ctx> {
     env_drop_noop: Option<MirFunctionId>,
     closure_envs: HashMap<(DefId, Vec<TypeId>), (TypeId, Vec<DefId>)>,
     env_mono_next: u32,
+    extra_fns: HashMap<DefId, Rc<HirFn>>,
 
     mode: CompilationMode,
 
@@ -317,6 +319,7 @@ impl<'ctx> MirLowering<'ctx> {
             env_drop_noop: None,
             closure_envs: HashMap::default(),
             env_mono_next: CLOSURE_ENV_MONO_BASE,
+            extra_fns: HashMap::default(),
             errors: Vec::new(),
             warnings: Vec::new(),
             mode,
@@ -466,19 +469,20 @@ impl<'ctx> MirLowering<'ctx> {
 
         let ordered = self.globals_in_init_order();
 
-        let void_ty = self.typecheck.interner.intern(Type::Void);
-        let entry = BlockId(0);
-        let mut fb = FnBuilder::new(
-            DefId(u32::MAX),
-            Vec::new(),
-            entry,
-            void_ty,
-            HashMap::default(),
+        let void_ty = self.void_ty();
+        self.typecheck.def_types.insert(
+            GLOBAL_INIT_FN_DEF,
+            self.typecheck.interner.intern(Type::Fn {
+                params: Vec::new(),
+                ret: void_ty,
+            }),
         );
-        fb.new_block();
 
+        let mut next_hir_id = self.expr_types_max_hir_id().unwrap_or(0) + 1;
+
+        let mut stmts: Vec<Rc<HirStmt>> = Vec::new();
+        let mut last_source: Option<Source> = None;
         for def_id in ordered {
-            let id = self.globals_by_def[&def_id];
             let value = Rc::clone(
                 &self
                     .globals
@@ -487,39 +491,64 @@ impl<'ctx> MirLowering<'ctx> {
                     .unwrap()
                     .value,
             );
-            let (block, operand) = self.lower_expr_to_operand(&mut fb, &value, entry);
+            last_source = Some(value.source.clone());
+            let value_source = value.source.clone();
 
-            if let Operand::Copy(place, _) | Operand::Move(place, _) = &operand
-                && place.local != crate::GLOBAL_LOCAL
-                && matches!(
-                    self.typecheck.interner.get(fb.func.local(place.local).ty),
-                    Type::Void
-                )
-            {
-                continue;
-            }
-
-            fb.push_stmt(
-                block,
-                MirStatement::Assign {
-                    place: Place::global(id),
-                    rvalue: Rvalue::Use(operand),
-                    source: None,
+            let object = Rc::new(HirExpr {
+                id: HirId(next_hir_id),
+                kind: HirExprKind::VarRef {
+                    def: def_id,
+                    generic_args: Vec::new(),
                 },
-            );
+                source: value_source.clone(),
+            });
+            next_hir_id += 1;
 
-            fb.set_terminator(block, Terminator::Goto(entry));
+            stmts.push(Rc::new(HirStmt {
+                id: HirId(next_hir_id),
+                kind: HirStmtKind::Assign { object, value },
+                source: value_source,
+            }));
+            next_hir_id += 1;
         }
 
-        fb.set_terminator(
-            entry,
-            Terminator::Return(Operand::Constant(ConstValue::Void, None)),
-        );
+        let body_source = last_source.expect("globals cannot be empty here");
 
-        let id = self.mono_cache.fresh_id();
-        self.set_function_name(id, "zeen_init_globals");
-        self.program.functions.insert(id, fb.func);
+        let body_block = Rc::new(HirExpr {
+            id: HirId(next_hir_id),
+            kind: HirExprKind::Block {
+                stmts,
+                trailing: None,
+            },
+            source: body_source.clone(),
+        });
+
+        let body = HirStmt {
+            id: HirId(next_hir_id + 1),
+            kind: HirStmtKind::Expr(body_block),
+            source: body_source,
+        };
+
+        let init_name = self.rodeo.borrow_mut().get_or_intern("zeen_init_globals");
+        let init_hir = HirFn {
+            name: (init_name, SourceSpan::new(0.into(), 0)),
+            generics: Vec::new(),
+            params: Vec::new(),
+            return_type: None,
+            body: Some(Rc::new(body)),
+            is_pub: false,
+            is_extern: false,
+            self_param: None,
+            parent_fn: None,
+        };
+        self.extra_fns.insert(GLOBAL_INIT_FN_DEF, Rc::new(init_hir));
+
+        let id = self.monomorphize_fn(GLOBAL_INIT_FN_DEF, Vec::new(), None, &[]);
         self.program.init_globals_fn = Some(id);
+    }
+
+    fn expr_types_max_hir_id(&self) -> Option<u32> {
+        self.typecheck.expr_types.keys().map(|id| id.0).max()
     }
 
     fn globals_in_init_order(&self) -> Vec<DefId> {
@@ -8287,7 +8316,14 @@ impl<'ctx> MirLowering<'ctx> {
         fat_args: &[TypeId],
         bindings_override: Option<HashMap<DefId, TypeId>>,
     ) -> MirFunctionId {
-        let hir_fn = self.hir_fns_by_def[&def_id].clone();
+        let hir_fn = if let Some(hir_fn) = self.hir_fns_by_def.get(&def_id) {
+            hir_fn.clone()
+        } else {
+            self.extra_fns
+                .get(&def_id)
+                .cloned()
+                .expect("monomorphize_fn: function not found")
+        };
         let key = (def_id, generic_args.clone(), fat_args.to_vec());
 
         if let Some(&existing) = self.mono_cache.cache.get(&key) {
