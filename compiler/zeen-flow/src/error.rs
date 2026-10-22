@@ -133,11 +133,7 @@ pub enum FlowError {
     },
 
     #[error("unused function `{name}`")]
-    #[diagnostic(
-        severity(Warning),
-        code(zeen::dataflow::unused_fn),
-        help("consider removing it, or marking it `pub`")
-    )]
+    #[diagnostic(severity(Warning), code(zeen::dataflow::unused_fn))]
     UnusedFunction {
         name: SmolStr,
 
