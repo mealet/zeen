@@ -131,4 +131,65 @@ pub enum FlowError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("unused function `{name}`")]
+    #[diagnostic(
+        severity(Warning),
+        code(zeen::dataflow::unused_fn),
+        help("consider removing it, or marking it `pub`")
+    )]
+    UnusedFunction {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("unreachable code")]
+    #[diagnostic(
+        severity(Warning),
+        code(zeen::dataflow::unreachable_code),
+        help("statements here can never run, execution reached a terminator before them")
+    )]
+    UnreachableCode {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("unused constant `{name}`")]
+    #[diagnostic(
+        severity(Warning),
+        code(zeen::dataflow::unused_const),
+        help("consider removing it, or marking it `pub`")
+    )]
+    UnusedConst {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+}
+
+impl FlowError {
+    pub fn source_code(&self) -> Option<&NamedSource<Arc<String>>> {
+        match self {
+            Self::UseOfUninitialized { src, .. } => Some(src),
+            Self::UseAfterMove { src, .. } => Some(src),
+            Self::MoveOutOfDrop { src, .. } => Some(src),
+            Self::UseOfPartiallyMoved { src, .. } => Some(src),
+            Self::MaybeUninitializedDrop { src, .. } => Some(src),
+            Self::EscapingBorrow { src, .. } => Some(src),
+            Self::UnusedVariable { src, .. } => Some(src),
+            Self::AliasedDrop { src, .. } => Some(src),
+            Self::UnusedFunction { src, .. } => Some(src),
+            Self::UnreachableCode { src, .. } => Some(src),
+            Self::UnusedConst { src, .. } => Some(src),
+        }
+    }
 }

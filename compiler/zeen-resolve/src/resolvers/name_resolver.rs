@@ -1762,6 +1762,7 @@ impl<'ctx> NameResolver {
         match self.result.const_values.get(&def_id).copied() {
             Some(lit) => {
                 self.result.arm_const_values.insert((arm_key, index), lit);
+                self.result.arm_const_defs.push(def_id);
             }
             None => {
                 self.report(ResolveError::NonLiteralConstPattern {

@@ -109,6 +109,7 @@ pub struct ResolutionResult {
     pub interface_self_placeholders: HashMap<DefId, DefId>,
 
     pub arm_const_values: HashMap<(NodeKey, usize), Literal>,
+    pub arm_const_defs: Vec<DefId>,
     pub const_values: HashMap<DefId, Literal>,
 
     pub nested_fn_parents: HashMap<DefId, DefId>,

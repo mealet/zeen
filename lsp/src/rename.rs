@@ -336,11 +336,8 @@ mod tests {
                     .parse()
                     .unwrap();
                 let output = crate::diagnostics::check(&uri, text, &[]);
-                assert!(
-                    output.diagnostics.is_empty(),
-                    "sample must check cleanly: {:?}",
-                    output.diagnostics
-                );
+                let errors = crate::diagnostics::only_errors(&output.diagnostics);
+                assert!(errors.is_empty(), "sample must check cleanly: {:?}", errors);
 
                 uris.push(uri);
                 owned.push(text.to_string());

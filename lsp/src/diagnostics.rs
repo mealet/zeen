@@ -25,6 +25,13 @@ pub struct CheckOutput {
     pub analysis: Analysis,
 }
 
+pub(crate) fn only_errors(diagnostics: &[Diagnostic]) -> Vec<&Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity != Some(DiagnosticSeverity::WARNING))
+        .collect()
+}
+
 struct OpenFile<'a> {
     uri: &'a Uri,
     path: Option<PathBuf>,
@@ -378,7 +385,11 @@ fn check_full(
         }
     };
 
-    for warning in lowered.warnings.iter() {
+    for warning in lowered
+        .warnings
+        .iter()
+        .filter(|warning| !warning_module_disables(warning.source_code()))
+    {
         push_diagnostic(&mut diags, &open, warning);
     }
 
@@ -389,7 +400,11 @@ fn check_full(
         Rc::clone(&interner),
     ) {
         Ok(flow_result) => {
-            for warning in flow_result.warnings.iter() {
+            for warning in flow_result
+                .warnings
+                .iter()
+                .filter(|warning| !warning_module_disables(warning.source_code()))
+            {
                 push_diagnostic(&mut diags, &open, warning);
             }
 
@@ -409,6 +424,10 @@ fn check_full(
             }
         }
     }
+}
+
+fn warning_module_disables(source: Option<&miette::NamedSource<Arc<String>>>) -> bool {
+    source.is_some_and(zeen_driver::source_disables_warnings)
 }
 
 pub(crate) fn std_src(root: PathBuf) -> Option<PathBuf> {

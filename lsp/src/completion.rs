@@ -1946,11 +1946,8 @@ mod tests {
         let uri: tower_lsp_server::ls_types::Uri =
             "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
         let output = crate::diagnostics::check(&uri, text, &[]);
-        assert!(
-            output.diagnostics.is_empty(),
-            "sample must check cleanly: {:?}",
-            output.diagnostics
-        );
+        let errors = crate::diagnostics::only_errors(&output.diagnostics);
+        assert!(errors.is_empty(), "sample must check cleanly: {:?}", errors);
         output.analysis
     }
 
@@ -2474,10 +2471,11 @@ mod tests {
         );
 
         let output = crate::diagnostics::check(&uri, text, &packages);
+        let errors = crate::diagnostics::only_errors(&output.diagnostics);
         assert!(
-            output.diagnostics.is_empty(),
+            errors.is_empty(),
             "package sample must check cleanly: {:?}",
-            output.diagnostics
+            errors
         );
 
         let src = dir.join("src");
@@ -2525,10 +2523,11 @@ mod tests {
 
         let packages = vec![mapping];
         let output = crate::diagnostics::check(&uri, text, &packages);
+        let errors = crate::diagnostics::only_errors(&output.diagnostics);
         assert!(
-            output.diagnostics.is_empty(),
+            errors.is_empty(),
             "self import must check cleanly: {:?}",
-            output.diagnostics
+            errors
         );
 
         let _ = std::fs::remove_dir_all(&dir);
