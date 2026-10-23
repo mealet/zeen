@@ -303,11 +303,16 @@ fn check_full(
         }
     };
 
+    let canonical_root =
+        std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+
     let covered = resolution_result
         .defs
         .values()
         .map(|info| info.span.src.name().to_string())
-        .filter(|name| Path::new(name).is_absolute() && Path::new(name).starts_with(project_root))
+        .filter(|name| {
+            Path::new(name).is_absolute() && Path::new(name).starts_with(&canonical_root)
+        })
         .collect::<Vec<String>>();
 
     if open.path.as_deref() != Some(entry_path)
