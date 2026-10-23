@@ -189,6 +189,49 @@ pub fn manifest_mtimes(root: &Path) -> (Option<SystemTime>, Option<SystemTime>) 
     (mtime(MANIFEST), mtime(LOCKFILE))
 }
 
+pub fn src_modules(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = Vec::new();
+
+    let src = root.join("src");
+    let tests = root.join("tests");
+
+    if src.is_dir() || tests.is_dir() {
+        stack.push(src);
+        stack.push(tests);
+    } else {
+        for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
+            let path = entry.path();
+
+            if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("zn") {
+                out.push(path);
+            }
+        }
+    }
+
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+
+            if path.extension().and_then(|ext| ext.to_str()) == Some("zn") {
+                out.push(path);
+            }
+        }
+    }
+
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,6 +317,45 @@ mod tests {
         std::fs::write(dir.join(MANIFEST), BIN_MANIFEST).unwrap();
 
         assert_eq!(self_mapping(&dir), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn src_modules_lists_project_sources() {
+        let dir = project("modules", BIN_MANIFEST);
+        std::fs::create_dir_all(dir.join("src").join("deep")).unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::write(dir.join("src").join("main.zn"), "fn main() {}\n").unwrap();
+        std::fs::write(dir.join("src").join("deep").join("nested.zn"), "\n").unwrap();
+        std::fs::write(dir.join("tests").join("suite.zn"), "\n").unwrap();
+        std::fs::write(dir.join("src").join("notes.txt"), "\n").unwrap();
+
+        assert_eq!(
+            src_modules(&dir),
+            vec![
+                dir.join("src").join("deep").join("nested.zn"),
+                dir.join("src").join("main.zn"),
+                dir.join("tests").join("suite.zn"),
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn src_modules_falls_back_to_flat_project() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-flat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("main.zn"), "fn main() {}\n").unwrap();
+        std::fs::write(dir.join("lib.zn"), "\n").unwrap();
+        std::fs::write(dir.join("nested").join("deep.zn"), "\n").unwrap();
+
+        assert_eq!(
+            src_modules(&dir),
+            vec![dir.join("lib.zn"), dir.join("main.zn")]
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -17,6 +17,8 @@ use crate::{analysis, completion, diagnostics, folding, position, semantic, symb
 
 const DIAGNOSTIC_DEBOUNCE: Duration = Duration::from_millis(30);
 
+type ProjectRegistry = HashMap<String, HashMap<String, HashSet<String>>>;
+
 #[derive(Debug)]
 pub struct Backend {
     client: Client,
@@ -25,6 +27,7 @@ pub struct Backend {
     symbols: Arc<RwLock<symbols::SymbolIndex>>,
     repair_cache: Arc<RwLock<HashMap<(u64, u64), analysis::Analysis>>>,
     document_changes: std::sync::atomic::AtomicBool,
+    project_diagnostics: Arc<RwLock<ProjectRegistry>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -86,6 +89,96 @@ fn hierarchy_docs(documents: &HashMap<Uri, Document>) -> Vec<crate::hierarchy::H
             analysis: &document.analysis,
         })
         .collect()
+}
+
+async fn publish_event(
+    client: Client,
+    documents: Arc<RwLock<HashMap<Uri, Document>>>,
+    registry: Arc<RwLock<ProjectRegistry>>,
+    packages: Vec<(String, PathBuf)>,
+    uri: Uri,
+    text: String,
+    output: diagnostics::CheckOutput,
+) {
+    let open_path = diagnostics::file_uri_to_path(&uri);
+    let context = open_path
+        .as_ref()
+        .map(|path| diagnostics::entry_context(path, &text));
+
+    let mut groups = output.by_uri;
+
+    if let Some(context) = context.clone()
+        && let Some(root) = context.zora
+    {
+        let buffers = documents
+            .read()
+            .await
+            .iter()
+            .filter_map(|(open_uri, document)| {
+                let path = diagnostics::file_uri_to_path(open_uri)?;
+                let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+
+                Some((canonical, (open_uri.clone(), document.text.clone())))
+            })
+            .collect::<HashMap<PathBuf, (Uri, String)>>();
+
+        groups.extend(diagnostics::scan_project_modules(
+            &root,
+            &output.covered,
+            open_path.as_deref(),
+            &packages,
+            &buffers,
+        ));
+    }
+    let mut merged: Vec<(Uri, Vec<Diagnostic>)> = Vec::new();
+
+    for (file_uri, diagnostics) in groups {
+        if let Some(entry) = merged.iter_mut().find(|(uri, _)| uri == &file_uri) {
+            if entry.1 != diagnostics {
+                entry.1.extend(diagnostics);
+            }
+
+            continue;
+        }
+
+        merged.push((file_uri, diagnostics));
+    }
+
+    let present = merged
+        .iter()
+        .map(|(file_uri, _)| file_uri.to_string())
+        .collect::<HashSet<String>>();
+
+    client
+        .publish_diagnostics(uri.clone(), output.diagnostics, None)
+        .await;
+
+    let root_key = context
+        .as_ref()
+        .map(|context| context.root.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let open_key = uri.to_string();
+
+    {
+        let mut registry = registry.write().await;
+        let per_root = registry.entry(root_key).or_default();
+        let published = per_root.entry(open_key.clone()).or_default();
+        let previous = std::mem::take(published);
+
+        for key in previous.difference(&present) {
+            if let Ok(stale) = Uri::from_str(key) {
+                client.publish_diagnostics(stale, Vec::new(), None).await;
+            }
+        }
+
+        per_root.insert(open_key, present);
+    }
+
+    for (file_uri, diagnostics) in merged {
+        client
+            .publish_diagnostics(file_uri, diagnostics, None)
+            .await;
+    }
 }
 
 async fn packages_for_cache(
@@ -173,6 +266,7 @@ impl Backend {
             symbols: Arc::new(RwLock::new(symbols::SymbolIndex::default())),
             repair_cache: Arc::new(RwLock::new(HashMap::new())),
             document_changes: std::sync::atomic::AtomicBool::new(false),
+            project_diagnostics: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -264,6 +358,8 @@ impl Backend {
 
         let mut output = diagnostics::CheckOutput {
             diagnostics: Vec::new(),
+            by_uri: Vec::new(),
+            covered: Vec::new(),
             analysis: crate::analysis::Analysis::default(),
         };
         let mut seen = String::new();
@@ -1756,14 +1852,21 @@ impl LanguageServer for Backend {
             uri.clone(),
             Document {
                 version,
-                text,
-                analysis: output.analysis,
+                text: text.clone(),
+                analysis: output.analysis.clone(),
             },
         );
 
-        self.client
-            .publish_diagnostics(uri, output.diagnostics, None)
-            .await;
+        publish_event(
+            self.client.clone(),
+            self.documents.clone(),
+            self.project_diagnostics.clone(),
+            packages,
+            uri,
+            text,
+            output,
+        )
+        .await;
 
         let _ = self.client.semantic_tokens_refresh().await;
         let _ = self.client.inlay_hint_refresh().await;
@@ -1796,6 +1899,7 @@ impl LanguageServer for Backend {
         let client = self.client.clone();
         let documents = Arc::clone(&self.documents);
         let deps = Arc::clone(&self.deps);
+        let project_diagnostics = Arc::clone(&self.project_diagnostics);
         let version = params.text_document.version;
         let root = self.zora_root_of(&uri);
 
@@ -1818,21 +1922,28 @@ impl LanguageServer for Backend {
             let analysis = if output.analysis.occurrences.is_empty() {
                 current.analysis.clone()
             } else {
-                output.analysis
+                output.analysis.clone()
             };
 
             documents.write().await.insert(
                 uri.clone(),
                 Document {
                     version,
-                    text: current.text,
+                    text: current.text.clone(),
                     analysis,
                 },
             );
 
-            client
-                .publish_diagnostics(uri, output.diagnostics, None)
-                .await;
+            publish_event(
+                client.clone(),
+                documents,
+                project_diagnostics,
+                packages.0,
+                uri,
+                current.text,
+                output,
+            )
+            .await;
 
             let _ = client.semantic_tokens_refresh().await;
             let _ = client.inlay_hint_refresh().await;
@@ -2058,14 +2169,21 @@ impl LanguageServer for Backend {
                     uri.clone(),
                     Document {
                         version,
-                        text,
-                        analysis: output.analysis,
+                        text: text.clone(),
+                        analysis: output.analysis.clone(),
                     },
                 );
 
-                self.client
-                    .publish_diagnostics(uri, output.diagnostics, None)
-                    .await;
+                publish_event(
+                    self.client.clone(),
+                    self.documents.clone(),
+                    self.project_diagnostics.clone(),
+                    packages.clone(),
+                    uri,
+                    text,
+                    output,
+                )
+                .await;
             }
         }
 
@@ -2082,14 +2200,21 @@ impl LanguageServer for Backend {
                 uri.clone(),
                 Document {
                     version,
-                    text,
-                    analysis: output.analysis,
+                    text: text.clone(),
+                    analysis: output.analysis.clone(),
                 },
             );
 
-            self.client
-                .publish_diagnostics(uri, output.diagnostics, None)
-                .await;
+            publish_event(
+                self.client.clone(),
+                self.documents.clone(),
+                self.project_diagnostics.clone(),
+                packages,
+                uri,
+                text,
+                output,
+            )
+            .await;
         }
     }
 }

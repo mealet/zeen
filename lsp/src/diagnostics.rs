@@ -3,6 +3,7 @@ use std::str::FromStr;
 use rustc_hash::FxHashSet as HashSet;
 use std::{
     cell::RefCell,
+    collections::HashMap,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -20,8 +21,16 @@ use tower_lsp_server::ls_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Uri,
 };
 
+#[derive(Clone)]
+struct DiagText {
+    uri: Uri,
+    text: String,
+}
+
 pub struct CheckOutput {
     pub diagnostics: Vec<Diagnostic>,
+    pub by_uri: Vec<(Uri, Vec<Diagnostic>)>,
+    pub covered: Vec<String>,
     pub analysis: Analysis,
 }
 
@@ -79,6 +88,8 @@ fn check_with(uri: &Uri, text: &str, full: bool, packages: &[(String, PathBuf)])
     let Some(open_path) = file_uri_to_path(uri) else {
         return CheckOutput {
             diagnostics: check_syntax(uri, text),
+            by_uri: Vec::new(),
+            covered: Vec::new(),
             analysis: Analysis::default(),
         };
     };
@@ -97,7 +108,14 @@ fn check_with(uri: &Uri, text: &str, full: bool, packages: &[(String, PathBuf)])
 
     let context = entry_context(&open_path, text);
 
-    check_entry(&context.entry, open, full, packages, &context.root)
+    check_entry(
+        &context.entry,
+        open,
+        full,
+        packages,
+        &context.root,
+        context.zora.is_none(),
+    )
 }
 
 fn check_entry(
@@ -106,6 +124,7 @@ fn check_entry(
     full: bool,
     packages: &[(String, PathBuf)],
     project_root: &Path,
+    standalone: bool,
 ) -> CheckOutput {
     let open_path = open.path.clone().unwrap_or_else(|| PathBuf::from("."));
 
@@ -118,6 +137,7 @@ fn check_entry(
             full,
             packages,
             project_root,
+            standalone,
         );
     }
 
@@ -130,6 +150,7 @@ fn check_entry(
             full,
             packages,
             project_root,
+            true,
         );
     };
 
@@ -144,6 +165,7 @@ fn check_entry(
         full,
         packages,
         project_root,
+        standalone,
     )
 }
 
@@ -168,17 +190,18 @@ fn check_syntax(uri: &Uri, text: &str) -> Vec<Diagnostic> {
     match parser.parse_program() {
         Ok(_) => Vec::new(),
         Err(errors) => {
-            let mut diags = Vec::with_capacity(errors.len());
+            let mut collector = Collector::new(Path::new(""), &open);
 
             for err in errors.iter() {
-                push_diagnostic(&mut diags, &open, err);
+                collector.push_source(err, None);
             }
 
-            diags
+            collector.finish().0
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_full(
     entry_path: &Path,
     uri: &Uri,
@@ -187,13 +210,15 @@ fn check_full(
     full: bool,
     packages: &[(String, PathBuf)],
     project_root: &Path,
+    standalone: bool,
 ) -> CheckOutput {
     let filename = Rc::new(uri_filename(uri));
     let content = Arc::new(text.to_string());
     let interner = Rc::new(RefCell::new(Rodeo::default()));
     let bump = Bump::new();
 
-    let mut diags = Vec::new();
+    let mut collector = Collector::new(project_root, &open);
+    let mut analysis = Analysis::default();
 
     let mut tokens = zeen_lexer::tokenize(text);
     let mut parser = zeen_parser::Parser::new(
@@ -208,12 +233,16 @@ fn check_full(
         Ok(program) => program,
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, &open, err);
+                collector.push_source(err, None);
             }
 
+            let (diagnostics, by_uri) = collector.finish();
+
             return CheckOutput {
-                diagnostics: diags,
-                analysis: Analysis::default(),
+                diagnostics,
+                by_uri,
+                covered: Vec::new(),
+                analysis,
             };
         }
     };
@@ -239,7 +268,11 @@ fn check_full(
             .map(|file| file.to_basic())
             .collect(),
         mode: zeen_driver::CompilationMode::Debug,
-        output: zeen_driver::CompilationOutput::Binary,
+        output: if standalone {
+            zeen_driver::CompilationOutput::Object
+        } else {
+            zeen_driver::CompilationOutput::Binary
+        },
         target: None,
         warnings: Vec::new(),
     };
@@ -256,14 +289,26 @@ fn check_full(
         Ok(resolved) => resolved,
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, &open, err);
+                collector.push_source(err, None);
             }
+
+            let (diagnostics, by_uri) = collector.finish();
+
             return CheckOutput {
-                diagnostics: diags,
+                diagnostics,
+                by_uri,
+                covered: Vec::new(),
                 analysis: analysis::build_syntax_fallback(program, text),
             };
         }
     };
+
+    let covered = resolution_result
+        .defs
+        .values()
+        .map(|info| info.span.src.name().to_string())
+        .filter(|name| Path::new(name).is_absolute() && Path::new(name).starts_with(project_root))
+        .collect::<Vec<String>>();
 
     if open.path.as_deref() != Some(entry_path)
         && !resolution_result.defs.values().any(|info| {
@@ -272,9 +317,13 @@ fn check_full(
         })
     {
         let Some(open_path) = open.path.clone() else {
+            let (diagnostics, by_uri) = collector.finish();
+
             return CheckOutput {
-                diagnostics: diags,
-                analysis: Analysis::default(),
+                diagnostics,
+                by_uri,
+                covered,
+                analysis,
             };
         };
 
@@ -286,6 +335,7 @@ fn check_full(
             full,
             packages,
             project_root,
+            true,
         );
     }
 
@@ -294,7 +344,7 @@ fn check_full(
 
     drop(bump);
 
-    let mut analysis = Analysis::build(
+    analysis = Analysis::build(
         &hir_module,
         &resolution_result,
         &interner,
@@ -312,11 +362,16 @@ fn check_full(
         Ok(result) => result,
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, &open, err);
+                collector.push_source(err, None);
             }
+
+            let (diagnostics, by_uri) = collector.finish();
+
             return CheckOutput {
-                diagnostics: diags,
-                analysis: analysis.clone(),
+                diagnostics,
+                by_uri,
+                covered,
+                analysis,
             };
         }
     };
@@ -360,8 +415,12 @@ fn check_full(
     );
 
     if !full {
+        let (diagnostics, by_uri) = collector.finish();
+
         return CheckOutput {
-            diagnostics: diags,
+            diagnostics,
+            by_uri,
+            covered,
             analysis,
         };
     }
@@ -376,11 +435,16 @@ fn check_full(
         Ok(lowered) => lowered,
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, &open, err);
+                collector.push_source(err, None);
             }
+
+            let (diagnostics, by_uri) = collector.finish();
+
             return CheckOutput {
-                diagnostics: diags,
-                analysis: analysis.clone(),
+                diagnostics,
+                by_uri,
+                covered,
+                analysis,
             };
         }
     };
@@ -390,7 +454,7 @@ fn check_full(
         .iter()
         .filter(|warning| !warning_module_disables(warning.source_code()))
     {
-        push_diagnostic(&mut diags, &open, warning);
+        collector.push_source(warning, None);
     }
 
     match zeen_flow::run_dataflow(
@@ -405,29 +469,193 @@ fn check_full(
                 .iter()
                 .filter(|warning| !warning_module_disables(warning.source_code()))
             {
-                push_diagnostic(&mut diags, &open, warning);
-            }
-
-            CheckOutput {
-                diagnostics: diags,
-                analysis,
+                collector.push_source(warning, None);
             }
         }
         Err(errors) => {
             for err in errors.iter() {
-                push_diagnostic(&mut diags, &open, err);
-            }
-
-            CheckOutput {
-                diagnostics: diags,
-                analysis,
+                collector.push_source(err, None);
             }
         }
     }
+
+    let (diagnostics, by_uri) = collector.finish();
+
+    CheckOutput {
+        diagnostics,
+        by_uri,
+        covered,
+        analysis,
+    }
 }
 
-fn warning_module_disables(source: Option<&miette::NamedSource<Arc<String>>>) -> bool {
-    source.is_some_and(zeen_driver::source_disables_warnings)
+struct Collector<'a> {
+    project_root: &'a Path,
+    open: &'a OpenFile<'a>,
+    texts: HashMap<String, DiagText>,
+    own: Vec<Diagnostic>,
+    foreign: Vec<(String, Uri, Vec<Diagnostic>)>,
+}
+
+impl<'a> Collector<'a> {
+    fn new(project_root: &'a Path, open: &'a OpenFile<'a>) -> Self {
+        Self {
+            project_root,
+            open,
+            texts: HashMap::default(),
+            own: Vec::new(),
+            foreign: Vec::new(),
+        }
+    }
+
+    fn host(&mut self, name: Option<&str>) -> Option<(Option<String>, DiagText)> {
+        let owner = DiagText {
+            uri: self.open.uri.clone(),
+            text: (*self.open.text).to_string(),
+        };
+
+        let Some(name) = name else {
+            return Some((None, owner));
+        };
+
+        if name == self.open.filename || name == self.open.canonical {
+            return Some((None, owner));
+        }
+
+        let path = PathBuf::from(name);
+
+        if !path.is_absolute() || !path.starts_with(self.project_root) {
+            return None;
+        }
+
+        if let Some(text) = self.texts.get(name) {
+            return Some((Some(name.to_string()), text.clone()));
+        }
+
+        let text = std::fs::read_to_string(&path).ok()?;
+        let uri = Uri::from_str(&format!("file://{}", name)).ok()?;
+        let resolved = DiagText { uri, text };
+
+        self.texts.insert(name.to_string(), resolved.clone());
+
+        Some((Some(name.to_string()), resolved))
+    }
+
+    fn finish(self) -> (Vec<Diagnostic>, Vec<(Uri, Vec<Diagnostic>)>) {
+        let by_uri = self
+            .foreign
+            .into_iter()
+            .map(|(_, uri, diagnostics)| (uri, diagnostics))
+            .collect();
+
+        (self.own, by_uri)
+    }
+
+    fn push_source(&mut self, err: &dyn miette::Diagnostic, fallback: Option<&str>) {
+        let mut message = err.to_string();
+        if let Some(help) = err.help() {
+            message.push('\n');
+            message.push_str(&help.to_string());
+        }
+
+        let mut primary: Vec<(usize, usize)> = Vec::new();
+        if let Some(labels) = err.labels() {
+            primary.extend(labels.map(|label| (label.offset(), label.len())));
+        }
+
+        let mut related: Vec<(String, usize, usize, Option<String>)> = Vec::new();
+        if let Some(related_errors) = err.related() {
+            for related_error in related_errors {
+                let related_message = related_error.to_string();
+                if let Some(labels) = related_error.labels() {
+                    for label in labels {
+                        let span = miette::SourceSpan::new(label.offset().into(), label.len());
+                        let name = error_source_name(related_error, &span)
+                            .or_else(|| fallback.map(str::to_string));
+
+                        if let Some(name) = self.host(name.as_deref()).map(|(key, _)| key) {
+                            related.push((
+                                related_message.clone(),
+                                label.offset(),
+                                label.len(),
+                                name,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        let main = match primary.first() {
+            Some(span) => *span,
+            None => related
+                .last()
+                .map(|(_, offset, len, _)| (*offset, *len))
+                .unwrap_or((0, 0)),
+        };
+
+        let probe = miette::SourceSpan::new(main.0.into(), main.1);
+        let source_name = error_source_name(err, &probe);
+        let Some((key, host)) = self.host(source_name.as_deref()) else {
+            return;
+        };
+
+        let main_from_related = primary.is_empty() && !related.is_empty();
+
+        let mut related_information = Vec::new();
+        for (index, (related_message, offset, len, related_key)) in related.iter().enumerate() {
+            if main_from_related && index == related.len() - 1 {
+                continue;
+            }
+            if (*offset, *len) == main {
+                continue;
+            }
+
+            let (location_uri, location_text) = match self.host(related_key.as_deref()) {
+                Some((_, related_host)) => (related_host.uri, related_host.text),
+                None => (host.uri.clone(), host.text.clone()),
+            };
+
+            related_information.push(DiagnosticRelatedInformation {
+                location: Location {
+                    uri: location_uri,
+                    range: position::span_to_range(&location_text, *offset, *len),
+                },
+                message: related_message.clone(),
+            });
+        }
+
+        let diagnostic = Diagnostic {
+            range: position::span_to_range(&host.text, main.0, main.1),
+            severity: Some(severity_of(err)),
+            code: err
+                .code()
+                .map(|code| NumberOrString::String(code.to_string())),
+            source: Some("zeen".to_string()),
+            message,
+            related_information: if related_information.is_empty() {
+                None
+            } else {
+                Some(related_information)
+            },
+            ..Default::default()
+        };
+
+        match key {
+            Some(key) => {
+                if let Some(entry) = self
+                    .foreign
+                    .iter_mut()
+                    .find(|(entry_key, _, _)| *entry_key == key)
+                {
+                    entry.2.push(diagnostic);
+                } else {
+                    self.foreign.push((key, host.uri, vec![diagnostic]));
+                }
+            }
+            None => self.own.push(diagnostic),
+        }
+    }
 }
 
 pub(crate) fn std_src(root: PathBuf) -> Option<PathBuf> {
@@ -452,84 +680,78 @@ pub(crate) fn resolve_std_root() -> Option<PathBuf> {
     None
 }
 
-fn push_diagnostic(diags: &mut Vec<Diagnostic>, open: &OpenFile<'_>, err: &dyn miette::Diagnostic) {
-    let mut message = err.to_string();
-    if let Some(help) = err.help() {
-        message.push('\n');
-        message.push_str(&help.to_string());
-    }
+fn warning_module_disables(source: Option<&miette::NamedSource<Arc<String>>>) -> bool {
+    source.is_some_and(zeen_driver::source_disables_warnings)
+}
 
-    let mut primary: Vec<(usize, usize)> = Vec::new();
-    if let Some(labels) = err.labels() {
-        primary.extend(labels.map(|label| (label.offset(), label.len())));
-    }
-    let mut related: Vec<(String, usize, usize)> = Vec::new();
-    if let Some(related_errors) = err.related() {
-        for related_error in related_errors {
-            let related_message = related_error.to_string();
-            if let Some(labels) = related_error.labels() {
-                for label in labels {
-                    let span = miette::SourceSpan::new(label.offset().into(), label.len());
-                    let matches = error_source_name(related_error, &span).is_none_or(|name| {
-                        name == open.filename
-                            || Some(name.as_str()) == Some(open.canonical.as_str())
-                    });
-                    if matches {
-                        related.push((related_message.clone(), label.offset(), label.len()));
-                    }
-                }
-            }
+pub fn scan_project_modules(
+    root: &Path,
+    covered: &[String],
+    open_path: Option<&Path>,
+    packages: &[(String, PathBuf)],
+    buffers: &HashMap<PathBuf, (Uri, String)>,
+) -> Vec<(Uri, Vec<Diagnostic>)> {
+    let mut groups = Vec::new();
+
+    for module in crate::zora::src_modules(root) {
+        if open_path.is_some_and(|open| open == module) {
+            continue;
         }
+
+        let Ok(canonical) = std::fs::canonicalize(&module) else {
+            continue;
+        };
+
+        if covered.iter().any(|name| Path::new(name) == canonical) {
+            continue;
+        }
+
+        let buffer = buffers.get(&canonical).cloned();
+
+        let Some((uri, output)) = check_project_file(&module, root, packages, buffer) else {
+            continue;
+        };
+
+        if !output.diagnostics.is_empty() {
+            groups.push((uri, output.diagnostics));
+        }
+
+        groups.extend(output.by_uri);
     }
 
-    let main = match primary.first() {
-        Some(span) => *span,
-        None => related
-            .last()
-            .map(|(_, offset, len)| (*offset, *len))
-            .unwrap_or((0, 0)),
+    groups
+}
+
+pub fn check_project_file(
+    path: &Path,
+    root: &Path,
+    packages: &[(String, PathBuf)],
+    buffer: Option<(Uri, String)>,
+) -> Option<(Uri, CheckOutput)> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    let (uri, text) = match buffer {
+        Some(buffer) => buffer,
+        None => {
+            let text = std::fs::read_to_string(path).ok()?;
+            let uri = Uri::from_str(&format!("file://{}", canonical.display())).ok()?;
+
+            (uri, text)
+        }
     };
-    let probe = miette::SourceSpan::new(main.0.into(), main.1);
-    if let Some(name) = error_source_name(err, &probe)
-        && name != open.filename
-        && Some(name.as_str()) != Some(open.canonical.as_str())
-    {
-        return;
-    }
-    let main_from_related = primary.is_empty() && !related.is_empty();
 
-    let mut related_information = Vec::new();
-    for (index, (related_message, offset, len)) in related.iter().enumerate() {
-        if main_from_related && index == related.len() - 1 {
-            continue;
-        }
-        if (*offset, *len) == main {
-            continue;
-        }
-        related_information.push(DiagnosticRelatedInformation {
-            location: Location {
-                uri: open.uri.clone(),
-                range: position::span_to_range(open.text, *offset, *len),
-            },
-            message: related_message.clone(),
-        });
-    }
+    let filename = uri_filename(&uri);
+    let open = OpenFile {
+        path: Some(canonical.clone()),
+        filename: &filename,
+        canonical: canonical.to_string_lossy().into_owned(),
+        uri: &uri,
+        text: &text,
+    };
 
-    diags.push(Diagnostic {
-        range: position::span_to_range(open.text, main.0, main.1),
-        severity: Some(severity_of(err)),
-        code: err
-            .code()
-            .map(|code| NumberOrString::String(code.to_string())),
-        source: Some("zeen".to_string()),
-        message,
-        related_information: if related_information.is_empty() {
-            None
-        } else {
-            Some(related_information)
-        },
-        ..Default::default()
-    });
+    let output = check_full(&canonical, &uri, &text, open, true, packages, root, true);
+
+    Some((uri, output))
 }
 
 pub fn uri_filename(uri: &Uri) -> String {
@@ -548,6 +770,7 @@ pub(crate) fn file_uri_to_path(uri: &Uri) -> Option<PathBuf> {
     Some(PathBuf::from(decode_uri_path(stripped)))
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct EntryContext {
     pub entry: PathBuf,
     pub root: PathBuf,
@@ -913,6 +1136,182 @@ mod tests {
         assert_eq!(
             error_source_name(&err, &probe),
             Some("sample.zn".to_string())
+        );
+    }
+
+    fn used_module_project(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = test_dir(tag);
+        let module = dir.join("helpers.zn");
+        std::fs::write(
+            &module,
+            "pub fn value() i32 {\n    return undefined_thing;\n}\n",
+        )
+        .unwrap();
+        let main = dir.join("main.zn");
+        std::fs::write(
+            &main,
+            "use helpers;\n\nfn main() {\n    @println(\"{}\");\n}\n",
+        )
+        .unwrap();
+
+        (main, module)
+    }
+
+    #[test]
+    fn used_module_diagnostics_reported() {
+        let (main, module) = used_module_project("used-diags");
+        let uri = Uri::from_str(&format!("file://{}", main.display())).unwrap();
+        let text = std::fs::read_to_string(&main).unwrap();
+
+        let output = check(&uri, &text, &[]);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "main itself must stay clean: {:?}",
+            output.diagnostics
+        );
+
+        let module_uri = Uri::from_str(&format!("file://{}", module.display())).unwrap();
+
+        assert!(
+            output
+                .by_uri
+                .iter()
+                .any(|(uri, diagnostics)| uri == &module_uri
+                    && diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.message.contains("unresolved"))),
+            "module diagnostics must be grouped: {:?}",
+            output.by_uri
+        );
+    }
+
+    #[test]
+    fn unreachable_project_module_scanned() {
+        let dir = test_dir("scan-covered");
+        let main = dir.join("main.zn");
+        std::fs::write(
+            &main,
+            "use helpers;\n\nfn main() {\n    @println(\"{}\", value());\n}\n",
+        )
+        .unwrap();
+        let helpers = dir.join("helpers.zn");
+        std::fs::write(&helpers, "pub fn value() i32 {\n    return 7;\n}\n").unwrap();
+
+        let stray = dir.join("stray.zn");
+        std::fs::write(
+            &stray,
+            "pub fn broken() i32 {\n    return missing_value;\n}\n",
+        )
+        .unwrap();
+        let stray_uri = Uri::from_str(&format!("file://{}", stray.display())).unwrap();
+
+        let uri = Uri::from_str(&format!("file://{}", main.display())).unwrap();
+        let text = std::fs::read_to_string(&main).unwrap();
+
+        let output = check(&uri, &text, &[]);
+
+        let helpers_canonical = std::fs::canonicalize(&helpers).unwrap();
+        assert!(
+            output
+                .covered
+                .contains(&helpers_canonical.to_string_lossy().into_owned()),
+            "used module must be covered: {:?}",
+            output.covered
+        );
+
+        let groups =
+            scan_project_modules(&dir, &output.covered, Some(&main), &[], &HashMap::default());
+
+        assert!(
+            groups.iter().any(|(uri, diagnostics)| uri == &stray_uri
+                && diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("missing_value"))),
+            "uncovered project module must be scanned: {:?}",
+            groups
+        );
+
+        let scanned_helpers = groups
+            .iter()
+            .any(|(uri, _)| uri.path().as_str().ends_with("helpers.zn"));
+
+        assert!(!scanned_helpers, "covered modules must be skipped");
+    }
+
+    #[test]
+    fn zora_bin_scan_reports_broken_module() {
+        let dir = test_dir("zora-scan");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Zora.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nzeen = \"0.3\"\ntype = \"bin\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src").join("main.zn"),
+            "fn main() {\n    @println(\"hi\");\n}\n",
+        )
+        .unwrap();
+
+        let broken = dir.join("src").join("broken.zn");
+        std::fs::write(
+            &broken,
+            "pub fn boom() i32 {\n    return no_such_name;\n}\n",
+        )
+        .unwrap();
+
+        let main = dir.join("src").join("main.zn");
+        let uri = Uri::from_str(&format!("file://{}", main.display())).unwrap();
+        let text = std::fs::read_to_string(&main).unwrap();
+
+        let output = check(&uri, &text, &[]);
+        let groups =
+            scan_project_modules(&dir, &output.covered, Some(&main), &[], &HashMap::default());
+
+        let broken_uri = Uri::from_str(&format!("file://{}", broken.display())).unwrap();
+
+        assert!(
+            groups.iter().any(|(uri, diagnostics)| uri == &broken_uri
+                && diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("no_such_name"))),
+            "zora src scan must report broken module: {:?}",
+            groups
+        );
+    }
+
+    #[test]
+    fn used_module_marked_covered() {
+        let dir = test_dir("covered-module");
+        let main = dir.join("main.zn");
+        std::fs::write(
+            &main,
+            "use helpers;\n\nfn main() {\n    @println(\"{}\", value());\n}\n",
+        )
+        .unwrap();
+        let module = dir.join("helpers.zn");
+        std::fs::write(&module, "pub fn value() i32 {\n    return 7;\n}\n").unwrap();
+
+        let uri = Uri::from_str(&format!("file://{}", main.display())).unwrap();
+        let text = std::fs::read_to_string(&main).unwrap();
+
+        let output = check(&uri, &text, &[]);
+
+        assert!(
+            output.diagnostics.is_empty(),
+            "clean project must report nothing: {:?}",
+            output.diagnostics
+        );
+
+        let module_canonical = std::fs::canonicalize(&module).unwrap();
+
+        assert!(
+            output
+                .covered
+                .contains(&module_canonical.to_string_lossy().into_owned()),
+            "used module must be covered by the graph: {:?}",
+            output.covered
         );
     }
 }
