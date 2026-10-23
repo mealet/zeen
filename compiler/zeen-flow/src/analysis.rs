@@ -1423,6 +1423,10 @@ impl<'ctx> DataFlow<'ctx> {
                 continue;
             }
 
+            if self.typecheck.interface_method_owners.contains_key(def_id) {
+                continue;
+            }
+
             if Some(*def_id) == self.typecheck.main_fn_def {
                 continue;
             }

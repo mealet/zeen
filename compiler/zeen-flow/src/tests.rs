@@ -340,6 +340,26 @@ fn unused_function_in_root_module_is_warned() {
 }
 
 #[test]
+fn interface_methods_are_not_warned() {
+    let diagnostics = flow_diagnostics(
+        "interface Describe { \
+             fn kind(*const self) i32; \
+         } \
+         fn main() i32 { \
+             return 0; \
+         }",
+    );
+
+    assert!(
+        !has_warning(&diagnostics, |e| matches!(
+            e,
+            FlowError::UnusedFunction { .. }
+        )),
+        "interface method declarations must not be flagged, got {diagnostics:?}"
+    );
+}
+
+#[test]
 fn used_function_is_not_warned() {
     let diagnostics = flow_diagnostics(
         "fn helper() i32 { \
