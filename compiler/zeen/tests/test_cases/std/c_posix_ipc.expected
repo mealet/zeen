@@ -7,4 +7,3 @@ cpu_ok=true
 sem_ok=true sem_val=1
 shm_ok=true
 named_ok=true
-
