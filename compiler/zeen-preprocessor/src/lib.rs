@@ -692,6 +692,10 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 inclusive,
             },
 
+            ExpressionKind::Splice { expr } => ExpressionKind::Splice {
+                expr: self.resolve_expr(expr),
+            },
+
             ExpressionKind::ConditionalBlock(_) => {
                 unreachable!("conditional expressions are expanded by resolve_expr")
             }

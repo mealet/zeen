@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use lasso::Spur;
 
@@ -6,7 +8,7 @@ use zeen_ast::{
     Declaration, DeclarationKind, Expression, ExpressionKind, Statement, StatementKind, TypeExpr,
     TypeKind,
     declarations::{AliasDecl, FnParam, GenericType},
-    expressions::{Arm, FieldInit, Pattern},
+    expressions::{Arm, FieldInit, Literal, Pattern},
 };
 
 use crate::error::Error;
@@ -452,6 +454,16 @@ impl<'arena> Interp<'arena> {
     ) -> Result<Option<&'arena TypeExpr<'arena>>, Vec<Error>> {
         match &ty.kind {
             TypeKind::Named { name, generic_args } => {
+                if generic_args.is_none() && self.is_comptime_const(module, *name) {
+                    match self.comptime_const_value(module, *name) {
+                        Some(Value::Type(ty_expr)) => {
+                            return Ok(Some(self.arena.alloc(*ty_expr)));
+                        }
+                        Some(_) => {}
+                        None => {}
+                    }
+                }
+
                 let _ = name;
                 let Some(args) = generic_args else {
                     return Ok(None);
@@ -656,6 +668,10 @@ impl<'arena> Interp<'arena> {
         expr: &'arena Expression<'arena>,
     ) -> Result<Option<&'arena Expression<'arena>>, Vec<Error>> {
         match &expr.kind {
+            ExpressionKind::Literal(Literal::String(spur)) => {
+                self.substitute_string_literal(module, *spur, expr.span)
+            }
+
             ExpressionKind::Literal(_) => Ok(None),
 
             ExpressionKind::Ident { name, generic_args } => {
@@ -742,7 +758,6 @@ impl<'arena> Interp<'arena> {
                         }
                     }
 
-                    // Check if the comptime fn has void return type
                     let is_void_fn = self.scopes.get(module)
                         .and_then(|scope| scope.fns.get(&callee_name))
                         .map(|decl| {
@@ -750,12 +765,8 @@ impl<'arena> Interp<'arena> {
                         })
                         .unwrap_or(false);
 
-                    // For void comptime fn, call it for side effects but substitute with @void()
-                    // so MIR doesn't warn about unused result
                     if is_void_fn {
-                        // Execute the call for side effects (macros print, etc.)
                         let _ = self.eval_comptime_call(module, callee_name, expr.span, &values);
-                        // Substitute with @void() to discard the result without warning
                         let spur = self.interner.borrow_mut().get_or_intern("void");
                         let void_macro = Expression {
                             kind: ExpressionKind::MacroCall {
@@ -924,13 +935,21 @@ impl<'arena> Interp<'arena> {
                     return Ok(None);
                 }
 
-                Ok(Some(self.arena.alloc(Expression {
+                let new_expr = self.arena.alloc(Expression {
                     kind: ExpressionKind::SliceAccess {
                         object: object_new.unwrap_or(object),
                         index: index_new.unwrap_or(index),
                     },
                     span: expr.span,
-                })))
+                });
+
+                if let Ok(value) = self.eval_expr(new_expr)
+                    && let Ok(literal_expr) = self.value_into_expr(value, expr.span)
+                {
+                    return Ok(Some(self.arena.alloc(literal_expr)));
+                }
+
+                Ok(Some(new_expr))
             }
 
             ExpressionKind::StructInit { ty, fields } => {
@@ -1170,6 +1189,14 @@ impl<'arena> Interp<'arena> {
             }
 
             ExpressionKind::TargetVar(_) => Ok(None),
+
+            ExpressionKind::Splice { expr } => match self.eval_fresh_expr(module, expr) {
+                Ok(value) => match self.value_into_expr(value, expr.span) {
+                    Ok(new_expr) => Ok(Some(self.arena.alloc(new_expr))),
+                    Err(error) => Err(self.report(error)),
+                },
+                Err(_) => Err(self.errors.clone()),
+            },
 
             other => {
                 let _ = other;
@@ -1471,6 +1498,116 @@ impl<'arena> Interp<'arena> {
         result
     }
 
+    fn substitute_string_literal(
+        &mut self,
+        module: &PathBuf,
+        spur: Spur,
+        span: miette::SourceSpan,
+    ) -> Result<Option<&'arena Expression<'arena>>, Vec<Error>> {
+        let text = self.interned(&spur);
+
+        if !text.contains("$(") {
+            return Ok(None);
+        }
+
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        let mut changed = false;
+        let mut i = 0;
+
+        while i < chars.len() {
+            if chars[i] == '$' && chars.get(i + 1) == Some(&'(') {
+                let start = i + 2;
+                let mut depth = 1usize;
+                let mut j = start;
+
+                while j < chars.len() {
+                    match chars[j] {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    j += 1;
+                }
+
+                if depth != 0 {
+                    self.errors.push(Error::TypeMismatch {
+                        message: "unterminated `$(` in string literal".into(),
+                        src: self.current_src(),
+                        span,
+                    });
+                    return Err(self.errors.clone());
+                }
+
+                let fragment: String = chars[start..j].iter().collect();
+                let value = self.eval_interpolation(module, &fragment, span)?;
+                out.push_str(&value.display());
+                changed = true;
+                i = j + 1;
+                continue;
+            }
+
+            out.push(chars[i]);
+            i += 1;
+        }
+
+        if !changed {
+            return Ok(None);
+        }
+
+        let interned = self.interner.borrow_mut().get_or_intern(&out);
+        let literal = self.arena.alloc(Expression {
+            kind: ExpressionKind::Literal(Literal::String(interned)),
+            span,
+        });
+
+        Ok(Some(literal))
+    }
+
+    fn eval_interpolation(
+        &mut self,
+        module: &PathBuf,
+        fragment: &str,
+        span: miette::SourceSpan,
+    ) -> Result<Value<'arena>, Vec<Error>> {
+        let src = Arc::new(fragment.to_string());
+        let filename = Rc::new(String::from("<comptime interpolation>"));
+        let tokens: Vec<_> = zeen_lexer::tokenize(fragment).collect();
+        let mut iter = tokens.into_iter();
+
+        let mut parser = zeen_parser::Parser::new(
+            filename,
+            src,
+            &mut iter,
+            self.arena,
+            Rc::clone(&self.interner),
+        );
+        let parsed = zeen_parser::expressions::ExprParser::new(&mut parser).parse();
+
+        let expr = match parsed {
+            Some(expr) if parser.errors.is_empty() => expr,
+            _ => {
+                self.errors.push(Error::TypeMismatch {
+                    message: "invalid expression inside `$(` splice".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(self.errors.clone());
+            }
+        };
+
+        match self.eval_fresh_expr(module, expr) {
+            Ok(value) => Ok(value),
+            Err(_) => Err(self.errors.clone()),
+        }
+    }
+
     pub(crate) fn value_into_expr(
         &self,
         value: Value<'arena>,
@@ -1499,10 +1636,38 @@ impl<'arena> Interp<'arena> {
                 zeen_ast::expressions::Literal::String(interned)
             }
 
-            Value::Type(_) | Value::Expr(_) | Value::Decl(_) => {
+            Value::Type(ty) => {
+                return Ok(Expression {
+                    kind: ExpressionKind::Type(ty),
+                    span,
+                });
+            }
+
+            Value::Expr(expr) => {
+                return Ok(*expr);
+            }
+
+            Value::Decl(_) => {
                 return Err(Error::TypeMismatch {
-                    message: "comptime type values are not valid runtime values in v1".into(),
+                    message: "comptime declaration values are not valid runtime expressions in v1"
+                        .into(),
                     src: self.current_src(),
+                    span,
+                });
+            }
+
+            Value::Array(items) => {
+                let mut elements: Vec<&'arena Expression<'arena>> = Vec::with_capacity(items.len());
+
+                for item in items {
+                    let element = self.value_into_expr(item, span)?;
+                    elements.push(self.arena.alloc(element));
+                }
+
+                return Ok(Expression {
+                    kind: ExpressionKind::ArrayInit {
+                        elements: self.arena.alloc_slice_copy(&elements),
+                    },
                     span,
                 });
             }

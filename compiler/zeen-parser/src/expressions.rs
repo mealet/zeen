@@ -302,6 +302,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 | TokenKind::OpenBrace
                 | TokenKind::DotDot
                 | TokenKind::DotDotEq
+                | TokenKind::Dollar
         )
     }
 
@@ -353,6 +354,16 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             TokenKind::Ref => UnaryOp::AddrOf,
 
             TokenKind::DotDot | TokenKind::DotDotEq => return self.parse_prefix_range(),
+            TokenKind::Dollar => {
+                let _ = self.p.advance_not_eof()?;
+                let _ = self.p.expect(TokenKind::OpenParen, "(")?;
+                let inner = self.parse()?;
+                let close = self.p.expect(TokenKind::CloseParen, ")")?;
+                return Some(self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Splice { expr: inner },
+                    span: token.merge_span(close.span),
+                }));
+            }
 
             _ => return self.parse_postfix(),
         };
@@ -931,38 +942,70 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             self.p.src[ident_span.offset() + 1..ident_span.offset() + ident_span.len()].to_owned();
         let ident_id = self.p.get_or_intern(&ident_slice);
 
-        let _open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
         let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
+        #[allow(unused_assignments)]
+        let mut close_span = macro_ident.span;
 
-        if matches!(
-            ident_slice.as_str(),
-            "as" | "sizeof" | "alignof" | "typename" | "variantNames" | "variantCount"
-        ) {
-            let mut tp = crate::type_parser::TypeParser::new(self.p);
-            let parsed_type = tp.parse()?;
+        if self.p.at(TokenKind::OpenParen) {
+            let _ = self.p.advance_not_eof()?;
 
-            let ty_expr = self.p.arena.alloc(Expression {
-                kind: ExpressionKind::Type(parsed_type),
-                span: parsed_type.span,
-            });
+            if matches!(
+                ident_slice.as_str(),
+                "as" | "sizeof"
+                    | "alignof"
+                    | "typename"
+                    | "variantNames"
+                    | "variantCount"
+                    | "zeen_type"
+                    | "fields"
+                    | "variants"
+                    | "typeInfo"
+                    | "hasField"
+                    | "fieldType"
+            ) {
+                let mut tp = crate::type_parser::TypeParser::new(self.p);
+                let parsed_type = tp.parse()?;
 
-            args_buffer.push(ty_expr);
-            let _ = self.p.eat(TokenKind::Comma);
-        }
+                let ty_expr = self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Type(parsed_type),
+                    span: parsed_type.span,
+                });
 
-        while !matches!(
-            self.p.current().kind,
-            TokenKind::CloseParen | TokenKind::Eof
-        ) {
-            let arg = self.parse()?;
-            args_buffer.push(arg);
-
-            if !self.p.at(TokenKind::CloseParen) {
-                self.p.expect(TokenKind::Comma, ",")?;
+                args_buffer.push(ty_expr);
+                let _ = self.p.eat(TokenKind::Comma);
             }
-        }
 
-        let close_paren = self.p.expect(TokenKind::CloseParen, ")")?;
+            while !matches!(
+                self.p.current().kind,
+                TokenKind::CloseParen | TokenKind::Eof
+            ) {
+                let arg = self.parse()?;
+                args_buffer.push(arg);
+
+                if !self.p.at(TokenKind::CloseParen) {
+                    self.p.expect(TokenKind::Comma, ",")?;
+                }
+            }
+
+            let close_paren = self.p.expect(TokenKind::CloseParen, ")")?;
+            close_span = close_paren.span;
+        } else if self.p.at(TokenKind::OpenBrace) {
+            let open_brace = self.p.expect(TokenKind::OpenBrace, "{")?;
+            let mut expr_parser = ExprParser::new(self.p);
+            let block_expr = expr_parser.parse()?;
+            let _close_brace = self.p.expect(TokenKind::CloseBrace, "}")?;
+
+            args_buffer.push(block_expr);
+            close_span = open_brace.merge_span(_close_brace.span);
+        } else {
+            self.p.report(ParserError::SyntaxError {
+                label: "expected `(` or `{` after macro identifier".into(),
+                help: None,
+                src: self.p.named_src(),
+                span: self.p.current.span,
+            });
+            return None;
+        }
 
         let args = self.p.arena.alloc_slice_copy(&args_buffer);
         drop(args_buffer);
@@ -972,7 +1015,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 name: (ident_id, ident_span),
                 args,
             },
-            span: macro_ident.merge_span(close_paren.span),
+            span: macro_ident.merge_span(close_span),
         });
 
         Some(expr)

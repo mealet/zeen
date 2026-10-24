@@ -971,6 +971,10 @@ impl<'res> HirLowering<'res> {
             ExpressionKind::ConditionalBlock(_) => {
                 unreachable!("preprocessor must resolve conditional expressions")
             }
+
+            ExpressionKind::Splice { .. } => {
+                unreachable!("comptime splice must be substituted before HIR lowering")
+            }
         };
 
         HirExpr {

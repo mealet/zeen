@@ -1,0 +1,7 @@
+comptime Answer = 42;
+comptime Name = "zeen";
+
+fn main() {
+  @println("$(Answer)");
+  @println("hello $(Name), answer is $(Answer + 1)");
+}

@@ -88,7 +88,6 @@ pub enum ExpressionKind<'arena> {
         trailing: Option<&'arena Expression<'arena>>,
     },
 
-    /// Anonymous function expression: `fn(params) ret { body }`.
     Closure {
         params: &'arena [crate::declarations::FnParam<'arena>],
         return_type: Option<&'arena crate::types::TypeExpr<'arena>>,
@@ -97,21 +96,21 @@ pub enum ExpressionKind<'arena> {
 
     Type(&'arena crate::types::TypeExpr<'arena>),
 
-    /// Compile-time target constant (`@var[os]`).
     TargetVar(TargetVarKind),
 
-    /// An expression guarded by a target condition (`@os[linux] { expr } else { expr }`).
     ConditionalBlock(&'arena ExprConditionalBlock<'arena>),
 
-    /// Range expression: `a..b`, `a..=b`, `a..`, `..b`, `..=b`, `..`.
     Range {
         start: Option<&'arena Expression<'arena>>,
         end: Option<&'arena Expression<'arena>>,
         inclusive: bool,
     },
+
+    Splice {
+        expr: &'arena Expression<'arena>,
+    },
 }
 
-/// A `@name[values] { expr }` guard at expression level with an optional `else`.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct ExprConditionalBlock<'arena> {
     pub directive: PreprocessorDirective,
@@ -121,7 +120,6 @@ pub struct ExprConditionalBlock<'arena> {
     pub else_block: Option<&'arena Expression<'arena>>,
 }
 
-/// Target information provided at compile time via `@var[name]`.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum TargetVarKind {
     Os,
@@ -148,8 +146,6 @@ impl TargetVarKind {
     }
 }
 
-// Literal
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Literal {
     Int(i64),
@@ -161,18 +157,14 @@ pub enum Literal {
     Null,
 }
 
-// Binary
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum BinaryOp {
-    // Arithmetic
     Add, // +
     Sub, // -
     Mul, // *
     Div, // /
     Mod, // %
 
-    // Comparison
     Eq, // ==
     Ne, // !=
     Lt, // <
@@ -180,11 +172,9 @@ pub enum BinaryOp {
     Le, // <= / =<
     Ge, // >=
 
-    // Boolean
     LogicalAnd, // &&
     LogicalOr,  // ||
 
-    // Bitwise
     BitAnd, // &
     BitOr,  // |
     BitXor, // ^
@@ -224,8 +214,6 @@ impl std::fmt::Display for BinaryOp {
     }
 }
 
-// Unary
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum UnaryOp {
     Neg,    // -a
@@ -251,16 +239,12 @@ impl std::fmt::Display for UnaryOp {
     }
 }
 
-// Struct Init
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct FieldInit<'arena> {
     pub name: Spur,
     pub value: &'arena Expression<'arena>,
     pub span: SourceSpan,
 }
-
-// Switch
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Arm<'arena> {

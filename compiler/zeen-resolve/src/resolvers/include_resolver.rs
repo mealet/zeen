@@ -390,6 +390,8 @@ impl<'ctx> IncludeResolver<'ctx> {
                     self.expr_usage(end, flags);
                 }
             }
+
+            ExpressionKind::Splice { .. } => {}
         }
     }
 

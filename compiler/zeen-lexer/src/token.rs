@@ -67,6 +67,7 @@ pub enum TokenKind {
     Ampersand, // &
     Caret,     // ^
     Hashtag,   // #
+    Dollar,
 
     Plus,    // +
     Minus,   // -

@@ -1,0 +1,7 @@
+comptime MyInt = @zeen_type(i32);
+alias MyAlias = MyInt;
+
+fn main() {
+  let x: MyAlias = 42;
+  @println("{}", x);
+}

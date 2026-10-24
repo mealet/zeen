@@ -1,0 +1,27 @@
+struct Point {
+  x: i32,
+  y: i32,
+}
+
+enum Color {
+  Red,
+  Green,
+  Blue,
+}
+
+comptime PointFields = @fields(Point);
+comptime ColorVariants = @variants(Color);
+comptime PointType = @typeInfo(Point);
+comptime ColorType = @typeInfo(Color);
+comptime HasX = @hasField(Point, "x");
+comptime HasZ = @hasField(Point, "z");
+
+fn main() {
+  @println("Point fields: {}", PointFields);
+  @println("Color variants: {}", ColorVariants);
+  @println("Point type: {}", PointType);
+  @println("Color type: {}", ColorType);
+  @println("Point has x: {}", HasX);
+  @println("Point has z: {}", HasZ);
+  @println("done");
+}

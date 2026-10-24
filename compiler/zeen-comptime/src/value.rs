@@ -14,6 +14,7 @@ pub enum Value<'arena> {
     Bool(bool),
     Char(char),
     Str(Rc<str>),
+    Array(Vec<Value<'arena>>),
 
     Type(&'arena TypeExpr<'arena>),
     Expr(&'arena Expression<'arena>),
@@ -28,6 +29,7 @@ impl Value<'_> {
             Self::Bool(_) => "comptime_bool",
             Self::Char(_) => "comptime_char",
             Self::Str(_) => "comptime_str",
+            Self::Array(_) => "comptime_array",
             Self::Type(_) => "zeen_type",
             Self::Expr(_) => "zeen_expr",
             Self::Decl(_) => "zeen_decl",
@@ -41,6 +43,17 @@ impl Value<'_> {
             Self::Bool(v) => v.to_string(),
             Self::Char(_) => "char".to_string(),
             Self::Str(v) => v.to_string(),
+            Self::Array(items) => {
+                let mut s = String::from("[");
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&item.display());
+                }
+                s.push(']');
+                s
+            }
             Self::Type(_) => "type".to_string(),
             Self::Expr(_) => "expr".to_string(),
             Self::Decl(_) => "decl".to_string(),
@@ -67,6 +80,20 @@ impl<'arena> Value<'arena> {
                 let spur: Spur = interner.borrow_mut().get_or_intern(v.as_ref());
                 Literal::String(spur)
             }
+            Self::Array(items) => {
+                let mut elements: Vec<&'arena Expression<'arena>> = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    let expr = item.into_expr(arena, interner, span)?;
+                    elements.push(expr);
+                }
+                return Ok(arena.alloc(Expression {
+                    kind: ExpressionKind::ArrayInit {
+                        elements: arena.alloc_slice_copy(&elements),
+                    },
+                    span,
+                }));
+            }
+
             Self::Type(_) | Self::Expr(_) | Self::Decl(_) => {
                 return Err(SmolStr::from(
                     "comptime fragment does not fit into a plain expression",

@@ -6,7 +6,8 @@ use crate::{
 use smallvec::SmallVec;
 
 use zeen_ast::{
-    Declaration, DeclarationKind, Expression, ExpressionKind, PreprocessorDirective, Statement, StatementKind, TypeExpr, declarations,
+    Declaration, DeclarationKind, Expression, ExpressionKind, PreprocessorDirective, Statement,
+    StatementKind, TypeExpr, declarations,
 };
 use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
@@ -303,7 +304,8 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
             let (stmts, trailing) = if let Some(tr) = trailing {
                 let len = stmts.len();
-                let trimmed: &'ctx [&'ctx Statement<'ctx>] = self.p.arena.alloc_slice_copy(&stmts[..len - 1]);
+                let trimmed: &'ctx [&'ctx Statement<'ctx>] =
+                    self.p.arena.alloc_slice_copy(&stmts[..len - 1]);
                 (trimmed, Some(tr))
             } else {
                 (stmts, None)
@@ -494,7 +496,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let mut buffer: SmallVec<[&'ctx Statement<'ctx>; 8]> = SmallVec::new();
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
-            let mut stmt_parser = StmtParser::new(self.p);
+            let mut stmt_parser = StmtParser::new(self.p).with_optional_semicolon(true);
             if let Some(stmt) = stmt_parser.parse() {
                 buffer.push(stmt);
             }
