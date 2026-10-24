@@ -106,7 +106,8 @@ fn explicit_host_target_compiles_and_runs() {
         .success();
 
     let output = ProcessCommand::new(&binary).output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello, World!\n");
+    let stdout = String::from_utf8_lossy(&output.stdout).replace('\r', "");
+    assert_eq!(stdout, "Hello, World!\n");
 
     let _ = fs::remove_file(&binary);
 }
