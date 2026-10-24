@@ -185,6 +185,7 @@ pub enum CompilerKeyword {
 
     Let,
     Const,
+    Comptime,
     Switch,
     Return,
 
@@ -224,6 +225,7 @@ impl CompilerKeyword {
 
             "let" => Some(CompilerKeyword::Let),
             "const" => Some(CompilerKeyword::Const),
+            "comptime" => Some(CompilerKeyword::Comptime),
             "switch" => Some(CompilerKeyword::Switch),
             "return" => Some(CompilerKeyword::Return),
 
@@ -265,6 +267,7 @@ impl CompilerKeyword {
 
             CompilerKeyword::Let => "let",
             CompilerKeyword::Const => "const",
+            CompilerKeyword::Comptime => "comptime",
             CompilerKeyword::Switch => "switch",
             CompilerKeyword::Return => "return",
 

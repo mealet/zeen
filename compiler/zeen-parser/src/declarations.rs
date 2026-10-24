@@ -5,7 +5,9 @@ use crate::{
 
 use smallvec::SmallVec;
 
-use zeen_ast::{Declaration, DeclarationKind, PreprocessorDirective, TypeExpr, declarations};
+use zeen_ast::{
+    Declaration, DeclarationKind, PreprocessorDirective, Statement, TypeExpr, declarations,
+};
 use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
 pub struct DeclParser<'tok, 'ctx, 'pr> {
@@ -76,6 +78,17 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             }
             TokenKind::Keyword(CompilerKeyword::Const) => {
                 self.parse_global_var(start_span, is_pub, true)
+            }
+            TokenKind::Keyword(CompilerKeyword::Comptime) => {
+                let _ = self.p.advance_not_eof()?;
+
+                match self.p.current().kind {
+                    TokenKind::Keyword(CompilerKeyword::Fn) => {
+                        self.parse_comptime_fn(start_span, is_pub)
+                    }
+                    TokenKind::OpenBrace => self.parse_comptime_block(start_span),
+                    _ => self.parse_comptime_const(start_span, is_pub),
+                }
             }
             TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
@@ -352,6 +365,116 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 ty,
             }),
             source: (span, self.p.named_src()).into(),
+        });
+
+        Some(decl)
+    }
+
+    fn parse_comptime_fn(
+        &mut self,
+        start_span: miette::SourceSpan,
+        is_pub: IsPub,
+    ) -> Option<&'ctx Declaration<'ctx>> {
+        let fn_decl = self.parse_fn(start_span, is_pub, IsExtern(false), AllowBare(false))?;
+
+        let (name, generics, params, return_type, body, is_pub) = match &fn_decl.kind {
+            DeclarationKind::FnDecl {
+                name,
+                generics,
+                params,
+                return_type,
+                body,
+                is_pub,
+                ..
+            } => (*name, *generics, *params, *return_type, *body, *is_pub),
+            _ => return Some(fn_decl),
+        };
+
+        if let Some(generics) = generics
+            && let Some(first) = generics.first()
+        {
+            self.p.report(ParserError::SyntaxError {
+                label: "comptime functions cannot have generic parameters".into(),
+                help: Some("generic parameters inside comptime are planned for v2".into()),
+                src: self.p.named_src(),
+                span: first.name.1,
+            });
+        }
+
+        let fn_span = fn_decl.merge_span(start_span);
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::ComptimeFn {
+                name,
+                params,
+                return_type,
+                body,
+                is_pub,
+            },
+            source: (fn_span, fn_decl.source.src()).into(),
+        });
+
+        Some(decl)
+    }
+
+    fn parse_comptime_const(
+        &mut self,
+        _start_span: miette::SourceSpan,
+        is_pub: IsPub,
+    ) -> Option<&'ctx Declaration<'ctx>> {
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+        let name = (self.p.get_or_intern(name_slice), name_span);
+
+        let _ = self.p.expect(TokenKind::Eq, "= initial value")?;
+
+        let mut expr_parser = ExprParser::new(self.p);
+        let value = expr_parser.parse()?;
+
+        let _ = self.p.expect(TokenKind::Semicolon, ";")?;
+
+        let span = value.merge_span(_start_span);
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::ComptimeConst {
+                name,
+                value,
+                is_pub: is_pub.0,
+            },
+            source: (span, self.p.named_src()).into(),
+        });
+
+        Some(decl)
+    }
+
+    fn parse_comptime_block(
+        &mut self,
+        _start_span: miette::SourceSpan,
+    ) -> Option<&'ctx Declaration<'ctx>> {
+        let open = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        let mut buffer: SmallVec<[&'ctx Statement<'ctx>; 8]> = SmallVec::new();
+        while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+            let mut stmt_parser = StmtParser::new(self.p);
+            if let Some(stmt) = stmt_parser.parse() {
+                buffer.push(stmt);
+            }
+            if self.p.panic_mode {
+                break;
+            }
+        }
+
+        let close = self.p.expect(TokenKind::CloseBrace, "}")?;
+
+        let stmts = self.p.arena.alloc_slice_copy(&buffer);
+
+        let block = self.p.arena.alloc(declarations::ComptimeBlock { stmts });
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::ComptimeBlock(block),
+            source: (open.merge_span(close.span), self.p.named_src()).into(),
         });
 
         Some(decl)

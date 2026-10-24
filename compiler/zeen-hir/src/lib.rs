@@ -176,6 +176,12 @@ impl<'res> HirLowering<'res> {
         let kind = match decl.kind {
             DeclarationKind::FnDecl { .. } => HirDeclKind::Fn(Rc::new(self.lower_fn(decl, None))),
 
+            DeclarationKind::ComptimeConst { .. }
+            | DeclarationKind::ComptimeFn { .. }
+            | DeclarationKind::ComptimeBlock(_) => {
+                unreachable!("comptime declarations are stripped before HIR lowering")
+            }
+
             DeclarationKind::StructDecl {
                 name,
                 is_pub,

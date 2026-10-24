@@ -1070,6 +1070,16 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
     }
 
+    pub fn module_of_decl(&self, decl: &'ctx Declaration<'ctx>) -> PathBuf {
+        let target_ptr = decl as *const Declaration as usize;
+
+        self.decl_owner
+            .get(&target_ptr)
+            .and_then(|id| self.module_ids.get(*id as usize))
+            .cloned()
+            .unwrap_or_else(|| self.root.clone().unwrap_or_default())
+    }
+
     pub(crate) fn module_graph(&self) -> ModuleGraph {
         let project_root = canonicalize_best_effort(&self.context.paths.project_root);
         let std_root = self

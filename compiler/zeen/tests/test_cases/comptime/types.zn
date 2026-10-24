@@ -1,0 +1,29 @@
+comptime N = 4;
+comptime fn width(n: i32) i32 {
+  return n * 2;
+}
+
+struct Buffer {
+  data: [N]i32,
+
+  pub fn first(*const self) i32 {
+    return self.data[0];
+  }
+
+  pub fn last(*const self) i32 {
+    return self.data[N - 1];
+  }
+}
+
+struct Wide {
+  data: [width(3)]i32,
+}
+
+fn main() {
+  let buffer: Buffer = Buffer { .data = [1, 2, 3, 4] };
+  @println("{} {}", buffer.first(), buffer.last());
+  @println("{}", @sizeof(Buffer));
+
+  let wide: Wide = Wide { .data = [7, 8, 9, 10, 11, 12] };
+  @println("{} {}", wide.data[0], wide.data[5]);
+}

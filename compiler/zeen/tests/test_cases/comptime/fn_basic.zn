@@ -1,0 +1,42 @@
+comptime fn double(x: i32) i32 {
+  return x * 2;
+}
+
+comptime BASE = 5;
+
+comptime fn plus_base(x: i32) i32 {
+  return double(x) + BASE;
+}
+
+comptime fn fib(n: i32) i32 {
+  if (n < 2) {
+    return n;
+  }
+
+  return fib(n - 1) + fib(n - 2);
+}
+
+comptime fn classify(kind: i32) i32 {
+  switch (kind) {
+    0 => { return 100; }
+    1 | 2 => { return 200; }
+    _ => { return 300; }
+  }
+}
+
+comptime fn total(n: i32) i32 {
+  let acc = 0;
+  for (i : n) {
+    acc += i;
+  }
+
+  return acc;
+}
+
+fn main() {
+  @println("{}", double(21));
+  @println("{}", plus_base(10));
+  @println("{}", fib(10));
+  @println("{} {} {}", classify(0), classify(2), classify(7));
+  @println("{}", total(5));
+}

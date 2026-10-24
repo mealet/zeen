@@ -10,8 +10,9 @@ use zeen_ast::declarations::{
 };
 use zeen_ast::expressions::Literal;
 use zeen_ast::{
-    Declaration, DeclarationKind, DirectiveValue, ExprConditionalBlock, Expression, ExpressionKind,
-    PreprocessorDirective, Statement, StatementKind, StmtConditionalBlock, TypeExpr, TypeKind,
+    ComptimeBlock as ComptimeBlockDecl, Declaration, DeclarationKind, DirectiveValue,
+    ExprConditionalBlock, Expression, ExpressionKind, PreprocessorDirective, Statement,
+    StatementKind, StmtConditionalBlock, TypeExpr, TypeKind,
 };
 use zeen_driver::{CompilationMode, Target};
 
@@ -220,6 +221,35 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 generics: self.resolve_generics(alias.generics),
                 ty: self.resolve_type(alias.ty),
             }),
+
+            DeclarationKind::ComptimeConst {
+                name,
+                value,
+                is_pub,
+            } => DeclarationKind::ComptimeConst {
+                name,
+                value: self.resolve_expr(value),
+                is_pub,
+            },
+
+            DeclarationKind::ComptimeFn {
+                name,
+                params,
+                return_type,
+                body,
+                is_pub,
+            } => DeclarationKind::ComptimeFn {
+                name,
+                params: self.resolve_params(params),
+                return_type: return_type.map(|ty| self.resolve_type(ty)),
+                body: body.map(|s| self.resolve_stmt(s)),
+                is_pub,
+            },
+
+            DeclarationKind::ComptimeBlock(block) => {
+                let stmts = self.resolve_stmt_list(block.stmts);
+                DeclarationKind::ComptimeBlock(self.arena.alloc(ComptimeBlockDecl { stmts }))
+            }
 
             DeclarationKind::ConditionalBlock(_) => {
                 unreachable!("conditional blocks are expanded by resolve_block")

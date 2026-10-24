@@ -4,7 +4,7 @@ pub mod statements;
 pub mod types;
 
 pub use declarations::{
-    AliasDecl, ConditionalBlock, Declaration, DeclarationKind, DirectiveValue,
+    AliasDecl, ComptimeBlock, ConditionalBlock, Declaration, DeclarationKind, DirectiveValue,
     PreprocessorDirective,
 };
 pub use expressions::{ExprConditionalBlock, Expression, ExpressionKind};

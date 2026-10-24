@@ -64,6 +64,26 @@ pub fn resolve<'ctx>(
         miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
     )?;
 
+    let include_resolver = include_resolver;
+    let resolved_program = {
+        let module_of_decl = |decl: &Declaration<'_>| include_resolver.module_of_decl(decl);
+
+        match zeen_comptime::evaluate(
+            resolved_program,
+            arena,
+            Rc::clone(&interner),
+            module_of_decl,
+        ) {
+            Ok(program) => program,
+            Err(errors) => {
+                return Err(errors
+                    .into_iter()
+                    .map(ResolveError::from)
+                    .collect::<Vec<_>>());
+            }
+        }
+    };
+
     let graph = include_resolver.module_graph();
 
     let mut name_resolver = name_resolver::NameResolver::new(filename, src, interner, graph);

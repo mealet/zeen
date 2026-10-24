@@ -780,6 +780,12 @@ impl<'ctx> NameResolver {
             DeclarationKind::ImplementDecl { .. } => {}
             DeclarationKind::Use { .. } => {}
             DeclarationKind::ConditionalBlock(_) => {}
+
+            DeclarationKind::ComptimeConst { .. }
+            | DeclarationKind::ComptimeFn { .. }
+            | DeclarationKind::ComptimeBlock(_) => {
+                unreachable!("comptime declarations are stripped before name resolution")
+            }
         }
     }
 
@@ -802,6 +808,12 @@ impl<'ctx> NameResolver {
                 self.resolve_fn_body(decl);
 
                 self.current_fn_def = prev_fn;
+            }
+
+            DeclarationKind::ComptimeConst { .. }
+            | DeclarationKind::ComptimeFn { .. }
+            | DeclarationKind::ComptimeBlock(_) => {
+                unreachable!("comptime declarations are stripped before name resolution")
             }
 
             DeclarationKind::StructDecl {

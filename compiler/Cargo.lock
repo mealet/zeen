@@ -845,6 +845,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeen-comptime"
+version = "0.4.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "miette",
+ "rustc-hash",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-lexer",
+ "zeen-parser",
+]
+
+[[package]]
 name = "zeen-driver"
 version = "0.4.0"
 dependencies = [
@@ -972,6 +988,7 @@ dependencies = [
  "smol_str",
  "thiserror",
  "zeen-ast",
+ "zeen-comptime",
  "zeen-driver",
  "zeen-lexer",
  "zeen-parser",
