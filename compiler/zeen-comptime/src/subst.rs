@@ -157,17 +157,34 @@ impl<'arena> Interp<'arena> {
                     }
                 }
 
+                let mut new_methods: Vec<&'arena Declaration<'arena>> =
+                    Vec::with_capacity(methods.len());
+                for method in methods.iter() {
+                    match self.substitute_decl(module, method) {
+                        Ok(None) => new_methods.push(*method),
+                        Ok(Some(new_method)) => {
+                            changed = true;
+                            new_methods.push(new_method);
+                        }
+                        Err(errors) => {
+                            self.pop_shadow();
+                            return Err(errors);
+                        }
+                    }
+                }
+
                 self.pop_shadow();
 
                 if changed {
                     let fields_alloc = self.arena.alloc_slice_copy(&new_fields);
+                    let methods_alloc = self.arena.alloc_slice_copy(&new_methods);
                     Ok(Some(self.arena.alloc(Declaration {
                         kind: DeclarationKind::StructDecl {
                             name: *name,
                             is_pub: *is_pub,
                             generics: *generics,
                             fields: fields_alloc,
-                            methods,
+                            methods: methods_alloc,
                         },
                         source: decl.source.clone(),
                     })))
@@ -269,17 +286,34 @@ impl<'arena> Interp<'arena> {
                     };
                 }
 
+                let mut new_methods: Vec<&'arena Declaration<'arena>> =
+                    Vec::with_capacity(methods.len());
+                for method in methods.iter() {
+                    match self.substitute_decl(module, method) {
+                        Ok(None) => new_methods.push(*method),
+                        Ok(Some(new_method)) => {
+                            changed = true;
+                            new_methods.push(new_method);
+                        }
+                        Err(errors) => {
+                            self.pop_shadow();
+                            return Err(errors);
+                        }
+                    }
+                }
+
                 self.pop_shadow();
 
                 if changed {
                     let variants_alloc = self.arena.alloc_slice_copy(&new_variants);
+                    let methods_alloc = self.arena.alloc_slice_copy(&new_methods);
                     Ok(Some(self.arena.alloc(Declaration {
                         kind: DeclarationKind::EnumDecl {
                             name: *name,
                             is_pub: *is_pub,
                             generics: *generics,
                             variants: variants_alloc,
-                            methods,
+                            methods: methods_alloc,
                         },
                         source: decl.source.clone(),
                     })))
@@ -1302,7 +1336,7 @@ impl<'arena> Interp<'arena> {
                 }
 
                 Ok(Some(self.arena.alloc(Statement {
-                    kind: StatementKind::Return { value: *value },
+                    kind: StatementKind::Return { value: new_value },
                     span: stmt.span,
                 })))
             }

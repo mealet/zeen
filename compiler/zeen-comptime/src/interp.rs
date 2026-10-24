@@ -508,7 +508,7 @@ impl<'arena> Interp<'arena> {
                 Ok(Some(value)) if is_last => return Ok(Some(value)),
                 Ok(Some(_)) => continue,
                 Ok(None) => continue,
-                Err(Unwind::Return(v)) => return Ok(Some(v)),
+                Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
                 Err(_) => return Err(Unwind::Break),
             }
         }
@@ -706,7 +706,7 @@ impl<'arena> Interp<'arena> {
             StatementKind::Expr(expr) => {
                 match self.eval_expr(expr) {
                     Ok(value) => Ok(Some(value)),
-                    Err(Unwind::Return(v)) => Ok(Some(v)),
+                    Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
                     Err(_) => Err(Unwind::Break),
                 }
             }
@@ -714,7 +714,7 @@ impl<'arena> Interp<'arena> {
             StatementKind::TrailingExpr(expr) => {
                 match self.eval_expr(expr) {
                     Ok(value) => Ok(Some(value)),
-                    Err(Unwind::Return(v)) => Ok(Some(v)),
+                    Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
                     Err(_) => Err(Unwind::Break),
                 }
             }
@@ -1068,7 +1068,7 @@ impl<'arena> Interp<'arena> {
                 Some(else_statement) => {
                     match self.eval_statement(else_statement) {
                         Ok(value) => return Ok(value.unwrap_or(Value::Bool(false))),
-                        Err(Unwind::Return(v)) => return Ok(v),
+                        Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
                         Err(_) => return Err(Unwind::Break),
                     }
                 }
@@ -1078,7 +1078,7 @@ impl<'arena> Interp<'arena> {
 
         match self.eval_statement(then_block) {
             Ok(value) => Ok(value.unwrap_or(Value::Bool(false))),
-            Err(Unwind::Return(v)) => Ok(v),
+            Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
             Err(_) => Err(Unwind::Break),
         }
     }
@@ -1104,7 +1104,7 @@ impl<'arena> Interp<'arena> {
         match outcome {
             Ok(Some(value)) => return Ok(value),
             Ok(None) => {}
-            Err(Unwind::Return(v)) => return Ok(v),
+            Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
             Err(_) => return Err(Unwind::Break),
         }
 
