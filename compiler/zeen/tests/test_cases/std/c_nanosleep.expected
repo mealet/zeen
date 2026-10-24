@@ -1,1 +1,3 @@
+@! skip-windows
 nanosleep=0
+

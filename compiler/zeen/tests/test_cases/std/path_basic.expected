@@ -1,3 +1,4 @@
+@! skip-windows
 true|false|false
 base1=b.txt
 base2=b.txt
@@ -9,3 +10,4 @@ join2=a/b
 norm=/a/c
 ext=txt
 noext=false
+

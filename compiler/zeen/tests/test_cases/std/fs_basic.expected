@@ -1,3 +1,4 @@
+@! skip-windows
 create_dir
 exists: true
 write: 16
@@ -18,3 +19,4 @@ remove_dir
 exists after: false
 missing is_err: true
 missing kind: NotFound
+

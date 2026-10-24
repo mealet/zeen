@@ -1,3 +1,4 @@
+@! skip-windows
 euid_ok=true
 egid_ok=true
 dup_ok=true
@@ -6,3 +7,4 @@ cpu_ok=true
 sem_ok=true sem_val=1
 shm_ok=true
 named_ok=true
+
