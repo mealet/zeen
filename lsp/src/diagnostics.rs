@@ -454,10 +454,12 @@ fn check_full(
         }
     };
 
+    let package_dirs: Vec<std::path::PathBuf> = packages.iter().map(|(_, d)| d.clone()).collect();
+
     for warning in lowered
         .warnings
         .iter()
-        .filter(|warning| !warning_module_disables(warning.source_code()))
+        .filter(|warning| !warning_module_disables(warning.source_code(), &package_dirs))
     {
         collector.push_source(warning, None);
     }
@@ -472,7 +474,7 @@ fn check_full(
             for warning in flow_result
                 .warnings
                 .iter()
-                .filter(|warning| !warning_module_disables(warning.source_code()))
+                .filter(|warning| !warning_module_disables(warning.source_code(), &package_dirs))
             {
                 collector.push_source(warning, None);
             }
@@ -685,8 +687,12 @@ pub(crate) fn resolve_std_root() -> Option<PathBuf> {
     None
 }
 
-fn warning_module_disables(source: Option<&miette::NamedSource<Arc<String>>>) -> bool {
-    source.is_some_and(zeen_driver::source_disables_warnings)
+fn warning_module_disables(
+    source: Option<&miette::NamedSource<Arc<String>>>,
+    packages: &[std::path::PathBuf],
+) -> bool {
+    source
+        .is_some_and(|source| zeen_driver::source_disables_warnings(source, packages))
 }
 
 pub fn scan_project_modules(
