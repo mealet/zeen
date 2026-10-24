@@ -51,6 +51,7 @@ pub struct CallFrame<'arena> {
     pub(crate) module: PathBuf,
     pub(crate) src: NamedSource<Arc<String>>,
     pub(crate) scopes: EvalFrame<'arena>,
+    pub(crate) caller_name: Option<(Spur, miette::SourceSpan)>,
 }
 
 pub struct Interp<'arena> {
@@ -94,7 +95,7 @@ impl<'arena> Interp<'arena> {
         for decl in program {
             let path = module_of(decl);
 
-            let scope = self.scopes.entry(path).or_insert_with(|| ModuleScope {
+            let scope = self.scopes.entry(path.clone()).or_insert_with(|| ModuleScope {
                 src: decl.source.src(),
                 consts: HashMap::default(),
                 fns: HashMap::default(),
@@ -109,6 +110,22 @@ impl<'arena> Interp<'arena> {
                 }
                 DeclarationKind::ComptimeFn { name, .. } => {
                     scope.fns.entry(name.0).or_insert(decl);
+                }
+                DeclarationKind::ComptimeBlock(block) => {
+                    self.frames.push(CallFrame {
+                        module: path.clone(),
+                        src: decl.source.src(),
+                        scopes: vec![FxHashMap::default()],
+                        caller_name: None,
+                    });
+                    for stmt in block.stmts.iter() {
+                        if let Err(Unwind::Break) = self.eval_statement(stmt) {
+                            if !self.errors.is_empty() {
+                                break;
+                            }
+                        }
+                    }
+                    self.frames.pop();
                 }
                 _ => continue,
             }
@@ -284,8 +301,10 @@ impl<'arena> Interp<'arena> {
             }
         };
 
-        let (params, body) = match &fn_decl.kind {
-            DeclarationKind::ComptimeFn { params, body, .. } => (*params, *body),
+        let (params, body, return_type) = match &fn_decl.kind {
+            DeclarationKind::ComptimeFn { params, body, return_type, .. } => {
+                (*params, *body, *return_type)
+            }
             _ => {
                 self.errors.push(Error::Unsupported {
                     message: "expected comptime function declaration".into(),
@@ -335,10 +354,13 @@ impl<'arena> Interp<'arena> {
             module: module.clone(),
             src: fn_src,
             scopes: vec![bindings],
+            caller_name: Some((name, span)),
         });
 
         self.depth += 1;
         self.push_shadow();
+
+        let empty_body_no_return = matches!(body.kind, StatementKind::Expr(expr) if matches!(&expr.kind, ExpressionKind::Block { stmts, trailing } if stmts.is_empty() && trailing.is_none())) && return_type.is_some();
 
         let result: Result<Option<Value<'arena>>, Unwind<'arena>> = match self.eval_statement(body)
         {
@@ -347,6 +369,18 @@ impl<'arena> Interp<'arena> {
             Err(_) => Err(Unwind::Break),
         };
 
+        if empty_body_no_return {
+            self.errors.push(Error::Unsupported {
+                message: format!(
+                    "comptime function `{}` declared return type but body is empty",
+                    self.interned(&name)
+                )
+                .into(),
+                src: self.current_src(),
+                span: body.span,
+            });
+        }
+
         self.pop_shadow();
         self.depth -= 1;
         self.frames.pop();
@@ -354,12 +388,20 @@ impl<'arena> Interp<'arena> {
         match result {
             Ok(Some(value)) => Ok(value),
             Ok(None) => {
-                self.errors.push(Error::Unsupported {
-                    message: "comptime function produced no value".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                Err(Unwind::Break)
+                if return_type.is_some() {
+                    let label = self.interned(&name);
+                    self.errors.push(Error::Unsupported {
+                        message: format!(
+                            "comptime function `{label}` declared return type but body produced no value"
+                        )
+                        .into(),
+                        src: self.current_src(),
+                        span,
+                    });
+                    Err(Unwind::Break)
+                } else {
+                    Ok(Value::Bool(false))
+                }
             }
             Err(Unwind::Break) => Err(Unwind::Break),
             Err(_) => Err(Unwind::Break),
@@ -437,6 +479,7 @@ impl<'arena> Interp<'arena> {
             module: module.clone(),
             src: frame_src,
             scopes: vec![FxHashMap::default()],
+            caller_name: None,
         });
 
         self.depth += 1;
@@ -458,29 +501,15 @@ impl<'arena> Interp<'arena> {
     // ==================== Statements ====================
 
     pub fn eval_statements(&mut self, stmts: &'arena [&Statement<'arena>]) -> StmtResult<'arena> {
-        for stmt in stmts {
-            let unwound: Option<Option<Value<'arena>>> =
-                match matches!(stmt.kind, StatementKind::TrailingExpr(_)) {
-                    true => None,
-                    false => None,
-                };
+        for (i, stmt) in stmts.iter().enumerate() {
+            let is_last = stmts.iter().skip(i).count() == 1;
 
-            let _ = unwound;
-
-            if self
-                .frames
-                .last()
-                .map(|f| f.scopes.is_empty())
-                .unwrap_or(true)
-            {
-                return Err(Unwind::Continue);
-            }
-
-            match self.eval_statement(stmt)? {
-                Some(value) => {
-                    return Ok(Some(value));
-                }
-                None => continue,
+            match self.eval_statement(stmt) {
+                Ok(Some(value)) if is_last => return Ok(Some(value)),
+                Ok(Some(_)) => continue,
+                Ok(None) => continue,
+                Err(Unwind::Return(v)) => return Ok(Some(v)),
+                Err(_) => return Err(Unwind::Break),
             }
         }
 
@@ -675,13 +704,19 @@ impl<'arena> Interp<'arena> {
             } => self.eval_for_statement(varname.0, iterator, block, stmt.span),
 
             StatementKind::Expr(expr) => {
-                self.eval_expr(expr)?;
-                Ok(None)
+                match self.eval_expr(expr) {
+                    Ok(value) => Ok(Some(value)),
+                    Err(Unwind::Return(v)) => Ok(Some(v)),
+                    Err(_) => Err(Unwind::Break),
+                }
             }
 
             StatementKind::TrailingExpr(expr) => {
-                let value = self.eval_expr(expr)?;
-                Ok(Some(value))
+                match self.eval_expr(expr) {
+                    Ok(value) => Ok(Some(value)),
+                    Err(Unwind::Return(v)) => Ok(Some(v)),
+                    Err(_) => Err(Unwind::Break),
+                }
             }
 
             StatementKind::FnDecl(_) => {
@@ -894,6 +929,31 @@ impl<'arena> Interp<'arena> {
 
             ExpressionKind::Call { callee, args } => self.eval_call(callee, args, expr.span),
 
+            ExpressionKind::MacroCall { name, args } => {
+                let macro_name_owned = self.interner.borrow().resolve(&name.0).to_owned();
+                match macro_name_owned.as_str() {
+                    "format" => self.eval_macro_format(name.1, args),
+                    "print" => {
+                        self.eval_macro_println(name.1, args, false)?;
+                        Ok(Value::Bool(false))
+                    }
+                    "println" => {
+                        self.eval_macro_println(name.1, args, true)?;
+                        Ok(Value::Bool(false))
+                    }
+                    "dbg" => self.eval_macro_dbg(name.1, args),
+                    "panic" => self.eval_macro_panic(name.1, args),
+                    _ => {
+                        self.errors.push(Error::Unsupported {
+                            message: format!("macro `@{macro_name_owned}` is not supported in comptime").into(),
+                            src: self.current_src(),
+                            span: expr.span,
+                        });
+                        Err(Unwind::Break)
+                    }
+                }
+            }
+
             _ => {
                 self.errors.push(Error::Unsupported {
                     message: "expression is not supported in comptime".to_string().into(),
@@ -1005,16 +1065,22 @@ impl<'arena> Interp<'arena> {
 
         if !self.value_truthy(condition_value, span, "comptime `if` condition") {
             match else_block {
-                Some(else_statement) => self.eval_statement(else_statement)?,
+                Some(else_statement) => {
+                    match self.eval_statement(else_statement) {
+                        Ok(value) => return Ok(value.unwrap_or(Value::Bool(false))),
+                        Err(Unwind::Return(v)) => return Ok(v),
+                        Err(_) => return Err(Unwind::Break),
+                    }
+                }
                 None => return Ok(Value::Bool(false)),
             };
-
-            return Ok(Value::Bool(false));
         }
 
-        self.eval_statement(then_block)?;
-
-        Ok(Value::Bool(false))
+        match self.eval_statement(then_block) {
+            Ok(value) => Ok(value.unwrap_or(Value::Bool(false))),
+            Err(Unwind::Return(v)) => Ok(v),
+            Err(_) => Err(Unwind::Break),
+        }
     }
 
     fn eval_block(
@@ -1035,7 +1101,12 @@ impl<'arena> Interp<'arena> {
             frame.scopes.pop();
         }
 
-        outcome?;
+        match outcome {
+            Ok(Some(value)) => return Ok(value),
+            Ok(None) => {}
+            Err(Unwind::Return(v)) => return Ok(v),
+            Err(_) => return Err(Unwind::Break),
+        }
 
         match trailing {
             Some(trailing_expr) => self.eval_expr(trailing_expr),
@@ -1290,5 +1361,240 @@ impl<'arena> Interp<'arena> {
                 Err(Unwind::Break)
             }
         }
+    }
+
+    // ==================== Macros ====================
+
+    fn eval_macro_format(
+        &mut self,
+        span: miette::SourceSpan,
+        args: &'arena [&'arena Expression<'arena>],
+    ) -> EvalResult<'arena> {
+        let format_expr = match args.first() {
+            Some(e) => e,
+            None => {
+                self.errors.push(Error::TypeMismatch {
+                    message: "@format requires at least one argument (format string)".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let format_str = match &format_expr.kind {
+            ExpressionKind::Literal(Literal::String(spur)) => self.interner.borrow().resolve(spur).to_string(),
+            _ => {
+                self.errors.push(Error::TypeMismatch {
+                    message: "@format first argument must be a string literal".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let mut result = String::new();
+        let mut args_iter = args.iter().skip(1).peekable();
+        let mut chars = format_str.chars();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                match chars.next() {
+                    Some('}') => {
+                        if let Some(arg) = args_iter.next() {
+                            let value = self.eval_expr(arg)?;
+                            result.push_str(&value.display());
+                        } else {
+                            result.push_str("{}");
+                        }
+                    }
+                    Some('{') => result.push('{'),
+                    Some(_) => {
+                        result.push_str("{}");
+                    }
+                    None => result.push('{'),
+                }
+            } else if c == '}' {
+                match chars.next() {
+                    Some('}') => result.push('}'),
+                    Some(_) => {
+                        result.push('}');
+                    }
+                    None => result.push('}'),
+                }
+            } else {
+                result.push(c);
+            }
+        }
+
+        Ok(Value::Str(result.into()))
+    }
+
+    fn eval_macro_println(
+        &mut self,
+        span: miette::SourceSpan,
+        args: &'arena [&'arena Expression<'arena>],
+        with_newline: bool,
+    ) -> Result<(), Unwind<'arena>> {
+        if args.is_empty() {
+            return Ok(());
+        }
+
+        let (call_name, call_span) = self.frames.last().and_then(|f| f.caller_name).unzip();
+        let source = self.current_src();
+        let source_name = source.name().to_string();
+
+        let format_str = match &args[0].kind {
+            ExpressionKind::Literal(Literal::String(spur)) => self.interner.borrow().resolve(spur).to_string(),
+            _ => {
+                self.errors.push(Error::TypeMismatch {
+                    message: "@println first argument must be a string literal".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let mut result = String::new();
+        let mut chars = format_str.chars();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                match chars.next() {
+                    Some('}') => {
+                        for (i, arg) in args.iter().skip(1).enumerate() {
+                            if i > 0 {
+                                result.push(' ');
+                            }
+                            if let Ok(value) = self.eval_expr(*arg) {
+                                result.push_str(&value.display());
+                            }
+                        }
+                    }
+                    Some('{') => result.push('{'),
+                    Some(_) => result.push_str("{}"),
+                    None => result.push('{'),
+                }
+            } else {
+                result.push(c);
+            }
+        }
+
+        if let Some(name) = call_name {
+            let name_str = self.interner.borrow().resolve(&name).to_string();
+            let offset = call_span.unwrap().offset().into();
+            let source_str = source.inner();
+            let source_text = source_str.as_ref();
+            let line = source_text[..offset].matches('\n').count() + 1;
+            let prefix = format!("[comptime {}][{}:{}]", name_str, source_name, line);
+            if with_newline {
+                println!("{} {}", prefix, result);
+            } else {
+                print!("{} {}", prefix, result);
+            }
+        } else {
+            if with_newline {
+                println!("{}", result);
+            } else {
+                print!("{}", result);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn eval_macro_dbg(
+        &mut self,
+        span: miette::SourceSpan,
+        args: &'arena [&'arena Expression<'arena>],
+    ) -> EvalResult<'arena> {
+        if args.is_empty() {
+            self.errors.push(Error::TypeMismatch {
+                message: "@dbg requires at least one argument".into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        let expr = args[0];
+        let value = self.eval_expr(expr)?;
+        let (call_name, call_span) = self.frames.last().and_then(|f| f.caller_name).unzip();
+        let source = self.current_src();
+        let source_name = source.name().to_string();
+
+        let (prefix, value_str) = if let Some(name) = call_name {
+            let name_str = self.interner.borrow().resolve(&name).to_string();
+            let offset = call_span.unwrap().offset().into();
+            let source_str = source.inner();
+            let source_text = source_str.as_ref();
+            let line = source_text[..offset].matches('\n').count() + 1;
+            let prefix = format!("[comptime {}][{}:{}]", name_str, source_name, line);
+            (prefix, value.display())
+        } else {
+            ("[comptime dbg]".to_string(), value.display())
+        };
+
+        println!("{} {}", prefix, value_str);
+        Ok(value)
+    }
+
+    fn eval_macro_panic(
+        &mut self,
+        span: miette::SourceSpan,
+        args: &'arena [&'arena Expression<'arena>],
+    ) -> EvalResult<'arena> {
+        let message = if args.is_empty() {
+            "comptime panic".into()
+        } else {
+            match &args[0].kind {
+                ExpressionKind::Literal(Literal::String(spur)) => {
+                    let format_str = self.interner.borrow().resolve(spur).to_string();
+                    let mut result = String::new();
+                    let mut chars = format_str.chars();
+                    let mut args_iter = args.iter().skip(1).peekable();
+
+                    while let Some(c) = chars.next() {
+                        if c == '{' {
+                            match chars.next() {
+                                Some('}') => {
+                                    if let Some(arg) = args_iter.next() {
+                                        let value = self.eval_expr(arg)?;
+                                        result.push_str(&value.display());
+                                    } else {
+                                        result.push_str("{}");
+                                    }
+                                }
+                                Some('{') => result.push('{'),
+                                Some(_) => result.push_str("{}"),
+                                None => result.push('{'),
+                            }
+                        } else if c == '}' {
+                            match chars.next() {
+                                Some('}') => result.push('}'),
+                                Some(_) => {
+                                    result.push('}');
+                                }
+                                None => result.push('}'),
+                            }
+                        } else {
+                            result.push(c);
+                        }
+                    }
+                    result
+                }
+                _ => "comptime panic".into(),
+            }
+        };
+
+        self.errors.push(Error::Panic {
+            message: message.into(),
+            trace: Vec::new(),
+            src: self.current_src(),
+            span,
+        });
+        Err(Unwind::Break)
     }
 }

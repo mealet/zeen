@@ -1265,7 +1265,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         Some(expr)
     }
 
-    fn parse_block(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    pub(crate) fn parse_block(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let open = self.p.expect(TokenKind::OpenBrace, "{")?;
 
         let mut stmts_buffer: SmallVec<[&'ctx zeen_ast::statements::Statement<'ctx>; 8]> =

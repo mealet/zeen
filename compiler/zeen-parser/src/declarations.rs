@@ -6,7 +6,7 @@ use crate::{
 use smallvec::SmallVec;
 
 use zeen_ast::{
-    Declaration, DeclarationKind, PreprocessorDirective, Statement, TypeExpr, declarations,
+    Declaration, DeclarationKind, Expression, ExpressionKind, PreprocessorDirective, Statement, StatementKind, TypeExpr, declarations,
 };
 use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
@@ -269,8 +269,6 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let params = self.p.arena.alloc_slice_copy(&params_buffer);
 
         let mut return_type = None;
-        let mut body = None;
-
         if !(self.p.at(TokenKind::OpenBrace)
             || self.p.at(TokenKind::CloseBrace)
             || self.p.at(TokenKind::Semicolon)
@@ -280,10 +278,49 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             return_type = Some(type_parser.parse()?);
         }
 
-        if self.p.at(TokenKind::OpenBrace) {
-            let mut stmt_parser = StmtParser::new(self.p).no_semicolon();
-            body = Some(stmt_parser.parse()?);
-        }
+        let body: Option<&'ctx Statement<'ctx>> = if self.p.at(TokenKind::OpenBrace) {
+            let open = self.p.expect(TokenKind::OpenBrace, "{")?;
+            let mut stmts_buffer: SmallVec<[&'ctx Statement<'ctx>; 8]> = SmallVec::new();
+
+            while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
+                let mut stmt_parser =
+                    crate::statements::StmtParser::new(self.p).with_optional_semicolon(true);
+                if let Some(stmt) = stmt_parser.parse() {
+                    stmts_buffer.push(stmt);
+                }
+            }
+
+            self.p.expect(TokenKind::CloseBrace, "}")?;
+
+            let stmts: &'ctx [&'ctx Statement<'ctx>] = self.p.arena.alloc_slice_copy(&stmts_buffer);
+            let trailing: Option<&'ctx Expression<'ctx>> = stmts.last().and_then(|stmt| {
+                if let StatementKind::TrailingExpr(expr) = stmt.kind {
+                    Some(expr)
+                } else {
+                    None
+                }
+            });
+
+            let (stmts, trailing) = if let Some(tr) = trailing {
+                let len = stmts.len();
+                let trimmed: &'ctx [&'ctx Statement<'ctx>] = self.p.arena.alloc_slice_copy(&stmts[..len - 1]);
+                (trimmed, Some(tr))
+            } else {
+                (stmts, None)
+            };
+
+            let block_expr = self.p.arena.alloc(Expression {
+                kind: ExpressionKind::Block { stmts, trailing },
+                span: open.merge_span(self.p.current().span),
+            });
+            let body_stmt = Statement {
+                kind: StatementKind::Expr(block_expr),
+                span: block_expr.span,
+            };
+            Some(self.p.arena.alloc(body_stmt))
+        } else {
+            None
+        };
 
         let _ = self.p.eat(TokenKind::Semicolon);
 

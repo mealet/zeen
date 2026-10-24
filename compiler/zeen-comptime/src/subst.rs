@@ -708,6 +708,31 @@ impl<'arena> Interp<'arena> {
                         }
                     }
 
+                    // Check if the comptime fn has void return type
+                    let is_void_fn = self.scopes.get(module)
+                        .and_then(|scope| scope.fns.get(&callee_name))
+                        .map(|decl| {
+                            matches!(&decl.kind, DeclarationKind::ComptimeFn { return_type: Some(rt), .. } if matches!(&rt.kind, TypeKind::Builtin(zt) if matches!(zt, zeen_ast::types::BuiltinType::void)))
+                        })
+                        .unwrap_or(false);
+
+                    // For void comptime fn, call it for side effects but substitute with @void()
+                    // so MIR doesn't warn about unused result
+                    if is_void_fn {
+                        // Execute the call for side effects (macros print, etc.)
+                        let _ = self.eval_comptime_call(module, callee_name, expr.span, &values);
+                        // Substitute with @void() to discard the result without warning
+                        let spur = self.interner.borrow_mut().get_or_intern("void");
+                        let void_macro = Expression {
+                            kind: ExpressionKind::MacroCall {
+                                name: (spur, expr.span),
+                                args: self.arena.alloc_slice_copy(&[]),
+                            },
+                            span: expr.span,
+                        };
+                        return Ok(Some(self.arena.alloc(void_macro)));
+                    }
+
                     return match self.eval_comptime_call(module, callee_name, expr.span, &values) {
                         Ok(value) => match self.value_into_expr(value, expr.span) {
                             Ok(new_call_expr) => Ok(Some(self.arena.alloc(new_call_expr))),
@@ -1402,6 +1427,7 @@ impl<'arena> Interp<'arena> {
             module: module.clone(),
             src: self.scope_src(module),
             scopes: vec![rustc_hash::FxHashMap::default()],
+            caller_name: None,
         });
 
         let result = self.eval_expr(expr);
