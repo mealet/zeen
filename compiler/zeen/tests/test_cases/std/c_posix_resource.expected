@@ -7,4 +7,3 @@ gettimeofday=0
 mkstemp fd>=0=true
 memmem nonnull=true
 stpcpy ok=true
-
