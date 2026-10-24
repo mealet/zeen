@@ -6,8 +6,11 @@ use zeen_driver::{CORE_FILES, CompilationContext, CompilationOutput, MietteDrive
 mod cli;
 mod targets;
 
-fn warning_module_disables(source: Option<&miette::NamedSource<Arc<String>>>) -> bool {
-    source.is_some_and(zeen_driver::source_disables_warnings)
+fn warning_module_disables(
+    source: Option<&miette::NamedSource<Arc<String>>>,
+    packages: &[std::path::PathBuf],
+) -> bool {
+    source.is_some_and(|source| zeen_driver::source_disables_warnings(source, packages))
 }
 
 fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
@@ -23,6 +26,8 @@ fn with_default_extension(path: &Path, ext: &str) -> std::path::PathBuf {
     name.push(ext);
     std::path::PathBuf::from(name)
 }
+
+const COMPILER_THREAD_STACK: usize = 256 * 1024 * 1024;
 
 fn parse_pkg_flags(flags: &[String]) -> Vec<(String, std::path::PathBuf)> {
     let mut out = Vec::new();
@@ -173,8 +178,15 @@ fn main() {
         exit(0);
     }
 
-    // Release builds use `panic = "abort"`, so this only guards debug builds.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile(args)));
+    // The pipeline runs on a dedicated thread with a big stack: recursive
+    // passes need more than the 1 MB default main thread on Windows, while
+    // Linux gives 8 MB.
+    let result = std::thread::Builder::new()
+        .name("zeen-compile".into())
+        .stack_size(COMPILER_THREAD_STACK)
+        .spawn(|| compile(args))
+        .and_then(|child| child.join().map_err(|_| std::io::Error::other("ICE")));
+
     if result.is_err() {
         cli::println_error(
             "internal compiler error (ICE). This is a compiler bug; see https://github.com/mealet/zeen",
@@ -270,6 +282,13 @@ fn compile(args: cli::Args) {
         target: Some(target_triple.clone()),
         warnings: Vec::new(),
     };
+
+    let package_dirs: Vec<std::path::PathBuf> = context
+        .paths
+        .packages
+        .iter()
+        .map(|(_, dir)| std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone()))
+        .collect();
 
     cli::println_info(
         "Building",
@@ -398,14 +417,14 @@ fn compile(args: cli::Args) {
                 let mut warnings = Vec::new();
 
                 for warning in lowered_mir.warnings.iter() {
-                    if warning_module_disables(warning.source_code()) {
+                    if warning_module_disables(warning.source_code(), &package_dirs) {
                         continue;
                     }
 
                     warnings.push(warning as &dyn miette::Diagnostic);
                 }
                 for warning in result.warnings.iter() {
-                    if warning_module_disables(warning.source_code()) {
+                    if warning_module_disables(warning.source_code(), &package_dirs) {
                         continue;
                     }
 

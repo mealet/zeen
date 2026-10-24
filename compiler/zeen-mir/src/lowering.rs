@@ -207,6 +207,7 @@ pub struct FnBuilder {
     fat_bindings: Vec<(DefId, TypeId)>,
     scope_stack: Vec<Vec<LocalId>>,
     diverged: bool,
+    finalized_unreachable: HashSet<BlockId>,
 }
 
 impl FnBuilder {
@@ -235,6 +236,7 @@ impl FnBuilder {
             fat_bindings: Vec::new(),
             scope_stack: Vec::new(),
             diverged: false,
+            finalized_unreachable: HashSet::default(),
         }
     }
 
@@ -286,10 +288,16 @@ impl FnBuilder {
     }
 
     fn block_is_open(&self, block: BlockId) -> bool {
-        matches!(
-            self.func.block(block).terminator,
-            Terminator::Unreachable // placeholder for a block that still needs a terminator
-        )
+        !self.finalized_unreachable.contains(&block)
+            && matches!(
+                self.func.block(block).terminator,
+                Terminator::Unreachable // placeholder for a block that still needs a terminator
+            )
+    }
+
+    fn set_final_unreachable(&mut self, block: BlockId) {
+        self.finalized_unreachable.insert(block);
+        self.set_terminator(block, Terminator::Unreachable);
     }
 
     fn reroute_after_flow_cut(&mut self, block: BlockId) -> BlockId {
@@ -3998,6 +4006,7 @@ impl<'ctx> MirLowering<'ctx> {
                     );
 
                     let next_block = fb.new_block();
+                    fb.finalized_unreachable.insert(next_block);
                     (next_block, Operand::Constant(ConstValue::Void, None))
                 } else {
                     (
@@ -6366,7 +6375,7 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         if is_diverging {
-            fb.set_terminator(next, Terminator::Unreachable);
+            fb.set_final_unreachable(next);
             (next, Operand::Constant(ConstValue::Void, None))
         } else {
             (
@@ -7367,7 +7376,7 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        fb.set_terminator(next, Terminator::Unreachable);
+        fb.set_final_unreachable(next);
         (next, Operand::Constant(ConstValue::Void, None))
     }
 
@@ -8937,7 +8946,7 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         if is_diverging {
-            fb.set_terminator(next_block, Terminator::Unreachable);
+            fb.set_final_unreachable(next_block);
             (next_block, Operand::Constant(ConstValue::Void, None))
         } else {
             (
