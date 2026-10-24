@@ -292,6 +292,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                         | CompilerKeyword::Null
                         | CompilerKeyword::SelfLower
                         | CompilerKeyword::SelfUpper
+                        | CompilerKeyword::Comptime
                 )
                 | TokenKind::Minus
                 | TokenKind::Bang
@@ -424,6 +425,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::If) => self.parse_if_expr(),
             TokenKind::Keyword(CompilerKeyword::Switch) => self.parse_switch(),
             TokenKind::Keyword(CompilerKeyword::Fn) => self.parse_closure(),
+            TokenKind::Keyword(CompilerKeyword::Comptime) => self.parse_comptime_block_expr(),
 
             TokenKind::Keyword(CompilerKeyword::SelfUpper | CompilerKeyword::SelfLower) => {
                 self.parse_ident_or_struct_init()
@@ -1058,7 +1060,16 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     fn parse_field_access(&mut self, object: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
         let _ = self.p.advance_not_eof()?; // skip `.`
 
-        let field_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let field_token = if self
+            .p
+            .at(TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::Type))
+        {
+            let token = self.p.current_clone();
+            self.p.advance();
+            token
+        } else {
+            self.p.expect(TokenKind::Ident, "identifier")?
+        };
         let field_span = field_token.span;
         let field_slice =
             self.p.src[field_span.offset()..field_span.offset() + field_span.len()].to_owned();
@@ -1360,6 +1371,23 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         });
 
         Some(expr)
+    }
+
+    fn parse_comptime_block_expr(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let comptime_token = self.p.current_clone();
+        let _ = self.p.advance_not_eof()?;
+
+        let block = self.parse_block()?;
+
+        let (stmts, trailing) = match block.kind {
+            ExpressionKind::Block { stmts, trailing } => (stmts, trailing),
+            _ => unreachable!("parse_block must return a block expression"),
+        };
+
+        Some(self.p.arena.alloc(Expression {
+            kind: ExpressionKind::ComptimeBlock { stmts, trailing },
+            span: comptime_token.merge_span(block.span),
+        }))
     }
 
     fn parse_closure(&mut self) -> Option<&'ctx Expression<'ctx>> {

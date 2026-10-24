@@ -975,6 +975,10 @@ impl<'res> HirLowering<'res> {
             ExpressionKind::Splice { .. } => {
                 unreachable!("comptime splice must be substituted before HIR lowering")
             }
+
+            ExpressionKind::ComptimeBlock { .. } => {
+                unreachable!("comptime blocks must be evaluated before HIR lowering")
+            }
         };
 
         HirExpr {

@@ -1,8 +1,5 @@
-use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::Arc;
-
 use lasso::Spur;
+use std::path::PathBuf;
 
 use zeen_ast::{
     Declaration, DeclarationKind, Expression, ExpressionKind, Statement, StatementKind, TypeExpr,
@@ -12,7 +9,7 @@ use zeen_ast::{
 };
 
 use crate::error::Error;
-use crate::interp::Interp;
+use crate::interp::{Interp, Unwind};
 use crate::value::Value;
 
 impl<'arena> Interp<'arena> {
@@ -399,7 +396,7 @@ impl<'arena> Interp<'arena> {
 
         let new_return = match return_type {
             Some(rt) => match self.substitute_type(module, rt) {
-                Ok(None) => None,
+                Ok(None) => Some(rt),
                 Ok(Some(new_rt)) => {
                     changed = true;
                     Some(new_rt)
@@ -414,7 +411,7 @@ impl<'arena> Interp<'arena> {
 
         let new_body = match body {
             Some(body_stmt) => match self.substitute_statement(module, body_stmt) {
-                Ok(None) => None,
+                Ok(None) => Some(body_stmt),
                 Ok(Some(new_stmt)) => {
                     changed = true;
                     Some(new_stmt)
@@ -662,11 +659,61 @@ impl<'arena> Interp<'arena> {
         self.substitute_expr_inner(module, expr)
     }
 
+    fn is_comptime_value_expr(
+        &mut self,
+        module: &PathBuf,
+        expr: &'arena Expression<'arena>,
+    ) -> bool {
+        match &expr.kind {
+            ExpressionKind::Literal(_) => false,
+
+            ExpressionKind::Ident {
+                name,
+                generic_args: None,
+            } => self.is_comptime_const(module, *name),
+
+            ExpressionKind::Ident { .. } => false,
+
+            ExpressionKind::FieldAccess { object, .. } => {
+                self.is_comptime_value_expr(module, object)
+            }
+
+            ExpressionKind::SliceAccess { object, index } => {
+                self.is_comptime_value_expr(module, object)
+                    || self.is_comptime_value_expr(module, index)
+            }
+
+            ExpressionKind::ArrayInit { elements } => elements
+                .iter()
+                .any(|element| self.is_comptime_value_expr(module, element)),
+
+            ExpressionKind::Unary { expr: inner, .. } => self.is_comptime_value_expr(module, inner),
+
+            ExpressionKind::Binary { lhs, rhs, .. } => {
+                self.is_comptime_value_expr(module, lhs) || self.is_comptime_value_expr(module, rhs)
+            }
+
+            ExpressionKind::MacroCall { .. } => false,
+
+            _ => false,
+        }
+    }
+
     fn substitute_expr_inner(
         &mut self,
         module: &PathBuf,
         expr: &'arena Expression<'arena>,
     ) -> Result<Option<&'arena Expression<'arena>>, Vec<Error>> {
+        if self.is_comptime_value_expr(module, expr) {
+            return match self.eval_fresh_expr(module, expr) {
+                Ok(value) => match self.value_into_expr(value, expr.span) {
+                    Ok(new_expr) => Ok(Some(self.arena.alloc(new_expr))),
+                    Err(error) => Err(self.report(error)),
+                },
+                Err(_) => Err(self.errors.clone()),
+            };
+        }
+
         match &expr.kind {
             ExpressionKind::Literal(Literal::String(spur)) => {
                 self.substitute_string_literal(module, *spur, expr.span)
@@ -749,9 +796,9 @@ impl<'arena> Interp<'arena> {
                         _ => unreachable!("original_callee_is_comptime_fn"),
                     };
 
-                    let mut values: Vec<Value<'arena>> = Vec::with_capacity(new_args.len());
+                    let mut values: Vec<Value<'arena>> = Vec::with_capacity(args.len());
 
-                    for arg in new_args.iter() {
+                    for arg in args.iter() {
                         match self.eval_fresh_expr(module, arg) {
                             Ok(value) => values.push(value),
                             Err(_) => return Err(self.errors.clone()),
@@ -767,15 +814,7 @@ impl<'arena> Interp<'arena> {
 
                     if is_void_fn {
                         let _ = self.eval_comptime_call(module, callee_name, expr.span, &values);
-                        let spur = self.interner.borrow_mut().get_or_intern("void");
-                        let void_macro = Expression {
-                            kind: ExpressionKind::MacroCall {
-                                name: (spur, expr.span),
-                                args: self.arena.alloc_slice_copy(&[]),
-                            },
-                            span: expr.span,
-                        };
-                        return Ok(Some(self.arena.alloc(void_macro)));
+                        return Ok(Some(self.void_macro_expr(expr.span)));
                     }
 
                     return match self.eval_comptime_call(module, callee_name, expr.span, &values) {
@@ -942,12 +981,6 @@ impl<'arena> Interp<'arena> {
                     },
                     span: expr.span,
                 });
-
-                if let Ok(value) = self.eval_expr(new_expr)
-                    && let Ok(literal_expr) = self.value_into_expr(value, expr.span)
-                {
-                    return Ok(Some(self.arena.alloc(literal_expr)));
-                }
 
                 Ok(Some(new_expr))
             }
@@ -1190,13 +1223,38 @@ impl<'arena> Interp<'arena> {
 
             ExpressionKind::TargetVar(_) => Ok(None),
 
-            ExpressionKind::Splice { expr } => match self.eval_fresh_expr(module, expr) {
-                Ok(value) => match self.value_into_expr(value, expr.span) {
-                    Ok(new_expr) => Ok(Some(self.arena.alloc(new_expr))),
-                    Err(error) => Err(self.report(error)),
-                },
-                Err(_) => Err(self.errors.clone()),
-            },
+            ExpressionKind::ComptimeBlock { trailing, .. } => {
+                match self.eval_fresh_expr(module, expr) {
+                    Ok(value) => {
+                        if trailing.is_none() {
+                            return Ok(Some(self.void_macro_expr(expr.span)));
+                        }
+
+                        match self.value_into_expr(value, expr.span) {
+                            Ok(new_expr) => Ok(Some(self.arena.alloc(new_expr))),
+                            Err(error) => Err(self.report(error)),
+                        }
+                    }
+                    Err(Unwind::Break | Unwind::Continue) => Err(self.errors.clone()),
+                    Err(Unwind::Return(_)) => {
+                        self.errors.push(Error::Unsupported {
+                            message: "`return` is not allowed inside a comptime block".into(),
+                            src: self.current_src(),
+                            span: expr.span,
+                        });
+                        Err(self.errors.clone())
+                    }
+                }
+            }
+
+            ExpressionKind::Splice { .. } => {
+                self.errors.push(Error::SpliceOutsideQuote {
+                    message: "`$()` is only allowed inside strings in v1".into(),
+                    src: self.current_src(),
+                    span: expr.span,
+                });
+                Err(self.errors.clone())
+            }
 
             other => {
                 let _ = other;
@@ -1479,7 +1537,7 @@ impl<'arena> Interp<'arena> {
         Ok(Some(self.arena.alloc(expr)))
     }
 
-    fn eval_fresh_expr(
+    pub(crate) fn eval_fresh_expr(
         &mut self,
         module: &PathBuf,
         expr: &'arena Expression<'arena>,
@@ -1498,6 +1556,18 @@ impl<'arena> Interp<'arena> {
         result
     }
 
+    fn void_macro_expr(&self, span: miette::SourceSpan) -> &'arena Expression<'arena> {
+        let spur = self.interner.borrow_mut().get_or_intern("void");
+
+        self.arena.alloc(Expression {
+            kind: ExpressionKind::MacroCall {
+                name: (spur, span),
+                args: self.arena.alloc_slice_copy(&[]),
+            },
+            span,
+        })
+    }
+
     fn substitute_string_literal(
         &mut self,
         module: &PathBuf,
@@ -1510,102 +1580,18 @@ impl<'arena> Interp<'arena> {
             return Ok(None);
         }
 
-        let chars: Vec<char> = text.chars().collect();
-        let mut out = String::with_capacity(text.len());
-        let mut changed = false;
-        let mut i = 0;
+        let interpolated = match self.interpolate_string(module, &text, span) {
+            Ok(text) => text,
+            Err(_) => return Err(self.errors.clone()),
+        };
 
-        while i < chars.len() {
-            if chars[i] == '$' && chars.get(i + 1) == Some(&'(') {
-                let start = i + 2;
-                let mut depth = 1usize;
-                let mut j = start;
-
-                while j < chars.len() {
-                    match chars[j] {
-                        '(' => depth += 1,
-                        ')' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-
-                    j += 1;
-                }
-
-                if depth != 0 {
-                    self.errors.push(Error::TypeMismatch {
-                        message: "unterminated `$(` in string literal".into(),
-                        src: self.current_src(),
-                        span,
-                    });
-                    return Err(self.errors.clone());
-                }
-
-                let fragment: String = chars[start..j].iter().collect();
-                let value = self.eval_interpolation(module, &fragment, span)?;
-                out.push_str(&value.display());
-                changed = true;
-                i = j + 1;
-                continue;
-            }
-
-            out.push(chars[i]);
-            i += 1;
-        }
-
-        if !changed {
-            return Ok(None);
-        }
-
-        let interned = self.interner.borrow_mut().get_or_intern(&out);
+        let interned = self.interner.borrow_mut().get_or_intern(&interpolated);
         let literal = self.arena.alloc(Expression {
             kind: ExpressionKind::Literal(Literal::String(interned)),
             span,
         });
 
         Ok(Some(literal))
-    }
-
-    fn eval_interpolation(
-        &mut self,
-        module: &PathBuf,
-        fragment: &str,
-        span: miette::SourceSpan,
-    ) -> Result<Value<'arena>, Vec<Error>> {
-        let src = Arc::new(fragment.to_string());
-        let filename = Rc::new(String::from("<comptime interpolation>"));
-        let tokens: Vec<_> = zeen_lexer::tokenize(fragment).collect();
-        let mut iter = tokens.into_iter();
-
-        let mut parser = zeen_parser::Parser::new(
-            filename,
-            src,
-            &mut iter,
-            self.arena,
-            Rc::clone(&self.interner),
-        );
-        let parsed = zeen_parser::expressions::ExprParser::new(&mut parser).parse();
-
-        let expr = match parsed {
-            Some(expr) if parser.errors.is_empty() => expr,
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "invalid expression inside `$(` splice".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(self.errors.clone());
-            }
-        };
-
-        match self.eval_fresh_expr(module, expr) {
-            Ok(value) => Ok(value),
-            Err(_) => Err(self.errors.clone()),
-        }
     }
 
     pub(crate) fn value_into_expr(
@@ -1637,20 +1623,22 @@ impl<'arena> Interp<'arena> {
             }
 
             Value::Type(ty) => {
+                let name = self.type_display(ty);
+                let interned = self.interner.borrow_mut().get_or_intern(&name);
+
                 return Ok(Expression {
-                    kind: ExpressionKind::Type(ty),
+                    kind: ExpressionKind::Literal(Literal::String(interned)),
                     span,
                 });
             }
 
-            Value::Expr(expr) => {
-                return Ok(*expr);
-            }
-
-            Value::Decl(_) => {
-                return Err(Error::TypeMismatch {
-                    message: "comptime declaration values are not valid runtime expressions in v1"
-                        .into(),
+            Value::Record(record) => {
+                return Err(Error::RuntimeOnly {
+                    message: format!(
+                        "comptime {} values cannot be used in runtime code",
+                        record.kind
+                    )
+                    .into(),
                     src: self.current_src(),
                     span,
                 });

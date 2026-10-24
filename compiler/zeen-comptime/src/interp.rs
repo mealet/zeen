@@ -13,12 +13,14 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smol_str::SmolStr;
 
 use zeen_ast::{
-    Declaration, DeclarationKind, Expression, ExpressionKind, Statement, StatementKind,
+    Declaration, DeclarationKind, Expression, ExpressionKind, Statement, StatementKind, TypeExpr,
+    declarations::{EnumVariantPayload, StructField},
     expressions::{BinaryOp, Literal, UnaryOp},
+    types::TypeKind,
 };
 
 use crate::error::Error;
-use crate::value::Value;
+use crate::value::{Record, Value};
 
 pub const STEP_LIMIT: usize = 200_000;
 pub const DEPTH_LIMIT: usize = 200;
@@ -68,8 +70,6 @@ pub struct Interp<'arena> {
 
     pub(crate) shadow_stack: Vec<FxHashSet<Spur>>,
 
-    pub(crate) emitted_decls: Vec<&'arena Declaration<'arena>>,
-
     pub(crate) steps: usize,
     pub(crate) depth: usize,
 
@@ -85,7 +85,6 @@ impl<'arena> Interp<'arena> {
             frames: Vec::new(),
             default_src: None,
             shadow_stack: Vec::new(),
-            emitted_decls: Vec::new(),
             steps: 0,
             depth: 0,
             errors: Vec::new(),
@@ -162,14 +161,93 @@ impl<'arena> Interp<'arena> {
             })
             .collect();
 
-        let mut result: Vec<&'arena Declaration<'arena>> = kept;
-        result.extend(self.emitted_decls.iter().copied());
-
-        Ok(self.arena.alloc_slice_copy(&result))
+        Ok(self.arena.alloc_slice_copy(&kept))
     }
 
     pub(crate) fn interned(&self, spur: &Spur) -> String {
         self.interner.borrow().resolve(spur).to_string()
+    }
+
+    pub(crate) fn type_display(&self, ty: &TypeExpr<'arena>) -> String {
+        match &ty.kind {
+            TypeKind::Builtin(builtin) => builtin.to_string(),
+
+            TypeKind::SelfType | TypeKind::SelfAlias => "Self".to_string(),
+
+            TypeKind::VaArgs => "...".to_string(),
+
+            TypeKind::Named { name, generic_args } => match generic_args {
+                Some(args) => {
+                    let rendered: Vec<String> =
+                        args.iter().map(|arg| self.type_display(arg)).collect();
+                    format!("{}[{}]", self.interned(name), rendered.join(", "))
+                }
+                None => self.interned(name),
+            },
+
+            TypeKind::Const(inner) => self.type_display(inner),
+
+            TypeKind::TypeOf(_) => "typeof".to_string(),
+
+            TypeKind::SinglePointer(inner) => format!("*{}", self.type_display(inner)),
+
+            TypeKind::ManyPointer(inner) => format!("[*]{}", self.type_display(inner)),
+
+            TypeKind::Array { element, len } => match len {
+                Some(len) => format!("[{}]{}", self.expr_display(len), self.type_display(element)),
+                None => format!("[]{}", self.type_display(element)),
+            },
+
+            TypeKind::Fn { params, ret, .. } => {
+                let rendered: Vec<String> = params
+                    .iter()
+                    .map(|param| self.type_display(param))
+                    .collect();
+                format!("fn({}) {}", rendered.join(", "), self.type_display(ret))
+            }
+
+            TypeKind::FatFn { params, ret, once } => {
+                let rendered: Vec<String> = params
+                    .iter()
+                    .map(|param| self.type_display(param))
+                    .collect();
+                let name = if *once { "FnOnce" } else { "Fn" };
+                format!(
+                    "{}({}) {}",
+                    name,
+                    rendered.join(", "),
+                    self.type_display(ret)
+                )
+            }
+        }
+    }
+
+    fn expr_display(&self, expr: &Expression<'arena>) -> String {
+        match &expr.kind {
+            ExpressionKind::Literal(Literal::Int(value)) => value.to_string(),
+            ExpressionKind::Ident { name, .. } => self.interned(name),
+            _ => "_".to_string(),
+        }
+    }
+
+    pub(crate) fn display_value(&self, value: &Value<'arena>) -> String {
+        match value {
+            Value::Type(ty) => self.type_display(ty),
+            Value::Array(items) => {
+                let rendered: Vec<String> =
+                    items.iter().map(|item| self.display_value(item)).collect();
+                format!("[{}]", rendered.join(", "))
+            }
+            Value::Record(record) => {
+                let rendered: Vec<String> = record
+                    .fields
+                    .iter()
+                    .map(|(name, item)| format!("{name}: {}", self.display_value(item)))
+                    .collect();
+                format!("{} {{ {} }}", record.kind, rendered.join(", "))
+            }
+            other => other.display(),
+        }
     }
 
     pub(crate) fn current_src(&self) -> NamedSource<Arc<String>> {
@@ -768,39 +846,63 @@ impl<'arena> Interp<'arena> {
 
         let iterator_value = self.eval_expr(iterator)?;
 
-        match iterator_value {
+        let outcome = match iterator_value {
             Value::Int(total) if total >= 0 => {
-                for index in 0..total {
-                    {
-                        let frame = self.frames.last_mut().expect("comptime frame");
-                        let scope = frame.scopes.last_mut().expect("comptime scope exists");
-                        scope.insert(name, Value::Int(index));
-                    }
+                let values: Vec<Value<'arena>> = (0..total).map(Value::Int).collect();
+                self.run_for_iteration(name, values, block)
+            }
 
-                    match self.eval_statement(block) {
-                        Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                        Err(Unwind::Break) => break,
-                        Err(Unwind::Continue) => continue,
-                        Ok(_) => {}
-                    }
-                }
+            Value::Array(items) => self.run_for_iteration(name, items, block),
+
+            Value::Str(text) => {
+                let chars: Vec<Value<'arena>> = text.chars().map(Value::Char).collect();
+                self.run_for_iteration(name, chars, block)
             }
 
             other => {
                 self.errors.push(Error::TypeMismatch {
                     message: format!(
-                        "comptime `for` only supports integer ranges, got {}",
+                        "comptime `for` supports integer ranges, arrays and strings, got {}",
                         other.type_name()
                     )
                     .into(),
                     src: self.current_src(),
                     span,
                 });
+                Err(Unwind::Break)
+            }
+        };
+
+        self.depth -= 1;
+
+        match outcome {
+            Ok(()) => Ok(None),
+            Err(unwind) => Err(unwind),
+        }
+    }
+
+    fn run_for_iteration(
+        &mut self,
+        name: Spur,
+        values: Vec<Value<'arena>>,
+        block: &'arena Statement<'arena>,
+    ) -> Result<(), Unwind<'arena>> {
+        for value in values {
+            {
+                let frame = self.frames.last_mut().expect("comptime frame");
+                let scope = frame.scopes.last_mut().expect("comptime scope exists");
+                scope.insert(name, value);
+            }
+
+            match self.eval_statement(block) {
+                Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
+                Err(Unwind::Break) => break,
+                Err(Unwind::Continue) => continue,
+                Ok(_) => {}
             }
         }
 
-        self.depth -= 1;
-        Ok(None)
+        Ok(())
     }
 
     fn eval_ident_value(&mut self, name: Spur, span: miette::SourceSpan) -> EvalResult<'arena> {
@@ -933,7 +1035,10 @@ impl<'arena> Interp<'arena> {
                 self.eval_if(condition, then_block, else_statement, expr.span)
             }
 
-            ExpressionKind::Block { stmts, trailing } => self.eval_block(stmts, *trailing),
+            ExpressionKind::Block { stmts, trailing }
+            | ExpressionKind::ComptimeBlock { stmts, trailing } => {
+                self.eval_block(stmts, *trailing)
+            }
 
             ExpressionKind::Switch { object, arms } => self.eval_switch(object, arms),
 
@@ -945,6 +1050,51 @@ impl<'arena> Interp<'arena> {
                     items.push(self.eval_expr(element)?);
                 }
                 Ok(Value::Array(items))
+            }
+
+            ExpressionKind::Type(ty) => Ok(Value::Type(ty)),
+
+            ExpressionKind::FieldAccess { object, field } => {
+                let target = self.eval_expr(object)?;
+
+                let field_name = match &field.kind {
+                    ExpressionKind::Ident { name, .. } => self.interned(name),
+                    _ => {
+                        self.errors.push(Error::TypeMismatch {
+                            message: "comptime field access expects a field name".into(),
+                            src: self.current_src(),
+                            span: expr.span,
+                        });
+                        return Err(Unwind::Break);
+                    }
+                };
+
+                match target {
+                    Value::Record(record) => match record.get(&field_name) {
+                        Some(value) => Ok(value.clone()),
+                        None => {
+                            self.errors.push(Error::TypeMismatch {
+                                message: format!("`{}` has no field `{field_name}`", record.kind)
+                                    .into(),
+                                src: self.current_src(),
+                                span: expr.span,
+                            });
+                            Err(Unwind::Break)
+                        }
+                    },
+                    other => {
+                        self.errors.push(Error::TypeMismatch {
+                            message: format!(
+                                "field access expects a comptime record, got {}",
+                                other.type_name()
+                            )
+                            .into(),
+                            src: self.current_src(),
+                            span: expr.span,
+                        });
+                        Err(Unwind::Break)
+                    }
+                }
             }
 
             ExpressionKind::SliceAccess { object, index } => {
@@ -966,10 +1116,36 @@ impl<'arena> Interp<'arena> {
                         }
                         Ok(items[idx as usize].clone())
                     }
+                    (Value::Str(text), Value::Int(idx)) => {
+                        let len = text.chars().count();
+
+                        if idx < 0 || idx >= len as i128 {
+                            self.errors.push(Error::TypeMismatch {
+                                message: format!("string index {idx} out of bounds (length {len})")
+                                    .into(),
+                                src: self.current_src(),
+                                span: expr.span,
+                            });
+                            return Err(Unwind::Break);
+                        }
+
+                        match text.chars().nth(idx as usize) {
+                            Some(value) => Ok(Value::Char(value)),
+                            None => {
+                                self.errors.push(Error::TypeMismatch {
+                                    message: format!("string index {idx} out of bounds").into(),
+                                    src: self.current_src(),
+                                    span: expr.span,
+                                });
+                                Err(Unwind::Break)
+                            }
+                        }
+                    }
                     _ => {
                         self.errors.push(Error::TypeMismatch {
-                            message: "comptime slice access expects an array and an integer index"
-                                .into(),
+                            message:
+                                "comptime slice access expects an array or a string and an integer index"
+                                    .into(),
                             src: self.current_src(),
                             span: expr.span,
                         });
@@ -993,16 +1169,11 @@ impl<'arena> Interp<'arena> {
                     "dbg" => self.eval_macro_dbg(name.1, args),
                     "panic" => self.eval_macro_panic(name.1, args),
                     "zeen_type" => self.eval_macro_zeen_type(name.1, args),
-                    "zeen_expr" => self.eval_macro_zeen_expr(name.1, args),
-                    "zeen_decl" => self.eval_macro_zeen_decl(name.1, args),
-                    "emit" => self.eval_macro_emit(name.1, args),
                     "fields" => self.eval_macro_fields(name.1, args),
                     "variants" => self.eval_macro_variants(name.1, args),
                     "typeInfo" => self.eval_macro_type_info(name.1, args),
                     "hasField" => self.eval_macro_has_field(name.1, args),
                     "fieldType" => self.eval_macro_field_type(name.1, args),
-                    "fieldName" => self.eval_macro_field_name(name.1, args),
-                    "fieldTypeIndex" => self.eval_macro_field_type_index(name.1, args),
                     _ => {
                         self.errors.push(Error::Unsupported {
                             message: format!(
@@ -1039,7 +1210,14 @@ impl<'arena> Interp<'arena> {
             Literal::Bool(v) => Ok(Value::Bool(*v)),
             Literal::String(spur) => {
                 let text = self.interned(spur);
-                Ok(Value::Str(text.into()))
+
+                if !text.contains("$(") {
+                    return Ok(Value::Str(text.into()));
+                }
+
+                let module = self.current_module();
+                let interpolated = self.interpolate_string(&module, &text, span)?;
+                Ok(Value::Str(interpolated.into()))
             }
             Literal::Null => {
                 let _ = span;
@@ -1052,6 +1230,138 @@ impl<'arena> Interp<'arena> {
                 });
                 Err(Unwind::Break)
             }
+        }
+    }
+
+    pub(crate) fn interpolate_string(
+        &mut self,
+        module: &PathBuf,
+        text: &str,
+        span: miette::SourceSpan,
+    ) -> std::result::Result<String, Unwind<'arena>> {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        let mut i = 0;
+
+        while i < chars.len() {
+            if chars[i] == '$' && chars.get(i + 1) == Some(&'(') {
+                let start = i + 2;
+                let mut depth = 1usize;
+                let mut j = start;
+
+                while j < chars.len() {
+                    match chars[j] {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    j += 1;
+                }
+
+                if depth != 0 {
+                    self.errors.push(Error::TypeMismatch {
+                        message: "unterminated `$(` in string literal".into(),
+                        src: self.current_src(),
+                        span,
+                    });
+                    return Err(Unwind::Break);
+                }
+
+                let fragment: String = chars[start..j].iter().collect();
+                let value = self.eval_interpolation_fragment(module, &fragment, span)?;
+                out.push_str(&self.display_value(&value));
+                i = j + 1;
+                continue;
+            }
+
+            out.push(chars[i]);
+            i += 1;
+        }
+
+        Ok(out)
+    }
+
+    fn format_string_of(
+        &mut self,
+        expr: &'arena Expression<'arena>,
+        span: miette::SourceSpan,
+        macro_name: &str,
+    ) -> std::result::Result<String, Unwind<'arena>> {
+        let spur = match &expr.kind {
+            ExpressionKind::Literal(Literal::String(spur)) => *spur,
+            _ => {
+                self.errors.push(Error::TypeMismatch {
+                    message: format!("@{macro_name} first argument must be a string literal")
+                        .into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let text = self.interned(&spur);
+
+        if !text.contains("$(") {
+            return Ok(text);
+        }
+
+        let module = self.current_module();
+        self.interpolate_string(&module, &text, span)
+    }
+
+    fn eval_interpolation_fragment(
+        &mut self,
+        module: &PathBuf,
+        fragment: &str,
+        span: miette::SourceSpan,
+    ) -> EvalResult<'arena> {
+        let src = Arc::new(fragment.to_string());
+        let filename = Rc::new(String::from("<comptime interpolation>"));
+        let tokens: Vec<_> = zeen_lexer::tokenize(fragment).collect();
+
+        let expr = {
+            let mut iter = tokens.into_iter();
+            let mut parser = zeen_parser::Parser::new(
+                filename,
+                src,
+                &mut iter,
+                self.arena,
+                Rc::clone(&self.interner),
+            );
+            let parsed = zeen_parser::expressions::ExprParser::new(&mut parser).parse();
+
+            match parsed {
+                Some(expr) if parser.errors.is_empty() => expr,
+                _ => {
+                    self.errors.push(Error::TypeMismatch {
+                        message: "invalid expression inside `$(` splice".into(),
+                        src: self.current_src(),
+                        span,
+                    });
+                    return Err(Unwind::Break);
+                }
+            }
+        };
+
+        self.eval_snippet(module, expr)
+    }
+
+    fn eval_snippet(
+        &mut self,
+        module: &PathBuf,
+        expr: &'arena Expression<'arena>,
+    ) -> EvalResult<'arena> {
+        if self.frames.is_empty() {
+            self.eval_fresh_expr(module, expr)
+        } else {
+            self.eval_expr(expr)
         }
     }
 
@@ -1159,22 +1469,21 @@ impl<'arena> Interp<'arena> {
 
         let outcome = self.eval_statements(stmts);
 
-        {
-            let frame = self.frames.last_mut().expect("comptime frame");
-            frame.scopes.pop();
-        }
+        let result = match outcome {
+            Ok(Some(value)) => Ok(value),
+            Ok(None) => match trailing {
+                Some(trailing_expr) => self.eval_expr(trailing_expr),
+                None => Ok(Value::Bool(false)),
+            },
+            Err(Unwind::Return(v)) => Err(Unwind::Return(v)),
+            Err(Unwind::Break) => Err(Unwind::Break),
+            Err(Unwind::Continue) => Err(Unwind::Continue),
+        };
 
-        match outcome {
-            Ok(Some(value)) => return Ok(value),
-            Ok(None) => {}
-            Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-            Err(_) => return Err(Unwind::Break),
-        }
+        let frame = self.frames.last_mut().expect("comptime frame");
+        frame.scopes.pop();
 
-        match trailing {
-            Some(trailing_expr) => self.eval_expr(trailing_expr),
-            None => Ok(Value::Bool(false)),
-        }
+        result
     }
 
     fn eval_switch(
@@ -1443,19 +1752,7 @@ impl<'arena> Interp<'arena> {
             }
         };
 
-        let format_str = match &format_expr.kind {
-            ExpressionKind::Literal(Literal::String(spur)) => {
-                self.interner.borrow().resolve(spur).to_string()
-            }
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@format first argument must be a string literal".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
+        let format_str = self.format_string_of(format_expr, span, "format")?;
 
         let mut result = String::new();
         let mut args_iter = args.iter().skip(1).peekable();
@@ -1467,7 +1764,7 @@ impl<'arena> Interp<'arena> {
                     Some('}') => {
                         if let Some(arg) = args_iter.next() {
                             let value = self.eval_expr(arg)?;
-                            result.push_str(&value.display());
+                            result.push_str(&self.display_value(&value));
                         } else {
                             result.push_str("{}");
                         }
@@ -1508,19 +1805,7 @@ impl<'arena> Interp<'arena> {
         let source = self.current_src();
         let source_name = source.name().to_string();
 
-        let format_str = match &args[0].kind {
-            ExpressionKind::Literal(Literal::String(spur)) => {
-                self.interner.borrow().resolve(spur).to_string()
-            }
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@println first argument must be a string literal".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
+        let format_str = self.format_string_of(args[0], span, "println")?;
 
         let mut result = String::new();
         let mut chars = format_str.chars();
@@ -1534,7 +1819,7 @@ impl<'arena> Interp<'arena> {
                                 result.push(' ');
                             }
                             if let Ok(value) = self.eval_expr(arg) {
-                                result.push_str(&value.display());
+                                result.push_str(&self.display_value(&value));
                             }
                         }
                     }
@@ -1597,9 +1882,9 @@ impl<'arena> Interp<'arena> {
             let source_text = source_str.as_ref();
             let line = source_text[..offset].matches('\n').count() + 1;
             let prefix = format!("[comptime {}][{}:{}]", name_str, source_name, line);
-            (prefix, value.display())
+            (prefix, self.display_value(&value))
         } else {
-            ("[comptime dbg]".to_string(), value.display())
+            ("[comptime dbg]".to_string(), self.display_value(&value))
         };
 
         println!("{} {}", prefix, value_str);
@@ -1612,46 +1897,41 @@ impl<'arena> Interp<'arena> {
         args: &'arena [&'arena Expression<'arena>],
     ) -> EvalResult<'arena> {
         let message = if args.is_empty() {
-            "comptime panic".into()
+            "comptime panic".to_string()
         } else {
-            match &args[0].kind {
-                ExpressionKind::Literal(Literal::String(spur)) => {
-                    let format_str = self.interner.borrow().resolve(spur).to_string();
-                    let mut result = String::new();
-                    let mut chars = format_str.chars();
-                    let mut args_iter = args.iter().skip(1).peekable();
+            let format_str = self.format_string_of(args[0], span, "panic")?;
+            let mut result = String::new();
+            let mut chars = format_str.chars();
+            let mut args_iter = args.iter().skip(1).peekable();
 
-                    while let Some(c) = chars.next() {
-                        if c == '{' {
-                            match chars.next() {
-                                Some('}') => {
-                                    if let Some(arg) = args_iter.next() {
-                                        let value = self.eval_expr(arg)?;
-                                        result.push_str(&value.display());
-                                    } else {
-                                        result.push_str("{}");
-                                    }
-                                }
-                                Some('{') => result.push('{'),
-                                Some(_) => result.push_str("{}"),
-                                None => result.push('{'),
+            while let Some(c) = chars.next() {
+                if c == '{' {
+                    match chars.next() {
+                        Some('}') => {
+                            if let Some(arg) = args_iter.next() {
+                                let value = self.eval_expr(arg)?;
+                                result.push_str(&self.display_value(&value));
+                            } else {
+                                result.push_str("{}");
                             }
-                        } else if c == '}' {
-                            match chars.next() {
-                                Some('}') => result.push('}'),
-                                Some(_) => {
-                                    result.push('}');
-                                }
-                                None => result.push('}'),
-                            }
-                        } else {
-                            result.push(c);
                         }
+                        Some('{') => result.push('{'),
+                        Some(_) => result.push_str("{}"),
+                        None => result.push('{'),
                     }
-                    result
+                } else if c == '}' {
+                    match chars.next() {
+                        Some('}') => result.push('}'),
+                        Some(_) => {
+                            result.push('}');
+                        }
+                        None => result.push('}'),
+                    }
+                } else {
+                    result.push(c);
                 }
-                _ => "comptime panic".into(),
             }
+            result
         };
 
         self.errors.push(Error::Panic {
@@ -1668,165 +1948,9 @@ impl<'arena> Interp<'arena> {
         span: miette::SourceSpan,
         args: &'arena [&'arena Expression<'arena>],
     ) -> EvalResult<'arena> {
-        let type_expr = match args.first() {
-            Some(e) => e,
-            None => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@zeen_type requires a type argument".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
-        let ty = match &type_expr.kind {
-            ExpressionKind::Type(ty) => *ty,
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@zeen_type requires a type expression".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
+        let ty = self.type_arg(args.first(), span, "@zeen_type")?;
 
         Ok(Value::Type(ty))
-    }
-
-    fn eval_macro_zeen_expr(
-        &mut self,
-        _span: miette::SourceSpan,
-        args: &'arena [&'arena Expression<'arena>],
-    ) -> EvalResult<'arena> {
-        let expr = match args.first() {
-            Some(e) => *e,
-            None => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@zeen_expr requires an expression argument".into(),
-                    src: self.current_src(),
-                    span: _span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
-        Ok(Value::Expr(expr))
-    }
-
-    fn eval_macro_zeen_decl(
-        &mut self,
-        span: miette::SourceSpan,
-        args: &'arena [&'arena Expression<'arena>],
-    ) -> EvalResult<'arena> {
-        let name = match &args.first().map(|e| &e.kind) {
-            Some(ExpressionKind::Ident { name, .. }) => *name,
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@zeen_decl requires a declaration name".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
-        let module = self.current_module();
-        let decl = self.scopes.get(&module).and_then(|scope| {
-            scope
-                .fns
-                .get(&name)
-                .copied()
-                .or_else(|| scope.structs.get(&name).copied())
-                .or_else(|| scope.enums.get(&name).copied())
-        });
-
-        match decl {
-            Some(decl) => Ok(Value::Decl(decl)),
-            None => {
-                let label = self.interned(&name);
-                self.errors.push(Error::UnresolvedIdent {
-                    name: label.into(),
-                    src: self.current_src(),
-                    span,
-                });
-                Err(Unwind::Break)
-            }
-        }
-    }
-
-    fn eval_macro_emit(
-        &mut self,
-        span: miette::SourceSpan,
-        args: &'arena [&'arena Expression<'arena>],
-    ) -> EvalResult<'arena> {
-        let value = match args.first() {
-            Some(e) => self.eval_expr(e)?,
-            None => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@emit requires a declaration argument".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
-        match value {
-            Value::Decl(decl) => {
-                match decl.kind {
-                    DeclarationKind::ComptimeFn {
-                        name,
-                        params,
-                        return_type,
-                        body,
-                        is_pub,
-                        ..
-                    } => {
-                        let fn_decl = DeclarationKind::FnDecl {
-                            name,
-                            generics: None,
-                            params,
-                            return_type,
-                            body,
-                            is_pub,
-                            is_extern: false,
-                        };
-                        self.emitted_decls.push(self.arena.alloc(Declaration {
-                            kind: fn_decl,
-                            source: decl.source.clone(),
-                        }));
-                    }
-                    DeclarationKind::ComptimeConst { .. } => {
-                        self.errors.push(Error::Unsupported {
-                            message: "@emit with comptime const is not supported in v1".into(),
-                            src: self.current_src(),
-                            span,
-                        });
-                        return Err(Unwind::Break);
-                    }
-                    _ => {
-                        self.errors.push(Error::TypeMismatch {
-                            message: "@emit expects a comptime fn declaration".into(),
-                            src: self.current_src(),
-                            span,
-                        });
-                        return Err(Unwind::Break);
-                    }
-                }
-                Ok(Value::Bool(false))
-            }
-            other => {
-                self.errors.push(Error::TypeMismatch {
-                    message: format!("@emit expects a zeen_decl value, got {}", other.type_name())
-                        .into(),
-                    src: self.current_src(),
-                    span,
-                });
-                Err(Unwind::Break)
-            }
-        }
     }
 
     fn eval_macro_fields(
@@ -1834,25 +1958,22 @@ impl<'arena> Interp<'arena> {
         span: miette::SourceSpan,
         args: &'arena [&'arena Expression<'arena>],
     ) -> EvalResult<'arena> {
-        let ty_expr = match args.first() {
-            Some(e) => e,
-            None => {
+        let ty = self.type_arg(args.first(), span, "@fields")?;
+        let decl = self.decl_for_type(ty, span)?;
+
+        let fields = match &decl.kind {
+            DeclarationKind::StructDecl { fields, .. } => *fields,
+            DeclarationKind::EnumDecl { .. } => {
                 self.errors.push(Error::TypeMismatch {
-                    message: "@fields requires a type argument".into(),
+                    message: "@fields expects a struct type, use @variants for enums".into(),
                     src: self.current_src(),
                     span,
                 });
                 return Err(Unwind::Break);
             }
-        };
-
-        let decl = self.resolve_type_decl(ty_expr, span)?;
-        let count = match &decl.kind {
-            DeclarationKind::StructDecl { fields, .. } => fields.len() as i128,
-            DeclarationKind::EnumDecl { variants, .. } => variants.len() as i128,
             _ => {
                 self.errors.push(Error::TypeMismatch {
-                    message: "@fields expects a struct or enum type".into(),
+                    message: "@fields expects a struct type".into(),
                     src: self.current_src(),
                     span,
                 });
@@ -1860,7 +1981,7 @@ impl<'arena> Interp<'arena> {
             }
         };
 
-        Ok(Value::Int(count))
+        Ok(Value::Array(self.field_records(fields)))
     }
 
     fn eval_macro_variants(
@@ -1868,21 +1989,11 @@ impl<'arena> Interp<'arena> {
         span: miette::SourceSpan,
         args: &'arena [&'arena Expression<'arena>],
     ) -> EvalResult<'arena> {
-        let ty_expr = match args.first() {
-            Some(e) => e,
-            None => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@variants requires a type argument".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
+        let ty = self.type_arg(args.first(), span, "@variants")?;
+        let decl = self.decl_for_type(ty, span)?;
 
-        let decl = self.resolve_type_decl(ty_expr, span)?;
-        let count = match &decl.kind {
-            DeclarationKind::EnumDecl { variants, .. } => variants.len() as i128,
+        let variants = match &decl.kind {
+            DeclarationKind::EnumDecl { variants, .. } => *variants,
             _ => {
                 self.errors.push(Error::TypeMismatch {
                     message: "@variants expects an enum type".into(),
@@ -1893,7 +2004,50 @@ impl<'arena> Interp<'arena> {
             }
         };
 
-        Ok(Value::Int(count))
+        let mut items = Vec::with_capacity(variants.len());
+
+        for (index, variant) in variants.iter().enumerate() {
+            let mut fields = vec![
+                ("index", Value::Int(index as i128)),
+                ("name", Value::Str(self.interned(&variant.name).into())),
+            ];
+
+            match variant.payload {
+                None => fields.push(("payload", Value::Str("none".into()))),
+                Some(EnumVariantPayload::Single(ty)) => {
+                    fields.push(("payload", Value::Str("value".into())));
+                    fields.push(("type", Value::Type(ty)));
+                }
+                Some(EnumVariantPayload::Anonymous(payload_fields)) => {
+                    fields.push(("payload", Value::Str("struct".into())));
+                    fields.push(("fields", Value::Array(self.field_records(payload_fields))));
+                }
+            }
+
+            items.push(Value::Record(Rc::new(Record {
+                kind: "Variant",
+                fields,
+            })));
+        }
+
+        Ok(Value::Array(items))
+    }
+
+    fn field_records(&mut self, fields: &'arena [StructField<'arena>]) -> Vec<Value<'arena>> {
+        let mut items = Vec::with_capacity(fields.len());
+
+        for (index, field) in fields.iter().enumerate() {
+            items.push(Value::Record(Rc::new(Record {
+                kind: "Field",
+                fields: vec![
+                    ("index", Value::Int(index as i128)),
+                    ("name", Value::Str(self.interned(&field.name).into())),
+                    ("type", Value::Type(field.ty)),
+                ],
+            })));
+        }
+
+        items
     }
 
     fn eval_macro_type_info(
@@ -1901,19 +2055,8 @@ impl<'arena> Interp<'arena> {
         span: miette::SourceSpan,
         args: &'arena [&'arena Expression<'arena>],
     ) -> EvalResult<'arena> {
-        let ty_expr = match args.first() {
-            Some(e) => e,
-            None => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@typeInfo requires a type argument".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
-        let decl = self.resolve_type_decl(ty_expr, span)?;
+        let ty = self.type_arg(args.first(), span, "@typeInfo")?;
+        let decl = self.decl_for_type(ty, span)?;
         let info_str = match &decl.kind {
             DeclarationKind::StructDecl { .. } => "struct",
             DeclarationKind::EnumDecl { .. } => "enum",
@@ -1948,26 +2091,14 @@ impl<'arena> Interp<'arena> {
             return Err(Unwind::Break);
         }
 
-        let ty_expr = &args[0];
-        let field_name_expr = &args[1];
+        let ty = self.type_arg(args.first(), span, "@hasField")?;
+        let field_name = self.string_arg(args[1], span, "@hasField")?;
 
-        let field_name = match &field_name_expr.kind {
-            ExpressionKind::Literal(Literal::String(spur)) => *spur,
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@hasField second argument must be a string literal".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
-        let decl = self.resolve_type_decl(ty_expr, span)?;
+        let decl = self.decl_for_type(ty, span)?;
         let has = match &decl.kind {
-            DeclarationKind::StructDecl { fields, .. } => fields
-                .iter()
-                .any(|f| self.interned(&f.name) == self.interned(&field_name)),
+            DeclarationKind::StructDecl { fields, .. } => {
+                fields.iter().any(|f| self.interned(&f.name) == field_name)
+            }
             _ => false,
         };
 
@@ -1988,26 +2119,14 @@ impl<'arena> Interp<'arena> {
             return Err(Unwind::Break);
         }
 
-        let ty_expr = &args[0];
-        let field_name_expr = &args[1];
+        let ty = self.type_arg(args.first(), span, "@fieldType")?;
+        let field_name = self.string_arg(args[1], span, "@fieldType")?;
 
-        let field_name = match &field_name_expr.kind {
-            ExpressionKind::Literal(Literal::String(spur)) => *spur,
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@fieldType second argument must be a string literal".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
-        let decl = self.resolve_type_decl(ty_expr, span)?;
+        let decl = self.decl_for_type(ty, span)?;
         let field_ty = match &decl.kind {
             DeclarationKind::StructDecl { fields, .. } => fields
                 .iter()
-                .find(|f| self.interned(&f.name) == self.interned(&field_name))
+                .find(|f| self.interned(&f.name) == field_name)
                 .map(|f| f.ty),
             _ => None,
         };
@@ -2016,7 +2135,7 @@ impl<'arena> Interp<'arena> {
             Some(ty) => Ok(Value::Type(ty)),
             None => {
                 self.errors.push(Error::TypeMismatch {
-                    message: format!("field not found: {}", self.interned(&field_name)).into(),
+                    message: format!("field not found: {field_name}").into(),
                     src: self.current_src(),
                     span,
                 });
@@ -2025,111 +2144,65 @@ impl<'arena> Interp<'arena> {
         }
     }
 
-    fn eval_macro_field_name(
+    fn type_arg(
         &mut self,
+        expr: Option<&&'arena Expression<'arena>>,
         span: miette::SourceSpan,
-        args: &'arena [&'arena Expression<'arena>],
-    ) -> EvalResult<'arena> {
-        if args.len() < 2 {
+        macro_name: &str,
+    ) -> Result<&'arena TypeExpr<'arena>, Unwind<'arena>> {
+        let Some(expr) = expr else {
             self.errors.push(Error::TypeMismatch {
-                message: "@fieldName requires a type and a field index".into(),
+                message: format!("{macro_name} requires a type argument").into(),
                 src: self.current_src(),
                 span,
             });
             return Err(Unwind::Break);
-        }
-
-        let ty_expr = &args[0];
-        let index_expr = &args[1];
-
-        let index = match &index_expr.kind {
-            ExpressionKind::Literal(Literal::Int(v)) => *v as usize,
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@fieldName second argument must be an integer literal".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
         };
 
-        let decl = self.resolve_type_decl(ty_expr, span)?;
-        let fields = match &decl.kind {
-            DeclarationKind::StructDecl { fields, .. } => fields,
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@fieldName expects a struct type".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
-        if index >= fields.len() {
-            self.errors.push(Error::TypeMismatch {
-                message: format!(
-                    "field index {index} out of bounds (struct has {} fields)",
-                    fields.len()
-                )
-                .into(),
-                src: self.current_src(),
-                span,
-            });
-            return Err(Unwind::Break);
-        }
-
-        let name_str = self.interned(&fields[index].name);
-        Ok(Value::Str(name_str.into()))
-    }
-
-    fn eval_macro_field_type_index(
-        &mut self,
-        span: miette::SourceSpan,
-        args: &'arena [&'arena Expression<'arena>],
-    ) -> EvalResult<'arena> {
-        if args.len() < 2 {
-            self.errors.push(Error::TypeMismatch {
-                message: "@fieldTypeIndex requires a type and a field index".into(),
-                src: self.current_src(),
-                span,
-            });
-            return Err(Unwind::Break);
-        }
-
-        let ty_expr = &args[0];
-        let index_expr = &args[1];
-
-        let index = match &index_expr.kind {
-            ExpressionKind::Literal(Literal::Int(v)) => *v as usize,
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "@fieldTypeIndex second argument must be an integer literal".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
-        let decl = self.resolve_type_decl(ty_expr, span)?;
-        let field_ty = match &decl.kind {
-            DeclarationKind::StructDecl { fields, .. } => {
-                if index >= fields.len() {
-                    None
-                } else {
-                    Some(fields[index].ty)
+        match &expr.kind {
+            ExpressionKind::Type(ty) => {
+                if let TypeKind::Named {
+                    name,
+                    generic_args: None,
+                } = &ty.kind
+                    && let Some(Value::Type(bound)) = self.named_value(*name)
+                {
+                    return Ok(bound);
                 }
-            }
-            _ => None,
-        };
 
-        match field_ty {
-            Some(ty) => Ok(Value::Type(ty)),
-            None => {
+                Ok(*ty)
+            }
+            _ => match self.eval_expr(expr)? {
+                Value::Type(ty) => Ok(ty),
+                other => {
+                    self.errors.push(Error::TypeMismatch {
+                        message: format!("{macro_name} expects a type, got {}", other.type_name())
+                            .into(),
+                        src: self.current_src(),
+                        span,
+                    });
+                    Err(Unwind::Break)
+                }
+            },
+        }
+    }
+
+    fn string_arg(
+        &mut self,
+        expr: &'arena Expression<'arena>,
+        span: miette::SourceSpan,
+        macro_name: &str,
+    ) -> Result<String, Unwind<'arena>> {
+        if let ExpressionKind::Literal(Literal::String(spur)) = &expr.kind {
+            return Ok(self.interned(spur));
+        }
+
+        match self.eval_expr(expr)? {
+            Value::Str(text) => Ok(text.to_string()),
+            other => {
                 self.errors.push(Error::TypeMismatch {
-                    message: format!("field index {index} out of bounds").into(),
+                    message: format!("{macro_name} expects a string, got {}", other.type_name())
+                        .into(),
                     src: self.current_src(),
                     span,
                 });
@@ -2138,23 +2211,27 @@ impl<'arena> Interp<'arena> {
         }
     }
 
-    fn resolve_type_decl(
+    fn named_value(&mut self, name: Spur) -> Option<Value<'arena>> {
+        if let Some(value) = self.local_value(name) {
+            return Some(value);
+        }
+
+        let module = self.current_module();
+
+        if self.is_comptime_const(&module, name)
+            && let Ok(value) = self.eval_const(&module, name)
+        {
+            return Some(value);
+        }
+
+        None
+    }
+
+    fn decl_for_type(
         &mut self,
-        ty_expr: &'arena Expression<'arena>,
+        ty: &'arena TypeExpr<'arena>,
         span: miette::SourceSpan,
     ) -> Result<&'arena Declaration<'arena>, Unwind<'arena>> {
-        let ty = match &ty_expr.kind {
-            ExpressionKind::Type(ty) => *ty,
-            _ => {
-                self.errors.push(Error::TypeMismatch {
-                    message: "expected a type expression".into(),
-                    src: self.current_src(),
-                    span,
-                });
-                return Err(Unwind::Break);
-            }
-        };
-
         let name = match &ty.kind {
             zeen_ast::types::TypeKind::Named { name, .. } => *name,
             _ => {

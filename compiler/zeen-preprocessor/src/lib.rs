@@ -670,6 +670,13 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 ExpressionKind::Block { stmts, trailing }
             }
 
+            ExpressionKind::ComptimeBlock { stmts, trailing } => {
+                let trailing = trailing.map(|e| self.resolve_expr(e));
+                let stmts = self.resolve_stmt_list(stmts);
+                let (stmts, trailing) = self.finish_block_stmts(stmts, trailing);
+                ExpressionKind::ComptimeBlock { stmts, trailing }
+            }
+
             ExpressionKind::Closure {
                 params,
                 return_type,

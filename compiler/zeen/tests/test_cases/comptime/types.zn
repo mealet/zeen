@@ -1,10 +1,10 @@
 comptime N = 4;
-comptime fn width(n: i32) i32 {
+comptime fn width(n: comptime_int) comptime_int {
   return n * 2;
 }
 
 struct Buffer {
-  data: [N]i32,
+  pub data: [N]i32,
 
   pub fn first(*const self) i32 {
     return self.data[0];
@@ -16,7 +16,7 @@ struct Buffer {
 }
 
 struct Wide {
-  data: [width(3)]i32,
+  pub data: [width(3)]i32,
 }
 
 fn main() {

@@ -1,8 +1,8 @@
-comptime fn pow2(n: i32) i32 {
+comptime fn pow2(n: comptime_int) comptime_int {
   return n * n;
 }
 
-comptime Table = [$(pow2(1)), $(pow2(2)), $(pow2(3))];
+comptime Table = [pow2(1), pow2(2), pow2(3)];
 
 fn main() {
   @println("{} {} {}", Table[0], Table[1], Table[2]);

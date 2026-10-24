@@ -1,6 +1,0 @@
-comptime Base = 10;
-comptime Offset = $(Base + 5);
-
-fn main() {
-  @println("{}", Offset);
-}

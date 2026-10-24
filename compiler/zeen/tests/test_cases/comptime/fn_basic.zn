@@ -1,14 +1,14 @@
-comptime fn double(x: i32) i32 {
+comptime fn double(x: comptime_int) comptime_int {
   return x * 2;
 }
 
 comptime BASE = 5;
 
-comptime fn plus_base(x: i32) i32 {
+comptime fn plus_base(x: comptime_int) comptime_int {
   return double(x) + BASE;
 }
 
-comptime fn fib(n: i32) i32 {
+comptime fn fib(n: comptime_int) comptime_int {
   if (n < 2) {
     return n;
   }
@@ -16,7 +16,7 @@ comptime fn fib(n: i32) i32 {
   return fib(n - 1) + fib(n - 2);
 }
 
-comptime fn classify(kind: i32) i32 {
+comptime fn classify(kind: comptime_int) comptime_int {
   switch (kind) {
     0 => { return 100; }
     1 | 2 => { return 200; }
@@ -24,7 +24,7 @@ comptime fn classify(kind: i32) i32 {
   }
 }
 
-comptime fn total(n: i32) i32 {
+comptime fn total(n: comptime_int) comptime_int {
   let acc = 0;
   for (i : n) {
     acc += i;

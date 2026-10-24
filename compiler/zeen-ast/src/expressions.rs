@@ -109,6 +109,11 @@ pub enum ExpressionKind<'arena> {
     Splice {
         expr: &'arena Expression<'arena>,
     },
+
+    ComptimeBlock {
+        stmts: &'arena [&'arena crate::statements::Statement<'arena>],
+        trailing: Option<&'arena Expression<'arena>>,
+    },
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

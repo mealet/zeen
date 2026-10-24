@@ -1131,7 +1131,8 @@ impl<'ctx> NameResolver {
                 self.collect_global_deps(len, out);
             }
 
-            ExpressionKind::Block { stmts, trailing } => {
+            ExpressionKind::Block { stmts, trailing }
+            | ExpressionKind::ComptimeBlock { stmts, trailing } => {
                 for stmt in stmts {
                     self.collect_global_stmt_deps(stmt, out);
                 }
@@ -1932,7 +1933,8 @@ impl<'ctx> NameResolver {
                 self.resolve_expr(len);
             }
 
-            ExpressionKind::Block { stmts, trailing } => {
+            ExpressionKind::Block { stmts, trailing }
+            | ExpressionKind::ComptimeBlock { stmts, trailing } => {
                 self.table.push(ScopeKind::Block);
 
                 for stmt in stmts {

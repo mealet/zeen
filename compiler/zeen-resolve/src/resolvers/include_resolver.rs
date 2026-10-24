@@ -349,7 +349,8 @@ impl<'ctx> IncludeResolver<'ctx> {
                 self.expr_usage(len, flags);
             }
 
-            ExpressionKind::Block { stmts, trailing } => {
+            ExpressionKind::Block { stmts, trailing }
+            | ExpressionKind::ComptimeBlock { stmts, trailing } => {
                 for stmt in stmts.iter() {
                     self.stmt_usage(stmt, flags);
                 }

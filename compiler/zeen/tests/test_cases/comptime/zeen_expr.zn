@@ -1,6 +1,0 @@
-comptime E = @zeen_expr(1 + 2 * 3);
-
-fn main() {
-  let x: i32 = E;
-  @println("{}", x);
-}

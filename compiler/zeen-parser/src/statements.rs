@@ -58,6 +58,11 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(),
             TokenKind::Keyword(CompilerKeyword::If) => self.parse_if(),
             TokenKind::Keyword(CompilerKeyword::Switch) => self.parse_switch(),
+            TokenKind::Keyword(CompilerKeyword::Comptime) => {
+                let mut expr_parser = ExprParser::new(self.p);
+                let expr = expr_parser.parse()?;
+                self.finish_expr_stmt(expr)
+            }
             TokenKind::OpenBrace => self.parse_block(),
             TokenKind::Keyword(CompilerKeyword::Fn | CompilerKeyword::Public) => {
                 self.parse_fn_decl()

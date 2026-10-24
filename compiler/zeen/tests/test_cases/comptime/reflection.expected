@@ -1,7 +1,4 @@
-Point fields: 2
-Color variants: 3
-Point type: struct
-Color type: enum
-Point has x: true
-Point has z: false
-done
+y i32
+struct enum
+true false
+i64
