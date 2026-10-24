@@ -25,6 +25,8 @@ struct Expected {
     pub output: String,
     pub exit_code: Option<i32>,
     pub free_output: bool,
+    pub skip_windows: bool,
+    pub skip_unix: bool,
 }
 
 fn count_digits(mut number: usize) -> usize {
@@ -101,6 +103,8 @@ fn discover_test_cases_recursive(
 fn parse_expected(content: &str) -> Expected {
     let mut exit_code = None;
     let mut free_output = false;
+    let mut skip_windows = false;
+    let mut skip_unix = false;
 
     let output = if content.starts_with("@!") {
         let header_end = content
@@ -111,6 +115,8 @@ fn parse_expected(content: &str) -> Expected {
         for token in content[..header_end].split_whitespace().skip(1) {
             match token {
                 "free-output" => free_output = true,
+                "skip-windows" => skip_windows = true,
+                "skip-unix" => skip_unix = true,
                 token => {
                     if let Ok(number) = token.parse::<i32>() {
                         exit_code = Some(number);
@@ -128,6 +134,8 @@ fn parse_expected(content: &str) -> Expected {
         output,
         exit_code,
         free_output,
+        skip_windows,
+        skip_unix,
     }
 }
 
@@ -221,6 +229,7 @@ fn golden_system_tests() -> anyhow::Result<()> {
 
     let mut passed_tests: Vec<String> = Vec::new();
     let mut failed_tests: Vec<FailedTest> = Vec::new();
+    let mut skipped_tests: Vec<String> = Vec::new();
 
     for (index, (test_name, test_path)) in test_cases.into_iter().enumerate() {
         let current_number_digits = count_digits(index + 1).wrapping_sub(1);
@@ -229,6 +238,22 @@ fn golden_system_tests() -> anyhow::Result<()> {
             index + 1,
             " ".repeat(tests_count_digits - current_number_digits)
         );
+
+        let expected_content = fs::read_to_string(format!("tests/test_cases/{test_path}.expected"))?;
+        let expected = parse_expected(&expected_content);
+
+        let is_windows = std::env::consts::OS == "windows";
+        let should_skip = if is_windows {
+            expected.skip_windows
+        } else {
+            expected.skip_unix
+        };
+
+        if should_skip {
+            println!("{numeration} Running test: `{test_name}` [skipped on this platform]");
+            skipped_tests.push(test_name);
+            continue;
+        }
 
         println!("{numeration} Running test: `{test_name}`");
 
@@ -278,6 +303,12 @@ fn golden_system_tests() -> anyhow::Result<()> {
     }
 
     println!();
+    println!("Skipped tests ({}):", skipped_tests.len());
+    for test_name in &skipped_tests {
+        println!("  - {test_name}");
+    }
+
+    println!();
     println!("Failed tests ({}):", failed_tests.len());
     for failed_test in &failed_tests {
         println!(
@@ -288,10 +319,12 @@ fn golden_system_tests() -> anyhow::Result<()> {
         println!();
     }
 
+    let run_count = tests_count - skipped_tests.len();
+
     println!(
         "successful/everything: {}/{}",
         passed_tests.len(),
-        tests_count
+        run_count
     );
 
     if failed_tests.is_empty() {

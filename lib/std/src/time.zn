@@ -4,6 +4,7 @@ use std.string;
 
 @os[windows] {
   use std.c.windows.winbase;
+  use std.c.windows.windef;
 }
 
 /// Seconds and nanoseconds span.

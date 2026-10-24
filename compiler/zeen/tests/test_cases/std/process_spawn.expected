@@ -1,3 +1,4 @@
+@! skip-windows
 echo-ok=true code=0
 echo-text=[hello]
 args=[a b]
@@ -11,3 +12,4 @@ still-running=true
 kill-signal=15
 missing-err=true
 reuse=[again] [again]
+
