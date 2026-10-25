@@ -363,7 +363,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 }
             }
 
-            self.p.expect(TokenKind::CloseBrace, "}")?;
+            let close = self.p.expect(TokenKind::CloseBrace, "}")?;
 
             let stmts: &'ctx [&'ctx Statement<'ctx>] = self.p.arena.alloc_slice_copy(&stmts_buffer);
             let trailing: Option<&'ctx Expression<'ctx>> = stmts.last().and_then(|stmt| {
@@ -385,7 +385,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
             let block_expr = self.p.arena.alloc(Expression {
                 kind: ExpressionKind::Block { stmts, trailing },
-                span: open.merge_span(self.p.current().span),
+                span: open.merge_span(close.span),
             });
             let body_stmt = Statement {
                 kind: StatementKind::Expr(block_expr),
@@ -1258,6 +1258,28 @@ mod tests {
                 },
                 ..
             }])
+        );
+    }
+
+    #[test]
+    fn fn_body_span_ends_at_closing_brace() {
+        const SRC: &str = "fn foo() {}\n\nfn bar() {}";
+        const FIRST: &str = "fn foo() {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        let program = parser.parse_program().unwrap();
+        let DeclarationKind::FnDecl {
+            body: Some(body), ..
+        } = &program[0].kind
+        else {
+            panic!("expected fn declaration");
+        };
+
+        assert_eq!(body.span.offset() + body.span.len(), FIRST.len());
+        assert_eq!(
+            program[0].source.span.offset() + program[0].source.span.len(),
+            FIRST.len()
         );
     }
 
