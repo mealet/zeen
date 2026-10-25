@@ -41,9 +41,127 @@ pub(crate) enum DeclNamespace {
 pub(crate) type DeclNameKey = (String, DeclNamespace, Spur);
 pub(crate) type DeclSite = (String, usize);
 
+#[derive(Clone)]
 pub(crate) struct CallOutcome<'arena> {
     pub(crate) value: Value<'arena>,
     pub(crate) receiver: Option<Value<'arena>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ValueKey {
+    Int(i128),
+    Float(u64),
+    Bool(bool),
+    Char(char),
+    Str(Rc<str>),
+    Array(Vec<ValueKey>),
+    Struct(usize, PathBuf, Vec<(Rc<str>, ValueKey)>),
+    Type(usize),
+    Expr(usize),
+    Decl(usize),
+}
+
+fn value_key(value: &Value<'_>) -> ValueKey {
+    match value {
+        Value::Int(value) => ValueKey::Int(*value),
+        Value::Float(value) => ValueKey::Float(value.to_bits()),
+        Value::Bool(value) => ValueKey::Bool(*value),
+        Value::Char(value) => ValueKey::Char(*value),
+        Value::Str(value) => ValueKey::Str(value.clone()),
+        Value::Array(items) => ValueKey::Array(items.iter().map(value_key).collect()),
+        Value::Struct(value) => ValueKey::Struct(
+            value.decl as *const Declaration<'_> as usize,
+            value.module.clone(),
+            value
+                .fields
+                .iter()
+                .map(|(name, item)| (name.clone(), value_key(item)))
+                .collect(),
+        ),
+        Value::Type(ty) => ValueKey::Type(*ty as *const TypeExpr<'_> as usize),
+        Value::Expr(expr) => ValueKey::Expr(*expr as *const Expression<'_> as usize),
+        Value::Decl(decl) => ValueKey::Decl(*decl as *const Declaration<'_> as usize),
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct FnCacheKey {
+    decl: usize,
+    module: PathBuf,
+    args: Vec<ValueKey>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ShapeCacheKey {
+    module: PathBuf,
+    ty: TypeKey,
+    bindings: Vec<Vec<(Spur, PathBuf, TypeKey)>>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum TypeKey {
+    Builtin(BuiltinType),
+    SelfType,
+    SelfAlias,
+    VaArgs,
+    Named(Spur, Option<Vec<TypeKey>>),
+    Const(Box<TypeKey>),
+    TypeOf(usize),
+    SinglePointer(Box<TypeKey>),
+    ManyPointer(Box<TypeKey>),
+    Array(Box<TypeKey>, Option<usize>),
+    Fn(Vec<TypeKey>, Box<TypeKey>),
+    FatFn(Vec<TypeKey>, Box<TypeKey>, bool),
+}
+
+fn type_key(ty: &TypeExpr<'_>) -> TypeKey {
+    match &ty.kind {
+        TypeKind::Builtin(builtin) => TypeKey::Builtin(*builtin),
+        TypeKind::SelfType => TypeKey::SelfType,
+        TypeKind::SelfAlias => TypeKey::SelfAlias,
+        TypeKind::VaArgs => TypeKey::VaArgs,
+        TypeKind::Named { name, generic_args } => TypeKey::Named(
+            *name,
+            generic_args.map(|args| args.iter().map(|arg| type_key(arg)).collect()),
+        ),
+        TypeKind::Const(inner) => TypeKey::Const(Box::new(type_key(inner))),
+        TypeKind::TypeOf(expr) => TypeKey::TypeOf(*expr as *const Expression<'_> as usize),
+        TypeKind::SinglePointer(inner) => TypeKey::SinglePointer(Box::new(type_key(inner))),
+        TypeKind::ManyPointer(inner) => TypeKey::ManyPointer(Box::new(type_key(inner))),
+        TypeKind::Array { element, len } => TypeKey::Array(
+            Box::new(type_key(element)),
+            len.map(|len| len as *const Expression<'_> as usize),
+        ),
+        TypeKind::Fn { params, ret, .. } => TypeKey::Fn(
+            params.iter().map(|param| type_key(param)).collect(),
+            Box::new(type_key(ret)),
+        ),
+        TypeKind::FatFn { params, ret, once } => TypeKey::FatFn(
+            params.iter().map(|param| type_key(param)).collect(),
+            Box::new(type_key(ret)),
+            *once,
+        ),
+    }
+}
+
+fn shape_cache_key(module: &Path, ty: &TypeExpr<'_>, bindings: &[ShapeFrame<'_>]) -> ShapeCacheKey {
+    let bindings = bindings
+        .iter()
+        .map(|frame| {
+            let mut entries: Vec<(Spur, PathBuf, TypeKey)> = frame
+                .iter()
+                .map(|(name, (module, ty))| (*name, module.clone(), type_key(ty)))
+                .collect();
+            entries.sort_by_key(|entry| entry.0);
+            entries
+        })
+        .collect();
+
+    ShapeCacheKey {
+        module: module.to_path_buf(),
+        ty: type_key(ty),
+        bindings,
+    }
 }
 
 pub type EvalResult<'arena> = Result<Value<'arena>, Unwind<'arena>>;
@@ -131,6 +249,14 @@ pub struct Interp<'arena> {
     pub(crate) fresh_counter: usize,
 
     pub(crate) layout: LayoutEngine,
+    pub(crate) fn_cache: FxHashMap<FnCacheKey, CallOutcome<'arena>>,
+    pub(crate) shape_cache: FxHashMap<ShapeCacheKey, Shape>,
+    pub(crate) impure: usize,
+
+    #[cfg(test)]
+    pub(crate) calls: usize,
+    #[cfg(test)]
+    pub(crate) shape_computations: usize,
 
     pub(crate) errors: Vec<Error>,
 }
@@ -159,6 +285,13 @@ impl<'arena> Interp<'arena> {
             declared_names: FxHashMap::default(),
             fresh_counter: 0,
             layout: LayoutEngine::for_target(target),
+            fn_cache: FxHashMap::default(),
+            shape_cache: FxHashMap::default(),
+            impure: 0,
+            #[cfg(test)]
+            calls: 0,
+            #[cfg(test)]
+            shape_computations: 0,
             errors: Vec::new(),
         }
     }
@@ -702,6 +835,40 @@ impl<'arena> Interp<'arena> {
         span: miette::SourceSpan,
         args: &[Value<'arena>],
     ) -> Result<CallOutcome<'arena>, Unwind<'arena>> {
+        let key = FnCacheKey {
+            decl: fn_decl as *const Declaration<'_> as usize,
+            module: module.clone(),
+            args: args.iter().map(value_key).collect(),
+        };
+
+        if let Some(outcome) = self.fn_cache.get(&key) {
+            return Ok(outcome.clone());
+        }
+
+        let impure = self.impure;
+        let outcome = self.run_fn_uncached(fn_decl, fn_src, module, name, span, args)?;
+
+        if self.impure == impure {
+            self.fn_cache.insert(key, outcome.clone());
+        }
+
+        Ok(outcome)
+    }
+
+    fn run_fn_uncached(
+        &mut self,
+        fn_decl: &'arena Declaration<'arena>,
+        fn_src: NamedSource<Arc<String>>,
+        module: PathBuf,
+        name: Spur,
+        span: miette::SourceSpan,
+        args: &[Value<'arena>],
+    ) -> Result<CallOutcome<'arena>, Unwind<'arena>> {
+        #[cfg(test)]
+        {
+            self.calls += 1;
+        }
+
         self.steps += 1;
         if self.steps > STEP_LIMIT {
             self.errors.push(Error::LimitExceeded {
@@ -1885,20 +2052,31 @@ impl<'arena> Interp<'arena> {
                 match macro_name_owned.as_str() {
                     "format" => self.eval_macro_format(name.1, args),
                     "print" => {
+                        self.impure += 1;
                         self.eval_macro_println(name.1, args, false)?;
                         Ok(Value::Bool(false))
                     }
                     "println" => {
+                        self.impure += 1;
                         self.eval_macro_println(name.1, args, true)?;
                         Ok(Value::Bool(false))
                     }
-                    "dbg" => self.eval_macro_dbg(name.1, args),
+                    "dbg" => {
+                        self.impure += 1;
+                        self.eval_macro_dbg(name.1, args)
+                    }
                     "panic" => self.eval_macro_panic(name.1, args),
                     "zeen_type" => self.eval_macro_zeen_type(name.1, args),
                     "zeen_expr" => self.eval_macro_zeen_expr(name.1, args),
                     "zeen_decl" => self.eval_macro_zeen_decl(name.1, args),
-                    "emit" => self.eval_macro_emit(name.1, args),
-                    "fresh_name" => self.eval_macro_fresh_name(name.1, args),
+                    "emit" => {
+                        self.impure += 1;
+                        self.eval_macro_emit(name.1, args)
+                    }
+                    "fresh_name" => {
+                        self.impure += 1;
+                        self.eval_macro_fresh_name(name.1, args)
+                    }
                     "fields" => self.eval_macro_fields(name.1, args),
                     "variants" => self.eval_macro_variants(name.1, args),
                     "sizeof" => self.eval_macro_sizeof(name.1, args, false),
@@ -3303,6 +3481,12 @@ impl<'arena> Interp<'arena> {
         macro_name: &str,
         bindings: &[ShapeFrame<'arena>],
     ) -> Result<Shape, Unwind<'arena>> {
+        let key = shape_cache_key(module, ty, bindings);
+
+        if let Some(shape) = self.shape_cache.get(&key) {
+            return Ok(shape.clone());
+        }
+
         if self.layout_depth >= LAYOUT_DEPTH_LIMIT {
             self.errors.push(Error::LimitExceeded {
                 message: format!("{macro_name} nested type depth limit exceeded").into(),
@@ -3312,9 +3496,22 @@ impl<'arena> Interp<'arena> {
             return Err(Unwind::Break);
         }
 
+        let impure = self.impure;
+
+        #[cfg(test)]
+        {
+            self.shape_computations += 1;
+        }
+
         self.layout_depth += 1;
         let shape = self.shape_for_type_inner(module, ty, span, macro_name, bindings);
         self.layout_depth -= 1;
+
+        if let Ok(shape) = &shape
+            && self.impure == impure
+        {
+            self.shape_cache.insert(key, shape.clone());
+        }
 
         shape
     }
@@ -3793,5 +3990,171 @@ fn builtin_shape(builtin: BuiltinType) -> Shape {
         BuiltinType::char => Shape::Char,
         BuiltinType::void => Shape::Void,
         BuiltinType::never => Shape::Never,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Stats {
+        calls: usize,
+        shapes: usize,
+        failed: bool,
+    }
+
+    fn interpret(src: &str) -> Stats {
+        let rodeo = Rc::new(RefCell::new(Rodeo::default()));
+        let bump = Bump::default();
+        let content = Arc::new(src.to_string());
+        let filename = Rc::new("test.zn".to_string());
+
+        let mut tokens = zeen_lexer::tokenize(&content);
+        let mut parser = zeen_parser::Parser::new(
+            Rc::clone(&filename),
+            Arc::clone(&content),
+            &mut tokens,
+            &bump,
+            Rc::clone(&rodeo),
+        );
+
+        let program = parser.parse_program().expect("test program parses");
+        let mut interp = Interp::new(
+            &bump,
+            Rc::clone(&rodeo),
+            HashMap::default(),
+            &Target::host(),
+        );
+        let failed = interp
+            .evaluate(program, |_| PathBuf::from("test.zn"))
+            .is_err();
+
+        Stats {
+            calls: interp.calls,
+            shapes: interp.shape_computations,
+            failed,
+        }
+    }
+
+    #[test]
+    fn caches_pure_function_calls() {
+        let stats = interpret(
+            r#"comptime fn double(n: comptime_int) comptime_int {
+  return n * 2;
+}
+
+fn main() {
+  comptime {
+    let a = double(4);
+    let b = double(4);
+    let c = double(4);
+  };
+}
+"#,
+        );
+
+        assert!(!stats.failed);
+        assert_eq!(stats.calls, 1);
+    }
+
+    #[test]
+    fn caches_function_calls_by_argument_values() {
+        let stats = interpret(
+            r#"comptime fn double(n: comptime_int) comptime_int {
+  return n * 2;
+}
+
+fn main() {
+  comptime {
+    let a = double(1);
+    let b = double(2);
+    let c = double(1);
+  };
+}
+"#,
+        );
+
+        assert!(!stats.failed);
+        assert_eq!(stats.calls, 2);
+    }
+
+    #[test]
+    fn does_not_cache_calls_with_side_effects() {
+        let stats = interpret(
+            r#"comptime fn tag() comptime_str {
+  return @fresh_name("tag");
+}
+
+fn main() {
+  comptime {
+    let a = tag();
+    let b = tag();
+  };
+}
+"#,
+        );
+
+        assert!(!stats.failed);
+        assert_eq!(stats.calls, 2);
+    }
+
+    #[test]
+    fn reuses_sizeof_shapes() {
+        let single = interpret(
+            r#"struct Point {
+  x: i32,
+  y: i32,
+}
+
+fn main() {
+  comptime {
+    let a = @sizeof(Point);
+  };
+}
+"#,
+        );
+
+        let repeated = interpret(
+            r#"struct Point {
+  x: i32,
+  y: i32,
+}
+
+fn main() {
+  comptime {
+    let a = @sizeof(Point);
+    let b = @sizeof(Point);
+    let c = @sizeof(Point);
+  };
+}
+"#,
+        );
+
+        assert!(!single.failed);
+        assert!(!repeated.failed);
+        assert_eq!(single.shapes, 2);
+        assert_eq!(single.shapes, repeated.shapes);
+    }
+
+    #[test]
+    fn keeps_shapes_of_distinct_generic_instances() {
+        let stats = interpret(
+            r#"struct Slot[T] {
+  value: T,
+}
+
+fn main() {
+  comptime {
+    let a = @sizeof(Slot[i32]);
+    let b = @sizeof(Slot[i64]);
+
+    if (a != 4) { @panic("Slot[i32] size"); }
+    if (b != 8) { @panic("Slot[i64] size"); }
+  };
+}
+"#,
+        );
+
+        assert!(!stats.failed);
     }
 }

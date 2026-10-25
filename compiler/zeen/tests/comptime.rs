@@ -1684,3 +1684,58 @@ fn main() {
     );
     assert!(result.stdout.contains("32"), "stdout: {}", result.stdout);
 }
+
+#[test]
+fn reuses_cached_results_of_identical_calls() {
+    let source = r#"comptime fn sum(n: comptime_int) comptime_int {
+  let acc: comptime_int = 0;
+  for (i : 0..n) {
+    acc += i;
+  }
+  return acc;
+}
+
+fn main() {
+  comptime {
+    let a = sum(20000);
+    let b = sum(20000);
+    let c = sum(20000);
+    let d = sum(20000);
+  };
+}
+"#;
+
+    let result = compile("cache_calls", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+}
+
+#[test]
+fn recomputes_calls_with_distinct_arguments() {
+    let source = r#"comptime fn sum(n: comptime_int) comptime_int {
+  let acc: comptime_int = 0;
+  for (i : 0..n) {
+    acc += i;
+  }
+  return acc;
+}
+
+fn main() {
+  comptime {
+    let a = sum(20000);
+    let b = sum(20001);
+    let c = sum(20002);
+    let d = sum(20003);
+  };
+}
+"#;
+
+    let result = compile("cache_args", source);
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("comptime step limit exceeded"),
+        "stderr: {}",
+        result.stderr
+    );
+}
