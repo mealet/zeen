@@ -695,6 +695,17 @@ impl<'arena> Interp<'arena> {
 
             ExpressionKind::MacroCall { .. } => false,
 
+            ExpressionKind::Call { callee, .. } => match &callee.kind {
+                ExpressionKind::FieldAccess { object, .. } => {
+                    self.is_comptime_value_expr(module, object)
+                }
+                ExpressionKind::Ident {
+                    name,
+                    generic_args: None,
+                } => self.is_comptime_fn(module, *name),
+                _ => false,
+            },
+
             _ => false,
         }
     }
@@ -1638,11 +1649,11 @@ impl<'arena> Interp<'arena> {
                 });
             }
 
-            Value::Record(record) => {
+            Value::Struct(value) => {
                 return Err(Error::RuntimeOnly {
                     message: format!(
                         "comptime {} values cannot be used in runtime code",
-                        record.kind
+                        value.name
                     )
                     .into(),
                     src: self.current_src(),

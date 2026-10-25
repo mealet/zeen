@@ -251,6 +251,18 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 DeclarationKind::ComptimeBlock(self.arena.alloc(ComptimeBlockDecl { stmts }))
             }
 
+            DeclarationKind::ComptimeStruct {
+                name,
+                is_pub,
+                fields,
+                methods,
+            } => DeclarationKind::ComptimeStruct {
+                name,
+                is_pub,
+                fields: self.resolve_fields(fields),
+                methods: self.resolve_nested_decls(methods),
+            },
+
             DeclarationKind::ConditionalBlock(_) => {
                 unreachable!("conditional blocks are expanded by resolve_block")
             }

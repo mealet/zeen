@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use lasso::{Rodeo, Spur};
 use miette::NamedSource;
+use rustc_hash::FxHashSet;
 use smol_str::SmolStr;
 
 use zeen_ast::{
@@ -31,6 +32,7 @@ pub(crate) fn validate_program<'arena>(
     let mut checker = Checker {
         interner,
         src: None,
+        structs: collect_comptime_structs(program),
         errors: Vec::new(),
     };
 
@@ -41,9 +43,32 @@ pub(crate) fn validate_program<'arena>(
     checker.errors
 }
 
+fn collect_comptime_structs<'arena>(
+    program: &'arena [&'arena Declaration<'arena>],
+) -> FxHashSet<Spur> {
+    program
+        .iter()
+        .filter_map(|decl| match &decl.kind {
+            DeclarationKind::ComptimeStruct { name, .. } => Some(name.0),
+            _ => None,
+        })
+        .collect()
+}
+
+fn is_self_receiver(ty: &TypeExpr<'_>) -> bool {
+    match &ty.kind {
+        TypeKind::SelfType | TypeKind::SelfAlias => true,
+        TypeKind::Const(inner) | TypeKind::SinglePointer(inner) | TypeKind::ManyPointer(inner) => {
+            is_self_receiver(inner)
+        }
+        _ => false,
+    }
+}
+
 struct Checker<'a> {
     interner: &'a Rc<RefCell<Rodeo>>,
     src: Option<NamedSource<Arc<String>>>,
+    structs: FxHashSet<Spur>,
     errors: Vec<Error>,
 }
 
@@ -76,6 +101,42 @@ impl<'arena> Checker<'_> {
             DeclarationKind::ComptimeBlock(block) => {
                 for stmt in block.stmts.iter() {
                     self.statement(stmt, true);
+                }
+            }
+
+            DeclarationKind::ComptimeStruct {
+                fields, methods, ..
+            } => {
+                for field in fields.iter() {
+                    self.check_type(field.ty, false);
+                }
+
+                for method in methods.iter() {
+                    let (params, return_type, body) = match &method.kind {
+                        DeclarationKind::FnDecl {
+                            params,
+                            return_type,
+                            body,
+                            ..
+                        } => (*params, *return_type, *body),
+                        _ => continue,
+                    };
+
+                    for param in params.iter() {
+                        if is_self_receiver(param.ty) {
+                            continue;
+                        }
+
+                        self.check_type(param.ty, false);
+                    }
+
+                    if let Some(ret) = return_type {
+                        self.check_type(ret, true);
+                    }
+
+                    if let Some(body) = body {
+                        self.statement(body, true);
+                    }
                 }
             }
 
@@ -291,6 +352,10 @@ impl<'arena> Checker<'_> {
         match &ty.kind {
             TypeKind::Builtin(BuiltinType::void) if allow_void => {}
 
+            TypeKind::SelfType | TypeKind::SelfAlias => {}
+
+            TypeKind::Const(inner) => self.check_type(inner, false),
+
             TypeKind::Named { name, generic_args }
                 if generic_args.is_none() && self.is_comptime_type(*name) => {}
 
@@ -310,6 +375,10 @@ impl<'arena> Checker<'_> {
     }
 
     fn is_comptime_type(&self, name: Spur) -> bool {
+        if self.structs.contains(&name) {
+            return true;
+        }
+
         let resolved = self.interner.borrow().resolve(&name).to_string();
 
         COMPTIME_TYPES.contains(&resolved.as_str())

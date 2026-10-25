@@ -16,17 +16,22 @@ use zeen_ast::{
     Declaration, DeclarationKind, Expression, ExpressionKind, Statement, StatementKind, TypeExpr,
     declarations::{EnumVariantPayload, StructField},
     expressions::{BinaryOp, Literal, UnaryOp},
-    types::TypeKind,
+    types::{BuiltinType, TypeKind},
 };
 
 use crate::error::Error;
 use crate::format::{FormatChunk, FormatSpec, parse_format_string};
-use crate::value::{Record, Value};
+use crate::value::{StructValue, Value};
 
 pub const STEP_LIMIT: usize = 200_000;
 pub const DEPTH_LIMIT: usize = 200;
 
 pub type EvalFrame<'arena> = Vec<FxHashMap<Spur, Value<'arena>>>;
+
+pub(crate) struct CallOutcome<'arena> {
+    pub(crate) value: Value<'arena>,
+    pub(crate) receiver: Option<Value<'arena>>,
+}
 
 pub type EvalResult<'arena> = Result<Value<'arena>, Unwind<'arena>>;
 pub type StmtResult<'arena> = Result<Option<Value<'arena>>, Unwind<'arena>>;
@@ -45,6 +50,7 @@ pub struct ModuleScope<'arena> {
     pub(crate) fns: HashMap<Spur, &'arena Declaration<'arena>>,
     pub(crate) structs: HashMap<Spur, &'arena Declaration<'arena>>,
     pub(crate) enums: HashMap<Spur, &'arena Declaration<'arena>>,
+    pub(crate) comptime_structs: HashMap<Spur, &'arena Declaration<'arena>>,
 }
 
 pub enum ConstEntry<'arena> {
@@ -140,6 +146,7 @@ impl<'arena> Interp<'arena> {
                     fns: HashMap::default(),
                     structs: HashMap::default(),
                     enums: HashMap::default(),
+                    comptime_structs: HashMap::default(),
                 });
 
             match &decl.kind {
@@ -164,6 +171,9 @@ impl<'arena> Interp<'arena> {
                 }
                 DeclarationKind::EnumDecl { name, .. } => {
                     scope.enums.entry(name.0).or_insert(decl);
+                }
+                DeclarationKind::ComptimeStruct { name, .. } => {
+                    scope.comptime_structs.entry(name.0).or_insert(decl);
                 }
                 DeclarationKind::ComptimeBlock(block) => {
                     self.frames.push(CallFrame {
@@ -199,6 +209,7 @@ impl<'arena> Interp<'arena> {
                     DeclarationKind::ComptimeConst { .. }
                         | DeclarationKind::ComptimeFn { .. }
                         | DeclarationKind::ComptimeBlock(_)
+                        | DeclarationKind::ComptimeStruct { .. }
                 )
             })
             .collect();
@@ -222,13 +233,13 @@ impl<'arena> Interp<'arena> {
                     items.iter().map(|item| self.display_value(item)).collect();
                 format!("[{}]", rendered.join(", "))
             }
-            Value::Record(record) => {
-                let rendered: Vec<String> = record
+            Value::Struct(value) => {
+                let rendered: Vec<String> = value
                     .fields
                     .iter()
                     .map(|(name, item)| format!("{name}: {}", self.display_value(item)))
                     .collect();
-                format!("{} {{ {} }}", record.kind, rendered.join(", "))
+                format!("{} {{ {} }}", value.name, rendered.join(", "))
             }
             other => other.display(),
         }
@@ -344,6 +355,23 @@ impl<'arena> Interp<'arena> {
         match &decl.kind {
             DeclarationKind::StructDecl { is_pub, .. }
             | DeclarationKind::EnumDecl { is_pub, .. } => *is_pub,
+            _ => false,
+        }
+    }
+
+    fn comptime_struct_is_pub(decl: &Declaration<'_>) -> bool {
+        matches!(
+            &decl.kind,
+            DeclarationKind::ComptimeStruct { is_pub: true, .. }
+        )
+    }
+
+    fn is_self_receiver(ty: &TypeExpr<'_>) -> bool {
+        match &ty.kind {
+            TypeKind::SelfType | TypeKind::SelfAlias => true,
+            TypeKind::Const(inner)
+            | TypeKind::SinglePointer(inner)
+            | TypeKind::ManyPointer(inner) => Self::is_self_receiver(inner),
             _ => false,
         }
     }
@@ -494,6 +522,53 @@ impl<'arena> Interp<'arena> {
         self.pick_owner(name, span, public, private, "type")
     }
 
+    pub(crate) fn resolve_comptime_struct(
+        &mut self,
+        module: &PathBuf,
+        name: Spur,
+        span: miette::SourceSpan,
+    ) -> Result<Option<PathBuf>, Unwind<'arena>> {
+        if self
+            .scopes
+            .get(module)
+            .is_some_and(|scope| scope.comptime_structs.contains_key(&name))
+        {
+            return Ok(Some(module.clone()));
+        }
+
+        let mut public = Vec::new();
+        let mut private = Vec::new();
+
+        for target in self.visible_modules(module).to_vec() {
+            let Some(decl) = self
+                .scopes
+                .get(&target)
+                .and_then(|scope| scope.comptime_structs.get(&name))
+            else {
+                continue;
+            };
+
+            if Self::comptime_struct_is_pub(decl) {
+                public.push(target);
+            } else {
+                private.push(target);
+            }
+        }
+
+        self.pick_owner(name, span, public, private, "struct")
+    }
+
+    pub(crate) fn comptime_struct_decl(
+        &self,
+        owner: &PathBuf,
+        name: Spur,
+    ) -> Option<&'arena Declaration<'arena>> {
+        self.scopes
+            .get(owner)
+            .and_then(|scope| scope.comptime_structs.get(&name))
+            .copied()
+    }
+
     pub(crate) fn comptime_const_value(
         &mut self,
         module: &PathBuf,
@@ -513,29 +588,6 @@ impl<'arena> Interp<'arena> {
         span: miette::SourceSpan,
         args: &[Value<'arena>],
     ) -> EvalResult<'arena> {
-        self.steps += 1;
-        if self.steps > STEP_LIMIT {
-            self.errors.push(Error::LimitExceeded {
-                message: "comptime evaluation step limit exceeded".into(),
-                src: self.current_src(),
-                span,
-            });
-            return Err(Unwind::Break);
-        }
-
-        self.depth += 1;
-        let overflow = self.depth > DEPTH_LIMIT;
-        self.depth -= 1;
-
-        if overflow {
-            self.errors.push(Error::LimitExceeded {
-                message: "comptime evaluation depth limit exceeded".into(),
-                src: self.current_src(),
-                span,
-            });
-            return Err(Unwind::Break);
-        }
-
         let (fn_decl, fn_src) = {
             match self.scopes.get(module) {
                 Some(scope) => match scope.fns.get(&name) {
@@ -562,8 +614,50 @@ impl<'arena> Interp<'arena> {
             }
         };
 
+        self.run_fn(fn_decl, fn_src, module.clone(), name, span, args)
+            .map(|outcome| outcome.value)
+    }
+
+    fn run_fn(
+        &mut self,
+        fn_decl: &'arena Declaration<'arena>,
+        fn_src: NamedSource<Arc<String>>,
+        module: PathBuf,
+        name: Spur,
+        span: miette::SourceSpan,
+        args: &[Value<'arena>],
+    ) -> Result<CallOutcome<'arena>, Unwind<'arena>> {
+        self.steps += 1;
+        if self.steps > STEP_LIMIT {
+            self.errors.push(Error::LimitExceeded {
+                message: "comptime evaluation step limit exceeded".into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        self.depth += 1;
+        let overflow = self.depth > DEPTH_LIMIT;
+        self.depth -= 1;
+
+        if overflow {
+            self.errors.push(Error::LimitExceeded {
+                message: "comptime evaluation depth limit exceeded".into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
         let (params, body, return_type) = match &fn_decl.kind {
             DeclarationKind::ComptimeFn {
+                params,
+                body,
+                return_type,
+                ..
+            }
+            | DeclarationKind::FnDecl {
                 params,
                 body,
                 return_type,
@@ -607,17 +701,28 @@ impl<'arena> Interp<'arena> {
             return Err(Unwind::Break);
         }
 
+        let self_name = params
+            .iter()
+            .find(|param| param.name.is_none() && Self::is_self_receiver(param.ty))
+            .map(|_| self.interner.borrow_mut().get_or_intern("self"));
+
         let mut bindings: FxHashMap<Spur, Value<'arena>> = FxHashMap::default();
         for (param, value) in params.iter().zip(args.iter()) {
-            if let Some(param_name) = param.name {
-                bindings.insert(param_name, value.clone());
+            match param.name {
+                Some(param_name) => {
+                    bindings.insert(param_name, value.clone());
+                }
+                None if self_name.is_some() => {
+                    bindings.insert(self_name.expect("self binding"), value.clone());
+                }
+                None => {}
             }
         }
 
         let caller_src = self.current_src();
 
         self.frames.push(CallFrame {
-            module: module.clone(),
+            module,
             src: fn_src,
             scopes: vec![bindings],
             context: FrameContext::Function {
@@ -652,12 +757,17 @@ impl<'arena> Interp<'arena> {
             });
         }
 
+        let receiver = self_name.and_then(|name| {
+            let frame = self.frames.last()?;
+            frame.scopes.first()?.get(&name).cloned()
+        });
+
         self.pop_shadow();
         self.depth -= 1;
         self.frames.pop();
 
         match result {
-            Ok(Some(value)) => Ok(value),
+            Ok(Some(value)) => Ok(CallOutcome { value, receiver }),
             Ok(None) => {
                 if return_type.is_some() {
                     let label = self.interned(&name);
@@ -671,7 +781,10 @@ impl<'arena> Interp<'arena> {
                     });
                     Err(Unwind::Break)
                 } else {
-                    Ok(Value::Bool(false))
+                    Ok(CallOutcome {
+                        value: Value::Bool(false),
+                        receiver,
+                    })
                 }
             }
             Err(Unwind::Break) => Err(Unwind::Break),
@@ -834,78 +947,18 @@ impl<'arena> Interp<'arena> {
             }
 
             StatementKind::Assign { object, value } => {
-                let ExpressionKind::Ident { name, .. } = &object.kind else {
-                    self.errors.push(Error::Unsupported {
-                        message: "only simple names can be assigned in comptime"
-                            .to_string()
-                            .into(),
-                        src: self.current_src(),
-                        span: stmt.span,
-                    });
-                    return Err(Unwind::Break);
-                };
-
-                let value = self.eval_expr(value)?;
-
-                {
-                    let frame = self.frames.last_mut().expect("comptime frame");
-                    if let Some(scope) = frame
-                        .scopes
-                        .iter_mut()
-                        .rev()
-                        .find(|scope| scope.contains_key(name))
-                    {
-                        scope.insert(*name, value);
-                        return Ok(None);
-                    }
-                }
-
-                let label = self.interned(name);
-                self.errors.push(Error::UnresolvedIdent {
-                    name: label.into(),
-                    src: self.current_src(),
-                    span: stmt.span,
-                });
-                Err(Unwind::Break)
+                let rhs = self.eval_expr(value)?;
+                self.assign_place(object, rhs, stmt.span)?;
+                Ok(None)
             }
 
             StatementKind::CompoundAssign { object, value, op } => {
-                let ExpressionKind::Ident { name, .. } = &object.kind else {
-                    self.errors.push(Error::Unsupported {
-                        message: "only simple names support compound assign in comptime"
-                            .to_string()
-                            .into(),
-                        src: self.current_src(),
-                        span: stmt.span,
-                    });
-                    return Err(Unwind::Break);
-                };
-
                 let rhs_value = self.eval_expr(value)?;
-                let lhs_value = self.eval_ident_value(*name, stmt.span)?;
+                let lhs_value = self.eval_expr(object)?;
 
                 let computed = self.apply_binary(*op, lhs_value, rhs_value, stmt.span)?;
-
-                {
-                    let frame = self.frames.last_mut().expect("comptime frame");
-                    if let Some(scope) = frame
-                        .scopes
-                        .iter_mut()
-                        .rev()
-                        .find(|scope| scope.contains_key(name))
-                    {
-                        scope.insert(*name, computed);
-                        return Ok(None);
-                    }
-                }
-
-                let label = self.interned(name);
-                self.errors.push(Error::UnresolvedIdent {
-                    name: label.into(),
-                    src: self.current_src(),
-                    span: stmt.span,
-                });
-                Err(Unwind::Break)
+                self.assign_place(object, computed, stmt.span)?;
+                Ok(None)
             }
 
             StatementKind::Return { value } => match value {
@@ -1112,6 +1165,119 @@ impl<'arena> Interp<'arena> {
         None
     }
 
+    fn place_path(&self, expr: &Expression<'arena>) -> Option<(Spur, Vec<Rc<str>>)> {
+        match &expr.kind {
+            ExpressionKind::Ident { name, .. } => Some((*name, Vec::new())),
+            ExpressionKind::FieldAccess { object, field } => {
+                let ExpressionKind::Ident { name, .. } = &field.kind else {
+                    return None;
+                };
+
+                let (root, mut path) = self.place_path(object)?;
+                path.push(Rc::from(self.interned(name)));
+                Some((root, path))
+            }
+            ExpressionKind::Unary {
+                op: UnaryOp::Deref,
+                expr,
+            } => self.place_path(expr),
+            _ => None,
+        }
+    }
+
+    fn assign_place(
+        &mut self,
+        object: &Expression<'arena>,
+        value: Value<'arena>,
+        span: miette::SourceSpan,
+    ) -> Result<(), Unwind<'arena>> {
+        let Some((root, path)) = self.place_path(object) else {
+            self.errors.push(Error::Unsupported {
+                message: "only names and fields can be assigned in comptime"
+                    .to_string()
+                    .into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        };
+
+        if path.is_empty() {
+            return self.store_local(root, value, span);
+        }
+
+        let mut current = self.eval_ident_value(root, span)?;
+
+        if !Self::set_field(&mut current, &path, value) {
+            self.errors.push(Error::TypeMismatch {
+                message: format!(
+                    "cannot assign field `{}` on `{}`",
+                    path.iter()
+                        .map(|part| part.to_string())
+                        .collect::<Vec<_>>()
+                        .join("."),
+                    current.type_name()
+                )
+                .into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        self.store_local(root, current, span)
+    }
+
+    fn set_field(value: &mut Value<'arena>, path: &[Rc<str>], new: Value<'arena>) -> bool {
+        let Some((head, rest)) = path.split_first() else {
+            *value = new;
+            return true;
+        };
+
+        let Value::Struct(record) = value else {
+            return false;
+        };
+
+        let record = Rc::make_mut(record);
+
+        let Some((_, slot)) = record
+            .fields
+            .iter_mut()
+            .find(|(name, _)| name.as_ref() == head.as_ref())
+        else {
+            return false;
+        };
+
+        Self::set_field(slot, rest, new)
+    }
+
+    fn store_local(
+        &mut self,
+        name: Spur,
+        value: Value<'arena>,
+        span: miette::SourceSpan,
+    ) -> Result<(), Unwind<'arena>> {
+        let frame = self.frames.last_mut().expect("comptime frame");
+
+        if let Some(scope) = frame
+            .scopes
+            .iter_mut()
+            .rev()
+            .find(|scope| scope.contains_key(&name))
+        {
+            scope.insert(name, value);
+            return Ok(());
+        }
+
+        let label = self.interned(&name);
+        self.errors.push(Error::UnresolvedIdent {
+            name: label.into(),
+            src: self.current_src(),
+            span,
+        });
+        Err(Unwind::Break)
+    }
+
     pub(crate) fn current_module(&self) -> PathBuf {
         self.frames
             .last()
@@ -1125,6 +1291,10 @@ impl<'arena> Interp<'arena> {
         args: &'arena [&'arena Expression<'arena>],
         span: miette::SourceSpan,
     ) -> EvalResult<'arena> {
+        if let ExpressionKind::FieldAccess { object, field } = &callee.kind {
+            return self.eval_method_call(object, field, args, span);
+        }
+
         let name = match &callee.kind {
             ExpressionKind::Ident {
                 name,
@@ -1173,6 +1343,233 @@ impl<'arena> Interp<'arena> {
         }
 
         self.eval_comptime_call(&owner, name, span, &values)
+    }
+
+    fn eval_method_call(
+        &mut self,
+        object: &Expression<'arena>,
+        field: &Expression<'arena>,
+        args: &'arena [&'arena Expression<'arena>],
+        span: miette::SourceSpan,
+    ) -> EvalResult<'arena> {
+        let receiver = self.eval_expr(object)?;
+
+        let method_name = match &field.kind {
+            ExpressionKind::Ident { name, .. } => *name,
+            _ => {
+                self.errors.push(Error::TypeMismatch {
+                    message: "comptime method call expects a method name".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let value = match receiver {
+            Value::Struct(value) => value,
+            other => {
+                self.errors.push(Error::TypeMismatch {
+                    message: format!(
+                        "method call expects a comptime struct, got {}",
+                        other.type_name()
+                    )
+                    .into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let methods = match &value.decl.kind {
+            DeclarationKind::ComptimeStruct { methods, .. } => *methods,
+            _ => {
+                self.errors.push(Error::Unsupported {
+                    message: "expected comptime struct declaration".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let method = methods.iter().find(|method| {
+            matches!(&method.kind, DeclarationKind::FnDecl { name, .. } if name.0 == method_name)
+        });
+
+        let method = match method {
+            Some(method) => *method,
+            None => {
+                let label = self.interned(&method_name);
+                self.errors.push(Error::TypeMismatch {
+                    message: format!("`{}` has no method `{label}`", value.name).into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let fn_src = self.scope_src(&value.module);
+        let mutates = Self::mutates_receiver(method);
+
+        let mut values = Vec::with_capacity(args.len() + 1);
+        values.push(Value::Struct(value.clone()));
+
+        for arg in args.iter() {
+            values.push(self.eval_expr(arg)?);
+        }
+
+        let outcome = self.run_fn(
+            method,
+            fn_src,
+            value.module.clone(),
+            method_name,
+            span,
+            &values,
+        )?;
+
+        if mutates && let Some(receiver) = outcome.receiver {
+            self.assign_place(object, receiver, span)?;
+        }
+
+        Ok(outcome.value)
+    }
+
+    fn mutates_receiver(method: &Declaration<'_>) -> bool {
+        let DeclarationKind::FnDecl { params, .. } = &method.kind else {
+            return false;
+        };
+
+        params
+            .iter()
+            .find(|param| param.name.is_none() && Self::is_self_receiver(param.ty))
+            .is_some_and(|param| match &param.ty.kind {
+                TypeKind::SinglePointer(inner) => !matches!(&inner.kind, TypeKind::Const(_)),
+                _ => false,
+            })
+    }
+
+    fn eval_struct_init(
+        &mut self,
+        ty: &Expression<'arena>,
+        fields: Option<&'arena [zeen_ast::expressions::FieldInit<'arena>]>,
+        span: miette::SourceSpan,
+    ) -> EvalResult<'arena> {
+        let name = match &ty.kind {
+            ExpressionKind::Ident {
+                name,
+                generic_args: None,
+            } => *name,
+            _ => {
+                self.errors.push(Error::Unsupported {
+                    message: "comptime struct construction expects a struct name".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let module = self.current_module();
+
+        let owner = match self.resolve_comptime_struct(&module, name, span) {
+            Ok(Some(owner)) => owner,
+            Ok(None) => {
+                let label = self.interned(&name);
+                self.errors.push(Error::UnresolvedIdent {
+                    name: label.into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+            Err(unwind) => return Err(unwind),
+        };
+
+        let decl = match self.comptime_struct_decl(&owner, name) {
+            Some(decl) => decl,
+            None => {
+                let label = self.interned(&name);
+                self.errors.push(Error::UnresolvedIdent {
+                    name: label.into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let struct_fields = match &decl.kind {
+            DeclarationKind::ComptimeStruct { fields, .. } => *fields,
+            _ => {
+                self.errors.push(Error::Unsupported {
+                    message: "expected comptime struct declaration".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let mut provided: Vec<(Spur, Value<'arena>)> = Vec::new();
+
+        if let Some(inits) = fields {
+            for init in inits.iter() {
+                if provided.iter().any(|(field, _)| *field == init.name) {
+                    let label = self.interned(&init.name);
+                    self.errors.push(Error::TypeMismatch {
+                        message: format!("duplicate field `{label}` in comptime struct value")
+                            .into(),
+                        src: self.current_src(),
+                        span: init.span,
+                    });
+                    return Err(Unwind::Break);
+                }
+
+                if !struct_fields.iter().any(|field| field.name == init.name) {
+                    let label = self.interned(&init.name);
+                    self.errors.push(Error::TypeMismatch {
+                        message: format!("`{}` has no field `{label}`", self.interned(&name))
+                            .into(),
+                        src: self.current_src(),
+                        span: init.span,
+                    });
+                    return Err(Unwind::Break);
+                }
+
+                let value = self.eval_expr(init.value)?;
+                provided.push((init.name, value));
+            }
+        }
+
+        let mut values = Vec::with_capacity(struct_fields.len());
+
+        for field in struct_fields.iter() {
+            let Some((_, value)) = provided.iter().find(|(name, _)| *name == field.name) else {
+                let label = self.interned(&field.name);
+                self.errors.push(Error::TypeMismatch {
+                    message: format!(
+                        "missing field `{label}` in comptime struct value `{}`",
+                        self.interned(&name)
+                    )
+                    .into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            };
+
+            values.push((Rc::from(self.interned(&field.name)), value.clone()));
+        }
+
+        Ok(Value::Struct(Rc::new(StructValue {
+            decl,
+            module: owner,
+            name: self.interned(&name).into(),
+            fields: values,
+        })))
     }
 
     pub fn eval_expr(&mut self, expr: &Expression<'arena>) -> EvalResult<'arena> {
@@ -1232,6 +1629,10 @@ impl<'arena> Interp<'arena> {
                 Ok(Value::Array(items))
             }
 
+            ExpressionKind::StructInit { ty, fields } => {
+                self.eval_struct_init(ty, *fields, expr.span)
+            }
+
             ExpressionKind::Type(ty) => Ok(Value::Type(ty)),
 
             ExpressionKind::FieldAccess { object, field } => {
@@ -1250,11 +1651,11 @@ impl<'arena> Interp<'arena> {
                 };
 
                 match target {
-                    Value::Record(record) => match record.get(&field_name) {
-                        Some(value) => Ok(value.clone()),
+                    Value::Struct(value) => match value.get(&field_name) {
+                        Some(field) => Ok(field.clone()),
                         None => {
                             self.errors.push(Error::TypeMismatch {
-                                message: format!("`{}` has no field `{field_name}`", record.kind)
+                                message: format!("`{}` has no field `{field_name}`", value.name)
                                     .into(),
                                 src: self.current_src(),
                                 span: expr.span,
@@ -1265,7 +1666,7 @@ impl<'arena> Interp<'arena> {
                     other => {
                         self.errors.push(Error::TypeMismatch {
                             message: format!(
-                                "field access expects a comptime record, got {}",
+                                "field access expects a comptime struct, got {}",
                                 other.type_name()
                             )
                             .into(),
@@ -1601,6 +2002,8 @@ impl<'arena> Interp<'arena> {
             (UnaryOp::Neg, Value::Float(v)) => Ok(Value::Float(-v)),
             (UnaryOp::Not, Value::Bool(v)) => Ok(Value::Bool(!v)),
             (UnaryOp::BitNot, Value::Int(v)) => Ok(Value::Int(!v)),
+
+            (UnaryOp::Deref, value @ Value::Struct(_)) => Ok(value),
 
             (op, value) => {
                 self.errors.push(Error::TypeMismatch {
@@ -2077,10 +2480,10 @@ impl<'arena> Interp<'arena> {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Value::Record(record) => format!(
+            Value::Struct(value) => format!(
                 "{} {{ {} }}",
-                record.kind,
-                record
+                value.name,
+                value
                     .fields
                     .iter()
                     .map(|(name, item)| format!("{name}: {}", Self::format_debug(self, item)))
@@ -2238,7 +2641,7 @@ impl<'arena> Interp<'arena> {
             }
         };
 
-        Ok(Value::Array(self.field_records(fields)))
+        Ok(Value::Array(self.field_records(fields, span)?))
     }
 
     fn eval_macro_variants(
@@ -2261,50 +2664,158 @@ impl<'arena> Interp<'arena> {
             }
         };
 
+        let (variant_decl, variant_module) = self.reflection_struct("Variant", span)?;
+
         let mut items = Vec::with_capacity(variants.len());
 
         for (index, variant) in variants.iter().enumerate() {
-            let mut fields = vec![
-                ("index", Value::Int(index as i128)),
-                ("name", Value::Str(self.interned(&variant.name).into())),
-            ];
+            let (payload, ty, payload_fields) = match variant.payload {
+                None => (
+                    Value::Str("none".into()),
+                    Value::Type(self.void_type(span)),
+                    Value::Array(Vec::new()),
+                ),
+                Some(EnumVariantPayload::Single(ty)) => (
+                    Value::Str("value".into()),
+                    Value::Type(ty),
+                    Value::Array(Vec::new()),
+                ),
+                Some(EnumVariantPayload::Anonymous(payload_fields)) => (
+                    Value::Str("struct".into()),
+                    Value::Type(self.void_type(span)),
+                    Value::Array(self.field_records(payload_fields, span)?),
+                ),
+            };
 
-            match variant.payload {
-                None => fields.push(("payload", Value::Str("none".into()))),
-                Some(EnumVariantPayload::Single(ty)) => {
-                    fields.push(("payload", Value::Str("value".into())));
-                    fields.push(("type", Value::Type(ty)));
-                }
-                Some(EnumVariantPayload::Anonymous(payload_fields)) => {
-                    fields.push(("payload", Value::Str("struct".into())));
-                    fields.push(("fields", Value::Array(self.field_records(payload_fields))));
-                }
-            }
+            let value = self.make_struct_value(
+                variant_decl,
+                variant_module.clone(),
+                vec![
+                    ("index", Value::Int(index as i128)),
+                    ("name", Value::Str(self.interned(&variant.name).into())),
+                    ("payload", payload),
+                    ("ty", ty),
+                    ("fields", payload_fields),
+                ],
+                span,
+            )?;
 
-            items.push(Value::Record(Rc::new(Record {
-                kind: "Variant",
-                fields,
-            })));
+            items.push(value);
         }
 
         Ok(Value::Array(items))
     }
 
-    fn field_records(&mut self, fields: &'arena [StructField<'arena>]) -> Vec<Value<'arena>> {
+    fn field_records(
+        &mut self,
+        fields: &'arena [StructField<'arena>],
+        span: miette::SourceSpan,
+    ) -> Result<Vec<Value<'arena>>, Unwind<'arena>> {
+        let (decl, module) = self.reflection_struct("Field", span)?;
+
         let mut items = Vec::with_capacity(fields.len());
 
         for (index, field) in fields.iter().enumerate() {
-            items.push(Value::Record(Rc::new(Record {
-                kind: "Field",
-                fields: vec![
+            let value = self.make_struct_value(
+                decl,
+                module.clone(),
+                vec![
                     ("index", Value::Int(index as i128)),
                     ("name", Value::Str(self.interned(&field.name).into())),
-                    ("type", Value::Type(field.ty)),
+                    ("ty", Value::Type(field.ty)),
                 ],
-            })));
+                span,
+            )?;
+
+            items.push(value);
         }
 
-        items
+        Ok(items)
+    }
+
+    fn reflection_struct(
+        &mut self,
+        kind: &str,
+        span: miette::SourceSpan,
+    ) -> Result<(&'arena Declaration<'arena>, PathBuf), Unwind<'arena>> {
+        let module = self.current_module();
+        let name = self.interner.borrow_mut().get_or_intern(kind);
+
+        let owner = match self.resolve_comptime_struct(&module, name, span) {
+            Ok(Some(owner)) => owner,
+            Ok(None) => {
+                self.errors.push(Error::Unsupported {
+                    message: format!("comptime struct `{kind}` is not declared in core").into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+            Err(unwind) => return Err(unwind),
+        };
+
+        match self.comptime_struct_decl(&owner, name) {
+            Some(decl) => Ok((decl, owner)),
+            None => {
+                self.errors.push(Error::Unsupported {
+                    message: format!("comptime struct `{kind}` is not declared in core").into(),
+                    src: self.current_src(),
+                    span,
+                });
+                Err(Unwind::Break)
+            }
+        }
+    }
+
+    fn make_struct_value(
+        &mut self,
+        decl: &'arena Declaration<'arena>,
+        module: PathBuf,
+        values: Vec<(&'static str, Value<'arena>)>,
+        span: miette::SourceSpan,
+    ) -> Result<Value<'arena>, Unwind<'arena>> {
+        let (name, fields) = match &decl.kind {
+            DeclarationKind::ComptimeStruct { name, fields, .. } => (*name, *fields),
+            _ => {
+                self.errors.push(Error::Unsupported {
+                    message: "expected comptime struct declaration".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let mut out = Vec::with_capacity(fields.len());
+
+        for field in fields.iter() {
+            let field_name = self.interned(&field.name);
+
+            let Some((_, value)) = values.iter().find(|(name, _)| *name == field_name) else {
+                self.errors.push(Error::Unsupported {
+                    message: format!("missing field `{field_name}` in comptime value").into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            };
+
+            out.push((Rc::from(field_name), value.clone()));
+        }
+
+        Ok(Value::Struct(Rc::new(StructValue {
+            decl,
+            module,
+            name: self.interned(&name.0).into(),
+            fields: out,
+        })))
+    }
+
+    fn void_type(&self, span: miette::SourceSpan) -> &'arena TypeExpr<'arena> {
+        self.arena.alloc(TypeExpr {
+            kind: TypeKind::Builtin(BuiltinType::void),
+            span,
+        })
     }
 
     fn eval_macro_type_info(
@@ -2327,6 +2838,7 @@ impl<'arena> Interp<'arena> {
             DeclarationKind::Use { .. } => "use",
             DeclarationKind::ComptimeConst { .. } => "comptime_const",
             DeclarationKind::ComptimeBlock { .. } => "comptime_block",
+            DeclarationKind::ComptimeStruct { .. } => "comptime_struct",
             DeclarationKind::ConditionalBlock { .. } => "conditional_block",
             DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => "extern",
         };

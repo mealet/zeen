@@ -87,11 +87,16 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                     TokenKind::Keyword(CompilerKeyword::Fn) => {
                         self.parse_comptime_fn(start_span, is_pub)
                     }
+                    TokenKind::Keyword(CompilerKeyword::Struct) => {
+                        self.parse_struct(start_span, is_pub, true)
+                    }
                     TokenKind::OpenBrace => self.parse_comptime_block(start_span),
                     _ => self.parse_comptime_const(start_span, is_pub),
                 }
             }
-            TokenKind::Keyword(CompilerKeyword::Struct) => self.parse_struct(start_span, is_pub),
+            TokenKind::Keyword(CompilerKeyword::Struct) => {
+                self.parse_struct(start_span, is_pub, false)
+            }
             TokenKind::Keyword(CompilerKeyword::Enum) => self.parse_enum(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Alias) => self.parse_alias(start_span, is_pub),
             TokenKind::Keyword(CompilerKeyword::Use) => self.parse_use(is_pub),
@@ -523,6 +528,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         &mut self,
         start_span: miette::SourceSpan,
         is_pub: IsPub,
+        is_comptime: bool,
     ) -> Option<&'ctx Declaration<'ctx>> {
         #[derive(PartialEq)]
         enum Mode {
@@ -623,14 +629,36 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let span = close_brace.merge_span(start_span);
 
-        let decl = self.p.arena.alloc(Declaration {
-            kind: DeclarationKind::StructDecl {
+        let kind = if is_comptime {
+            if let Some(generics) = generics
+                && let Some(first) = generics.first()
+            {
+                self.p.report(ParserError::SyntaxError {
+                    label: "comptime structs cannot have generic parameters".into(),
+                    help: Some("use `zeen_type` fields instead".into()),
+                    src: self.p.named_src(),
+                    span: first.name.1,
+                });
+            }
+
+            DeclarationKind::ComptimeStruct {
+                name,
+                is_pub: is_pub.0,
+                fields,
+                methods,
+            }
+        } else {
+            DeclarationKind::StructDecl {
                 name,
                 is_pub: is_pub.0,
                 generics,
                 fields,
                 methods,
-            },
+            }
+        };
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind,
             source: (span, self.p.named_src()).into(),
         });
 

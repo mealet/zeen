@@ -1,18 +1,21 @@
+use std::path::PathBuf;
 use std::rc::Rc;
 
-use zeen_ast::TypeExpr;
+use zeen_ast::{Declaration, TypeExpr};
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Record<'arena> {
-    pub kind: &'static str,
-    pub fields: Vec<(&'static str, Value<'arena>)>,
+pub struct StructValue<'arena> {
+    pub decl: &'arena Declaration<'arena>,
+    pub module: PathBuf,
+    pub name: Rc<str>,
+    pub fields: Vec<(Rc<str>, Value<'arena>)>,
 }
 
-impl<'arena> Record<'arena> {
+impl<'arena> StructValue<'arena> {
     pub fn get(&self, name: &str) -> Option<&Value<'arena>> {
         self.fields
             .iter()
-            .find(|(field, _)| *field == name)
+            .find(|(field, _)| field.as_ref() == name)
             .map(|(_, value)| value)
     }
 }
@@ -25,22 +28,22 @@ pub enum Value<'arena> {
     Char(char),
     Str(Rc<str>),
     Array(Vec<Value<'arena>>),
-    Record(Rc<Record<'arena>>),
+    Struct(Rc<StructValue<'arena>>),
 
     Type(&'arena TypeExpr<'arena>),
 }
 
 impl Value<'_> {
-    pub fn type_name(&self) -> &'static str {
+    pub fn type_name(&self) -> String {
         match self {
-            Self::Int(_) => "comptime_int",
-            Self::Float(_) => "comptime_float",
-            Self::Bool(_) => "comptime_bool",
-            Self::Char(_) => "comptime_char",
-            Self::Str(_) => "comptime_str",
-            Self::Array(_) => "comptime_array",
-            Self::Record(record) => record.kind,
-            Self::Type(_) => "zeen_type",
+            Self::Int(_) => "comptime_int".to_string(),
+            Self::Float(_) => "comptime_float".to_string(),
+            Self::Bool(_) => "comptime_bool".to_string(),
+            Self::Char(_) => "comptime_char".to_string(),
+            Self::Str(_) => "comptime_str".to_string(),
+            Self::Array(_) => "comptime_array".to_string(),
+            Self::Struct(value) => value.name.to_string(),
+            Self::Type(_) => "zeen_type".to_string(),
         }
     }
 
@@ -62,16 +65,16 @@ impl Value<'_> {
                 s.push(']');
                 s
             }
-            Self::Record(record) => {
-                let mut s = String::from(record.kind);
+            Self::Struct(value) => {
+                let mut s = String::from(value.name.as_ref());
                 s.push_str(" { ");
-                for (i, (name, value)) in record.fields.iter().enumerate() {
+                for (i, (name, field)) in value.fields.iter().enumerate() {
                     if i > 0 {
                         s.push_str(", ");
                     }
                     s.push_str(name);
                     s.push_str(": ");
-                    s.push_str(&value.display());
+                    s.push_str(&field.display());
                 }
                 s.push_str(" }");
                 s

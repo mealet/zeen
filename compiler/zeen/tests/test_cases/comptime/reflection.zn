@@ -21,7 +21,7 @@ comptime YType = @fieldType(Point, "y");
 
 comptime fn dump_fields(T: zeen_type) void {
   for (f : @fields(T)) {
-    @println("[$(f.index)] $(f.name): $(f.type)");
+    @println("[$(f.index)] $(f.name): $(f.ty)");
   }
 }
 
@@ -32,7 +32,7 @@ comptime fn dump_variants(T: zeen_type) void {
 }
 
 fn main() {
-  @println("{} {}", Fields[1].name, Fields[0].type);
+  @println("{} {}", Fields[1].name, Fields[0].ty);
   dump_fields(@zeen_type(Point));
   dump_variants(@zeen_type(Shape));
   @println("{} {}", PointInfo, ShapeInfo);

@@ -113,6 +113,14 @@ pub enum DeclarationKind<'arena> {
 
     ComptimeBlock(&'arena ComptimeBlock<'arena>),
 
+    ComptimeStruct {
+        name: (Spur, SourceSpan),
+        is_pub: bool,
+
+        fields: &'arena [StructField<'arena>],
+        methods: &'arena [&'arena Declaration<'arena>],
+    },
+
     /// A declaration block guarded by a target condition (`@os[linux] { ... }`).
     ConditionalBlock(&'arena ConditionalBlock<'arena>),
 }

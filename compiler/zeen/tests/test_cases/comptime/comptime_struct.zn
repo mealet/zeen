@@ -1,0 +1,41 @@
+comptime struct Point {
+  x: comptime_int,
+  y: comptime_int,
+
+  fn sum(self) comptime_int {
+    return self.x + self.y;
+  }
+
+  fn offset(*self, dx: comptime_int) void {
+    self.x += dx;
+  }
+
+  fn label(*const self) comptime_str {
+    return "point";
+  }
+}
+
+comptime struct Row {
+  cells: [3]Point,
+
+  fn total(self) comptime_int {
+    return self.cells[0].sum() + self.cells[1].sum() + self.cells[2].sum();
+  }
+}
+
+comptime Base = Point { .x = 2, .y = 3 };
+
+comptime fn shifted(x: comptime_int) Point {
+  let point = Base;
+  point.offset(x);
+  return point;
+}
+
+comptime Total = Row {
+  .cells = [shifted(0), shifted(1), shifted(2)],
+}.total();
+
+fn main() {
+  @println("{} {} {} {}", Base.x, Base.y, Base.sum(), Base.label());
+  @println("{} {}", Total, shifted(5).sum());
+}

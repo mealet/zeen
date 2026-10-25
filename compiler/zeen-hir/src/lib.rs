@@ -178,7 +178,8 @@ impl<'res> HirLowering<'res> {
 
             DeclarationKind::ComptimeConst { .. }
             | DeclarationKind::ComptimeFn { .. }
-            | DeclarationKind::ComptimeBlock(_) => {
+            | DeclarationKind::ComptimeBlock(_)
+            | DeclarationKind::ComptimeStruct { .. } => {
                 unreachable!("comptime declarations are stripped before HIR lowering")
             }
 

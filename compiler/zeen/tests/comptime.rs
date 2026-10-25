@@ -790,3 +790,282 @@ fn keeps_runtime_annotations_outside_comptime() {
 
     assert!(result.success, "stderr: {}", result.stderr);
 }
+
+#[test]
+fn comptime_struct_methods_and_arrays() {
+    let source = r#"comptime struct Point {
+  x: comptime_int,
+  y: comptime_int,
+
+  fn sum(self) comptime_int {
+    return self.x + self.y;
+  }
+
+  fn offset(*self, dx: comptime_int) void {
+    self.x += dx;
+  }
+}
+
+comptime struct Row {
+  cells: [3]Point,
+
+  fn total(self) comptime_int {
+    return self.cells[0].sum() + self.cells[1].sum() + self.cells[2].sum();
+  }
+}
+
+comptime fn make(x: comptime_int) Point {
+  return Point { .x = x, .y = x * 2 };
+}
+
+fn main() {
+  comptime {
+    let point = make(1);
+    point.offset(4);
+    @println("{} {}", point.x, point.sum());
+
+    let row = Row { .cells = [make(1), make(2), make(3)] };
+    @println("{} {}", row.total(), row.cells[2].y);
+
+    let copy = point;
+    copy.offset(10);
+    @println("{} {}", point.x, copy.x);
+  };
+}
+"#;
+
+    let result = compile("comptime_struct", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(
+        result.stdout.contains("[comptime][main.zn:27] 5 7"),
+        "stdout: {}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("[comptime][main.zn:27] 18 6"),
+        "stdout: {}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("[comptime][main.zn:27] 5 15"),
+        "stdout: {}",
+        result.stdout
+    );
+}
+
+#[test]
+fn comptime_struct_accepts_nested_values() {
+    let source = r#"comptime struct Inner {
+  value: comptime_int,
+}
+
+comptime struct Middle {
+  inner: Inner,
+  name: comptime_str,
+}
+
+comptime struct Outer {
+  middle: Middle,
+  flag: comptime_bool,
+}
+
+comptime Value = Outer {
+  .middle = Middle { .inner = Inner { .value = 3 }, .name = "nested" },
+  .flag = true,
+}.middle.inner.value;
+
+fn main() {
+  comptime {
+    @println("{}", Value);
+  };
+}
+"#;
+
+    let result = compile("comptime_struct_nested", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(
+        result.stdout.contains("[comptime][main.zn:21] 3"),
+        "stdout: {}",
+        result.stdout
+    );
+}
+
+#[test]
+fn rejects_unknown_comptime_struct_field() {
+    let result = compile(
+        "comptime_struct_unknown_field",
+        "comptime struct Point {\n  x: comptime_int,\n}\n\nfn main() {\n  comptime {\n    let point = Point { .x = 1, .y = 2 };\n  };\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::type_mismatch"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("`Point` has no field `y`"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_duplicate_comptime_struct_field() {
+    let result = compile(
+        "comptime_struct_duplicate_field",
+        "comptime struct Point {\n  x: comptime_int,\n}\n\nfn main() {\n  comptime {\n    let point = Point { .x = 1, .x = 2 };\n  };\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result
+            .stderr
+            .contains("duplicate field `x` in comptime struct value"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_missing_comptime_struct_field() {
+    let result = compile(
+        "comptime_struct_missing_field",
+        "comptime struct Point {\n  x: comptime_int,\n  y: comptime_int,\n}\n\nfn main() {\n  comptime {\n    let point = Point { .x = 1 };\n  };\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result
+            .stderr
+            .contains("missing field `y` in comptime struct value `Point`"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_runtime_type_in_comptime_struct() {
+    let result = compile(
+        "comptime_struct_runtime_field",
+        "comptime struct Point {\n  x: i32,\n}\n\nfn main() {}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_type"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains(
+            "runtime type `i32` is not allowed in comptime code, use `comptime_int` instead"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_comptime_struct_in_runtime_code() {
+    let result = compile(
+        "comptime_struct_runtime_value",
+        "comptime struct Point {\n  x: comptime_int,\n}\n\ncomptime Value = Point { .x = 1 };\n\nfn main() {\n  @println(\"{}\", Value);\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_only"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("comptime Point values cannot be used in runtime code"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_unknown_comptime_struct_method() {
+    let result = compile(
+        "comptime_struct_unknown_method",
+        "comptime struct Point {\n  x: comptime_int,\n}\n\nfn main() {\n  comptime {\n    let point = Point { .x = 1 };\n    point.missing();\n  };\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("`Point` has no method `missing`"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_generic_comptime_struct() {
+    let result = compile(
+        "comptime_struct_generic",
+        "comptime struct Point[T] {\n  value: T,\n}\n\nfn main() {}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result
+            .stderr
+            .contains("comptime structs cannot have generic parameters"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn imports_public_comptime_struct() {
+    let files = [
+        (
+            "math.zn",
+            "pub comptime struct Point {\n  x: comptime_int,\n  y: comptime_int,\n\n  fn sum(self) comptime_int {\n    return self.x + self.y;\n  }\n}\n\ncomptime struct Secret {\n  value: comptime_int,\n}\n\npub comptime fn make(x: comptime_int) Point {\n  return Point { .x = x, .y = x };\n}\n",
+        ),
+        (
+            "main.zn",
+            "use math;\n\ncomptime fn total(point: Point) comptime_int {\n  return point.sum();\n}\n\nfn main() {\n  comptime {\n    let point = make(4);\n    @println(\"{} {}\", point.sum(), total(Point { .x = 7, .y = 2 }));\n  };\n}\n",
+        ),
+    ];
+
+    let result = compile_files("comptime_struct_module", &files);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(
+        result.stdout.contains("[comptime][main.zn:8] 8 9"),
+        "stdout: {}",
+        result.stdout
+    );
+}
+
+#[test]
+fn rejects_private_comptime_struct_across_modules() {
+    let files = [
+        (
+            "math.zn",
+            "comptime struct Secret {\n  value: comptime_int,\n}\n",
+        ),
+        (
+            "main.zn",
+            "use math;\n\nfn main() {\n  comptime {\n    let secret = Secret { .value = 1 };\n  };\n}\n",
+        ),
+    ];
+
+    let result = compile_files("comptime_struct_private", &files);
+
+    assert!(!result.success);
+    assert!(
+        result
+            .stderr
+            .contains("comptime struct `Secret` is not public in the module that defines it"),
+        "stderr: {}",
+        result.stderr
+    );
+}
