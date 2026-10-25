@@ -1739,3 +1739,48 @@ fn main() {
         result.stderr
     );
 }
+
+#[test]
+fn rejects_emit_of_comptime_declaration() {
+    let result = compile(
+        "emit_comptime_decl",
+        "comptime {\n  @emit(@zeen_decl(comptime X = 1;));\n}\n\nfn main() {\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result
+            .stderr
+            .contains("@emit cannot emit a comptime constant declaration"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_emit_above_declaration_limit() {
+    let source = r#"comptime {
+  for (i : 0..1025) {
+    let name = @fresh_name("Bulk");
+
+    @emit(@zeen_decl(
+      pub struct $(name) {
+        pub index: i32
+      }
+    ));
+  }
+}
+
+fn main() {
+}
+"#;
+
+    let result = compile("emit_limit", source);
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("@emit exceeded the limit"),
+        "stderr: {}",
+        result.stderr
+    );
+}
