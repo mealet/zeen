@@ -96,6 +96,8 @@ pub enum ExpressionKind<'arena> {
 
     Type(&'arena crate::types::TypeExpr<'arena>),
 
+    Decl(&'arena crate::declarations::Declaration<'arena>),
+
     TargetVar(TargetVarKind),
 
     ConditionalBlock(&'arena ExprConditionalBlock<'arena>),

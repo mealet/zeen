@@ -105,6 +105,9 @@ pub struct Interp<'arena> {
     pub(crate) steps: usize,
     pub(crate) depth: usize,
 
+    pub(crate) splice_depth: usize,
+    pub(crate) capture_depth: usize,
+
     pub(crate) errors: Vec<Error>,
 }
 
@@ -124,6 +127,8 @@ impl<'arena> Interp<'arena> {
             shadow_stack: Vec::new(),
             steps: 0,
             depth: 0,
+            splice_depth: 0,
+            capture_depth: 0,
             errors: Vec::new(),
         }
     }
@@ -219,6 +224,13 @@ impl<'arena> Interp<'arena> {
 
     pub(crate) fn interned(&self, spur: &Spur) -> String {
         crate::display::interned(&self.interner, spur)
+    }
+
+    pub(crate) fn is_capture_macro(&self, name: Spur) -> bool {
+        matches!(
+            self.interner.borrow().resolve(&name),
+            "zeen_expr" | "zeen_decl" | "zeen_type"
+        )
     }
 
     pub(crate) fn type_display(&self, ty: &TypeExpr<'arena>) -> String {
@@ -1750,6 +1762,8 @@ impl<'arena> Interp<'arena> {
                     "dbg" => self.eval_macro_dbg(name.1, args),
                     "panic" => self.eval_macro_panic(name.1, args),
                     "zeen_type" => self.eval_macro_zeen_type(name.1, args),
+                    "zeen_expr" => self.eval_macro_zeen_expr(name.1, args),
+                    "zeen_decl" => self.eval_macro_zeen_decl(name.1, args),
                     "fields" => self.eval_macro_fields(name.1, args),
                     "variants" => self.eval_macro_variants(name.1, args),
                     "typeInfo" => self.eval_macro_type_info(name.1, args),
@@ -2609,8 +2623,77 @@ impl<'arena> Interp<'arena> {
         args: &'arena [&'arena Expression<'arena>],
     ) -> EvalResult<'arena> {
         let ty = self.type_arg(args.first(), span, "@zeen_type")?;
+        let module = self.current_module();
 
-        Ok(Value::Type(ty))
+        match self.capture_type(&module, ty) {
+            Ok(captured) => Ok(Value::Type(captured)),
+            Err(()) => Err(Unwind::Break),
+        }
+    }
+
+    fn eval_macro_zeen_expr(
+        &mut self,
+        span: miette::SourceSpan,
+        args: &'arena [&'arena Expression<'arena>],
+    ) -> EvalResult<'arena> {
+        let Some(arg) = args.first() else {
+            self.errors.push(Error::TypeMismatch {
+                message: "@zeen_expr requires an expression".into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        };
+
+        if args.len() > 1 {
+            self.errors.push(Error::TypeMismatch {
+                message: "@zeen_expr takes exactly one expression".into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        let module = self.current_module();
+
+        match self.capture_expr(&module, arg) {
+            Ok(captured) => Ok(Value::Expr(captured)),
+            Err(()) => Err(Unwind::Break),
+        }
+    }
+
+    fn eval_macro_zeen_decl(
+        &mut self,
+        span: miette::SourceSpan,
+        args: &'arena [&'arena Expression<'arena>],
+    ) -> EvalResult<'arena> {
+        let decl = match args.first().map(|arg| &arg.kind) {
+            Some(ExpressionKind::Decl(decl)) => *decl,
+            _ => {
+                self.errors.push(Error::TypeMismatch {
+                    message: "@zeen_decl requires a declaration".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        if args.len() > 1 {
+            self.errors.push(Error::TypeMismatch {
+                message: "@zeen_decl takes exactly one declaration".into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        let module = self.current_module();
+
+        match self.capture_decl(&module, decl) {
+            Ok(captured) => Ok(Value::Decl(captured)),
+            Err(()) => Err(Unwind::Break),
+        }
     }
 
     fn eval_macro_fields(

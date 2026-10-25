@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use zeen_ast::{Declaration, TypeExpr};
+use zeen_ast::{Declaration, Expression, TypeExpr};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StructValue<'arena> {
@@ -31,6 +31,8 @@ pub enum Value<'arena> {
     Struct(Rc<StructValue<'arena>>),
 
     Type(&'arena TypeExpr<'arena>),
+    Expr(&'arena Expression<'arena>),
+    Decl(&'arena Declaration<'arena>),
 }
 
 impl Value<'_> {
@@ -44,6 +46,8 @@ impl Value<'_> {
             Self::Array(_) => "comptime_array".to_string(),
             Self::Struct(value) => value.name.to_string(),
             Self::Type(_) => "zeen_type".to_string(),
+            Self::Expr(_) => "zeen_expr".to_string(),
+            Self::Decl(_) => "zeen_decl".to_string(),
         }
     }
 
@@ -80,6 +84,8 @@ impl Value<'_> {
                 s
             }
             Self::Type(_) => "type".to_string(),
+            Self::Expr(_) => "expression".to_string(),
+            Self::Decl(_) => "declaration".to_string(),
         }
     }
 }

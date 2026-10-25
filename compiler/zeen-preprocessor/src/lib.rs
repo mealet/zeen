@@ -701,6 +701,8 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
 
             ExpressionKind::Type(ty) => ExpressionKind::Type(self.resolve_type(ty)),
 
+            ExpressionKind::Decl(decl) => ExpressionKind::Decl(self.resolve_decl(decl)),
+
             ExpressionKind::Range {
                 start,
                 end,

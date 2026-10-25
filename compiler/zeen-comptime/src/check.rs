@@ -228,6 +228,8 @@ impl<'arena> Checker<'_> {
             | ExpressionKind::Type(_)
             | ExpressionKind::TargetVar(_) => {}
 
+            ExpressionKind::Decl(decl) => self.declaration(decl, true),
+
             ExpressionKind::Binary { lhs, rhs, .. } => {
                 self.expression(lhs, comptime);
                 self.expression(rhs, comptime);

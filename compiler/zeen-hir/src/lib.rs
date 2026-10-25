@@ -980,6 +980,10 @@ impl<'res> HirLowering<'res> {
             ExpressionKind::ComptimeBlock { .. } => {
                 unreachable!("comptime blocks must be evaluated before HIR lowering")
             }
+
+            ExpressionKind::Decl(_) => {
+                unreachable!("comptime declarations must be substituted before HIR lowering")
+            }
         };
 
         HirExpr {

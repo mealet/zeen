@@ -39,6 +39,45 @@ fn compile(name: &str, source: &str) -> CompileResult {
     compile_files(name, &[("main.zn", source)])
 }
 
+fn run(name: &str, source: &str) -> CompileResult {
+    let dir = std::env::temp_dir().join(format!("zeen_comptime_run_{}_{name}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("main.zn");
+    fs::write(&path, source).unwrap();
+
+    let binary = dir.join("program");
+
+    let build: Output = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .arg(&path)
+        .arg(&binary)
+        .assert()
+        .get_output()
+        .clone();
+
+    let result = if !build.status.success() {
+        CompileResult {
+            success: false,
+            stdout: String::new(),
+            stderr: String::from_utf8_lossy(&build.stderr).replace('\r', ""),
+        }
+    } else {
+        let executed = std::process::Command::new(&binary).output().unwrap();
+
+        CompileResult {
+            success: executed.status.success(),
+            stdout: String::from_utf8_lossy(&executed.stdout).replace('\r', ""),
+            stderr: String::from_utf8_lossy(&executed.stderr).replace('\r', ""),
+        }
+    };
+
+    let _ = fs::remove_dir_all(&dir);
+
+    result
+}
+
 #[test]
 fn prints_block_and_function_prefixes() {
     let source = r#"comptime fn emit(n: comptime_int) comptime_int {
@@ -520,24 +559,22 @@ fn main() {
 }
 
 #[test]
-fn rejects_splice_outside_quote() {
+fn rejects_splice_of_runtime_value() {
     let result = compile(
-        "splice_outside_quote",
+        "splice_runtime_value",
         "fn main() {\n  let x = $(1 + 2);\n}\n",
     );
 
     assert!(!result.success);
     assert!(
-        result
-            .stderr
-            .contains("zeen::comptime::splice_outside_quote"),
+        result.stderr.contains("zeen::comptime::type_mismatch"),
         "stderr: {}",
         result.stderr
     );
     assert!(
         result
             .stderr
-            .contains("`$()` is only allowed inside strings in v1"),
+            .contains("`$()` in runtime code expects a zeen_expr, got comptime_int"),
         "stderr: {}",
         result.stderr
     );
@@ -1068,4 +1105,164 @@ fn rejects_private_comptime_struct_across_modules() {
         "stderr: {}",
         result.stderr
     );
+}
+
+#[test]
+fn inserts_captured_expressions() {
+    let source = r#"comptime fn twice(n: comptime_int) zeen_expr {
+  return @zeen_expr($(n) + $(n));
+}
+
+comptime Captured = @zeen_expr(1 + 2);
+
+fn main() {
+  let value = $(Captured);
+  let four = $(twice(2));
+  @println("{} {}", value, four);
+}
+"#;
+
+    let result = run("quote_expr", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("3 4"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn captures_expressions_without_evaluation() {
+    let source = r#"comptime fn total(x: comptime_int) zeen_expr {
+  return @zeen_expr($(x) + @zeen_expr(1));
+}
+
+fn main() {
+  let value = $(total(1));
+  @println("{}", value);
+}
+"#;
+
+    let result = run("quote_expr_nested", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("2"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn interpolates_strings_inside_captured_expressions() {
+    let source = r#"comptime Text = @zeen_expr("x = $(1 + 2)");
+
+fn main() {
+  @println($(Text));
+}
+"#;
+
+    let result = run("quote_expr_string", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("x = 3"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn substitutes_type_splices() {
+    let source = r#"comptime fn sized(n: comptime_int) zeen_type {
+  return @zeen_type([$(n)]i32);
+}
+
+comptime Array = sized(3);
+
+fn main() {
+  let values: Array = [1, 2, 3];
+  @println("{}", values[2]);
+}
+"#;
+
+    let result = run("quote_type_splice", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("3"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn requires_splice_for_type_values() {
+    let result = compile(
+        "quote_type_missing_splice",
+        "comptime fn sized(n: comptime_int) zeen_type {\n  return @zeen_type([n]i32);\n}\n\ncomptime Array = sized(3);\n\nfn main() {\n  let values: Array = [1, 2, 3];\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::resolver::unresolved_ident"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("unresolved identifier: n"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_decl_values_in_runtime_code() {
+    let result = compile(
+        "quote_decl_runtime",
+        "comptime fn make() zeen_decl {\n  return @zeen_decl(struct Foo { x: i32 });\n}\n\nfn main() {\n  let value = make();\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_only"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("comptime zeen_decl values can only be used with @emit"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_non_capture_value_in_splice() {
+    let result = compile(
+        "quote_splice_mismatch",
+        "fn main() {\n  let x = $(\"text\");\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::type_mismatch"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("`$()` in runtime code expects a zeen_expr, got comptime_str"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn reports_inserted_expressions_at_call_site() {
+    let source = r#"comptime fn bad() zeen_expr {
+  return @zeen_expr(1);
+}
+
+fn main() {
+  let x: bool = $(bad());
+}
+"#;
+
+    let result = compile("quote_expr_span", source);
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::typechecker::mismatch"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("main.zn:6:17"), "stderr: {}", result.stderr);
 }

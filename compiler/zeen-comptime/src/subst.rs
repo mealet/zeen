@@ -717,10 +717,7 @@ impl<'arena> Interp<'arena> {
     ) -> Result<Option<&'arena Expression<'arena>>, Vec<Error>> {
         if self.is_comptime_value_expr(module, expr) {
             return match self.eval_fresh_expr(module, expr) {
-                Ok(value) => match self.value_into_expr(value, expr.span) {
-                    Ok(new_expr) => Ok(Some(self.arena.alloc(new_expr))),
-                    Err(error) => Err(self.report(error)),
-                },
+                Ok(value) => self.value_to_expr(module, value, expr.span),
                 Err(_) => Err(self.errors.clone()),
             };
         }
@@ -739,10 +736,7 @@ impl<'arena> Interp<'arena> {
 
                 if self.is_comptime_const(module, *name) {
                     match self.comptime_const_value(module, *name) {
-                        Some(value) => match self.value_into_expr(value, expr.span) {
-                            Ok(new_expr) => Ok(Some(self.arena.alloc(new_expr))),
-                            Err(error) => Err(self.report(error)),
-                        },
+                        Some(value) => self.value_to_expr(module, value, expr.span),
                         None => Err(self.errors.clone()),
                     }
                 } else {
@@ -835,10 +829,7 @@ impl<'arena> Interp<'arena> {
                     }
 
                     return match self.eval_comptime_call(&owner, callee_name, expr.span, &values) {
-                        Ok(value) => match self.value_into_expr(value, expr.span) {
-                            Ok(new_call_expr) => Ok(Some(self.arena.alloc(new_call_expr))),
-                            Err(error) => Err(self.report(error)),
-                        },
+                        Ok(value) => self.value_to_expr(module, value, expr.span),
                         Err(_) => Err(self.errors.clone()),
                     };
                 }
@@ -857,6 +848,13 @@ impl<'arena> Interp<'arena> {
             }
 
             ExpressionKind::MacroCall { name, args } => {
+                if self.is_capture_macro(name.0) {
+                    return match self.eval_fresh_expr(module, expr) {
+                        Ok(value) => self.value_to_expr(module, value, expr.span),
+                        Err(_) => Err(self.errors.clone()),
+                    };
+                }
+
                 let mut new_args: Vec<&'arena Expression<'arena>> = Vec::with_capacity(args.len());
                 let mut changed = false;
 
@@ -1247,10 +1245,7 @@ impl<'arena> Interp<'arena> {
                             return Ok(Some(self.void_macro_expr(expr.span)));
                         }
 
-                        match self.value_into_expr(value, expr.span) {
-                            Ok(new_expr) => Ok(Some(self.arena.alloc(new_expr))),
-                            Err(error) => Err(self.report(error)),
-                        }
+                        self.value_to_expr(module, value, expr.span)
                     }
                     Err(Unwind::Break | Unwind::Continue) => Err(self.errors.clone()),
                     Err(Unwind::Return(_)) => {
@@ -1264,13 +1259,35 @@ impl<'arena> Interp<'arena> {
                 }
             }
 
-            ExpressionKind::Splice { .. } => {
-                self.errors.push(Error::SpliceOutsideQuote {
-                    message: "`$()` is only allowed inside strings in v1".into(),
-                    src: self.current_src(),
-                    span: expr.span,
-                });
-                Err(self.errors.clone())
+            ExpressionKind::Splice { expr: inner } => {
+                if self.splice_depth > 0 {
+                    self.errors.push(Error::SpliceOutsideQuote {
+                        message: "`$()` cannot be nested inside an inserted expression".into(),
+                        src: self.current_src(),
+                        span: expr.span,
+                    });
+                    return Err(self.errors.clone());
+                }
+
+                match self.eval_fresh_expr(module, inner) {
+                    Ok(Value::Expr(captured)) => {
+                        let inserted = self.insert_captured_expr(module, captured, expr.span)?;
+                        Ok(Some(inserted))
+                    }
+                    Ok(other) => {
+                        self.errors.push(Error::TypeMismatch {
+                            message: format!(
+                                "`$()` in runtime code expects a zeen_expr, got {}",
+                                other.type_name()
+                            )
+                            .into(),
+                            src: self.current_src(),
+                            span: expr.span,
+                        });
+                        Err(self.errors.clone())
+                    }
+                    Err(_) => Err(self.errors.clone()),
+                }
             }
 
             other => {
@@ -1611,6 +1628,50 @@ impl<'arena> Interp<'arena> {
         Ok(Some(literal))
     }
 
+    pub(crate) fn value_to_expr(
+        &mut self,
+        module: &PathBuf,
+        value: Value<'arena>,
+        span: miette::SourceSpan,
+    ) -> Result<Option<&'arena Expression<'arena>>, Vec<Error>> {
+        match value {
+            Value::Expr(captured) => match self.insert_captured_expr(module, captured, span) {
+                Ok(inserted) => Ok(Some(inserted)),
+                Err(errors) => Err(errors),
+            },
+            Value::Decl(_) => Err(self.report(Error::RuntimeOnly {
+                message: "comptime zeen_decl values can only be used with @emit".into(),
+                src: self.current_src(),
+                span,
+            })),
+            other => match self.value_into_expr(other, span) {
+                Ok(expression) => Ok(Some(self.arena.alloc(expression))),
+                Err(error) => Err(self.report(error)),
+            },
+        }
+    }
+
+    fn insert_captured_expr(
+        &mut self,
+        module: &PathBuf,
+        captured: &'arena Expression<'arena>,
+        span: miette::SourceSpan,
+    ) -> Result<&'arena Expression<'arena>, Vec<Error>> {
+        let mut inserted = *captured;
+        inserted.span = span;
+        let inserted = self.arena.alloc(inserted);
+
+        self.splice_depth += 1;
+        let substituted = self.substitute_expr(module, inserted);
+        self.splice_depth -= 1;
+
+        match substituted {
+            Ok(None) => Ok(inserted),
+            Ok(Some(new_expr)) => Ok(new_expr),
+            Err(errors) => Err(errors),
+        }
+    }
+
     pub(crate) fn value_into_expr(
         &self,
         value: Value<'arena>,
@@ -1645,6 +1706,16 @@ impl<'arena> Interp<'arena> {
 
                 return Ok(Expression {
                     kind: ExpressionKind::Literal(Literal::String(interned)),
+                    span,
+                });
+            }
+
+            Value::Expr(expr) => return Ok(*expr),
+
+            Value::Decl(_) => {
+                return Err(Error::RuntimeOnly {
+                    message: "comptime zeen_decl values can only be used with @emit".into(),
+                    src: self.current_src(),
                     span,
                 });
             }

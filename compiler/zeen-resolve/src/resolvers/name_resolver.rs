@@ -1165,6 +1165,8 @@ impl<'ctx> NameResolver {
 
             ExpressionKind::Splice { expr } => self.collect_global_deps(expr, out),
 
+            ExpressionKind::Decl(_) => {}
+
             ExpressionKind::ConditionalBlock(_) => {}
 
             ExpressionKind::Literal(_) => {}
@@ -1976,6 +1978,8 @@ impl<'ctx> NameResolver {
             ExpressionKind::Splice { expr } => {
                 self.resolve_expr(expr);
             }
+
+            ExpressionKind::Decl(_) => {}
 
             ExpressionKind::ConditionalBlock(_) => {}
         }

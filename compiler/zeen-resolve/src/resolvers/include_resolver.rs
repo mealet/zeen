@@ -270,6 +270,7 @@ impl<'ctx> IncludeResolver<'ctx> {
     fn expr_usage(&self, expr: &Expression<'ctx>, flags: &mut UsageFlags) {
         match &expr.kind {
             ExpressionKind::Literal(_) | ExpressionKind::TargetVar(_) => {}
+            ExpressionKind::Decl(_) => {}
             ExpressionKind::Ident { name, .. } => {
                 self.check_prelude_name(*name, flags);
             }

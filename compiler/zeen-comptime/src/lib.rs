@@ -1,3 +1,4 @@
+mod capture;
 mod check;
 mod display;
 mod error;

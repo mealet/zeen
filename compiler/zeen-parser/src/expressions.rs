@@ -951,6 +951,18 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         if self.p.at(TokenKind::OpenParen) {
             let _ = self.p.advance_not_eof()?;
 
+            if ident_slice.as_str() == "zeen_decl" {
+                let decl = crate::declarations::DeclParser::new(self.p).parse()?;
+
+                let decl_expr = self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Decl(decl),
+                    span: decl.source.span,
+                });
+
+                args_buffer.push(decl_expr);
+                let _ = self.p.eat(TokenKind::Comma);
+            }
+
             if matches!(
                 ident_slice.as_str(),
                 "as" | "sizeof"
