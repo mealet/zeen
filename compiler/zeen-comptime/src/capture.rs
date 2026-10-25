@@ -1,3 +1,4 @@
+use lasso::Spur;
 use std::path::PathBuf;
 
 use zeen_ast::{
@@ -536,6 +537,7 @@ impl<'arena> Interp<'arena> {
                 is_pub,
                 is_extern,
             } => {
+                let (name, name_changed) = self.capture_decl_name(module, name)?;
                 let new_params = self.capture_params(module, params)?;
                 let new_return = match return_type {
                     Some(ty) => Some(self.capture_type(module, ty)?),
@@ -546,7 +548,8 @@ impl<'arena> Interp<'arena> {
                     None => None,
                 };
 
-                if unchanged(params, new_params)
+                if !name_changed
+                    && unchanged(params, new_params)
                     && option_unchanged(return_type, new_return)
                     && option_unchanged(body, new_body)
                 {
@@ -574,10 +577,11 @@ impl<'arena> Interp<'arena> {
                 fields,
                 methods,
             } => {
+                let (name, name_changed) = self.capture_decl_name(module, name)?;
                 let (new_fields, fields_changed) = self.capture_fields(module, fields)?;
                 let (new_methods, methods_changed) = self.capture_decl_list(module, methods)?;
 
-                if !fields_changed && !methods_changed {
+                if !name_changed && !fields_changed && !methods_changed {
                     return Ok(decl);
                 }
 
@@ -600,6 +604,7 @@ impl<'arena> Interp<'arena> {
                 variants,
                 methods,
             } => {
+                let (name, name_changed) = self.capture_decl_name(module, name)?;
                 let mut new_variants = Vec::with_capacity(variants.len());
                 let mut variants_changed = false;
 
@@ -641,7 +646,7 @@ impl<'arena> Interp<'arena> {
 
                 let (new_methods, methods_changed) = self.capture_decl_list(module, methods)?;
 
-                if !variants_changed && !methods_changed {
+                if !name_changed && !variants_changed && !methods_changed {
                     return Ok(decl);
                 }
 
@@ -762,10 +767,11 @@ impl<'arena> Interp<'arena> {
                 is_const,
                 is_pub,
             } => {
+                let (name, name_changed) = self.capture_decl_name(module, name)?;
                 let new_ty = self.capture_type(module, ty)?;
                 let new_value = self.capture_expr(module, value)?;
 
-                if unchanged(ty, new_ty) && unchanged(value, new_value) {
+                if !name_changed && unchanged(ty, new_ty) && unchanged(value, new_value) {
                     return Ok(decl);
                 }
 
@@ -782,9 +788,10 @@ impl<'arena> Interp<'arena> {
             }
 
             DeclarationKind::ExternVar { name, ty, is_pub } => {
+                let (name, name_changed) = self.capture_decl_name(module, name)?;
                 let new_ty = self.capture_type(module, ty)?;
 
-                if unchanged(ty, new_ty) {
+                if !name_changed && unchanged(ty, new_ty) {
                     return Ok(decl);
                 }
 
@@ -799,14 +806,15 @@ impl<'arena> Interp<'arena> {
             }
 
             DeclarationKind::Alias(alias) => {
+                let (name, name_changed) = self.capture_decl_name(module, alias.name)?;
                 let new_ty = self.capture_type(module, alias.ty)?;
 
-                if unchanged(alias.ty, new_ty) {
+                if !name_changed && unchanged(alias.ty, new_ty) {
                     return Ok(decl);
                 }
 
                 let rebuilt = zeen_ast::declarations::AliasDecl {
-                    name: alias.name,
+                    name,
                     is_pub: alias.is_pub,
                     generics: alias.generics,
                     ty: new_ty,
@@ -824,9 +832,10 @@ impl<'arena> Interp<'arena> {
                 generics,
                 methods,
             } => {
+                let (name, name_changed) = self.capture_decl_name(module, name)?;
                 let (new_methods, methods_changed) = self.capture_decl_list(module, methods)?;
 
-                if !methods_changed {
+                if !name_changed && !methods_changed {
                     return Ok(decl);
                 }
 
@@ -870,6 +879,48 @@ impl<'arena> Interp<'arena> {
 
             DeclarationKind::ConditionalBlock(_) => {
                 unreachable!("conditional declarations are expanded before comptime")
+            }
+        }
+    }
+
+    fn capture_decl_name(
+        &mut self,
+        module: &PathBuf,
+        name: (Spur, miette::SourceSpan),
+    ) -> Result<((Spur, miette::SourceSpan), bool), ()> {
+        let text = self.interned(&name.0);
+
+        let Some(inner) = text
+            .strip_prefix("$(")
+            .and_then(|value| value.strip_suffix(')'))
+        else {
+            return Ok((name, false));
+        };
+
+        let fragment = inner.to_owned();
+        let value = match self.eval_interpolation_fragment(module, &fragment, name.1) {
+            Ok(value) => value,
+            Err(_) => return Err(()),
+        };
+
+        match value {
+            Value::Str(value) => {
+                let resolved = self.interner.borrow_mut().get_or_intern(value.as_ref());
+
+                Ok(((resolved, name.1), true))
+            }
+            other => {
+                self.errors.push(Error::TypeMismatch {
+                    message: format!(
+                        "a declaration name splice expects a comptime_str, got {}",
+                        other.type_name()
+                    )
+                    .into(),
+                    src: self.current_src(),
+                    span: name.1,
+                });
+
+                Err(())
             }
         }
     }

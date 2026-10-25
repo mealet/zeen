@@ -38,7 +38,7 @@ impl<'arena> Interp<'arena> {
         }
     }
 
-    fn substitute_decl(
+    pub(crate) fn substitute_decl(
         &mut self,
         module: &PathBuf,
         decl: &'arena Declaration<'arena>,
@@ -848,6 +848,17 @@ impl<'arena> Interp<'arena> {
             }
 
             ExpressionKind::MacroCall { name, args } => {
+                let macro_name = self.interned(&name.0);
+
+                if matches!(macro_name.as_str(), "emit" | "fresh_name") {
+                    return Err(self.report(Error::RuntimeOnly {
+                        message: format!("`@{macro_name}` is only available in comptime code")
+                            .into(),
+                        src: self.current_src(),
+                        span: expr.span,
+                    }));
+                }
+
                 if self.is_capture_macro(name.0) {
                     return match self.eval_fresh_expr(module, expr) {
                         Ok(value) => self.value_to_expr(module, value, expr.span),

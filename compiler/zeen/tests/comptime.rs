@@ -1264,5 +1264,206 @@ fn main() {
         "stderr: {}",
         result.stderr
     );
-    assert!(result.stderr.contains("main.zn:6:17"), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("main.zn:6:17"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn emits_declarations_from_comptime() {
+    let source = r#"comptime fn named(name: comptime_str) zeen_decl {
+  @zeen_decl(
+    pub struct $(name) {
+      pub value: i32
+    }
+  );
+}
+
+comptime fn adder() zeen_decl {
+  @zeen_decl(
+    pub fn inc(x: i32) i32 {
+      return x + 1;
+    }
+  );
+}
+
+comptime {
+  @emit(named("Point"));
+  @emit(adder());
+}
+
+fn main() {
+  let point = Point { .value = 41 };
+  @println("{}", inc(point.value));
+}
+"#;
+
+    let result = run("emit_declarations", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("42"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn emits_declarations_in_a_loop_with_fresh_names() {
+    let source = r#"comptime {
+  for (i : 0..3) {
+    let name = @fresh_name("Num");
+
+    @emit(@zeen_decl(
+      pub struct $(name) {
+        pub value: i32
+      }
+    ));
+  }
+}
+
+fn main() {
+  let first = Num_0 { .value = 1 };
+  let second = Num_1 { .value = 2 };
+  let third = Num_2 { .value = 3 };
+  @println("{}", first.value + second.value + third.value);
+}
+"#;
+
+    let result = run("emit_loop", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("6"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn rejects_emit_without_declaration() {
+    let result = compile(
+        "emit_mismatch",
+        "comptime {\n  @emit(1);\n}\n\nfn main() {}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::type_mismatch"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("@emit expects a zeen_decl, got comptime_int"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_name_splice_without_string() {
+    let result = compile(
+        "emit_name_mismatch",
+        "comptime {\n  @emit(@zeen_decl(pub struct $(1) { pub value: i32 }));\n}\n\nfn main() {}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::type_mismatch"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("a declaration name splice expects a comptime_str, got comptime_int"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_duplicate_emitted_name() {
+    let result = compile(
+        "emit_duplicate",
+        "comptime {\n  @emit(@zeen_decl(pub struct Twin { pub value: i32 }));\n  @emit(@zeen_decl(pub struct Twin { pub other: i32 }));\n}\n\nfn main() {}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result
+            .stderr
+            .contains("zeen::comptime::duplicate_definition"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("duplicate definition of `Twin`"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_emit_in_runtime_code() {
+    let result = compile(
+        "emit_runtime",
+        "comptime Value = @zeen_decl(pub struct Late { pub value: i32 });\n\nfn main() {\n  @emit(Value);\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_only"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("`@emit` is only available in comptime code"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_fresh_name_in_runtime_code() {
+    let result = compile(
+        "fresh_name_runtime",
+        "fn main() {\n  let name = @fresh_name(\"Num\");\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_only"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("`@fresh_name` is only available in comptime code"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn emits_from_nested_comptime_block() {
+    let source = r#"fn prepare() void {
+  comptime {
+    @emit(@zeen_decl(
+      pub struct Inner {
+        pub value: i32
+      }
+    ));
+  }
+}
+
+fn main() {
+  let inner = Inner { .value = 7 };
+  @println("{}", inner.value);
+}
+"#;
+
+    let result = run("emit_nested_block", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("7"), "stdout: {}", result.stdout);
 }

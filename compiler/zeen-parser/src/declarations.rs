@@ -13,6 +13,7 @@ use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
 pub struct DeclParser<'tok, 'ctx, 'pr> {
     p: &'pr mut Parser<'tok, 'ctx>,
+    name_splices: bool,
 }
 
 pub(crate) struct IsPub(pub bool);
@@ -22,11 +23,82 @@ pub(crate) struct AllowBare(pub bool);
 /// ==@ Declarations Parser @==
 impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
     pub fn new(parser: &'pr mut Parser<'tok, 'ctx>) -> Self {
-        Self { p: parser }
+        Self {
+            p: parser,
+            name_splices: false,
+        }
+    }
+
+    pub fn with_name_splices(mut self) -> Self {
+        self.name_splices = true;
+        self
     }
 
     pub fn errors(&self) -> &[ParserError] {
         &self.p.errors
+    }
+
+    fn parse_decl_name(&mut self) -> Option<(lasso::Spur, miette::SourceSpan)> {
+        if self.name_splices && self.p.at(TokenKind::Dollar) {
+            return self.parse_name_splice();
+        }
+
+        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let name_span = name_token.span;
+        let name_slice =
+            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
+
+        Some((self.p.get_or_intern(name_slice), name_span))
+    }
+
+    fn parse_name_splice(&mut self) -> Option<(lasso::Spur, miette::SourceSpan)> {
+        let dollar_span = self.p.current().span;
+
+        let _dollar = self.p.advance_not_eof()?;
+
+        if !self.p.at(TokenKind::OpenParen) {
+            self.p.report(ParserError::SyntaxError {
+                label: "expected `(` after `$` in a declaration name".into(),
+                help: None,
+                src: self.p.named_src(),
+                span: self.p.current().span,
+            });
+
+            return None;
+        }
+
+        let open_paren = self.p.advance_not_eof()?;
+        let mut end = open_paren.span.offset() + open_paren.span.len();
+        let mut depth = 1usize;
+
+        while depth > 0 {
+            let token = self.p.advance_not_eof()?;
+
+            match token.kind {
+                TokenKind::OpenParen => depth += 1,
+                TokenKind::CloseParen => {
+                    depth -= 1;
+                    end = token.span.offset() + token.span.len();
+                }
+                TokenKind::Eof => {
+                    self.p.report(ParserError::SyntaxError {
+                        label: "unterminated `$(` splice in a declaration name".into(),
+                        help: None,
+                        src: self.p.named_src(),
+                        span: dollar_span,
+                    });
+
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
+        let start = dollar_span.offset();
+        let span = (start, end - start).into();
+        let text = self.p.src[start..end].to_owned();
+
+        Some((self.p.get_or_intern(text), span))
     }
 }
 
@@ -229,12 +301,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Fn), "fn")?;
 
-        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let name_span = name_token.span;
-        let name_slice =
-            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
-
-        let name = (self.p.get_or_intern(name_slice), name_span);
+        let name = self.parse_decl_name()?;
 
         let mut type_parser = TypeParser::new(self.p);
 
@@ -378,12 +445,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Alias), "alias")?;
 
-        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let name_span = name_token.span;
-        let name_slice =
-            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
-
-        let name = (self.p.get_or_intern(name_slice), name_span);
+        let name = self.parse_decl_name()?;
 
         let generics = {
             let mut type_parser = TypeParser::new(self.p);
@@ -465,12 +527,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         _start_span: miette::SourceSpan,
         is_pub: IsPub,
     ) -> Option<&'ctx Declaration<'ctx>> {
-        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let name_span = name_token.span;
-        let name_slice =
-            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
-
-        let name = (self.p.get_or_intern(name_slice), name_span);
+        let name = self.parse_decl_name()?;
 
         let _ = self.p.expect(TokenKind::Eq, "= initial value")?;
 
@@ -541,12 +598,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Struct), "struct")?;
 
-        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let name_span = name_token.span;
-        let name_slice =
-            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
-
-        let name = (self.p.get_or_intern(name_slice), name_span);
+        let name = self.parse_decl_name()?;
 
         let mut type_parser = TypeParser::new(self.p);
 
@@ -737,12 +789,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Enum), "enum")?;
 
-        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let name_span = name_token.span;
-        let name_slice =
-            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
-
-        let name = (self.p.get_or_intern(name_slice), name_span);
+        let name = self.parse_decl_name()?;
 
         let mut type_parser = TypeParser::new(self.p);
         let generics = type_parser.parse_generics_declarations();
@@ -961,12 +1008,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let mut type_parser = TypeParser::new(self.p);
         let generics = type_parser.parse_generics_declarations();
 
-        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let name_span = name_token.span;
-        let name_slice =
-            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
-
-        let name = (self.p.get_or_intern(name_slice), name_span);
+        let name = self.parse_decl_name()?;
 
         let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
 
@@ -1106,12 +1148,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 .expect(TokenKind::Keyword(CompilerKeyword::Let), "let")
         }?;
 
-        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let name_span = name_token.span;
-        let name_slice =
-            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
-
-        let name = (self.p.get_or_intern(name_slice), name_span);
+        let name = self.parse_decl_name()?;
 
         let _ = self.p.expect(
             TokenKind::Colon,
@@ -1158,12 +1195,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::Let), "let")?;
 
-        let name_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let name_span = name_token.span;
-        let name_slice =
-            self.p.src[name_span.offset()..name_span.offset() + name_span.len()].to_owned();
-
-        let name = (self.p.get_or_intern(name_slice), name_span);
+        let name = self.parse_decl_name()?;
 
         let _ = self.p.expect(TokenKind::Colon, ":")?;
 
@@ -2401,5 +2433,36 @@ mod tests {
                 ..
             }])
         );
+    }
+
+    #[test]
+    fn decl_name_splice_is_kept_raw() {
+        const SRC: &str = "@zeen_decl(pub struct $(generate()) { pub value: i32 })";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        let expr = ExprParser::new(&mut parser).parse().unwrap();
+
+        let ExpressionKind::MacroCall { args, .. } = &expr.kind else {
+            panic!("expected a macro call");
+        };
+        let ExpressionKind::Decl(decl) = &args[0].kind else {
+            panic!("expected a captured declaration");
+        };
+        let DeclarationKind::StructDecl { name, .. } = decl.kind else {
+            panic!("expected a struct declaration");
+        };
+
+        assert_eq!(rodeo.borrow().resolve(&name.0), "$(generate())");
+    }
+
+    #[test]
+    fn decl_name_splice_outside_zeen_decl_rejected() {
+        const SRC: &str = "pub struct $(generate()) { pub value: i32 }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        let errors = parser.parse_program().unwrap_err();
+        assert_matches!(errors[0], ParserError::ExpectedToken { .. });
     }
 }

@@ -25,8 +25,18 @@ use crate::value::{StructValue, Value};
 
 pub const STEP_LIMIT: usize = 200_000;
 pub const DEPTH_LIMIT: usize = 200;
+pub const EMIT_LIMIT: usize = 1024;
 
 pub type EvalFrame<'arena> = Vec<FxHashMap<Spur, Value<'arena>>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum DeclNamespace {
+    Value,
+    Type,
+}
+
+pub(crate) type DeclNameKey = (String, DeclNamespace, Spur);
+pub(crate) type DeclSite = (String, usize);
 
 pub(crate) struct CallOutcome<'arena> {
     pub(crate) value: Value<'arena>,
@@ -108,6 +118,10 @@ pub struct Interp<'arena> {
     pub(crate) splice_depth: usize,
     pub(crate) capture_depth: usize,
 
+    pub(crate) emitted: Vec<(PathBuf, &'arena Declaration<'arena>)>,
+    pub(crate) declared_names: FxHashMap<DeclNameKey, DeclSite>,
+    pub(crate) fresh_counter: usize,
+
     pub(crate) errors: Vec<Error>,
 }
 
@@ -129,6 +143,9 @@ impl<'arena> Interp<'arena> {
             depth: 0,
             splice_depth: 0,
             capture_depth: 0,
+            emitted: Vec::new(),
+            declared_names: FxHashMap::default(),
+            fresh_counter: 0,
             errors: Vec::new(),
         }
     }
@@ -138,6 +155,12 @@ impl<'arena> Interp<'arena> {
         program: &'arena [&'arena Declaration<'arena>],
         module_of: impl Fn(&Declaration<'_>) -> PathBuf,
     ) -> Result<&'arena [&'arena Declaration<'arena>], Vec<Error>> {
+        for decl in program {
+            if let Some((key, _, site)) = self.declared_key(decl) {
+                self.declared_names.entry(key).or_insert(site);
+            }
+        }
+
         for decl in program {
             let path = module_of(decl);
 
@@ -206,7 +229,7 @@ impl<'arena> Interp<'arena> {
         let module_ref = module_of;
         let substituted = self.substitute_program(program, &module_ref)?;
 
-        let kept: Vec<&'arena Declaration<'arena>> = substituted
+        let mut kept: Vec<&'arena Declaration<'arena>> = substituted
             .into_iter()
             .filter(|decl| {
                 !matches!(
@@ -218,6 +241,25 @@ impl<'arena> Interp<'arena> {
                 )
             })
             .collect();
+
+        let mut index = 0;
+        while index < self.emitted.len() {
+            let module = self.emitted[index].0.clone();
+            let decl = self.emitted[index].1;
+            index += 1;
+
+            self.default_src = Some(decl.source.src());
+
+            match self.substitute_decl(&module, decl) {
+                Ok(Some(new_decl)) => kept.push(new_decl),
+                Ok(None) => kept.push(decl),
+                Err(errors) => return Err(errors),
+            }
+        }
+
+        if !self.errors.is_empty() {
+            return Err(self.errors.clone());
+        }
 
         Ok(self.arena.alloc_slice_copy(&kept))
     }
@@ -1082,33 +1124,51 @@ impl<'arena> Interp<'arena> {
             return Err(Unwind::Break);
         }
 
-        let iterator_value = self.eval_expr(iterator)?;
+        let outcome = match &iterator.kind {
+            ExpressionKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let start_value = match start {
+                    Some(expr) => Some(self.eval_expr(expr)?),
+                    None => None,
+                };
+                let end_value = match end {
+                    Some(expr) => Some(self.eval_expr(expr)?),
+                    None => None,
+                };
 
-        let outcome = match iterator_value {
-            Value::Int(total) if total >= 0 => {
-                let values: Vec<Value<'arena>> = (0..total).map(Value::Int).collect();
-                self.run_for_iteration(name, values, block)
+                self.run_for_range(name, start_value, end_value, *inclusive, block, span)
             }
 
-            Value::Array(items) => self.run_for_iteration(name, items, block),
+            _ => match self.eval_expr(iterator)? {
+                Value::Int(total) if total >= 0 => {
+                    self.run_for_range(name, None, Some(Value::Int(total)), false, block, span)
+                }
 
-            Value::Str(text) => {
-                let chars: Vec<Value<'arena>> = text.chars().map(Value::Char).collect();
-                self.run_for_iteration(name, chars, block)
-            }
+                Value::Int(total) => {
+                    self.errors.push(Error::TypeMismatch {
+                        message: format!("comptime `for` count must not be negative, got {total}")
+                            .into(),
+                        src: self.current_src(),
+                        span,
+                    });
+                    Err(Unwind::Break)
+                }
 
-            other => {
-                self.errors.push(Error::TypeMismatch {
-                    message: format!(
-                        "comptime `for` supports integer ranges, arrays and strings, got {}",
-                        other.type_name()
-                    )
-                    .into(),
-                    src: self.current_src(),
-                    span,
-                });
-                Err(Unwind::Break)
-            }
+                Value::Array(items) => self.run_for_iteration(name, items, block),
+
+                Value::Str(text) => {
+                    let chars: Vec<Value<'arena>> = text.chars().map(Value::Char).collect();
+                    self.run_for_iteration(name, chars, block)
+                }
+
+                other => {
+                    self.for_unsupported(other, span);
+                    Err(Unwind::Break)
+                }
+            },
         };
 
         self.depth -= 1;
@@ -1117,6 +1177,58 @@ impl<'arena> Interp<'arena> {
             Ok(()) => Ok(None),
             Err(unwind) => Err(unwind),
         }
+    }
+
+    fn run_for_range(
+        &mut self,
+        name: Spur,
+        start: Option<Value<'arena>>,
+        end: Option<Value<'arena>>,
+        inclusive: bool,
+        block: &'arena Statement<'arena>,
+        span: miette::SourceSpan,
+    ) -> Result<(), Unwind<'arena>> {
+        let start = match start {
+            Some(Value::Int(value)) => value,
+            Some(other) => {
+                self.for_unsupported(other, span);
+                return Err(Unwind::Break);
+            }
+            None => 0,
+        };
+
+        let end = match end {
+            Some(Value::Int(value)) => value,
+            Some(other) => {
+                self.for_unsupported(other, span);
+                return Err(Unwind::Break);
+            }
+            None => {
+                self.errors.push(Error::TypeMismatch {
+                    message: "comptime `for` requires an upper bound in a range expression".into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+        };
+
+        let end = if inclusive { end + 1 } else { end };
+        let values: Vec<Value<'arena>> = (start..end).map(Value::Int).collect();
+
+        self.run_for_iteration(name, values, block)
+    }
+
+    fn for_unsupported(&mut self, value: Value<'arena>, span: miette::SourceSpan) {
+        self.errors.push(Error::TypeMismatch {
+            message: format!(
+                "comptime `for` supports integer ranges, arrays and strings, got {}",
+                value.type_name()
+            )
+            .into(),
+            src: self.current_src(),
+            span,
+        });
     }
 
     fn run_for_iteration(
@@ -1764,6 +1876,8 @@ impl<'arena> Interp<'arena> {
                     "zeen_type" => self.eval_macro_zeen_type(name.1, args),
                     "zeen_expr" => self.eval_macro_zeen_expr(name.1, args),
                     "zeen_decl" => self.eval_macro_zeen_decl(name.1, args),
+                    "emit" => self.eval_macro_emit(name.1, args),
+                    "fresh_name" => self.eval_macro_fresh_name(name.1, args),
                     "fields" => self.eval_macro_fields(name.1, args),
                     "variants" => self.eval_macro_variants(name.1, args),
                     "typeInfo" => self.eval_macro_type_info(name.1, args),
@@ -1920,7 +2034,7 @@ impl<'arena> Interp<'arena> {
         self.interpolate_string(&module, &text, span)
     }
 
-    fn eval_interpolation_fragment(
+    pub(crate) fn eval_interpolation_fragment(
         &mut self,
         module: &PathBuf,
         fragment: &str,
@@ -2694,6 +2808,140 @@ impl<'arena> Interp<'arena> {
             Ok(captured) => Ok(Value::Decl(captured)),
             Err(()) => Err(Unwind::Break),
         }
+    }
+
+    fn declared_key(
+        &self,
+        decl: &'arena Declaration<'arena>,
+    ) -> Option<(DeclNameKey, miette::SourceSpan, DeclSite)> {
+        let (name, namespace) = match &decl.kind {
+            DeclarationKind::FnDecl { name, .. } => (*name, DeclNamespace::Value),
+            DeclarationKind::StructDecl { name, .. } => (*name, DeclNamespace::Type),
+            DeclarationKind::InterfaceDecl { name, .. } => (*name, DeclNamespace::Type),
+            DeclarationKind::EnumDecl { name, .. } => (*name, DeclNamespace::Type),
+            DeclarationKind::Alias(alias) => (alias.name, DeclNamespace::Type),
+            DeclarationKind::ExternVar { name, .. } => (*name, DeclNamespace::Value),
+            DeclarationKind::GlobalVar { name, .. } => (*name, DeclNamespace::Value),
+            _ => return None,
+        };
+
+        let src = decl.source.src();
+        let site = source_site(&src, name.1);
+
+        Some(((site.0.clone(), namespace, name.0), name.1, site))
+    }
+
+    fn eval_macro_emit(
+        &mut self,
+        span: miette::SourceSpan,
+        args: &'arena [&'arena Expression<'arena>],
+    ) -> EvalResult<'arena> {
+        let Some(arg) = args.first() else {
+            self.errors.push(Error::TypeMismatch {
+                message: "@emit requires a zeen_decl argument".into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        };
+
+        if args.len() > 1 {
+            self.errors.push(Error::TypeMismatch {
+                message: "@emit takes exactly one zeen_decl argument".into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        let decl = match self.eval_expr(arg) {
+            Ok(Value::Decl(decl)) => decl,
+            Ok(other) => {
+                self.errors.push(Error::TypeMismatch {
+                    message: format!("@emit expects a zeen_decl, got {}", other.type_name()).into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+            Err(unwind) => return Err(unwind),
+        };
+
+        let unsupported = match &decl.kind {
+            DeclarationKind::ComptimeConst { .. } => Some("comptime constant"),
+            DeclarationKind::ComptimeFn { .. } => Some("comptime function"),
+            DeclarationKind::ComptimeBlock(_) => Some("comptime block"),
+            DeclarationKind::ComptimeStruct { .. } => Some("comptime struct"),
+            DeclarationKind::Use { .. } => Some("use"),
+            DeclarationKind::ExternLink { .. } => Some("extern link"),
+            DeclarationKind::ExternInclude { .. } => Some("extern include"),
+            DeclarationKind::ConditionalBlock(_) => Some("conditional block"),
+            _ => None,
+        };
+
+        if let Some(what) = unsupported {
+            self.errors.push(Error::Unsupported {
+                message: format!("@emit cannot emit a {what} declaration").into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        if self.emitted.len() >= EMIT_LIMIT {
+            self.errors.push(Error::LimitExceeded {
+                message: format!("@emit exceeded the limit of {EMIT_LIMIT} declarations").into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        if let Some((key, name_span, site)) = self.declared_key(decl) {
+            match self.declared_names.get(&key) {
+                Some((file, line)) => {
+                    let name = self.interned(&key.2);
+                    self.errors.push(Error::DuplicateDefinition {
+                        message: format!(
+                            "duplicate definition of `{name}`, already defined at {file}:{line}"
+                        )
+                        .into(),
+                        src: decl.source.src(),
+                        span: name_span,
+                    });
+                    return Err(Unwind::Break);
+                }
+                None => {
+                    self.declared_names.insert(key, site);
+                }
+            }
+        }
+
+        self.emitted.push((self.current_module(), decl));
+
+        Ok(Value::Bool(false))
+    }
+
+    fn eval_macro_fresh_name(
+        &mut self,
+        span: miette::SourceSpan,
+        args: &'arena [&'arena Expression<'arena>],
+    ) -> EvalResult<'arena> {
+        if args.len() != 1 {
+            self.errors.push(Error::TypeMismatch {
+                message: "@fresh_name takes exactly one prefix string".into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        let prefix = self.string_arg(args[0], span, "@fresh_name")?;
+
+        let counter = self.fresh_counter;
+        self.fresh_counter += 1;
+
+        Ok(Value::Str(format!("{prefix}_{counter}").into()))
     }
 
     fn eval_macro_fields(

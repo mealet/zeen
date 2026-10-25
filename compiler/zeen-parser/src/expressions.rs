@@ -952,7 +952,9 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             let _ = self.p.advance_not_eof()?;
 
             if ident_slice.as_str() == "zeen_decl" {
-                let decl = crate::declarations::DeclParser::new(self.p).parse()?;
+                let decl = crate::declarations::DeclParser::new(self.p)
+                    .with_name_splices()
+                    .parse()?;
 
                 let decl_expr = self.p.arena.alloc(Expression {
                     kind: ExpressionKind::Decl(decl),

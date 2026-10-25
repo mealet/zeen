@@ -97,6 +97,17 @@ pub enum Error {
     },
 
     #[error("{message}")]
+    #[diagnostic(severity(Error), code(zeen::comptime::duplicate_definition))]
+    DuplicateDefinition {
+        message: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("{message}")]
     #[diagnostic(severity(Error), code(zeen::comptime::unsupported))]
     Unsupported {
         message: SmolStr,
