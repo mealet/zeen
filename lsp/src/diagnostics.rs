@@ -691,8 +691,7 @@ fn warning_module_disables(
     source: Option<&miette::NamedSource<Arc<String>>>,
     packages: &[std::path::PathBuf],
 ) -> bool {
-    source
-        .is_some_and(|source| zeen_driver::source_disables_warnings(source, packages))
+    source.is_some_and(|source| zeen_driver::source_disables_warnings(source, packages))
 }
 
 pub fn scan_project_modules(
