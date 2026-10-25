@@ -2143,6 +2143,7 @@ fn walk_syntax_decl(
         }
 
         DeclarationKind::StructDecl { name, methods, .. }
+        | DeclarationKind::ComptimeStruct { name, methods, .. }
         | DeclarationKind::InterfaceDecl { name, methods, .. } => {
             push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type, None);
 
@@ -2198,6 +2199,57 @@ fn walk_syntax_decl(
                 Role::Type,
                 None,
             );
+        }
+
+        DeclarationKind::ComptimeConst { name, value, .. } => {
+            push_syntax(
+                occurrences,
+                name.1.offset(),
+                name.1.len(),
+                Role::Variable,
+                None,
+            );
+
+            walk_syntax_expr(value, text, occurrences);
+        }
+
+        DeclarationKind::ComptimeFn {
+            name, params, body, ..
+        } => {
+            push_syntax(
+                occurrences,
+                name.1.offset(),
+                name.1.len(),
+                Role::Function,
+                None,
+            );
+
+            let Some(body) = body else {
+                return;
+            };
+
+            let start = body.span.offset().min(text.len());
+            let end = span_end(body.span).min(text.len());
+
+            for param in *params {
+                if let Some((offset, len)) = syntax_param_name(text, param.span) {
+                    push_syntax(
+                        occurrences,
+                        offset,
+                        len,
+                        Role::Parameter,
+                        Some((start, end)),
+                    );
+                }
+            }
+
+            walk_syntax_stmt(body, end, text, occurrences);
+        }
+
+        DeclarationKind::ComptimeBlock(block) => {
+            for stmt in block.stmts.iter() {
+                walk_syntax_stmt(stmt, text.len(), text, occurrences);
+            }
         }
 
         DeclarationKind::Use { .. }
@@ -2409,6 +2461,22 @@ fn walk_syntax_expr(expr: &Expression<'_>, text: &str, occurrences: &mut Vec<Occ
         | ExpressionKind::Type(_)
         | ExpressionKind::TargetVar(_)
         | ExpressionKind::ConditionalBlock(_) => {}
+
+        ExpressionKind::Decl(decl) => walk_syntax_decl(decl, false, text, occurrences),
+
+        ExpressionKind::Splice { expr } => walk_syntax_expr(expr, text, occurrences),
+
+        ExpressionKind::ComptimeBlock { stmts, trailing } => {
+            let end = span_end(expr.span).min(text.len());
+
+            for stmt in *stmts {
+                walk_syntax_stmt(stmt, end, text, occurrences);
+            }
+
+            if let Some(trailing) = trailing {
+                walk_syntax_expr(trailing, text, occurrences);
+            }
+        }
     }
 }
 
