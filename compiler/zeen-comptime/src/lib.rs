@@ -1,3 +1,5 @@
+mod check;
+mod display;
 mod error;
 mod format;
 mod interp;
@@ -24,6 +26,12 @@ pub fn evaluate<'arena>(
     module_of: impl Fn(&Declaration<'_>) -> PathBuf,
     visibility: HashMap<PathBuf, Vec<PathBuf>>,
 ) -> Result<&'arena [&'arena Declaration<'arena>], Vec<Error>> {
+    let errors = check::validate_program(program, &interner);
+
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+
     let mut pass = interp::Interp::new(arena, interner, visibility);
     pass.evaluate(program, module_of)
 }

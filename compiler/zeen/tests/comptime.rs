@@ -625,3 +625,168 @@ fn rejects_reflection_macro_in_runtime_code() {
         result.stderr
     );
 }
+
+#[test]
+fn accepts_comptime_types_in_signatures_and_locals() {
+    let source = r#"comptime fn takes(
+  a: comptime_int,
+  b: comptime_float,
+  c: comptime_bool,
+  d: comptime_char,
+  e: comptime_str,
+  f: zeen_type,
+) comptime_int {
+  return a;
+}
+
+comptime fn returns_nothing() void {
+  @println("nothing");
+}
+
+comptime fn keeps_expr(x: zeen_expr) zeen_expr {
+  return x;
+}
+
+comptime fn keeps_decl(x: zeen_decl) zeen_decl {
+  return x;
+}
+
+comptime fn total(xs: [3]comptime_int) comptime_int {
+  return xs[0] + xs[1] + xs[2];
+}
+
+fn main() {
+  comptime {
+    let start: comptime_int = takes(1, 2.5, true, 'a', "text", @zeen_type(i32));
+    let xs: [3]comptime_int = [1, 2, 3];
+    @println("{} {}", start, total(xs));
+    returns_nothing();
+  };
+}
+"#;
+
+    let result = compile("comptime_types", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("1 6"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn rejects_runtime_parameter_type() {
+    let result = compile(
+        "runtime_param",
+        "comptime fn bad(x: i32) comptime_int {\n  return 1;\n}\n\nfn main() {}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_type"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains(
+            "runtime type `i32` is not allowed in comptime code, use `comptime_int` instead"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_runtime_return_type() {
+    let result = compile(
+        "runtime_return",
+        "comptime fn bad() u32 {\n  return 1;\n}\n\nfn main() {}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_type"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("runtime type `u32` is not allowed in comptime code"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_runtime_local_annotation() {
+    let result = compile(
+        "runtime_local",
+        "fn main() {\n  comptime {\n    let x: f64 = 1.5;\n  };\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_type"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains(
+            "runtime type `f64` is not allowed in comptime code, use `comptime_float` instead"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_void_parameter_type() {
+    let result = compile(
+        "void_param",
+        "comptime fn bad(x: void) void {\n  @println(\"x\");\n}\n\nfn main() {}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_type"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("`void` is only allowed as a comptime function return type"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_runtime_pointer_type() {
+    let result = compile(
+        "runtime_pointer",
+        "comptime fn bad(x: *i32) comptime_int {\n  return 1;\n}\n\nfn main() {}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::runtime_type"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("runtime type `*i32` is not allowed in comptime code"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn keeps_runtime_annotations_outside_comptime() {
+    let result = compile(
+        "runtime_annotation",
+        "fn main() {\n  let x: i32 = 1;\n  @println(\"{}\", x);\n}\n",
+    );
+
+    assert!(result.success, "stderr: {}", result.stderr);
+}

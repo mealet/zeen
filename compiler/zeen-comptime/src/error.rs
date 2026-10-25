@@ -64,6 +64,17 @@ pub enum Error {
     },
 
     #[error("{message}")]
+    #[diagnostic(severity(Error), code(zeen::comptime::runtime_type))]
+    RuntimeType {
+        message: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("{message}")]
     #[diagnostic(severity(Error), code(zeen::comptime::splice_outside_quote))]
     SpliceOutsideQuote {
         message: SmolStr,

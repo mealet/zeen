@@ -207,69 +207,11 @@ impl<'arena> Interp<'arena> {
     }
 
     pub(crate) fn interned(&self, spur: &Spur) -> String {
-        self.interner.borrow().resolve(spur).to_string()
+        crate::display::interned(&self.interner, spur)
     }
 
     pub(crate) fn type_display(&self, ty: &TypeExpr<'arena>) -> String {
-        match &ty.kind {
-            TypeKind::Builtin(builtin) => builtin.to_string(),
-
-            TypeKind::SelfType | TypeKind::SelfAlias => "Self".to_string(),
-
-            TypeKind::VaArgs => "...".to_string(),
-
-            TypeKind::Named { name, generic_args } => match generic_args {
-                Some(args) => {
-                    let rendered: Vec<String> =
-                        args.iter().map(|arg| self.type_display(arg)).collect();
-                    format!("{}[{}]", self.interned(name), rendered.join(", "))
-                }
-                None => self.interned(name),
-            },
-
-            TypeKind::Const(inner) => self.type_display(inner),
-
-            TypeKind::TypeOf(_) => "typeof".to_string(),
-
-            TypeKind::SinglePointer(inner) => format!("*{}", self.type_display(inner)),
-
-            TypeKind::ManyPointer(inner) => format!("[*]{}", self.type_display(inner)),
-
-            TypeKind::Array { element, len } => match len {
-                Some(len) => format!("[{}]{}", self.expr_display(len), self.type_display(element)),
-                None => format!("[]{}", self.type_display(element)),
-            },
-
-            TypeKind::Fn { params, ret, .. } => {
-                let rendered: Vec<String> = params
-                    .iter()
-                    .map(|param| self.type_display(param))
-                    .collect();
-                format!("fn({}) {}", rendered.join(", "), self.type_display(ret))
-            }
-
-            TypeKind::FatFn { params, ret, once } => {
-                let rendered: Vec<String> = params
-                    .iter()
-                    .map(|param| self.type_display(param))
-                    .collect();
-                let name = if *once { "FnOnce" } else { "Fn" };
-                format!(
-                    "{}({}) {}",
-                    name,
-                    rendered.join(", "),
-                    self.type_display(ret)
-                )
-            }
-        }
-    }
-
-    fn expr_display(&self, expr: &Expression<'arena>) -> String {
-        match &expr.kind {
-            ExpressionKind::Literal(Literal::Int(value)) => value.to_string(),
-            ExpressionKind::Ident { name, .. } => self.interned(name),
-            _ => "_".to_string(),
-        }
+        crate::display::type_display(&self.interner, ty)
     }
 
     pub(crate) fn display_value(&self, value: &Value<'arena>) -> String {
