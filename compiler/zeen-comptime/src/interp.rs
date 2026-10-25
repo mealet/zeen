@@ -20,6 +20,7 @@ use zeen_ast::{
 };
 
 use crate::error::Error;
+use crate::format::{FormatChunk, FormatSpec, parse_format_string};
 use crate::value::{Record, Value};
 
 pub const STEP_LIMIT: usize = 200_000;
@@ -51,11 +52,34 @@ pub enum ConstEntry<'arena> {
     Done(Value<'arena>),
 }
 
+pub(crate) enum FrameContext {
+    None,
+    Block {
+        file: String,
+        line: usize,
+    },
+    Function {
+        name: Spur,
+        file: String,
+        line: usize,
+    },
+}
+
 pub struct CallFrame<'arena> {
     pub(crate) module: PathBuf,
     pub(crate) src: NamedSource<Arc<String>>,
     pub(crate) scopes: EvalFrame<'arena>,
-    pub(crate) caller_name: Option<(Spur, miette::SourceSpan)>,
+    pub(crate) context: FrameContext,
+}
+
+fn source_line(src: &NamedSource<Arc<String>>, span: miette::SourceSpan) -> usize {
+    let text = src.inner().as_str();
+    let offset = span.offset().min(text.len());
+    text[..offset].matches('\n').count() + 1
+}
+
+fn source_site(src: &NamedSource<Arc<String>>, span: miette::SourceSpan) -> (String, usize) {
+    (src.name().to_string(), source_line(src, span))
 }
 
 pub struct Interp<'arena> {
@@ -127,11 +151,14 @@ impl<'arena> Interp<'arena> {
                     scope.enums.entry(name.0).or_insert(decl);
                 }
                 DeclarationKind::ComptimeBlock(block) => {
+                    let src = decl.source.src();
+                    let (file, line) = source_site(&src, decl.source.span);
+
                     self.frames.push(CallFrame {
                         module: path.clone(),
-                        src: decl.source.src(),
+                        src,
                         scopes: vec![FxHashMap::default()],
-                        caller_name: None,
+                        context: FrameContext::Block { file, line },
                     });
                     for stmt in block.stmts.iter() {
                         if let Err(Unwind::Break) = self.eval_statement(stmt)
@@ -447,11 +474,14 @@ impl<'arena> Interp<'arena> {
             }
         }
 
+        let caller_src = self.current_src();
+        let (file, line) = source_site(&caller_src, span);
+
         self.frames.push(CallFrame {
             module: module.clone(),
             src: fn_src,
             scopes: vec![bindings],
-            caller_name: Some((name, span)),
+            context: FrameContext::Function { name, file, line },
         });
 
         self.depth += 1;
@@ -575,7 +605,7 @@ impl<'arena> Interp<'arena> {
             module: module.clone(),
             src: frame_src,
             scopes: vec![FxHashMap::default()],
-            caller_name: None,
+            context: FrameContext::None,
         });
 
         self.depth += 1;
@@ -1035,9 +1065,10 @@ impl<'arena> Interp<'arena> {
                 self.eval_if(condition, then_block, else_statement, expr.span)
             }
 
-            ExpressionKind::Block { stmts, trailing }
-            | ExpressionKind::ComptimeBlock { stmts, trailing } => {
-                self.eval_block(stmts, *trailing)
+            ExpressionKind::Block { stmts, trailing } => self.eval_block(stmts, *trailing),
+
+            ExpressionKind::ComptimeBlock { stmts, trailing } => {
+                self.eval_comptime_block(stmts, *trailing, expr.span)
             }
 
             ExpressionKind::Switch { object, arms } => self.eval_switch(object, arms),
@@ -1469,19 +1500,40 @@ impl<'arena> Interp<'arena> {
 
         let outcome = self.eval_statements(stmts);
 
-        let result = match outcome {
-            Ok(Some(value)) => Ok(value),
-            Ok(None) => match trailing {
-                Some(trailing_expr) => self.eval_expr(trailing_expr),
-                None => Ok(Value::Bool(false)),
-            },
-            Err(Unwind::Return(v)) => Err(Unwind::Return(v)),
-            Err(Unwind::Break) => Err(Unwind::Break),
-            Err(Unwind::Continue) => Err(Unwind::Continue),
+        let result = match (outcome, trailing) {
+            (Err(Unwind::Return(v)), _) => Err(Unwind::Return(v)),
+            (Err(Unwind::Break), _) => Err(Unwind::Break),
+            (Err(Unwind::Continue), _) => Err(Unwind::Continue),
+            (Ok(_), Some(trailing_expr)) => self.eval_expr(trailing_expr),
+            (Ok(Some(value)), None) => Ok(value),
+            (Ok(None), None) => Ok(Value::Bool(false)),
         };
 
         let frame = self.frames.last_mut().expect("comptime frame");
         frame.scopes.pop();
+
+        result
+    }
+
+    fn eval_comptime_block(
+        &mut self,
+        stmts: &'arena [&Statement<'arena>],
+        trailing: Option<&Expression<'arena>>,
+        span: miette::SourceSpan,
+    ) -> EvalResult<'arena> {
+        let src = self.current_src();
+        let (file, line) = source_site(&src, span);
+
+        self.frames.push(CallFrame {
+            module: self.current_module(),
+            src,
+            scopes: vec![FxHashMap::default()],
+            context: FrameContext::Block { file, line },
+        });
+
+        let result = self.eval_block(stmts, trailing);
+
+        self.frames.pop();
 
         result
     }
@@ -1753,42 +1805,144 @@ impl<'arena> Interp<'arena> {
         };
 
         let format_str = self.format_string_of(format_expr, span, "format")?;
+        let result = self.render_format_args(&format_str, &args[1..], span)?;
+
+        Ok(Value::Str(result.into()))
+    }
+
+    fn format_error(&mut self, message: String, span: miette::SourceSpan) -> Unwind<'arena> {
+        self.errors.push(Error::FormatParseError {
+            message: message.into(),
+            src: self.current_src(),
+            span,
+        });
+        Unwind::Break
+    }
+
+    fn render_format_args(
+        &mut self,
+        format: &str,
+        values: &'arena [&'arena Expression<'arena>],
+        span: miette::SourceSpan,
+    ) -> Result<String, Unwind<'arena>> {
+        let chunks = match parse_format_string(format) {
+            Ok(chunks) => chunks,
+            Err(err) => return Err(self.format_error(err.message(), span)),
+        };
+
+        let placeholders = chunks
+            .iter()
+            .filter(|chunk| matches!(chunk, FormatChunk::Arg(_)))
+            .count();
+
+        if placeholders != values.len() {
+            return Err(self.format_error(
+                format!(
+                    "format string provides {placeholders} placeholders, but found {}",
+                    values.len()
+                ),
+                span,
+            ));
+        }
 
         let mut result = String::new();
-        let mut args_iter = args.iter().skip(1).peekable();
-        let mut chars = format_str.chars();
+        let mut values_iter = values.iter();
 
-        while let Some(c) = chars.next() {
-            if c == '{' {
-                match chars.next() {
-                    Some('}') => {
-                        if let Some(arg) = args_iter.next() {
-                            let value = self.eval_expr(arg)?;
-                            result.push_str(&self.display_value(&value));
-                        } else {
-                            result.push_str("{}");
-                        }
-                    }
-                    Some('{') => result.push('{'),
-                    Some(_) => {
-                        result.push_str("{}");
-                    }
-                    None => result.push('{'),
+        for chunk in chunks {
+            match chunk {
+                FormatChunk::Literal(text) => result.push_str(&text),
+                FormatChunk::Arg(spec) => {
+                    let expr = values_iter.next().expect("placeholder count was checked");
+                    let value = self.eval_expr(expr)?;
+                    result.push_str(&self.render_value(&value, spec, span)?);
                 }
-            } else if c == '}' {
-                match chars.next() {
-                    Some('}') => result.push('}'),
-                    Some(_) => {
-                        result.push('}');
-                    }
-                    None => result.push('}'),
-                }
-            } else {
-                result.push(c);
             }
         }
 
-        Ok(Value::Str(result.into()))
+        Ok(result)
+    }
+
+    fn render_value(
+        &mut self,
+        value: &Value<'arena>,
+        spec: FormatSpec,
+        span: miette::SourceSpan,
+    ) -> Result<String, Unwind<'arena>> {
+        match spec {
+            FormatSpec::Display => Ok(self.format_display(value)),
+            FormatSpec::Debug => Ok(self.format_debug(value)),
+            FormatSpec::Hex | FormatSpec::Oct | FormatSpec::Bin => match value {
+                Value::Int(number) => {
+                    let raw = *number as u64;
+                    Ok(match spec {
+                        FormatSpec::Hex => format!("{raw:x}"),
+                        FormatSpec::Oct => format!("{raw:o}"),
+                        _ => format!("{raw:b}"),
+                    })
+                }
+                other => Err(self.format_error(
+                    format!(
+                        "format requires integer type, but found `{}`",
+                        other.type_name()
+                    ),
+                    span,
+                )),
+            },
+            FormatSpec::Float { precision } => match value {
+                Value::Float(number) => Ok(format!("{:.*}", precision as usize, number)),
+                other => Err(self.format_error(
+                    format!(
+                        "format requires float type, but found `{}`",
+                        other.type_name()
+                    ),
+                    span,
+                )),
+            },
+        }
+    }
+
+    fn format_display(&self, value: &Value<'arena>) -> String {
+        match value {
+            Value::Float(number) => format!("{number:.6}"),
+            other => self.display_value(other),
+        }
+    }
+
+    fn format_debug(&self, value: &Value<'arena>) -> String {
+        match value {
+            Value::Str(text) => format!("\"{text}\""),
+            Value::Char(chr) => format!("'{chr}'"),
+            Value::Array(items) => format!(
+                "[{}]",
+                items
+                    .iter()
+                    .map(|item| self.format_debug(item))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Value::Record(record) => format!(
+                "{} {{ {} }}",
+                record.kind,
+                record
+                    .fields
+                    .iter()
+                    .map(|(name, item)| format!("{name}: {}", Self::format_debug(self, item)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            other => self.format_display(other),
+        }
+    }
+
+    fn print_prefix(&self) -> Option<String> {
+        match self.frames.last().map(|frame| &frame.context) {
+            Some(FrameContext::Block { file, line }) => Some(format!("[comptime][{file}:{line}]")),
+            Some(FrameContext::Function { name, file, line }) => {
+                let name = self.interned(name);
+                Some(format!("[comptime {name}][{file}:{line}]"))
+            }
+            _ => None,
+        }
     }
 
     fn eval_macro_println(
@@ -1797,59 +1951,29 @@ impl<'arena> Interp<'arena> {
         args: &'arena [&'arena Expression<'arena>],
         with_newline: bool,
     ) -> Result<(), Unwind<'arena>> {
-        if args.is_empty() {
-            return Ok(());
-        }
+        let macro_name = if with_newline { "println" } else { "print" };
 
-        let (call_name, call_span) = self.frames.last().and_then(|f| f.caller_name).unzip();
-        let source = self.current_src();
-        let source_name = source.name().to_string();
-
-        let format_str = self.format_string_of(args[0], span, "println")?;
-
-        let mut result = String::new();
-        let mut chars = format_str.chars();
-
-        while let Some(c) = chars.next() {
-            if c == '{' {
-                match chars.next() {
-                    Some('}') => {
-                        for (i, arg) in args.iter().skip(1).copied().enumerate() {
-                            if i > 0 {
-                                result.push(' ');
-                            }
-                            if let Ok(value) = self.eval_expr(arg) {
-                                result.push_str(&self.display_value(&value));
-                            }
-                        }
-                    }
-                    Some('{') => result.push('{'),
-                    Some(_) => result.push_str("{}"),
-                    None => result.push('{'),
-                }
-            } else {
-                result.push(c);
+        let format_expr = match args.first() {
+            Some(expr) => expr,
+            None => {
+                return Err(self.format_error(
+                    format!("@{macro_name} requires at least one argument (format string)"),
+                    span,
+                ));
             }
-        }
+        };
 
-        if let Some(name) = call_name {
-            let name_str = self.interner.borrow().resolve(&name).to_string();
-            let offset = call_span.unwrap().offset();
-            let source_str = source.inner();
-            let source_text = source_str.as_ref();
-            let line = source_text[..offset].matches('\n').count() + 1;
-            let prefix = format!("[comptime {}][{}:{}]", name_str, source_name, line);
-            if with_newline {
-                println!("{} {}", prefix, result);
-            } else {
-                print!("{} {}", prefix, result);
-            }
+        let format_str = self.format_string_of(format_expr, span, macro_name)?;
+        let result = self.render_format_args(&format_str, &args[1..], span)?;
+        let line = match self.print_prefix() {
+            Some(prefix) => format!("{prefix} {result}"),
+            None => result,
+        };
+
+        if with_newline {
+            println!("{line}");
         } else {
-            if with_newline {
-                println!("{}", result);
-            } else {
-                print!("{}", result);
-            }
+            print!("{line}");
         }
 
         Ok(())
@@ -1871,23 +1995,12 @@ impl<'arena> Interp<'arena> {
 
         let expr = args[0];
         let value = self.eval_expr(expr)?;
-        let (call_name, call_span) = self.frames.last().and_then(|f| f.caller_name).unzip();
-        let source = self.current_src();
-        let source_name = source.name().to_string();
+        let prefix = self
+            .print_prefix()
+            .unwrap_or_else(|| "[comptime dbg]".to_string());
+        let value_str = self.format_debug(&value);
 
-        let (prefix, value_str) = if let Some(name) = call_name {
-            let name_str = self.interner.borrow().resolve(&name).to_string();
-            let offset = call_span.unwrap().offset();
-            let source_str = source.inner();
-            let source_text = source_str.as_ref();
-            let line = source_text[..offset].matches('\n').count() + 1;
-            let prefix = format!("[comptime {}][{}:{}]", name_str, source_name, line);
-            (prefix, self.display_value(&value))
-        } else {
-            ("[comptime dbg]".to_string(), self.display_value(&value))
-        };
-
-        println!("{} {}", prefix, value_str);
+        println!("{prefix} {value_str}");
         Ok(value)
     }
 
@@ -1900,38 +2013,7 @@ impl<'arena> Interp<'arena> {
             "comptime panic".to_string()
         } else {
             let format_str = self.format_string_of(args[0], span, "panic")?;
-            let mut result = String::new();
-            let mut chars = format_str.chars();
-            let mut args_iter = args.iter().skip(1).peekable();
-
-            while let Some(c) = chars.next() {
-                if c == '{' {
-                    match chars.next() {
-                        Some('}') => {
-                            if let Some(arg) = args_iter.next() {
-                                let value = self.eval_expr(arg)?;
-                                result.push_str(&self.display_value(&value));
-                            } else {
-                                result.push_str("{}");
-                            }
-                        }
-                        Some('{') => result.push('{'),
-                        Some(_) => result.push_str("{}"),
-                        None => result.push('{'),
-                    }
-                } else if c == '}' {
-                    match chars.next() {
-                        Some('}') => result.push('}'),
-                        Some(_) => {
-                            result.push('}');
-                        }
-                        None => result.push('}'),
-                    }
-                } else {
-                    result.push(c);
-                }
-            }
-            result
+            self.render_format_args(&format_str, &args[1..], span)?
         };
 
         self.errors.push(Error::Panic {

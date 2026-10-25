@@ -1546,7 +1546,7 @@ impl<'arena> Interp<'arena> {
             module: module.clone(),
             src: self.scope_src(module),
             scopes: vec![rustc_hash::FxHashMap::default()],
-            caller_name: None,
+            context: crate::interp::FrameContext::None,
         });
 
         let result = self.eval_expr(expr);

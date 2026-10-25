@@ -1,4 +1,5 @@
 mod error;
+mod format;
 mod interp;
 mod subst;
 mod value;
