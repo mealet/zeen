@@ -1994,6 +1994,29 @@ pub fn build_syntax_fallback(program: &[&Declaration<'_>], text: &str) -> Analys
     }
 }
 
+pub fn merge_syntax_fallback(analysis: &mut Analysis, fallback: Analysis) {
+    let existing: Vec<(usize, usize)> = analysis
+        .occurrences
+        .iter()
+        .map(|occurrence| (occurrence.offset, occurrence.offset + occurrence.len))
+        .collect();
+
+    analysis
+        .occurrences
+        .extend(fallback.occurrences.into_iter().filter(|occurrence| {
+            let start = occurrence.offset;
+            let end = occurrence.offset + occurrence.len;
+
+            !existing
+                .iter()
+                .any(|(other_start, other_end)| start < *other_end && *other_start < end)
+        }));
+
+    analysis
+        .occurrences
+        .sort_by_key(|occurrence| (occurrence.offset, occurrence.len));
+}
+
 fn span_end(span: SourceSpan) -> usize {
     span.offset().saturating_add(span.len())
 }
@@ -2202,6 +2225,8 @@ fn walk_syntax_decl(
         }
 
         DeclarationKind::ComptimeConst { name, value, .. } => {
+            let before = occurrences.len();
+
             push_syntax(
                 occurrences,
                 name.1.offset(),
@@ -2209,6 +2234,10 @@ fn walk_syntax_decl(
                 Role::Variable,
                 None,
             );
+
+            if let Some(occurrence) = occurrences.get_mut(before) {
+                occurrence.is_const = Some(true);
+            }
 
             walk_syntax_expr(value, text, occurrences);
         }
@@ -2847,6 +2876,29 @@ mod tests {
             output.analysis.call_generics.get(&key).map(String::as_str),
             Some("[i32]")
         );
+    }
+
+    const COMPTIME_SOURCE: &str = "comptime LIMIT = 3;\n\ncomptime fn doubled(n: comptime_int) comptime_int {\n    return n * 2;\n}\n\nfn main() {\n    let value = comptime {\n        let local = doubled(LIMIT);\n        local\n    };\n\n    @println(\"{}\", value);\n}\n";
+
+    #[test]
+    fn records_comptime_names() {
+        let uri: Uri = "file:///tmp/zeen-lsp-analysis-comptime.zn".parse().unwrap();
+        let output = crate::diagnostics::check(&uri, COMPTIME_SOURCE, &[]);
+        assert!(output.diagnostics.is_empty());
+
+        let occurrences = &output.analysis.occurrences;
+        let matches = |name: &str, role: Role| {
+            occurrences.iter().any(|occurrence| {
+                COMPTIME_SOURCE.get(occurrence.offset..occurrence.offset + occurrence.len)
+                    == Some(name)
+                    && occurrence.role == role
+            })
+        };
+
+        assert!(matches("LIMIT", Role::Variable));
+        assert!(matches("doubled", Role::Function));
+        assert!(matches("local", Role::Variable));
+        assert!(matches("n", Role::Parameter));
     }
 
     const UNNAMED_PARAM: &str = "fn put(i32) {\n}\n\nfn main() {\n    put(5);\n}\n";
