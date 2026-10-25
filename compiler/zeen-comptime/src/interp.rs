@@ -41,6 +41,7 @@ pub enum Unwind<'arena> {
 pub struct ModuleScope<'arena> {
     pub(crate) src: NamedSource<Arc<String>>,
     pub(crate) consts: HashMap<Spur, ConstEntry<'arena>>,
+    pub(crate) pub_consts: FxHashSet<Spur>,
     pub(crate) fns: HashMap<Spur, &'arena Declaration<'arena>>,
     pub(crate) structs: HashMap<Spur, &'arena Declaration<'arena>>,
     pub(crate) enums: HashMap<Spur, &'arena Declaration<'arena>>,
@@ -55,13 +56,13 @@ pub enum ConstEntry<'arena> {
 pub(crate) enum FrameContext {
     None,
     Block {
-        file: String,
-        line: usize,
+        src: NamedSource<Arc<String>>,
+        span: miette::SourceSpan,
     },
     Function {
         name: Spur,
-        file: String,
-        line: usize,
+        src: NamedSource<Arc<String>>,
+        span: miette::SourceSpan,
     },
 }
 
@@ -87,6 +88,7 @@ pub struct Interp<'arena> {
     pub(crate) interner: Rc<RefCell<Rodeo>>,
 
     pub(crate) scopes: FxHashMap<PathBuf, ModuleScope<'arena>>,
+    pub(crate) visibility: HashMap<PathBuf, Vec<PathBuf>>,
 
     pub(crate) frames: Vec<CallFrame<'arena>>,
 
@@ -101,11 +103,16 @@ pub struct Interp<'arena> {
 }
 
 impl<'arena> Interp<'arena> {
-    pub fn new(arena: &'arena Bump, interner: Rc<RefCell<Rodeo>>) -> Self {
+    pub fn new(
+        arena: &'arena Bump,
+        interner: Rc<RefCell<Rodeo>>,
+        visibility: HashMap<PathBuf, Vec<PathBuf>>,
+    ) -> Self {
         Self {
             arena,
             interner,
             scopes: FxHashMap::default(),
+            visibility,
             frames: Vec::new(),
             default_src: None,
             shadow_stack: Vec::new(),
@@ -129,13 +136,21 @@ impl<'arena> Interp<'arena> {
                 .or_insert_with(|| ModuleScope {
                     src: decl.source.src(),
                     consts: HashMap::default(),
+                    pub_consts: FxHashSet::default(),
                     fns: HashMap::default(),
                     structs: HashMap::default(),
                     enums: HashMap::default(),
                 });
 
             match &decl.kind {
-                DeclarationKind::ComptimeConst { name, value, .. } => {
+                DeclarationKind::ComptimeConst {
+                    name,
+                    value,
+                    is_pub,
+                } => {
+                    if *is_pub {
+                        scope.pub_consts.insert(name.0);
+                    }
                     scope
                         .consts
                         .entry(name.0)
@@ -151,14 +166,14 @@ impl<'arena> Interp<'arena> {
                     scope.enums.entry(name.0).or_insert(decl);
                 }
                 DeclarationKind::ComptimeBlock(block) => {
-                    let src = decl.source.src();
-                    let (file, line) = source_site(&src, decl.source.span);
-
                     self.frames.push(CallFrame {
                         module: path.clone(),
-                        src,
+                        src: decl.source.src(),
                         scopes: vec![FxHashMap::default()],
-                        context: FrameContext::Block { file, line },
+                        context: FrameContext::Block {
+                            src: decl.source.src(),
+                            span: decl.source.span,
+                        },
                     });
                     for stmt in block.stmts.iter() {
                         if let Err(Unwind::Break) = self.eval_statement(stmt)
@@ -335,10 +350,19 @@ impl<'arena> Interp<'arena> {
             return false;
         }
 
-        match self.scopes.get(module) {
-            Some(scope) => scope.consts.contains_key(&name),
-            None => false,
+        if self
+            .scopes
+            .get(module)
+            .is_some_and(|scope| scope.consts.contains_key(&name))
+        {
+            return true;
         }
+
+        self.visible_modules(module).iter().any(|target| {
+            self.scopes
+                .get(target)
+                .is_some_and(|scope| scope.consts.contains_key(&name))
+        })
     }
 
     pub(crate) fn is_comptime_fn(&mut self, module: &PathBuf, name: Spur) -> bool {
@@ -348,10 +372,184 @@ impl<'arena> Interp<'arena> {
             return false;
         }
 
-        match self.scopes.get(module) {
-            Some(scope) => scope.fns.contains_key(&name),
-            None => false,
+        if self
+            .scopes
+            .get(module)
+            .is_some_and(|scope| scope.fns.contains_key(&name))
+        {
+            return true;
         }
+
+        self.visible_modules(module).iter().any(|target| {
+            self.scopes
+                .get(target)
+                .is_some_and(|scope| scope.fns.contains_key(&name))
+        })
+    }
+
+    fn visible_modules(&self, module: &PathBuf) -> &[PathBuf] {
+        self.visibility
+            .get(module)
+            .map(|targets| targets.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn fn_is_pub(decl: &Declaration<'_>) -> bool {
+        matches!(&decl.kind, DeclarationKind::ComptimeFn { is_pub: true, .. })
+    }
+
+    fn type_decl_is_pub(decl: &Declaration<'_>) -> bool {
+        match &decl.kind {
+            DeclarationKind::StructDecl { is_pub, .. }
+            | DeclarationKind::EnumDecl { is_pub, .. } => *is_pub,
+            _ => false,
+        }
+    }
+
+    fn pick_owner(
+        &mut self,
+        name: Spur,
+        span: miette::SourceSpan,
+        public: Vec<PathBuf>,
+        private: Vec<PathBuf>,
+        kind: &str,
+    ) -> Result<Option<PathBuf>, Unwind<'arena>> {
+        match public.len() {
+            0 => {
+                if !private.is_empty() {
+                    let label = self.interned(&name);
+                    self.errors.push(Error::TypeMismatch {
+                        message: format!(
+                            "comptime {kind} `{label}` is not public in the module that defines it"
+                        )
+                        .into(),
+                        src: self.current_src(),
+                        span,
+                    });
+                    return Err(Unwind::Break);
+                }
+
+                Ok(None)
+            }
+
+            1 => Ok(public.into_iter().next()),
+
+            _ => {
+                let label = self.interned(&name);
+                self.errors.push(Error::TypeMismatch {
+                    message: format!("ambiguous comptime {kind} `{label}`").into(),
+                    src: self.current_src(),
+                    span,
+                });
+                Err(Unwind::Break)
+            }
+        }
+    }
+
+    pub(crate) fn resolve_comptime_const(
+        &mut self,
+        module: &PathBuf,
+        name: Spur,
+        span: miette::SourceSpan,
+    ) -> Result<Option<PathBuf>, Unwind<'arena>> {
+        if self
+            .scopes
+            .get(module)
+            .is_some_and(|scope| scope.consts.contains_key(&name))
+        {
+            return Ok(Some(module.clone()));
+        }
+
+        let mut public = Vec::new();
+        let mut private = Vec::new();
+
+        for target in self.visible_modules(module).to_vec() {
+            let Some(scope) = self.scopes.get(&target) else {
+                continue;
+            };
+
+            if !scope.consts.contains_key(&name) {
+                continue;
+            }
+
+            if scope.pub_consts.contains(&name) {
+                public.push(target);
+            } else {
+                private.push(target);
+            }
+        }
+
+        self.pick_owner(name, span, public, private, "constant")
+    }
+
+    pub(crate) fn resolve_comptime_fn(
+        &mut self,
+        module: &PathBuf,
+        name: Spur,
+        span: miette::SourceSpan,
+    ) -> Result<Option<PathBuf>, Unwind<'arena>> {
+        if self
+            .scopes
+            .get(module)
+            .is_some_and(|scope| scope.fns.contains_key(&name))
+        {
+            return Ok(Some(module.clone()));
+        }
+
+        let mut public = Vec::new();
+        let mut private = Vec::new();
+
+        for target in self.visible_modules(module).to_vec() {
+            let Some(decl) = self
+                .scopes
+                .get(&target)
+                .and_then(|scope| scope.fns.get(&name))
+            else {
+                continue;
+            };
+
+            if Self::fn_is_pub(decl) {
+                public.push(target);
+            } else {
+                private.push(target);
+            }
+        }
+
+        self.pick_owner(name, span, public, private, "function")
+    }
+
+    pub(crate) fn resolve_comptime_type(
+        &mut self,
+        module: &PathBuf,
+        name: Spur,
+        span: miette::SourceSpan,
+    ) -> Result<Option<PathBuf>, Unwind<'arena>> {
+        if self.scopes.get(module).is_some_and(|scope| {
+            scope.structs.contains_key(&name) || scope.enums.contains_key(&name)
+        }) {
+            return Ok(Some(module.clone()));
+        }
+
+        let mut public = Vec::new();
+        let mut private = Vec::new();
+
+        for target in self.visible_modules(module).to_vec() {
+            let Some(decl) = self
+                .scopes
+                .get(&target)
+                .and_then(|scope| scope.structs.get(&name).or_else(|| scope.enums.get(&name)))
+            else {
+                continue;
+            };
+
+            if Self::type_decl_is_pub(decl) {
+                public.push(target);
+            } else {
+                private.push(target);
+            }
+        }
+
+        self.pick_owner(name, span, public, private, "type")
     }
 
     pub(crate) fn comptime_const_value(
@@ -475,13 +673,16 @@ impl<'arena> Interp<'arena> {
         }
 
         let caller_src = self.current_src();
-        let (file, line) = source_site(&caller_src, span);
 
         self.frames.push(CallFrame {
             module: module.clone(),
             src: fn_src,
             scopes: vec![bindings],
-            context: FrameContext::Function { name, file, line },
+            context: FrameContext::Function {
+                name,
+                src: caller_src,
+                span,
+            },
         });
 
         self.depth += 1;
@@ -942,8 +1143,10 @@ impl<'arena> Interp<'arena> {
 
         let module = self.current_module();
 
-        if self.is_comptime_const(&module, name) {
-            return self.eval_const(&module, name);
+        match self.resolve_comptime_const(&module, name, span) {
+            Ok(Some(owner)) => return self.eval_const(&owner, name),
+            Ok(None) => {}
+            Err(unwind) => return Err(unwind),
         }
 
         let label = self.interned(&name);
@@ -1008,22 +1211,26 @@ impl<'arena> Interp<'arena> {
 
         let module = self.current_module();
 
-        if !self.is_comptime_fn(&module, name) {
-            let label = self.interned(&name);
-            self.errors.push(Error::UnresolvedIdent {
-                name: label.into(),
-                src: self.current_src(),
-                span,
-            });
-            return Err(Unwind::Break);
-        }
+        let owner = match self.resolve_comptime_fn(&module, name, span) {
+            Ok(Some(owner)) => owner,
+            Ok(None) => {
+                let label = self.interned(&name);
+                self.errors.push(Error::UnresolvedIdent {
+                    name: label.into(),
+                    src: self.current_src(),
+                    span,
+                });
+                return Err(Unwind::Break);
+            }
+            Err(unwind) => return Err(unwind),
+        };
 
         let mut values: Vec<Value<'arena>> = Vec::with_capacity(args.len());
         for arg in args.iter() {
             values.push(self.eval_expr(arg)?);
         }
 
-        self.eval_comptime_call(&module, name, span, &values)
+        self.eval_comptime_call(&owner, name, span, &values)
     }
 
     pub fn eval_expr(&mut self, expr: &Expression<'arena>) -> EvalResult<'arena> {
@@ -1205,6 +1412,15 @@ impl<'arena> Interp<'arena> {
                     "typeInfo" => self.eval_macro_type_info(name.1, args),
                     "hasField" => self.eval_macro_has_field(name.1, args),
                     "fieldType" => self.eval_macro_field_type(name.1, args),
+                    "uninit" | "void" => {
+                        self.errors.push(Error::RuntimeOnly {
+                            message: format!("`@{macro_name_owned}` is not available in comptime")
+                                .into(),
+                            src: self.current_src(),
+                            span: expr.span,
+                        });
+                        Err(Unwind::Break)
+                    }
                     _ => {
                         self.errors.push(Error::Unsupported {
                             message: format!(
@@ -1522,13 +1738,12 @@ impl<'arena> Interp<'arena> {
         span: miette::SourceSpan,
     ) -> EvalResult<'arena> {
         let src = self.current_src();
-        let (file, line) = source_site(&src, span);
 
         self.frames.push(CallFrame {
             module: self.current_module(),
-            src,
+            src: src.clone(),
             scopes: vec![FxHashMap::default()],
-            context: FrameContext::Block { file, line },
+            context: FrameContext::Block { src, span },
         });
 
         let result = self.eval_block(stmts, trailing);
@@ -1936,13 +2151,31 @@ impl<'arena> Interp<'arena> {
 
     fn print_prefix(&self) -> Option<String> {
         match self.frames.last().map(|frame| &frame.context) {
-            Some(FrameContext::Block { file, line }) => Some(format!("[comptime][{file}:{line}]")),
-            Some(FrameContext::Function { name, file, line }) => {
+            Some(FrameContext::Block { src, span }) => {
+                let (file, line) = source_site(src, *span);
+                Some(format!("[comptime][{file}:{line}]"))
+            }
+            Some(FrameContext::Function { name, src, span }) => {
+                let (file, line) = source_site(src, *span);
                 let name = self.interned(name);
                 Some(format!("[comptime {name}][{file}:{line}]"))
             }
             _ => None,
         }
+    }
+
+    fn call_trace(&self) -> Vec<crate::error::Trace> {
+        self.frames
+            .iter()
+            .rev()
+            .filter_map(|frame| match &frame.context {
+                FrameContext::Function { src, span, .. } => Some(crate::error::Trace {
+                    src: src.clone(),
+                    span: *span,
+                }),
+                _ => None,
+            })
+            .collect()
     }
 
     fn eval_macro_println(
@@ -2018,7 +2251,7 @@ impl<'arena> Interp<'arena> {
 
         self.errors.push(Error::Panic {
             message: message.into(),
-            trace: Vec::new(),
+            trace: self.call_trace(),
             src: self.current_src(),
             span,
         });
@@ -2247,7 +2480,7 @@ impl<'arena> Interp<'arena> {
                     name,
                     generic_args: None,
                 } = &ty.kind
-                    && let Some(Value::Type(bound)) = self.named_value(*name)
+                    && let Some(Value::Type(bound)) = self.named_value(*name, span)
                 {
                     return Ok(bound);
                 }
@@ -2293,20 +2526,17 @@ impl<'arena> Interp<'arena> {
         }
     }
 
-    fn named_value(&mut self, name: Spur) -> Option<Value<'arena>> {
+    fn named_value(&mut self, name: Spur, span: miette::SourceSpan) -> Option<Value<'arena>> {
         if let Some(value) = self.local_value(name) {
             return Some(value);
         }
 
         let module = self.current_module();
 
-        if self.is_comptime_const(&module, name)
-            && let Ok(value) = self.eval_const(&module, name)
-        {
-            return Some(value);
+        match self.resolve_comptime_const(&module, name, span) {
+            Ok(Some(owner)) => self.eval_const(&owner, name).ok(),
+            _ => None,
         }
-
-        None
     }
 
     fn decl_for_type(
@@ -2327,28 +2557,37 @@ impl<'arena> Interp<'arena> {
         };
 
         let module = self.current_module();
-        let Some(scope) = self.scopes.get(&module) else {
-            self.errors.push(Error::UnresolvedIdent {
-                name: "<module>".into(),
-                src: self.current_src(),
-                span,
-            });
-            return Err(Unwind::Break);
-        };
 
-        scope
-            .structs
-            .get(&name)
-            .copied()
-            .or_else(|| scope.enums.get(&name).copied())
-            .ok_or_else(|| {
+        let owner = match self.resolve_comptime_type(&module, name, span) {
+            Ok(Some(owner)) => owner,
+            Ok(None) => {
                 let label = self.interned(&name);
                 self.errors.push(Error::UnresolvedIdent {
                     name: label.into(),
                     src: self.current_src(),
                     span,
                 });
-                Unwind::Break
-            })
+                return Err(Unwind::Break);
+            }
+            Err(unwind) => return Err(unwind),
+        };
+
+        let Some(decl) = self.scopes.get(&owner).and_then(|scope| {
+            scope
+                .structs
+                .get(&name)
+                .copied()
+                .or_else(|| scope.enums.get(&name).copied())
+        }) else {
+            let label = self.interned(&name);
+            self.errors.push(Error::UnresolvedIdent {
+                name: label.into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        };
+
+        Ok(decl)
     }
 }

@@ -796,6 +796,12 @@ impl<'arena> Interp<'arena> {
                         _ => unreachable!("original_callee_is_comptime_fn"),
                     };
 
+                    let owner = match self.resolve_comptime_fn(module, callee_name, expr.span) {
+                        Ok(Some(owner)) => owner,
+                        Ok(None) => return Err(self.errors.clone()),
+                        Err(_) => return Err(self.errors.clone()),
+                    };
+
                     let mut values: Vec<Value<'arena>> = Vec::with_capacity(args.len());
 
                     for arg in args.iter() {
@@ -805,7 +811,7 @@ impl<'arena> Interp<'arena> {
                         }
                     }
 
-                    let is_void_fn = self.scopes.get(module)
+                    let is_void_fn = self.scopes.get(&owner)
                         .and_then(|scope| scope.fns.get(&callee_name))
                         .map(|decl| {
                             matches!(&decl.kind, DeclarationKind::ComptimeFn { return_type: Some(rt), .. } if matches!(&rt.kind, TypeKind::Builtin(zt) if matches!(zt, zeen_ast::types::BuiltinType::void)))
@@ -813,11 +819,11 @@ impl<'arena> Interp<'arena> {
                         .unwrap_or(false);
 
                     if is_void_fn {
-                        let _ = self.eval_comptime_call(module, callee_name, expr.span, &values);
+                        let _ = self.eval_comptime_call(&owner, callee_name, expr.span, &values);
                         return Ok(Some(self.void_macro_expr(expr.span)));
                     }
 
-                    return match self.eval_comptime_call(module, callee_name, expr.span, &values) {
+                    return match self.eval_comptime_call(&owner, callee_name, expr.span, &values) {
                         Ok(value) => match self.value_into_expr(value, expr.span) {
                             Ok(new_call_expr) => Ok(Some(self.arena.alloc(new_call_expr))),
                             Err(error) => Err(self.report(error)),

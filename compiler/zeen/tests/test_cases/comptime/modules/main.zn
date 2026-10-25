@@ -1,0 +1,12 @@
+use math;
+
+fn main() {
+  let value: i32 = scale(4);
+  @println("{} {}", value, Tau);
+  @println("{}", Origin);
+
+  comptime {
+    let fields = @fields(Point);
+    @println("$(fields[0].name) $(fields[1].name)");
+  };
+}

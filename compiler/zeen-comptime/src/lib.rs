@@ -9,6 +9,7 @@ pub use value::Value;
 
 use bumpalo::Bump;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -21,7 +22,8 @@ pub fn evaluate<'arena>(
     arena: &'arena Bump,
     interner: Rc<RefCell<Rodeo>>,
     module_of: impl Fn(&Declaration<'_>) -> PathBuf,
+    visibility: HashMap<PathBuf, Vec<PathBuf>>,
 ) -> Result<&'arena [&'arena Declaration<'arena>], Vec<Error>> {
-    let mut pass = interp::Interp::new(arena, interner);
+    let mut pass = interp::Interp::new(arena, interner, visibility);
     pass.evaluate(program, module_of)
 }

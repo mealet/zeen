@@ -1122,6 +1122,59 @@ impl<'ctx> IncludeResolver<'ctx> {
         graph
     }
 
+    pub(crate) fn comptime_visibility(&self) -> HashMap<PathBuf, Vec<PathBuf>> {
+        let mut pub_reach: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::default();
+
+        loop {
+            let mut changed = false;
+
+            for (from, edges) in &self.edges {
+                for edge in edges.iter().filter(|edge| edge.is_pub) {
+                    let reachable = pub_reach.get(&edge.target).cloned().unwrap_or_default();
+                    let entry = pub_reach.entry(from.clone()).or_default();
+
+                    changed |= entry.insert(edge.target.clone());
+
+                    for target in reachable {
+                        changed |= entry.insert(target);
+                    }
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        let core_modules: Vec<PathBuf> = self
+            .modules
+            .iter()
+            .filter(|(_, module)| module.is_core)
+            .map(|(path, _)| path.clone())
+            .collect();
+
+        let mut visibility: HashMap<PathBuf, Vec<PathBuf>> = HashMap::default();
+
+        for path in self.modules.keys() {
+            let mut visible: HashSet<PathBuf> = core_modules.iter().cloned().collect();
+
+            if let Some(edges) = self.edges.get(path) {
+                for edge in edges {
+                    visible.insert(edge.target.clone());
+
+                    if let Some(reachable) = pub_reach.get(&edge.target) {
+                        visible.extend(reachable.iter().cloned());
+                    }
+                }
+            }
+
+            visible.remove(path);
+            visibility.insert(path.clone(), visible.into_iter().collect());
+        }
+
+        visibility
+    }
+
     fn build_decl_index(&mut self) {
         self.decl_owner.clear();
         self.module_ids.clear();

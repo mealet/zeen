@@ -804,7 +804,6 @@ dependencies = [
  "thiserror",
  "zeen-ast",
  "zeen-codegen-llvm",
- "zeen-comptime",
  "zeen-driver",
  "zeen-flow",
  "zeen-hir",
