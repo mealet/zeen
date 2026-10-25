@@ -20,6 +20,7 @@ thiserror = "2.0.18"
 zeen-ast = { path = "../zeen-ast" }
 zeen-driver = { path = "../zeen-driver" }
 zeen-hir = { path = "../zeen-hir" }
+zeen-layout = { path = "../zeen-layout" }
 zeen-mir = { path = "../zeen-mir" }
 zeen-resolve = { path = "../zeen-resolve" }
 zeen-typecheck = { path = "../zeen-typecheck" }

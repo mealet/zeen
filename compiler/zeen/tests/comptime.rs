@@ -1467,3 +1467,220 @@ fn main() {
     assert!(result.success, "stderr: {}", result.stderr);
     assert!(result.stdout.contains("7"), "stdout: {}", result.stdout);
 }
+
+fn compile_target(name: &str, target: &str, source: &str) -> CompileResult {
+    let dir = std::env::temp_dir().join(format!(
+        "zeen_comptime_target_{}_{name}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("main.zn");
+    fs::write(&path, source).unwrap();
+
+    let output: Output = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .arg(&path)
+        .arg("--check")
+        .arg("--target")
+        .arg(target)
+        .assert()
+        .get_output()
+        .clone();
+
+    let _ = fs::remove_dir_all(&dir);
+
+    CompileResult {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).replace('\r', ""),
+        stderr: String::from_utf8_lossy(&output.stderr).replace('\r', ""),
+    }
+}
+
+#[test]
+fn compares_sizeof_with_runtime_layout() {
+    let source = r#"struct Point {
+  x: i32,
+  y: i32,
+}
+
+struct Mixed {
+  tag: i8,
+  point: Point,
+  count: i64,
+}
+
+enum Shape {
+  empty,
+  circle: Point,
+  index: i64,
+}
+
+comptime POINT = @sizeof(Point);
+comptime MIXED = @sizeof(Mixed);
+comptime SHAPE = @sizeof(Shape);
+comptime ALIGN = @alignof(Shape);
+
+fn main() {
+  @println("{} {} {} {}", POINT == @sizeof(Point), MIXED == @sizeof(Mixed), SHAPE == @sizeof(Shape), ALIGN == @alignof(Shape));
+  @println("{} {} {}", POINT, MIXED, SHAPE);
+}
+"#;
+
+    let result = run("sizeof_runtime", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(
+        result.stdout.contains("true true true true"),
+        "stdout: {}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("8 24 16"),
+        "stdout: {}",
+        result.stdout
+    );
+}
+
+#[test]
+fn resolves_sizeof_for_imported_types() {
+    let shapes = r#"pub alias Level = i16;
+
+pub struct Vec2 {
+  x: f32,
+  y: f32,
+}
+
+pub enum Slot {
+  empty,
+  item: Vec2,
+  index: i32,
+}
+"#;
+
+    let main = r#"use shapes;
+
+comptime {
+  @println("{} {} {}", @sizeof(Vec2), @sizeof(Slot), @alignof(Level));
+}
+
+fn main() {}
+"#;
+
+    let result = compile_files(
+        "sizeof_modules",
+        &[("main.zn", main), ("shapes.zn", shapes)],
+    );
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(
+        result.stdout.contains("[comptime][main.zn:3] 8 12 2"),
+        "stdout: {}",
+        result.stdout
+    );
+}
+
+#[test]
+fn sizeof_follows_the_target_pointer_width() {
+    let source = r#"comptime {
+  @println("{} {} {}", @sizeof(*i32), @sizeof(usize), @sizeof([2]*i32));
+}
+
+fn main() {}
+"#;
+
+    let wide = compile_target("sizeof_target_wide", "x86_64-unknown-linux-gnu", source);
+    assert!(wide.success, "stderr: {}", wide.stderr);
+    assert!(wide.stdout.contains("8 8 16"), "stdout: {}", wide.stdout);
+
+    let narrow = compile_target("sizeof_target_narrow", "wasm32-unknown-unknown", source);
+    assert!(narrow.success, "stderr: {}", narrow.stderr);
+    assert!(narrow.stdout.contains("4 4 8"), "stdout: {}", narrow.stdout);
+}
+
+#[test]
+fn rejects_sizeof_of_unknown_type() {
+    let result = compile(
+        "sizeof_unknown",
+        "comptime SIZE = @sizeof(Missing);\n\nfn main() {\n  @println(\"{}\", SIZE);\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::unresolved_ident"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_sizeof_of_generic_type_without_arguments() {
+    let result = compile(
+        "sizeof_generic",
+        "struct Box[T] {\n  value: T\n}\n\ncomptime SIZE = @sizeof(Box);\n\nfn main() {\n  @println(\"{}\", SIZE);\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::type_mismatch"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("@sizeof requires generic arguments for Box"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_sizeof_without_type() {
+    let result = compile(
+        "sizeof_no_arg",
+        "comptime SIZE = @sizeof();\n\nfn main() {\n  @println(\"{}\", SIZE);\n}\n",
+    );
+
+    assert!(!result.success);
+}
+
+#[test]
+fn computes_sizeof_for_generic_types() {
+    let source = r#"struct Inner[T] {
+  value: T,
+}
+
+struct Outer[T] {
+  inner: Inner[T],
+  marker: T,
+}
+
+enum Maybe[T] {
+  none,
+  some: T,
+}
+
+alias Pointer[T] = *T;
+
+comptime fn total() comptime_int {
+  return @sizeof(Outer[i64]) + @sizeof(Maybe[i32]) + @sizeof(Pointer[i16]);
+}
+
+fn main() {
+  @println("{} {} {}", @sizeof(Outer[i64]), @sizeof(Maybe[i32]), @sizeof(Pointer[i16]));
+  @println("{}", total());
+}
+"#;
+
+    let result = run("sizeof_generics", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(
+        result.stdout.contains("16 8 8"),
+        "stdout: {}",
+        result.stdout
+    );
+    assert!(result.stdout.contains("32"), "stdout: {}", result.stdout);
+}

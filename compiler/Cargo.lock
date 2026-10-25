@@ -838,6 +838,7 @@ dependencies = [
  "zeen-ast",
  "zeen-driver",
  "zeen-hir",
+ "zeen-layout",
  "zeen-mir",
  "zeen-resolve",
  "zeen-typecheck",
@@ -856,6 +857,7 @@ dependencies = [
  "thiserror",
  "zeen-ast",
  "zeen-driver",
+ "zeen-layout",
  "zeen-lexer",
  "zeen-parser",
 ]
@@ -906,6 +908,13 @@ dependencies = [
  "zeen-lexer",
  "zeen-parser",
  "zeen-resolve",
+]
+
+[[package]]
+name = "zeen-layout"
+version = "0.4.0"
+dependencies = [
+ "zeen-driver",
 ]
 
 [[package]]

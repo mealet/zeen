@@ -47,7 +47,7 @@ pub fn resolve<'ctx>(
         arena,
         Rc::clone(&interner),
         context,
-        target,
+        target.clone(),
         mode,
     );
 
@@ -76,6 +76,7 @@ pub fn resolve<'ctx>(
             Rc::clone(&interner),
             module_of_decl,
             visibility,
+            &target,
         ) {
             Ok(program) => program,
             Err(errors) => {

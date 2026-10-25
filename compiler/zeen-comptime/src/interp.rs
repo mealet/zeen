@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -14,10 +14,12 @@ use smol_str::SmolStr;
 
 use zeen_ast::{
     Declaration, DeclarationKind, Expression, ExpressionKind, Statement, StatementKind, TypeExpr,
-    declarations::{EnumVariantPayload, StructField},
+    declarations::{EnumVariantPayload, GenericType, StructField},
     expressions::{BinaryOp, Literal, UnaryOp},
     types::{BuiltinType, TypeKind},
 };
+use zeen_driver::Target;
+use zeen_layout::{LayoutEngine, Shape};
 
 use crate::error::Error;
 use crate::format::{FormatChunk, FormatSpec, parse_format_string};
@@ -26,6 +28,7 @@ use crate::value::{StructValue, Value};
 pub const STEP_LIMIT: usize = 200_000;
 pub const DEPTH_LIMIT: usize = 200;
 pub const EMIT_LIMIT: usize = 1024;
+pub const LAYOUT_DEPTH_LIMIT: usize = 64;
 
 pub type EvalFrame<'arena> = Vec<FxHashMap<Spur, Value<'arena>>>;
 
@@ -46,6 +49,9 @@ pub(crate) struct CallOutcome<'arena> {
 pub type EvalResult<'arena> = Result<Value<'arena>, Unwind<'arena>>;
 pub type StmtResult<'arena> = Result<Option<Value<'arena>>, Unwind<'arena>>;
 
+type ShapeFrame<'arena> = FxHashMap<Spur, (PathBuf, &'arena TypeExpr<'arena>)>;
+type ShapeBindings<'arena> = Vec<ShapeFrame<'arena>>;
+
 #[derive(Debug)]
 pub enum Unwind<'arena> {
     Return(Value<'arena>),
@@ -60,6 +66,7 @@ pub struct ModuleScope<'arena> {
     pub(crate) fns: HashMap<Spur, &'arena Declaration<'arena>>,
     pub(crate) structs: HashMap<Spur, &'arena Declaration<'arena>>,
     pub(crate) enums: HashMap<Spur, &'arena Declaration<'arena>>,
+    pub(crate) aliases: HashMap<Spur, &'arena Declaration<'arena>>,
     pub(crate) comptime_structs: HashMap<Spur, &'arena Declaration<'arena>>,
 }
 
@@ -117,10 +124,13 @@ pub struct Interp<'arena> {
 
     pub(crate) splice_depth: usize,
     pub(crate) capture_depth: usize,
+    pub(crate) layout_depth: usize,
 
     pub(crate) emitted: Vec<(PathBuf, &'arena Declaration<'arena>)>,
     pub(crate) declared_names: FxHashMap<DeclNameKey, DeclSite>,
     pub(crate) fresh_counter: usize,
+
+    pub(crate) layout: LayoutEngine,
 
     pub(crate) errors: Vec<Error>,
 }
@@ -130,6 +140,7 @@ impl<'arena> Interp<'arena> {
         arena: &'arena Bump,
         interner: Rc<RefCell<Rodeo>>,
         visibility: HashMap<PathBuf, Vec<PathBuf>>,
+        target: &Target,
     ) -> Self {
         Self {
             arena,
@@ -143,9 +154,11 @@ impl<'arena> Interp<'arena> {
             depth: 0,
             splice_depth: 0,
             capture_depth: 0,
+            layout_depth: 0,
             emitted: Vec::new(),
             declared_names: FxHashMap::default(),
             fresh_counter: 0,
+            layout: LayoutEngine::for_target(target),
             errors: Vec::new(),
         }
     }
@@ -174,6 +187,7 @@ impl<'arena> Interp<'arena> {
                     fns: HashMap::default(),
                     structs: HashMap::default(),
                     enums: HashMap::default(),
+                    aliases: HashMap::default(),
                     comptime_structs: HashMap::default(),
                 });
 
@@ -199,6 +213,9 @@ impl<'arena> Interp<'arena> {
                 }
                 DeclarationKind::EnumDecl { name, .. } => {
                     scope.enums.entry(name.0).or_insert(decl);
+                }
+                DeclarationKind::Alias(alias) => {
+                    scope.aliases.entry(alias.name.0).or_insert(decl);
                 }
                 DeclarationKind::ComptimeStruct { name, .. } => {
                     scope.comptime_structs.entry(name.0).or_insert(decl);
@@ -418,6 +435,10 @@ impl<'arena> Interp<'arena> {
             &decl.kind,
             DeclarationKind::ComptimeStruct { is_pub: true, .. }
         )
+    }
+
+    fn alias_is_pub(decl: &Declaration<'_>) -> bool {
+        matches!(decl.kind, DeclarationKind::Alias(alias) if alias.is_pub)
     }
 
     fn is_self_receiver(ty: &TypeExpr<'_>) -> bool {
@@ -1880,6 +1901,8 @@ impl<'arena> Interp<'arena> {
                     "fresh_name" => self.eval_macro_fresh_name(name.1, args),
                     "fields" => self.eval_macro_fields(name.1, args),
                     "variants" => self.eval_macro_variants(name.1, args),
+                    "sizeof" => self.eval_macro_sizeof(name.1, args, false),
+                    "alignof" => self.eval_macro_sizeof(name.1, args, true),
                     "typeInfo" => self.eval_macro_type_info(name.1, args),
                     "hasField" => self.eval_macro_has_field(name.1, args),
                     "fieldType" => self.eval_macro_field_type(name.1, args),
@@ -3244,6 +3267,373 @@ impl<'arena> Interp<'arena> {
         }
     }
 
+    fn eval_macro_sizeof(
+        &mut self,
+        span: miette::SourceSpan,
+        args: &'arena [&'arena Expression<'arena>],
+        align: bool,
+    ) -> EvalResult<'arena> {
+        let macro_name = if align { "@alignof" } else { "@sizeof" };
+
+        if args.len() != 1 {
+            self.errors.push(Error::TypeMismatch {
+                message: format!("{macro_name} requires exactly one type argument").into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        let ty = self.type_arg(args.first(), span, macro_name)?;
+        let module = self.current_module();
+        let bindings = ShapeBindings::default();
+        let shape = self.shape_for_type(&module, ty, span, macro_name, &bindings)?;
+        let layout = self.layout.layout(&shape);
+
+        let value = if align { layout.align } else { layout.size };
+
+        Ok(Value::Int(value as i128))
+    }
+
+    fn shape_for_type(
+        &mut self,
+        module: &PathBuf,
+        ty: &'arena TypeExpr<'arena>,
+        span: miette::SourceSpan,
+        macro_name: &str,
+        bindings: &[ShapeFrame<'arena>],
+    ) -> Result<Shape, Unwind<'arena>> {
+        if self.layout_depth >= LAYOUT_DEPTH_LIMIT {
+            self.errors.push(Error::LimitExceeded {
+                message: format!("{macro_name} nested type depth limit exceeded").into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        self.layout_depth += 1;
+        let shape = self.shape_for_type_inner(module, ty, span, macro_name, bindings);
+        self.layout_depth -= 1;
+
+        shape
+    }
+
+    fn shape_for_type_inner(
+        &mut self,
+        module: &PathBuf,
+        ty: &'arena TypeExpr<'arena>,
+        span: miette::SourceSpan,
+        macro_name: &str,
+        bindings: &[ShapeFrame<'arena>],
+    ) -> Result<Shape, Unwind<'arena>> {
+        match &ty.kind {
+            TypeKind::Builtin(builtin) => Ok(builtin_shape(*builtin)),
+
+            TypeKind::Const(inner) => {
+                self.shape_for_type(module, inner, span, macro_name, bindings)
+            }
+
+            TypeKind::SinglePointer(_) | TypeKind::ManyPointer(_) | TypeKind::Fn { .. } => {
+                Ok(Shape::Pointer)
+            }
+
+            TypeKind::FatFn { .. } => Ok(Shape::fat_fn()),
+
+            TypeKind::Array { element, len } => match len {
+                Some(len) => {
+                    let count = self.array_len(len, span, macro_name)?;
+                    let element_shape =
+                        self.shape_for_type(module, element, span, macro_name, bindings)?;
+
+                    Ok(Shape::Array(Box::new(element_shape), count))
+                }
+                None => {
+                    self.shape_for_type(module, element, span, macro_name, bindings)?;
+
+                    Ok(Shape::slice())
+                }
+            },
+
+            TypeKind::Named { name, generic_args } => {
+                if generic_args.is_none()
+                    && let Some((frame, bound_module, bound_ty)) =
+                        shape_binding_lookup(bindings, name)
+                {
+                    return self.shape_for_type(
+                        &bound_module,
+                        bound_ty,
+                        span,
+                        macro_name,
+                        &bindings[..frame],
+                    );
+                }
+
+                let label = self.interned(name);
+
+                if let Some(owner) = self.resolve_comptime_alias(module, *name, span)? {
+                    let decl = *self.scopes[&owner].aliases.get(name).unwrap();
+                    let DeclarationKind::Alias(alias) = &decl.kind else {
+                        unreachable!("alias scope holds a non-alias declaration")
+                    };
+
+                    let bound = self.shape_bindings(
+                        alias.generics,
+                        *name,
+                        *generic_args,
+                        module,
+                        bindings,
+                        span,
+                        macro_name,
+                    )?;
+
+                    return self.shape_for_type(&owner, alias.ty, span, macro_name, &bound);
+                }
+
+                let owner = match self.resolve_comptime_type(module, *name, span)? {
+                    Some(owner) => owner,
+                    None => {
+                        if self.resolve_comptime_struct(module, *name, span)?.is_some() {
+                            self.errors.push(Error::Unsupported {
+                                message: format!(
+                                    "{macro_name} cannot be applied to comptime struct {label}"
+                                )
+                                .into(),
+                                src: self.current_src(),
+                                span,
+                            });
+                            return Err(Unwind::Break);
+                        }
+
+                        self.errors.push(Error::UnresolvedIdent {
+                            name: label.into(),
+                            src: self.current_src(),
+                            span,
+                        });
+                        return Err(Unwind::Break);
+                    }
+                };
+
+                let decl = *self.scopes[&owner]
+                    .structs
+                    .get(name)
+                    .or_else(|| self.scopes[&owner].enums.get(name))
+                    .expect("resolved type is a struct or enum");
+
+                let generics = match &decl.kind {
+                    DeclarationKind::StructDecl { generics, .. }
+                    | DeclarationKind::EnumDecl { generics, .. } => *generics,
+                    _ => None,
+                };
+
+                let bound = self.shape_bindings(
+                    generics,
+                    *name,
+                    *generic_args,
+                    module,
+                    bindings,
+                    span,
+                    macro_name,
+                )?;
+
+                self.shape_for_decl(&owner, decl, span, macro_name, &bound)
+            }
+
+            _ => {
+                self.errors.push(Error::Unsupported {
+                    message: format!("{macro_name} does not support this type").into(),
+                    src: self.current_src(),
+                    span,
+                });
+                Err(Unwind::Break)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn shape_bindings(
+        &mut self,
+        generics: Option<&'arena [GenericType<'arena>]>,
+        name: Spur,
+        generic_args: Option<&'arena [&'arena TypeExpr<'arena>]>,
+        arg_module: &Path,
+        parent: &[ShapeFrame<'arena>],
+        span: miette::SourceSpan,
+        macro_name: &str,
+    ) -> Result<ShapeBindings<'arena>, Unwind<'arena>> {
+        let generics = generics.unwrap_or(&[]);
+
+        let Some(args) = generic_args else {
+            if generics.is_empty() {
+                return Ok(parent.to_vec());
+            }
+
+            let label = self.interned(&name);
+
+            self.errors.push(Error::TypeMismatch {
+                message: format!("{macro_name} requires generic arguments for {label}").into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        };
+
+        if args.len() != generics.len() {
+            let label = self.interned(&name);
+
+            self.errors.push(Error::TypeMismatch {
+                message: format!(
+                    "{macro_name} expects {} generic arguments for {label}, got {}",
+                    generics.len(),
+                    args.len()
+                )
+                .into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(Unwind::Break);
+        }
+
+        let mut bindings = parent.to_vec();
+        let mut frame: FxHashMap<Spur, (PathBuf, &'arena TypeExpr<'arena>)> = FxHashMap::default();
+
+        for (generic, arg) in generics.iter().zip(args.iter()) {
+            frame.insert(generic.name.0, (arg_module.to_path_buf(), *arg));
+        }
+
+        bindings.push(frame);
+
+        Ok(bindings)
+    }
+
+    fn shape_for_decl(
+        &mut self,
+        module: &PathBuf,
+        decl: &'arena Declaration<'arena>,
+        span: miette::SourceSpan,
+        macro_name: &str,
+        bindings: &[ShapeFrame<'arena>],
+    ) -> Result<Shape, Unwind<'arena>> {
+        match &decl.kind {
+            DeclarationKind::StructDecl { fields, .. } => {
+                let mut shapes = Vec::with_capacity(fields.len());
+
+                for field in fields.iter() {
+                    shapes.push(self.shape_for_type(module, field.ty, span, macro_name, bindings)?);
+                }
+
+                Ok(Shape::Struct(shapes))
+            }
+
+            DeclarationKind::EnumDecl { variants, .. } => {
+                let mut shapes = Vec::with_capacity(variants.len());
+
+                for variant in variants.iter() {
+                    let shape = match &variant.payload {
+                        None => None,
+                        Some(EnumVariantPayload::Single(ty)) => {
+                            Some(self.shape_for_type(module, ty, span, macro_name, bindings)?)
+                        }
+                        Some(EnumVariantPayload::Anonymous(fields)) => {
+                            let mut payload = Vec::with_capacity(fields.len());
+
+                            for field in fields.iter() {
+                                payload.push(self.shape_for_type(
+                                    module, field.ty, span, macro_name, bindings,
+                                )?);
+                            }
+
+                            Some(Shape::Struct(payload))
+                        }
+                    };
+
+                    shapes.push(shape);
+                }
+
+                Ok(Shape::Enum(shapes))
+            }
+
+            _ => {
+                self.errors.push(Error::Unsupported {
+                    message: format!("{macro_name} does not support this type").into(),
+                    src: self.current_src(),
+                    span,
+                });
+                Err(Unwind::Break)
+            }
+        }
+    }
+
+    fn array_len(
+        &mut self,
+        len: &'arena Expression<'arena>,
+        span: miette::SourceSpan,
+        macro_name: &str,
+    ) -> Result<u64, Unwind<'arena>> {
+        let value = self.eval_expr(len)?;
+
+        match value {
+            Value::Int(count) if count > 0 => Ok(count as u64),
+            Value::Int(count) => {
+                self.errors.push(Error::TypeMismatch {
+                    message: format!("{macro_name} requires a positive array length, got {count}")
+                        .into(),
+                    src: self.current_src(),
+                    span,
+                });
+                Err(Unwind::Break)
+            }
+            other => {
+                self.errors.push(Error::TypeMismatch {
+                    message: format!(
+                        "{macro_name} requires a comptime_int array length, got {}",
+                        other.type_name()
+                    )
+                    .into(),
+                    src: self.current_src(),
+                    span,
+                });
+                Err(Unwind::Break)
+            }
+        }
+    }
+
+    fn resolve_comptime_alias(
+        &mut self,
+        module: &PathBuf,
+        name: Spur,
+        span: miette::SourceSpan,
+    ) -> Result<Option<PathBuf>, Unwind<'arena>> {
+        if self
+            .scopes
+            .get(module)
+            .is_some_and(|scope| scope.aliases.contains_key(&name))
+        {
+            return Ok(Some(module.clone()));
+        }
+
+        let mut public = Vec::new();
+        let mut private = Vec::new();
+
+        for target in self.visible_modules(module).to_vec() {
+            let Some(decl) = self
+                .scopes
+                .get(&target)
+                .and_then(|scope| scope.aliases.get(&name))
+            else {
+                continue;
+            };
+
+            if Self::alias_is_pub(decl) {
+                public.push(target);
+            } else {
+                private.push(target);
+            }
+        }
+
+        self.pick_owner(name, span, public, private, "type")
+    }
+
     fn type_arg(
         &mut self,
         expr: Option<&&'arena Expression<'arena>>,
@@ -3374,5 +3764,34 @@ impl<'arena> Interp<'arena> {
         };
 
         Ok(decl)
+    }
+}
+
+fn shape_binding_lookup<'arena>(
+    bindings: &[ShapeFrame<'arena>],
+    name: &Spur,
+) -> Option<(usize, PathBuf, &'arena TypeExpr<'arena>)> {
+    for (frame, entries) in bindings.iter().enumerate().rev() {
+        if let Some((module, ty)) = entries.get(name) {
+            return Some((frame, module.clone(), *ty));
+        }
+    }
+
+    None
+}
+
+fn builtin_shape(builtin: BuiltinType) -> Shape {
+    match builtin {
+        BuiltinType::i8 | BuiltinType::u8 => Shape::I8,
+        BuiltinType::i16 | BuiltinType::u16 => Shape::I16,
+        BuiltinType::i32 | BuiltinType::u32 => Shape::I32,
+        BuiltinType::i64 | BuiltinType::u64 => Shape::I64,
+        BuiltinType::isize | BuiltinType::usize => Shape::Isize,
+        BuiltinType::f32 => Shape::F32,
+        BuiltinType::f64 => Shape::F64,
+        BuiltinType::bool => Shape::Bool,
+        BuiltinType::char => Shape::Char,
+        BuiltinType::void => Shape::Void,
+        BuiltinType::never => Shape::Never,
     }
 }

@@ -1,0 +1,67 @@
+struct Point {
+  x: i32,
+  y: i32,
+}
+
+struct Mixed {
+  tag: i8,
+  point: Point,
+  count: i64,
+}
+
+struct Empty {}
+
+struct Pair[A, B] {
+  first: A,
+  second: B,
+}
+
+enum Shape {
+  empty,
+  circle: Point,
+  rect: { width: i32, height: i32 },
+  index: i64,
+}
+
+enum Tiny {
+  a,
+  b: Empty,
+}
+
+enum Maybe[T] {
+  none,
+  some: T,
+}
+
+alias Counter = u32;
+
+alias Slot[T] = Maybe[T];
+
+comptime POINT = @sizeof(Point);
+comptime MIXED = @sizeof(Mixed);
+comptime SHAPE = @sizeof(Shape);
+comptime COUNTER = @alignof(Counter);
+comptime TINY = @sizeof(Tiny);
+comptime TINY_ALIGN = @alignof(Tiny);
+comptime PAIR = @sizeof(Pair[i32, i64]);
+comptime MAYBE = @sizeof(Maybe[i64]);
+
+comptime fn pointer_size() comptime_int {
+  return @sizeof(*Point);
+}
+
+fn main() {
+  @println("point {} {} {}", POINT, @sizeof(Point), @alignof(Point));
+  @println("mixed {} {} {}", MIXED, @sizeof(Mixed), @alignof(Mixed));
+  @println("shape {} {} {}", SHAPE, @sizeof(Shape), @alignof(Shape));
+  @println("counter {} {} {}", COUNTER, @sizeof(Counter), @alignof(Counter));
+  @println("tiny {} {} {} {}", TINY, @sizeof(Tiny), TINY_ALIGN, @alignof(Tiny));
+  @println("generic {} {} {}", PAIR, @sizeof(Pair[i32, i64]), MAYBE);
+  @println("slot {}", @sizeof(Slot[i64]));
+  @println("pointer {} {}", pointer_size(), @sizeof(*Point));
+  @println("array {} {}", @sizeof([3]Point), @alignof([3]Point));
+  @println("slice {} {}", @sizeof([]i32), @alignof([]i32));
+  @println("fat {} {}", @sizeof(Fn(i32) i32), @alignof(Fn(i32) i32));
+  @println("basic {} {}", @sizeof(fn(i32) i32), @sizeof(bool));
+  @println("scalars {} {} {} {}", @sizeof(char), @sizeof(isize), @sizeof(f64), @sizeof(i8));
+}

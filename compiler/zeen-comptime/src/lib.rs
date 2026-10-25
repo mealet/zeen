@@ -26,6 +26,7 @@ pub fn evaluate<'arena>(
     interner: Rc<RefCell<Rodeo>>,
     module_of: impl Fn(&Declaration<'_>) -> PathBuf,
     visibility: HashMap<PathBuf, Vec<PathBuf>>,
+    target: &zeen_driver::Target,
 ) -> Result<&'arena [&'arena Declaration<'arena>], Vec<Error>> {
     let errors = check::validate_program(program, &interner);
 
@@ -33,6 +34,6 @@ pub fn evaluate<'arena>(
         return Err(errors);
     }
 
-    let mut pass = interp::Interp::new(arena, interner, visibility);
+    let mut pass = interp::Interp::new(arena, interner, visibility, target);
     pass.evaluate(program, module_of)
 }

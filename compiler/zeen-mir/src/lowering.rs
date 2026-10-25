@@ -2848,6 +2848,57 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
+    fn ensure_layout(&mut self, ty: TypeId) {
+        let mut visited: HashSet<TypeId> = HashSet::default();
+        self.ensure_layout_inner(ty, &mut visited);
+    }
+
+    fn ensure_layout_inner(&mut self, ty: TypeId, visited: &mut HashSet<TypeId>) {
+        if !visited.insert(ty) {
+            return;
+        }
+
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Struct { def_id, .. } => {
+                self.register_struct_layout(ty, def_id);
+
+                let fields: Vec<TypeId> = self
+                    .program
+                    .struct_layouts
+                    .get(&ty)
+                    .map(|layout| layout.fields.iter().map(|field| field.ty).collect())
+                    .unwrap_or_default();
+
+                for field in fields {
+                    self.ensure_layout_inner(field, visited);
+                }
+            }
+            Type::Enum { def_id, .. } => {
+                self.register_enum_layout(ty, def_id);
+
+                let payloads: Vec<TypeId> = self
+                    .program
+                    .enum_layouts
+                    .get(&ty)
+                    .map(|layout| {
+                        layout
+                            .variants
+                            .iter()
+                            .filter_map(|variant| variant.payload)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                for payload in payloads {
+                    self.ensure_layout_inner(payload, visited);
+                }
+            }
+            Type::Slice { .. } => self.register_slice_layout(ty),
+            Type::Array { element, .. } => self.ensure_layout_inner(element, visited),
+            _ => {}
+        }
+    }
+
     fn register_reachable_slice_layouts(&mut self) {
         let mut visited: HashSet<TypeId> = HashSet::default();
         let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
@@ -4022,6 +4073,8 @@ impl<'ctx> MirLowering<'ctx> {
                         HirExprKind::Type(_) => self.expr_type(fb, &args[0]),
                         _ => panic!("@sizeof / @alignof arg must be a type expression"),
                     };
+
+                    self.ensure_layout(target_ty);
 
                     let result_ty = self.expr_type(fb, expr);
                     let temp = fb.new_temp(result_ty);
