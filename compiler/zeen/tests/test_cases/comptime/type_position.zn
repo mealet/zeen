@@ -14,11 +14,18 @@ struct Box[T] {
   pub inner: T,
 }
 
+comptime Ty = i32;
+comptime Ptr = *i32;
+
 fn main() {
   let value: identity(i32) = 5;
   let boxed: Box[identity(i64)] = Box { .inner = 9 };
+  let aliased: Ty = 3;
   @println("{}", value);
   @println("{}", boxed.inner);
+  @println("{}", aliased);
   @println("{}", @typename(identity(Point)));
   @println("{}", @typename(pointer(u8)));
+  @println("{}", @typename(identity(Ty)));
+  @println("{}", @typename(identity(Ptr)));
 }
