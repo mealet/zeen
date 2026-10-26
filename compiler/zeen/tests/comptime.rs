@@ -1784,3 +1784,47 @@ fn main() {
         result.stderr
     );
 }
+
+#[test]
+fn void_comptime_calls_do_not_warn() {
+    let source = r#"comptime fn spell() void {
+  @println("compile time");
+}
+
+fn main() {
+  spell();
+  @println("run time");
+}
+"#;
+
+    let result = compile("void_call", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("unused result of expression"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn untyped_comptime_calls_do_not_warn() {
+    let source = r#"comptime fn note() {
+  @println("compile time");
+}
+
+fn main() {
+  note();
+  @println("run time");
+}
+"#;
+
+    let result = compile("untyped_call", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("unused result of expression"),
+        "stderr: {}",
+        result.stderr
+    );
+}

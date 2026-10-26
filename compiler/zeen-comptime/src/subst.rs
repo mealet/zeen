@@ -710,12 +710,59 @@ impl<'arena> Interp<'arena> {
         }
     }
 
+    fn is_void_comptime_call(
+        &mut self,
+        module: &PathBuf,
+        expr: &'arena Expression<'arena>,
+    ) -> bool {
+        let ExpressionKind::Call { callee, .. } = &expr.kind else {
+            return false;
+        };
+
+        let ExpressionKind::Ident {
+            name,
+            generic_args: None,
+        } = &callee.kind
+        else {
+            return false;
+        };
+
+        if !self.is_comptime_fn(module, *name) {
+            return false;
+        }
+
+        let Ok(Some(owner)) = self.resolve_comptime_fn(module, *name, expr.span) else {
+            return false;
+        };
+
+        self.scopes
+            .get(&owner)
+            .and_then(|scope| scope.fns.get(name))
+            .is_some_and(|decl| {
+                matches!(
+                    &decl.kind,
+                    DeclarationKind::ComptimeFn { return_type, .. }
+                        if match return_type {
+                            None => true,
+                            Some(rt) => matches!(&rt.kind, TypeKind::Builtin(zt) if matches!(zt, zeen_ast::types::BuiltinType::void)),
+                        }
+                )
+            })
+    }
+
     fn substitute_expr_inner(
         &mut self,
         module: &PathBuf,
         expr: &'arena Expression<'arena>,
     ) -> Result<Option<&'arena Expression<'arena>>, Vec<Error>> {
         if self.is_comptime_value_expr(module, expr) {
+            if self.is_void_comptime_call(module, expr) {
+                return match self.eval_fresh_expr(module, expr) {
+                    Ok(_) => Ok(Some(self.void_macro_expr(expr.span))),
+                    Err(_) => Err(self.errors.clone()),
+                };
+            }
+
             return match self.eval_fresh_expr(module, expr) {
                 Ok(value) => self.value_to_expr(module, value, expr.span),
                 Err(_) => Err(self.errors.clone()),
@@ -776,8 +823,6 @@ impl<'arena> Interp<'arena> {
             }
 
             ExpressionKind::Call { callee, args } => {
-                let original_callee_is_comptime_fn = matches!(&callee.kind, ExpressionKind::Ident { name, generic_args: None } if self.is_comptime_fn(module, *name));
-
                 let callee_new = self.substitute_expr(module, callee)?;
 
                 let mut new_args: Vec<&'arena Expression<'arena>> = Vec::with_capacity(args.len());
@@ -794,45 +839,6 @@ impl<'arena> Interp<'arena> {
                     .zip(args.iter())
                     .any(|(a, b)| !std::ptr::eq(*a as *const _, (*b) as *const _));
                 let any_changed = args_any_changed || callee_new.is_some();
-
-                if original_callee_is_comptime_fn {
-                    let callee_name = match &callee.kind {
-                        ExpressionKind::Ident { name, .. } => *name,
-                        _ => unreachable!("original_callee_is_comptime_fn"),
-                    };
-
-                    let owner = match self.resolve_comptime_fn(module, callee_name, expr.span) {
-                        Ok(Some(owner)) => owner,
-                        Ok(None) => return Err(self.errors.clone()),
-                        Err(_) => return Err(self.errors.clone()),
-                    };
-
-                    let mut values: Vec<Value<'arena>> = Vec::with_capacity(args.len());
-
-                    for arg in args.iter() {
-                        match self.eval_fresh_expr(module, arg) {
-                            Ok(value) => values.push(value),
-                            Err(_) => return Err(self.errors.clone()),
-                        }
-                    }
-
-                    let is_void_fn = self.scopes.get(&owner)
-                        .and_then(|scope| scope.fns.get(&callee_name))
-                        .map(|decl| {
-                            matches!(&decl.kind, DeclarationKind::ComptimeFn { return_type: Some(rt), .. } if matches!(&rt.kind, TypeKind::Builtin(zt) if matches!(zt, zeen_ast::types::BuiltinType::void)))
-                        })
-                        .unwrap_or(false);
-
-                    if is_void_fn {
-                        let _ = self.eval_comptime_call(&owner, callee_name, expr.span, &values);
-                        return Ok(Some(self.void_macro_expr(expr.span)));
-                    }
-
-                    return match self.eval_comptime_call(&owner, callee_name, expr.span, &values) {
-                        Ok(value) => self.value_to_expr(module, value, expr.span),
-                        Err(_) => Err(self.errors.clone()),
-                    };
-                }
 
                 if !any_changed {
                     return Ok(None);
