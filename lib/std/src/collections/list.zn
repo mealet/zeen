@@ -278,6 +278,27 @@ pub struct List[T] {
     };
   }
 
+  /// Swap elements at two indices
+  pub fn swap(*self, a: usize, b: usize) {
+    if (a >= self._len || b >= self._len) {
+      @panic(
+        "out of bounds, List len is {} but indices are {} and {}",
+        self._len,
+        a,
+        b
+      );
+    };
+
+    if (a == b) { return; };
+
+    let left = @as(*T, self.ptr + a);
+    let right = @as(*T, self.ptr + b);
+
+    let temp = *left;
+    *left = *right;
+    *right = temp;
+  }
+
   /// Sort list in place (through `Ord`)
   pub fn sort[T: Ord](*self) {
     let len = self._len;
@@ -734,6 +755,18 @@ implement[T: Eq] Eq : List[T] {
 implement[T: Copy] Index : List[T] {
   fn index(*const self, index: usize) T {
     let opt = self.get(index);
+
+    if (opt.is_none()) {
+      @panic("out of bounds, List len is {} but index is {}", self.len(), index);
+    }
+
+    opt.unwrap()
+  }
+}
+
+implement[T] Index : List[T] {
+  fn index(*const self, index: usize) *T {
+    let opt = self.get_ptr(index);
 
     if (opt.is_none()) {
       @panic("out of bounds, List len is {} but index is {}", self.len(), index);
