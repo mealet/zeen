@@ -508,6 +508,36 @@ impl<'arena> Interp<'arena> {
                 }
             },
 
+            TypeKind::Splice(expr) => {
+                self.errors.push(Error::SpliceOutsideQuote {
+                    message: "`$()` in a type position is only allowed inside a captured type"
+                        .into(),
+                    src: self.current_src(),
+                    span: expr.span,
+                });
+                Err(self.errors.clone())
+            }
+
+            TypeKind::ComptimeCall(expr) => match self.eval_fresh_expr(module, expr) {
+                Ok(Value::Type(result)) => match self.substitute_type(module, result)? {
+                    Some(new_ty) => Ok(Some(new_ty)),
+                    None => Ok(Some(result)),
+                },
+                Ok(other) => {
+                    self.errors.push(Error::TypeMismatch {
+                        message: format!(
+                            "a comptime call in a type position must produce a zeen_type, got {}",
+                            other.type_name()
+                        )
+                        .into(),
+                        src: self.current_src(),
+                        span: ty.span,
+                    });
+                    Err(self.errors.clone())
+                }
+                Err(_) => Err(self.errors.clone()),
+            },
+
             TypeKind::SinglePointer(inner) | TypeKind::ManyPointer(inner) => {
                 let new_kind = match self.substitute_type(module, inner)? {
                     None => return Ok(None),

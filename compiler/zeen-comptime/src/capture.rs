@@ -391,6 +391,10 @@ impl<'arena> Interp<'arena> {
         module: &PathBuf,
         ty: &'arena TypeExpr<'arena>,
     ) -> Result<&'arena TypeExpr<'arena>, ()> {
+        if let TypeKind::Splice(inner) = &ty.kind {
+            return self.splice_type(module, inner, ty.span);
+        }
+
         match ty.kind {
             TypeKind::Builtin(_) | TypeKind::SelfType | TypeKind::SelfAlias | TypeKind::VaArgs => {
                 Ok(ty)
@@ -438,6 +442,19 @@ impl<'arena> Interp<'arena> {
 
                 Ok(self.arena.alloc(TypeExpr {
                     kind: TypeKind::TypeOf(new_expr),
+                    span: ty.span,
+                }))
+            }
+
+            TypeKind::ComptimeCall(expr) => {
+                let new_expr = self.capture_expr(module, expr)?;
+
+                if unchanged(expr, new_expr) {
+                    return Ok(ty);
+                }
+
+                Ok(self.arena.alloc(TypeExpr {
+                    kind: TypeKind::ComptimeCall(new_expr),
                     span: ty.span,
                 }))
             }
@@ -519,6 +536,8 @@ impl<'arena> Interp<'arena> {
                     span: ty.span,
                 }))
             }
+
+            TypeKind::Splice(_) => unreachable!("splices are expanded above"),
         }
     }
 
@@ -920,6 +939,51 @@ impl<'arena> Interp<'arena> {
                     span: name.1,
                 });
 
+                Err(())
+            }
+        }
+    }
+
+    fn splice_type(
+        &mut self,
+        module: &PathBuf,
+        inner: &'arena Expression<'arena>,
+        span: miette::SourceSpan,
+    ) -> Result<&'arena TypeExpr<'arena>, ()> {
+        if self.capture_depth >= CAPTURE_DEPTH_LIMIT {
+            self.errors.push(Error::LimitExceeded {
+                message: format!(
+                    "comptime capture nesting exceeded the limit of {CAPTURE_DEPTH_LIMIT}"
+                )
+                .into(),
+                src: self.current_src(),
+                span,
+            });
+            return Err(());
+        }
+
+        let value = match self.eval_expr(inner) {
+            Ok(value) => value,
+            Err(_) => return Err(()),
+        };
+
+        match value {
+            Value::Type(ty) => {
+                self.capture_depth += 1;
+                let result = self.capture_type(module, ty);
+                self.capture_depth -= 1;
+                result
+            }
+            other => {
+                self.errors.push(Error::TypeMismatch {
+                    message: format!(
+                        "`$()` in a type position expects a zeen_type, got {}",
+                        other.type_name()
+                    )
+                    .into(),
+                    src: self.current_src(),
+                    span,
+                });
                 Err(())
             }
         }

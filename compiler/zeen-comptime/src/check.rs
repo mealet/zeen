@@ -358,6 +358,8 @@ impl<'arena> Checker<'_> {
 
             TypeKind::Const(inner) => self.check_type(inner, false),
 
+            TypeKind::Splice(expr) | TypeKind::ComptimeCall(expr) => self.expression(expr, true),
+
             TypeKind::Named { name, generic_args }
                 if generic_args.is_none() && self.is_comptime_type(*name) => {}
 

@@ -34,6 +34,10 @@ pub(crate) fn type_display(interner: &Rc<RefCell<Rodeo>>, ty: &TypeExpr<'_>) -> 
 
         TypeKind::TypeOf(_) => "typeof".to_string(),
 
+        TypeKind::Splice(expr) => format!("$({})", expr_display(interner, expr)),
+
+        TypeKind::ComptimeCall(expr) => expr_display(interner, expr),
+
         TypeKind::SinglePointer(inner) => format!("*{}", type_display(interner, inner)),
 
         TypeKind::ManyPointer(inner) => format!("[*]{}", type_display(interner, inner)),

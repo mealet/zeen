@@ -915,7 +915,17 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             self.p.current().kind,
             TokenKind::CloseParen | TokenKind::Eof
         ) {
-            let arg = self.parse()?;
+            let arg = if matches!(self.p.current().kind, TokenKind::Type(_)) {
+                let ty = crate::type_parser::TypeParser::new(self.p).parse()?;
+
+                self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Type(ty),
+                    span: ty.span,
+                })
+            } else {
+                self.parse()?
+            };
+
             args_buffer.push(arg);
 
             if !self.p.at(TokenKind::CloseParen) {
@@ -952,9 +962,16 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             let _ = self.p.advance_not_eof()?;
 
             if ident_slice.as_str() == "zeen_decl" {
+                let previous_splices = self.p.splices_allowed;
+                self.p.splices_allowed = true;
+
                 let decl = crate::declarations::DeclParser::new(self.p)
                     .with_name_splices()
-                    .parse()?;
+                    .parse();
+
+                self.p.splices_allowed = previous_splices;
+
+                let decl = decl?;
 
                 let decl_expr = self.p.arena.alloc(Expression {
                     kind: ExpressionKind::Decl(decl),
@@ -979,8 +996,15 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                     | "hasField"
                     | "fieldType"
             ) {
+                let previous_splices = self.p.splices_allowed;
+                self.p.splices_allowed = true;
+
                 let mut tp = crate::type_parser::TypeParser::new(self.p);
-                let parsed_type = tp.parse()?;
+                let parsed_type = tp.parse();
+
+                self.p.splices_allowed = previous_splices;
+
+                let parsed_type = parsed_type?;
 
                 let ty_expr = self.p.arena.alloc(Expression {
                     kind: ExpressionKind::Type(parsed_type),

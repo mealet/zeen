@@ -1,0 +1,24 @@
+comptime fn identity(ty: zeen_type) zeen_type {
+  ty
+}
+
+comptime fn pointer(ty: zeen_type) zeen_type {
+  @zeen_type(*$(ty))
+}
+
+struct Point {
+  pub x: i32,
+}
+
+struct Box[T] {
+  pub inner: T,
+}
+
+fn main() {
+  let value: identity(i32) = 5;
+  let boxed: Box[identity(i64)] = Box { .inner = 9 };
+  @println("{}", value);
+  @println("{}", boxed.inner);
+  @println("{}", @typename(identity(Point)));
+  @println("{}", @typename(pointer(u8)));
+}

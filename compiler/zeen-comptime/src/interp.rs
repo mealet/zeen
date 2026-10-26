@@ -107,6 +107,8 @@ enum TypeKey {
     Named(Spur, Option<Vec<TypeKey>>),
     Const(Box<TypeKey>),
     TypeOf(usize),
+    Splice(usize),
+    ComptimeCall(usize),
     SinglePointer(Box<TypeKey>),
     ManyPointer(Box<TypeKey>),
     Array(Box<TypeKey>, Option<usize>),
@@ -126,6 +128,10 @@ fn type_key(ty: &TypeExpr<'_>) -> TypeKey {
         ),
         TypeKind::Const(inner) => TypeKey::Const(Box::new(type_key(inner))),
         TypeKind::TypeOf(expr) => TypeKey::TypeOf(*expr as *const Expression<'_> as usize),
+        TypeKind::Splice(expr) => TypeKey::Splice(*expr as *const Expression<'_> as usize),
+        TypeKind::ComptimeCall(expr) => {
+            TypeKey::ComptimeCall(*expr as *const Expression<'_> as usize)
+        }
         TypeKind::SinglePointer(inner) => TypeKey::SinglePointer(Box::new(type_key(inner))),
         TypeKind::ManyPointer(inner) => TypeKey::ManyPointer(Box::new(type_key(inner))),
         TypeKind::Array { element, len } => TypeKey::Array(
@@ -1454,6 +1460,28 @@ impl<'arena> Interp<'arena> {
             Ok(Some(owner)) => return self.eval_const(&owner, name),
             Ok(None) => {}
             Err(unwind) => return Err(unwind),
+        }
+
+        let type_module = match self.resolve_comptime_type(&module, name, span)? {
+            Some(module) => Some(module),
+            None => self.resolve_comptime_struct(&module, name, span)?,
+        };
+
+        let type_module = match type_module {
+            Some(module) => Some(module),
+            None => self.resolve_comptime_alias(&module, name, span)?,
+        };
+
+        if type_module.is_some() {
+            let ty = self.arena.alloc(TypeExpr {
+                kind: TypeKind::Named {
+                    name,
+                    generic_args: None,
+                },
+                span,
+            });
+
+            return Ok(Value::Type(ty));
         }
 
         let label = self.interned(&name);

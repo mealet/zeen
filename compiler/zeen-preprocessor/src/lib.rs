@@ -363,6 +363,8 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
 
             TypeKind::Const(inner) => TypeKind::Const(self.resolve_type(inner)),
             TypeKind::TypeOf(expr) => TypeKind::TypeOf(self.resolve_expr(expr)),
+            TypeKind::Splice(expr) => TypeKind::Splice(self.resolve_expr(expr)),
+            TypeKind::ComptimeCall(expr) => TypeKind::ComptimeCall(self.resolve_expr(expr)),
             TypeKind::SinglePointer(inner) => TypeKind::SinglePointer(self.resolve_type(inner)),
             TypeKind::ManyPointer(inner) => TypeKind::ManyPointer(self.resolve_type(inner)),
 

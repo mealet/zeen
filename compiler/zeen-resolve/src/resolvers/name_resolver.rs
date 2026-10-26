@@ -2264,6 +2264,10 @@ impl<'ctx> NameResolver {
                 self.resolve_expr(expr);
             }
 
+            TypeKind::Splice(expr) | TypeKind::ComptimeCall(expr) => {
+                self.resolve_expr(expr);
+            }
+
             TypeKind::Array { element, len } => {
                 self.resolve_type(element);
 

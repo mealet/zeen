@@ -1828,3 +1828,127 @@ fn main() {
         result.stderr
     );
 }
+
+#[test]
+fn passes_builtin_types_to_comptime_functions() {
+    let source = r#"comptime fn identity(ty: zeen_type) zeen_type {
+  ty
+}
+
+fn main() {
+  @println("{}", @typename(identity(i64)));
+}
+"#;
+
+    let result = run("type_argument_builtin", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("i64"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn passes_named_types_to_comptime_functions() {
+    let source = r#"struct Point {
+  pub x: i32,
+}
+
+comptime fn identity(ty: zeen_type) zeen_type {
+  ty
+}
+
+fn main() {
+  @println("{}", @typename(identity(Point)));
+}
+"#;
+
+    let result = run("type_argument_named", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("Point"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn passes_macro_types_to_type_arguments() {
+    let source = r#"fn main() {
+  @println("{}", @typename(@zeen_type(*u32)));
+}
+"#;
+
+    let result = run("type_argument_macro", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("*u32"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn splices_types_in_captured_declarations() {
+    let source = r#"comptime fn holder(ty: zeen_type) zeen_decl {
+  return @zeen_decl(
+    pub struct Holder {
+      pub ptr: *$(ty),
+      pub pair: [2]$(ty),
+    }
+  );
+}
+
+comptime {
+  @emit(holder(i32));
+}
+
+fn main() {
+  let value = 7;
+  let holder = Holder { .ptr = &value, .pair = [1, 2] };
+  @println("{}", holder.pair[1]);
+}
+"#;
+
+    let result = run("type_splice_declaration", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("2"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn rejects_non_type_splice_in_type_position() {
+    let result = compile(
+        "type_splice_wrong_value",
+        "comptime fn build(n: comptime_int) zeen_decl {\n  return @zeen_decl(\n    pub struct Value {\n      pub field: $(n),\n    }\n  );\n}\n\ncomptime {\n  @emit(build(3));\n}\n\nfn main() {\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("zeen::comptime::type_mismatch"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_type_splice_outside_declaration_capture() {
+    let result = compile(
+        "type_splice_outside",
+        "comptime ty = i32;\n\nfn main() {\n  let value: $(ty) = 1;\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("only allowed inside `@zeen_decl`"),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn rejects_non_type_comptime_call_in_type_position() {
+    let result = compile(
+        "type_position_wrong_value",
+        "comptime fn count() comptime_int {\n  return 3;\n}\n\nfn main() {\n  let value: count() = 1;\n}\n",
+    );
+
+    assert!(!result.success);
+    assert!(
+        result.stderr.contains("must produce a zeen_type"),
+        "stderr: {}",
+        result.stderr
+    );
+}

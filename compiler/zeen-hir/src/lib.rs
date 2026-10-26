@@ -1050,6 +1050,10 @@ impl<'res> HirLowering<'res> {
 
             TypeKind::TypeOf(expr) => HirTypeKind::TypeOf(Rc::new(self.lower_expr(expr))),
 
+            TypeKind::Splice(_) | TypeKind::ComptimeCall(_) => {
+                unreachable!("comptime types are expanded before HIR lowering")
+            }
+
             TypeKind::SinglePointer(inner) => {
                 HirTypeKind::SinglePointer(Rc::new(self.lower_type(inner)))
             }
