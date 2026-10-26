@@ -1,9 +1,9 @@
 use std.alloc;
 
-const InitialListCapacity: usize = 4;
+comptime InitialListCapacity = 4;
 
 /// Insertion sort threshold (tiny runs).
-const SortInsertionThreshold: usize = 20;
+comptime SortInsertionThreshold = 20;
 
 /// Dynamic heap-allocated array buffer
 pub struct List[T] {

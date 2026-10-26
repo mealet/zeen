@@ -2,11 +2,11 @@ use std.string;
 use std.collections.list;
 use std.collections.map;
 
-const MaxJsonDepth: usize = 128;
+comptime MaxJsonDepth = 128;
 
-const SurrogateMin: u32 = 55296;
-const SurrogateMax: u32 = 57343;
-const Latin1Max: u32 = 255;
+comptime SurrogateMin = 55296;
+comptime SurrogateMax = 57343;
+comptime Latin1Max = 255;
 
 /// JSON parse error.
 pub struct JsonError {

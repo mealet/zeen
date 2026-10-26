@@ -239,7 +239,7 @@ fn unicode_char_literal_single_codepoint() {
 fn array_length_overflow_is_reported() {
     compile_err_contains(
         "struct A { x: [4294967296 * 4294967296]i32 }",
-        "array length overflows",
+        "is out of literal range",
     );
 }
 

@@ -1519,21 +1519,9 @@ mod tests {
 
         let (_, _, value, _, _) = fx.global_var("g");
 
-        let HirExprKind::Binary {
-            ref lhs, ref rhs, ..
-        } = value.kind
-        else {
-            panic!("initializer must lower to a Binary expression")
+        let HirExprKind::Literal(zeen_ast::expressions::Literal::Int(3)) = value.kind else {
+            panic!("initializer must constant-fold to a Literal expression")
         };
-
-        assert!(matches!(
-            lhs.kind,
-            HirExprKind::Literal(zeen_ast::expressions::Literal::Int(1))
-        ));
-        assert!(matches!(
-            rhs.kind,
-            HirExprKind::Literal(zeen_ast::expressions::Literal::Int(2))
-        ));
     }
 
     #[test]

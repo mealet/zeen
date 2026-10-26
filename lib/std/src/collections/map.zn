@@ -1,7 +1,7 @@
 use std.alloc;
 use std.collections.list;
 
-const InitialMapCapacity: usize = 8;
+comptime InitialMapCapacity = 8;
 
 fn next_pow2(n: usize) usize {
   let cap: usize = 1;
@@ -55,7 +55,7 @@ pub struct HashMap[K: Hash + Eq, V] {
   _capacity: usize,
 
   pub fn new() Self {
-    let cap = InitialMapCapacity;
+    let cap: usize = InitialMapCapacity;
     let buckets = List#[List[Entry[K, V]]].with_capacity(cap);
 
     let idx: usize = 0;

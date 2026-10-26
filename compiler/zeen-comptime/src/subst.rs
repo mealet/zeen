@@ -5,7 +5,7 @@ use zeen_ast::{
     Declaration, DeclarationKind, Expression, ExpressionKind, Statement, StatementKind, TypeExpr,
     TypeKind,
     declarations::{AliasDecl, FnParam, GenericType},
-    expressions::{Arm, FieldInit, Literal, Pattern},
+    expressions::{Arm, BinaryOp, FieldInit, Literal, Pattern},
 };
 
 use crate::error::Error;
@@ -695,7 +695,7 @@ impl<'arena> Interp<'arena> {
         expr: &'arena Expression<'arena>,
     ) -> bool {
         match &expr.kind {
-            ExpressionKind::Literal(_) => false,
+            ExpressionKind::Literal(lit) => !matches!(lit, Literal::Null | Literal::ByteChar(_)),
 
             ExpressionKind::Ident {
                 name,
@@ -710,17 +710,21 @@ impl<'arena> Interp<'arena> {
 
             ExpressionKind::SliceAccess { object, index } => {
                 self.is_comptime_value_expr(module, object)
-                    || self.is_comptime_value_expr(module, index)
+                    && self.is_comptime_value_expr(module, index)
             }
 
             ExpressionKind::ArrayInit { elements } => elements
                 .iter()
-                .any(|element| self.is_comptime_value_expr(module, element)),
+                .all(|element| self.is_comptime_value_expr(module, element)),
 
-            ExpressionKind::Unary { expr: inner, .. } => self.is_comptime_value_expr(module, inner),
+            ExpressionKind::Unary { .. } => false,
 
-            ExpressionKind::Binary { lhs, rhs, .. } => {
-                self.is_comptime_value_expr(module, lhs) || self.is_comptime_value_expr(module, rhs)
+            ExpressionKind::Binary { lhs, rhs, op } => {
+                matches!(
+                    op,
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+                ) && self.is_comptime_value_expr(module, lhs)
+                    && self.is_comptime_value_expr(module, rhs)
             }
 
             ExpressionKind::MacroCall { .. } => false,
