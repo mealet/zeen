@@ -3279,10 +3279,12 @@ impl<'ctx> MirLowering<'ctx> {
                     _ => false,
                 };
 
-                let inner_ty = match self.typecheck.interner.get(result_ty).clone() {
-                    Type::Pointer { inner, .. } => inner,
-                    _ => self.expr_type(fb, inner),
-                };
+                let inner_ty = self.expr_type(fb, inner);
+
+                let ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                    inner: inner_ty,
+                    is_const,
+                });
 
                 let (block, inner_place) = if self.expr_is_place(inner) {
                     self.lower_expr_to_place(fb, inner, block)
@@ -3301,17 +3303,43 @@ impl<'ctx> MirLowering<'ctx> {
                 };
 
                 let temp = fb.new_temp(result_ty);
-                fb.push_stmt(
-                    block,
-                    MirStatement::Assign {
-                        place: Place::from_local(temp),
-                        rvalue: Rvalue::Ref {
-                            place: inner_place,
-                            is_const,
+                if ptr_ty == result_ty {
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Ref {
+                                place: inner_place,
+                                is_const,
+                            },
+                            source: Some(expr.source.clone()),
                         },
-                        source: Some(expr.source.clone()),
-                    },
-                );
+                    );
+                } else {
+                    let ptr_temp = fb.new_temp(ptr_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(ptr_temp),
+                            rvalue: Rvalue::Ref {
+                                place: inner_place,
+                                is_const,
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Cast {
+                                operand: Operand::Copy(Place::from_local(ptr_temp), None),
+                                target: result_ty,
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                }
 
                 (
                     block,
