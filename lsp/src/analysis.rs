@@ -1994,6 +1994,29 @@ pub fn build_syntax_fallback(program: &[&Declaration<'_>], text: &str) -> Analys
     }
 }
 
+pub fn merge_syntax_fallback(analysis: &mut Analysis, fallback: Analysis) {
+    let existing: Vec<(usize, usize)> = analysis
+        .occurrences
+        .iter()
+        .map(|occurrence| (occurrence.offset, occurrence.offset + occurrence.len))
+        .collect();
+
+    analysis
+        .occurrences
+        .extend(fallback.occurrences.into_iter().filter(|occurrence| {
+            let start = occurrence.offset;
+            let end = occurrence.offset + occurrence.len;
+
+            !existing
+                .iter()
+                .any(|(other_start, other_end)| start < *other_end && *other_start < end)
+        }));
+
+    analysis
+        .occurrences
+        .sort_by_key(|occurrence| (occurrence.offset, occurrence.len));
+}
+
 fn span_end(span: SourceSpan) -> usize {
     span.offset().saturating_add(span.len())
 }
@@ -2143,6 +2166,7 @@ fn walk_syntax_decl(
         }
 
         DeclarationKind::StructDecl { name, methods, .. }
+        | DeclarationKind::ComptimeStruct { name, methods, .. }
         | DeclarationKind::InterfaceDecl { name, methods, .. } => {
             push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type, None);
 
@@ -2198,6 +2222,63 @@ fn walk_syntax_decl(
                 Role::Type,
                 None,
             );
+        }
+
+        DeclarationKind::ComptimeConst { name, value, .. } => {
+            let before = occurrences.len();
+
+            push_syntax(
+                occurrences,
+                name.1.offset(),
+                name.1.len(),
+                Role::Variable,
+                None,
+            );
+
+            if let Some(occurrence) = occurrences.get_mut(before) {
+                occurrence.is_const = Some(true);
+            }
+
+            walk_syntax_expr(value, text, occurrences);
+        }
+
+        DeclarationKind::ComptimeFn {
+            name, params, body, ..
+        } => {
+            push_syntax(
+                occurrences,
+                name.1.offset(),
+                name.1.len(),
+                Role::Function,
+                None,
+            );
+
+            let Some(body) = body else {
+                return;
+            };
+
+            let start = body.span.offset().min(text.len());
+            let end = span_end(body.span).min(text.len());
+
+            for param in *params {
+                if let Some((offset, len)) = syntax_param_name(text, param.span) {
+                    push_syntax(
+                        occurrences,
+                        offset,
+                        len,
+                        Role::Parameter,
+                        Some((start, end)),
+                    );
+                }
+            }
+
+            walk_syntax_stmt(body, end, text, occurrences);
+        }
+
+        DeclarationKind::ComptimeBlock(block) => {
+            for stmt in block.stmts.iter() {
+                walk_syntax_stmt(stmt, text.len(), text, occurrences);
+            }
         }
 
         DeclarationKind::Use { .. }
@@ -2409,6 +2490,22 @@ fn walk_syntax_expr(expr: &Expression<'_>, text: &str, occurrences: &mut Vec<Occ
         | ExpressionKind::Type(_)
         | ExpressionKind::TargetVar(_)
         | ExpressionKind::ConditionalBlock(_) => {}
+
+        ExpressionKind::Decl(decl) => walk_syntax_decl(decl, false, text, occurrences),
+
+        ExpressionKind::Splice { expr } => walk_syntax_expr(expr, text, occurrences),
+
+        ExpressionKind::ComptimeBlock { stmts, trailing } => {
+            let end = span_end(expr.span).min(text.len());
+
+            for stmt in *stmts {
+                walk_syntax_stmt(stmt, end, text, occurrences);
+            }
+
+            if let Some(trailing) = trailing {
+                walk_syntax_expr(trailing, text, occurrences);
+            }
+        }
     }
 }
 
@@ -2779,6 +2876,29 @@ mod tests {
             output.analysis.call_generics.get(&key).map(String::as_str),
             Some("[i32]")
         );
+    }
+
+    const COMPTIME_SOURCE: &str = "comptime LIMIT = 3;\n\ncomptime fn doubled(n: comptime_int) comptime_int {\n    return n * 2;\n}\n\nfn main() {\n    let value = comptime {\n        let local = doubled(LIMIT);\n        local\n    };\n\n    @println(\"{}\", value);\n}\n";
+
+    #[test]
+    fn records_comptime_names() {
+        let uri: Uri = "file:///tmp/zeen-lsp-analysis-comptime.zn".parse().unwrap();
+        let output = crate::diagnostics::check(&uri, COMPTIME_SOURCE, &[]);
+        assert!(output.diagnostics.is_empty());
+
+        let occurrences = &output.analysis.occurrences;
+        let matches = |name: &str, role: Role| {
+            occurrences.iter().any(|occurrence| {
+                COMPTIME_SOURCE.get(occurrence.offset..occurrence.offset + occurrence.len)
+                    == Some(name)
+                    && occurrence.role == role
+            })
+        };
+
+        assert!(matches("LIMIT", Role::Variable));
+        assert!(matches("doubled", Role::Function));
+        assert!(matches("local", Role::Variable));
+        assert!(matches("n", Role::Parameter));
     }
 
     const UNNAMED_PARAM: &str = "fn put(i32) {\n}\n\nfn main() {\n    put(5);\n}\n";

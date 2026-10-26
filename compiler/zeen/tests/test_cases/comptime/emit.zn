@@ -1,0 +1,43 @@
+comptime fn named_struct(name: comptime_str) zeen_decl {
+  @zeen_decl(
+    pub struct $(name) {
+      pub value: i32
+    }
+  );
+}
+
+comptime fn add_two_decl() zeen_decl {
+  @zeen_decl(
+    pub fn add_two(x: i32) i32 {
+      return x + 2;
+    }
+  );
+}
+
+comptime {
+  @emit(named_struct("Alpha"));
+  @emit(add_two_decl());
+}
+
+comptime {
+  for (i : 0..3) {
+    let name = @fresh_name("Item");
+
+    @emit(@zeen_decl(
+      pub struct $(name) {
+        pub index: i32
+      }
+    ));
+  }
+}
+
+fn main() {
+  let alpha = Alpha { .value = 10 };
+  let first = Item_0 { .index = 1 };
+  let second = Item_1 { .index = 2 };
+  let third = Item_2 { .index = 3 };
+
+  @println("{}", alpha.value);
+  @println("{}", add_two(alpha.value));
+  @println("{}", first.index + second.index + third.index);
+}

@@ -838,10 +838,28 @@ dependencies = [
  "zeen-ast",
  "zeen-driver",
  "zeen-hir",
+ "zeen-layout",
  "zeen-mir",
  "zeen-resolve",
  "zeen-typecheck",
  "zeen-types",
+]
+
+[[package]]
+name = "zeen-comptime"
+version = "0.4.0"
+dependencies = [
+ "bumpalo",
+ "lasso",
+ "miette",
+ "rustc-hash",
+ "smol_str",
+ "thiserror",
+ "zeen-ast",
+ "zeen-driver",
+ "zeen-layout",
+ "zeen-lexer",
+ "zeen-parser",
 ]
 
 [[package]]
@@ -890,6 +908,13 @@ dependencies = [
  "zeen-lexer",
  "zeen-parser",
  "zeen-resolve",
+]
+
+[[package]]
+name = "zeen-layout"
+version = "0.4.0"
+dependencies = [
+ "zeen-driver",
 ]
 
 [[package]]
@@ -972,6 +997,7 @@ dependencies = [
  "smol_str",
  "thiserror",
  "zeen-ast",
+ "zeen-comptime",
  "zeen-driver",
  "zeen-lexer",
  "zeen-parser",

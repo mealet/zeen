@@ -27,7 +27,9 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
     }
 
     pub fn parse(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
-        match self.p.current().kind {
+        let kind = self.p.current_clone().kind;
+
+        match kind {
             TokenKind::Type(_) => self.parse_builtin(),
 
             TokenKind::Star => self.parse_ptr(),
@@ -46,6 +48,26 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(token::CompilerKeyword::Const) => self.parse_const_type(),
 
             TokenKind::Keyword(token::CompilerKeyword::TypeOf) => self.parse_typeof(),
+
+            TokenKind::Dollar if self.p.splices_allowed => self.parse_splice(),
+
+            TokenKind::Dollar => {
+                self.p.report(ParserError::UnknownType {
+                    label: "`$()` in a type position is only allowed inside `@zeen_decl`".into(),
+                    help: None,
+                    src: self.p.named_src(),
+                    span: self.p.current().span,
+                });
+                None
+            }
+
+            TokenKind::Ident
+                if matches!(self.p.peek().map(|t| t.kind), Some(TokenKind::OpenParen)) =>
+            {
+                self.parse_comptime_call()
+            }
+
+            TokenKind::MacroIdent => self.parse_comptime_call(),
 
             TokenKind::Ident => self.parse_named(),
 
@@ -363,6 +385,31 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
         });
 
         Some(expr)
+    }
+
+    fn parse_comptime_call(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
+        let start = self.p.current_clone();
+        let call = crate::expressions::ExprParser::new(self.p).parse()?;
+        let span = start.merge_span(call.span);
+
+        Some(self.p.arena.alloc(TypeExpr {
+            kind: TypeKind::ComptimeCall(call),
+            span,
+        }))
+    }
+
+    fn parse_splice(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
+        let dollar = self.p.current_clone();
+        let _ = self.p.advance_not_eof()?;
+        let _ = self.p.expect(TokenKind::OpenParen, "(")?;
+        let inner = crate::expressions::ExprParser::new(self.p).parse()?;
+        let close = self.p.expect(TokenKind::CloseParen, ")")?;
+        let span = dollar.merge_span(close.span);
+
+        Some(self.p.arena.alloc(TypeExpr {
+            kind: TypeKind::Splice(inner),
+            span,
+        }))
     }
 
     fn parse_named(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {

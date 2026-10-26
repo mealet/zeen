@@ -1,0 +1,13 @@
+pub comptime struct Field {
+  index: comptime_int,
+  name: comptime_str,
+  ty: zeen_type,
+}
+
+pub comptime struct Variant {
+  index: comptime_int,
+  name: comptime_str,
+  payload: comptime_str,
+  ty: zeen_type,
+  fields: [0]Field,
+}

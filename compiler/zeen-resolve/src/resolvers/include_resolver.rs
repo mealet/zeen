@@ -270,6 +270,7 @@ impl<'ctx> IncludeResolver<'ctx> {
     fn expr_usage(&self, expr: &Expression<'ctx>, flags: &mut UsageFlags) {
         match &expr.kind {
             ExpressionKind::Literal(_) | ExpressionKind::TargetVar(_) => {}
+            ExpressionKind::Decl(_) => {}
             ExpressionKind::Ident { name, .. } => {
                 self.check_prelude_name(*name, flags);
             }
@@ -349,7 +350,8 @@ impl<'ctx> IncludeResolver<'ctx> {
                 self.expr_usage(len, flags);
             }
 
-            ExpressionKind::Block { stmts, trailing } => {
+            ExpressionKind::Block { stmts, trailing }
+            | ExpressionKind::ComptimeBlock { stmts, trailing } => {
                 for stmt in stmts.iter() {
                     self.stmt_usage(stmt, flags);
                 }
@@ -390,6 +392,8 @@ impl<'ctx> IncludeResolver<'ctx> {
                     self.expr_usage(end, flags);
                 }
             }
+
+            ExpressionKind::Splice { .. } => {}
         }
     }
 
@@ -1070,6 +1074,16 @@ impl<'ctx> IncludeResolver<'ctx> {
         }
     }
 
+    pub fn module_of_decl(&self, decl: &'ctx Declaration<'ctx>) -> PathBuf {
+        let target_ptr = decl as *const Declaration as usize;
+
+        self.decl_owner
+            .get(&target_ptr)
+            .and_then(|id| self.module_ids.get(*id as usize))
+            .cloned()
+            .unwrap_or_else(|| self.root.clone().unwrap_or_default())
+    }
+
     pub(crate) fn module_graph(&self) -> ModuleGraph {
         let project_root = canonicalize_best_effort(&self.context.paths.project_root);
         let std_root = self
@@ -1107,6 +1121,58 @@ impl<'ctx> IncludeResolver<'ctx> {
             graph.uses.insert(from.clone(), edges.clone());
         }
         graph
+    }
+
+    pub(crate) fn comptime_visibility(&self) -> HashMap<PathBuf, Vec<PathBuf>> {
+        let mut pub_reach: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::default();
+
+        loop {
+            let mut changed = false;
+
+            for (from, edges) in &self.edges {
+                for edge in edges.iter().filter(|edge| edge.is_pub) {
+                    let reachable = pub_reach.get(&edge.target).cloned().unwrap_or_default();
+                    let entry = pub_reach.entry(from.clone()).or_default();
+
+                    changed |= entry.insert(edge.target.clone());
+
+                    for target in reachable {
+                        changed |= entry.insert(target);
+                    }
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        let core_modules: Vec<PathBuf> = self
+            .modules
+            .iter()
+            .filter(|(_, module)| module.is_core)
+            .map(|(path, _)| path.clone())
+            .collect();
+
+        let mut visibility: HashMap<PathBuf, Vec<PathBuf>> = HashMap::default();
+
+        for path in self.modules.keys() {
+            let mut visible: HashSet<PathBuf> = core_modules.iter().cloned().collect();
+
+            if let Some(edges) = self.edges.get(path) {
+                for edge in edges {
+                    visible.insert(edge.target.clone());
+
+                    if let Some(reachable) = pub_reach.get(&edge.target) {
+                        visible.extend(reachable.iter().cloned());
+                    }
+                }
+            }
+
+            visibility.insert(path.clone(), visible.into_iter().collect());
+        }
+
+        visibility
     }
 
     fn build_decl_index(&mut self) {

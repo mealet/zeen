@@ -1,0 +1,7 @@
+pub use base;
+
+pub comptime Tau = 6.28;
+
+pub comptime fn scale(n: comptime_int) comptime_int {
+  return n * 3;
+}

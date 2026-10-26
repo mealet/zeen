@@ -1,11 +1,11 @@
 use std.c.math;
 
 /// Pi circle constant.
-pub const PI: f64 = 3.141592653589793;
+pub comptime PI = 3.141592653589793;
 /// Full circle constant (`2 * PI`).
-pub const TAU: f64 = 6.283185307179586;
+pub comptime TAU = 6.283185307179586;
 /// Euler number.
-pub const E: f64 = 2.718281828459045;
+pub comptime E = 2.718281828459045;
 
 /// Smaller of two values.
 pub fn min[T: Ord](a: T, b: T) T {

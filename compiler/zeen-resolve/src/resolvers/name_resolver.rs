@@ -780,6 +780,13 @@ impl<'ctx> NameResolver {
             DeclarationKind::ImplementDecl { .. } => {}
             DeclarationKind::Use { .. } => {}
             DeclarationKind::ConditionalBlock(_) => {}
+
+            DeclarationKind::ComptimeConst { .. }
+            | DeclarationKind::ComptimeFn { .. }
+            | DeclarationKind::ComptimeBlock(_)
+            | DeclarationKind::ComptimeStruct { .. } => {
+                unreachable!("comptime declarations are stripped before name resolution")
+            }
         }
     }
 
@@ -802,6 +809,13 @@ impl<'ctx> NameResolver {
                 self.resolve_fn_body(decl);
 
                 self.current_fn_def = prev_fn;
+            }
+
+            DeclarationKind::ComptimeConst { .. }
+            | DeclarationKind::ComptimeFn { .. }
+            | DeclarationKind::ComptimeBlock(_)
+            | DeclarationKind::ComptimeStruct { .. } => {
+                unreachable!("comptime declarations are stripped before name resolution")
             }
 
             DeclarationKind::StructDecl {
@@ -1119,7 +1133,8 @@ impl<'ctx> NameResolver {
                 self.collect_global_deps(len, out);
             }
 
-            ExpressionKind::Block { stmts, trailing } => {
+            ExpressionKind::Block { stmts, trailing }
+            | ExpressionKind::ComptimeBlock { stmts, trailing } => {
                 for stmt in stmts {
                     self.collect_global_stmt_deps(stmt, out);
                 }
@@ -1147,6 +1162,10 @@ impl<'ctx> NameResolver {
                     self.collect_global_deps(end, out);
                 }
             }
+
+            ExpressionKind::Splice { expr } => self.collect_global_deps(expr, out),
+
+            ExpressionKind::Decl(_) => {}
 
             ExpressionKind::ConditionalBlock(_) => {}
 
@@ -1918,7 +1937,8 @@ impl<'ctx> NameResolver {
                 self.resolve_expr(len);
             }
 
-            ExpressionKind::Block { stmts, trailing } => {
+            ExpressionKind::Block { stmts, trailing }
+            | ExpressionKind::ComptimeBlock { stmts, trailing } => {
                 self.table.push(ScopeKind::Block);
 
                 for stmt in stmts {
@@ -1954,6 +1974,12 @@ impl<'ctx> NameResolver {
                     self.resolve_expr(end);
                 }
             }
+
+            ExpressionKind::Splice { expr } => {
+                self.resolve_expr(expr);
+            }
+
+            ExpressionKind::Decl(_) => {}
 
             ExpressionKind::ConditionalBlock(_) => {}
         }
@@ -2235,6 +2261,10 @@ impl<'ctx> NameResolver {
             }
 
             TypeKind::TypeOf(expr) => {
+                self.resolve_expr(expr);
+            }
+
+            TypeKind::Splice(expr) | TypeKind::ComptimeCall(expr) => {
                 self.resolve_expr(expr);
             }
 

@@ -29,6 +29,7 @@ pub struct Parser<'tok, 'ctx> {
 
     pub errors: Vec<ParserError>,
     panic_mode: bool,
+    pub splices_allowed: bool,
 }
 
 impl<'tok, 'ctx> Parser<'tok, 'ctx> {
@@ -57,6 +58,7 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
 
             errors: Vec::new(),
             panic_mode: false,
+            splices_allowed: false,
         };
 
         while parser.current.kind == TokenKind::Comment {

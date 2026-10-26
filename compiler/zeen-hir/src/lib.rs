@@ -176,6 +176,13 @@ impl<'res> HirLowering<'res> {
         let kind = match decl.kind {
             DeclarationKind::FnDecl { .. } => HirDeclKind::Fn(Rc::new(self.lower_fn(decl, None))),
 
+            DeclarationKind::ComptimeConst { .. }
+            | DeclarationKind::ComptimeFn { .. }
+            | DeclarationKind::ComptimeBlock(_)
+            | DeclarationKind::ComptimeStruct { .. } => {
+                unreachable!("comptime declarations are stripped before HIR lowering")
+            }
+
             DeclarationKind::StructDecl {
                 name,
                 is_pub,
@@ -965,6 +972,18 @@ impl<'res> HirLowering<'res> {
             ExpressionKind::ConditionalBlock(_) => {
                 unreachable!("preprocessor must resolve conditional expressions")
             }
+
+            ExpressionKind::Splice { .. } => {
+                unreachable!("comptime splice must be substituted before HIR lowering")
+            }
+
+            ExpressionKind::ComptimeBlock { .. } => {
+                unreachable!("comptime blocks must be evaluated before HIR lowering")
+            }
+
+            ExpressionKind::Decl(_) => {
+                unreachable!("comptime declarations must be substituted before HIR lowering")
+            }
         };
 
         HirExpr {
@@ -1030,6 +1049,10 @@ impl<'res> HirLowering<'res> {
             TypeKind::Const(inner) => HirTypeKind::Const(Rc::new(self.lower_type(inner))),
 
             TypeKind::TypeOf(expr) => HirTypeKind::TypeOf(Rc::new(self.lower_expr(expr))),
+
+            TypeKind::Splice(_) | TypeKind::ComptimeCall(_) => {
+                unreachable!("comptime types are expanded before HIR lowering")
+            }
 
             TypeKind::SinglePointer(inner) => {
                 HirTypeKind::SinglePointer(Rc::new(self.lower_type(inner)))
@@ -1496,21 +1519,9 @@ mod tests {
 
         let (_, _, value, _, _) = fx.global_var("g");
 
-        let HirExprKind::Binary {
-            ref lhs, ref rhs, ..
-        } = value.kind
-        else {
-            panic!("initializer must lower to a Binary expression")
+        let HirExprKind::Literal(zeen_ast::expressions::Literal::Int(3)) = value.kind else {
+            panic!("initializer must constant-fold to a Literal expression")
         };
-
-        assert!(matches!(
-            lhs.kind,
-            HirExprKind::Literal(zeen_ast::expressions::Literal::Int(1))
-        ));
-        assert!(matches!(
-            rhs.kind,
-            HirExprKind::Literal(zeen_ast::expressions::Literal::Int(2))
-        ));
     }
 
     #[test]

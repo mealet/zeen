@@ -347,6 +347,8 @@ fn check_full(
     let mut hir_lowering = zeen_hir::HirLowering::new(&resolution_result, Rc::clone(&interner));
     let hir_module = hir_lowering.lower_module(resolved_program);
 
+    let syntax_fallback = analysis::build_syntax_fallback(program, open.text);
+
     drop(bump);
 
     analysis = Analysis::build(
@@ -357,6 +359,7 @@ fn check_full(
         open.filename,
         &open.canonical,
     );
+    analysis::merge_syntax_fallback(&mut analysis, syntax_fallback);
 
     let mut typechecker =
         zeen_typecheck::TypeChecker::new(&mut resolution_result, &context, Rc::clone(&interner));
@@ -691,8 +694,7 @@ fn warning_module_disables(
     source: Option<&miette::NamedSource<Arc<String>>>,
     packages: &[std::path::PathBuf],
 ) -> bool {
-    source
-        .is_some_and(|source| zeen_driver::source_disables_warnings(source, packages))
+    source.is_some_and(|source| zeen_driver::source_disables_warnings(source, packages))
 }
 
 pub fn scan_project_modules(
@@ -905,6 +907,27 @@ mod tests {
         assert!(contains_main("fn main() i32 {\nreturn 0;\n}"));
         assert!(!contains_main("fn helper() {}"));
         assert!(!contains_main(""));
+    }
+
+    #[test]
+    fn reports_comptime_errors() {
+        let text = "comptime VALUE = @uninit();\n\nfn main() {\n    @println(\"{}\", VALUE);\n}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-comptime-error.zn").unwrap();
+        let output = check(&uri, text, &[]);
+
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(
+                    |diagnostic| diagnostic.code.as_ref().is_some_and(|code| matches!(
+                        code,
+                        NumberOrString::String(code) if code == "zeen::comptime::runtime_only"
+                    ))
+                ),
+            "{:?}",
+            output.diagnostics
+        );
     }
 
     #[test]

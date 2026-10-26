@@ -29,6 +29,7 @@ use zeen_ast::{
 };
 use zeen_driver::CompilationMode;
 use zeen_hir::HirMacroKind;
+use zeen_layout::{Layout, LayoutEngine, Shape};
 use zeen_mir::{
     AggregateKind, BlockId, CallTarget, ConstValue, LocalId, MirFunction, MirFunctionId,
     MirGlobalVarId, MirProgram, MirStatement, Operand, Place, PlaceElem, Rvalue, Terminator,
@@ -2026,34 +2027,114 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
     }
 
     fn size_of(&self, ty: TypeId) -> BasicValueEnum<'ctx> {
-        let size = self.map_basic_type(ty).size_of().expect("sized type");
-        self.bitcast_to_usize(size)
-    }
-
-    fn align_of(&self, ty: TypeId) -> BasicValueEnum<'ctx> {
-        let align = self.target_data.get_abi_alignment(&self.map_type(ty));
+        let layout = self.type_layout(ty);
         self.context
             .ptr_sized_int_type(&self.target_data, None)
-            .const_int(align as u64, false)
+            .const_int(layout.size, false)
             .into()
     }
 
-    fn bitcast_to_usize(&self, value: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
-        let usize_ty = self.context.ptr_sized_int_type(&self.target_data, None);
-        let src_w = value.get_type().get_bit_width();
-        let dst_w = usize_ty.get_bit_width();
-        if src_w == dst_w {
-            value.into()
-        } else if src_w < dst_w {
-            self.builder
-                .build_int_z_extend(value, usize_ty, "")
-                .unwrap()
-                .into()
-        } else {
-            self.builder
-                .build_int_truncate(value, usize_ty, "")
-                .unwrap()
-                .into()
+    fn align_of(&self, ty: TypeId) -> BasicValueEnum<'ctx> {
+        let layout = self.type_layout(ty);
+        self.context
+            .ptr_sized_int_type(&self.target_data, None)
+            .const_int(layout.align, false)
+            .into()
+    }
+
+    fn layout_engine(&self) -> LayoutEngine {
+        LayoutEngine::with_pointer_size(u64::from(self.target_data.get_pointer_byte_size(None)))
+    }
+
+    fn type_layout(&self, ty: TypeId) -> Layout {
+        let layout = self.layout_engine().layout(&self.layout_shape(ty));
+        self.check_llvm_layout(ty, layout);
+        layout
+    }
+
+    fn check_llvm_layout(&self, ty: TypeId, layout: Layout) {
+        if !cfg!(debug_assertions) || self.is_void_ty(ty) || !self.has_llvm_type(ty) {
+            return;
+        }
+
+        let llvm_ty = self.map_type(ty);
+        let size = self.target_data.get_abi_size(&llvm_ty);
+        let align = u64::from(self.target_data.get_abi_alignment(&llvm_ty));
+
+        assert_eq!(
+            layout,
+            Layout::new(size, align),
+            "layout mismatch for {:?}",
+            self.typecheck.interner.get(ty)
+        );
+    }
+
+    fn has_llvm_type(&self, ty: TypeId) -> bool {
+        match self.typecheck.interner.get(ty) {
+            Type::Struct { .. } | Type::Slice { .. } | Type::FatFn { .. } => {
+                self.struct_types.contains_key(&ty)
+            }
+            _ => true,
+        }
+    }
+
+    fn layout_shape(&self, ty: TypeId) -> Shape {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Builtin(b) => match b {
+                BuiltinType::i8 | BuiltinType::u8 => Shape::I8,
+                BuiltinType::i16 | BuiltinType::u16 => Shape::I16,
+                BuiltinType::i32 | BuiltinType::u32 => Shape::I32,
+                BuiltinType::i64 | BuiltinType::u64 => Shape::I64,
+                BuiltinType::isize | BuiltinType::usize => Shape::Isize,
+                BuiltinType::f32 => Shape::F32,
+                BuiltinType::f64 => Shape::F64,
+                BuiltinType::bool => Shape::Bool,
+                BuiltinType::char => Shape::Char,
+                BuiltinType::void => Shape::Void,
+                BuiltinType::never => Shape::Never,
+            },
+
+            Type::IntLiteral => Shape::I32,
+            Type::FloatLiteral => Shape::F64,
+
+            Type::Slice { .. } => Shape::slice(),
+            Type::FatFn { .. } => Shape::fat_fn(),
+
+            Type::Struct { .. } => match self.program.struct_layouts.get(&ty) {
+                Some(layout) => Shape::Struct(
+                    layout
+                        .fields
+                        .iter()
+                        .map(|field| self.layout_shape(field.ty))
+                        .collect(),
+                ),
+                None => Shape::Struct(Vec::new()),
+            },
+
+            Type::Enum { .. } => match self.program.enum_layouts.get(&ty) {
+                Some(layout) => Shape::Enum(
+                    layout
+                        .variants
+                        .iter()
+                        .map(|variant| variant.payload.map(|payload| self.layout_shape(payload)))
+                        .collect(),
+                ),
+                None => Shape::Enum(Vec::new()),
+            },
+
+            Type::Interface { .. } | Type::InterfaceSelfPlaceholder(_) | Type::GenericParam(_) => {
+                Shape::I32
+            }
+
+            Type::Pointer { .. } | Type::ManyPointer { .. } | Type::Fn { .. } => Shape::Pointer,
+
+            Type::Array { element, len } => {
+                Shape::Array(Box::new(self.layout_shape(element)), len.unwrap_or(0))
+            }
+
+            Type::Void => Shape::Void,
+            Type::Never => Shape::Never,
+            Type::Error => Shape::I32,
         }
     }
 

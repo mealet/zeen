@@ -1,0 +1,12 @@
+comptime N = 41;
+comptime NAME = "zeen";
+comptime FLAG = true;
+comptime LETTER = 'z';
+comptime RATIO = 1.5;
+
+fn main() {
+  @println("{}", N + 1);
+  @println("{}", NAME);
+  @println("{} {} {}", FLAG, LETTER, RATIO);
+  @println("len {}", @sizeof([N]i64));
+}

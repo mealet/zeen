@@ -186,6 +186,46 @@ fn macro_docs(name: &str) -> Option<(&'static str, &'static str)> {
             "compiler macro: uninitialized value, reading it is UB",
         )),
         "void" => Some(("@void()", "compiler macro: builds the void value")),
+        "zeen_type" => Some((
+            "@zeen_type(T)",
+            "comptime macro: captures a type as zeen_type, `$()` splices are evaluated",
+        )),
+        "zeen_expr" => Some((
+            "@zeen_expr(expr)",
+            "comptime macro: captures an expression as zeen_expr without evaluating it",
+        )),
+        "zeen_decl" => Some((
+            "@zeen_decl(decl)",
+            "comptime macro: captures a declaration as zeen_decl without evaluating it",
+        )),
+        "emit" => Some((
+            "@emit(decl)",
+            "comptime macro: emits a captured zeen_decl into the module",
+        )),
+        "fresh_name" => Some((
+            "@fresh_name(\"prefix\")",
+            "comptime macro: unique name for generated declarations",
+        )),
+        "fields" => Some((
+            "@fields(T)",
+            "comptime macro: array of Field records for a struct type",
+        )),
+        "variants" => Some((
+            "@variants(T)",
+            "comptime macro: array of Variant records for an enum type",
+        )),
+        "typeInfo" => Some((
+            "@typeInfo(T)",
+            "comptime macro: kind of the type as a comptime string",
+        )),
+        "hasField" => Some((
+            "@hasField(T, \"name\")",
+            "comptime macro: whether a struct type declares the field",
+        )),
+        "fieldType" => Some((
+            "@fieldType(T, \"name\")",
+            "comptime macro: declared type of a struct field as zeen_type",
+        )),
         "enumTag" => Some((
             "@enumTag(expr)",
             "compiler macro: runtime tag of an enum value as u8",
@@ -1087,6 +1127,48 @@ mod tests {
         let markdown = hovering(SAMPLE, "x, g, m");
 
         assert!(markdown.contains("```zeen\npub x: i32\n```"), "{markdown}");
+    }
+
+    const COMPTIME_SAMPLE: &str = "comptime LIMIT = 3;\n\ncomptime fn doubled(n: comptime_int) comptime_int {\n    return n * 2;\n}\n\nfn main() {\n    let value = comptime {\n        let local = doubled(LIMIT);\n        local\n    };\n\n    @println(\"{}\", value);\n}\n";
+
+    #[test]
+    fn comptime_const_shows_const() {
+        let markdown = hovering(COMPTIME_SAMPLE, "LIMIT = 3");
+
+        assert!(markdown.contains("```zeen\nconst LIMIT\n```"), "{markdown}");
+    }
+
+    #[test]
+    fn comptime_fn_shows_function() {
+        let markdown = hovering(COMPTIME_SAMPLE, "doubled(n: comptime_int)");
+
+        assert!(markdown.contains("fn doubled(...)"), "{markdown}");
+        assert!(markdown.contains("function"), "{markdown}");
+    }
+
+    #[test]
+    fn comptime_locals_are_recorded() {
+        let markdown = hovering(COMPTIME_SAMPLE, "local = doubled");
+
+        assert!(markdown.contains("let local"), "{markdown}");
+    }
+
+    #[test]
+    fn documents_comptime_macros() {
+        for name in [
+            "zeen_type",
+            "zeen_expr",
+            "zeen_decl",
+            "emit",
+            "fresh_name",
+            "fields",
+            "variants",
+            "typeInfo",
+            "hasField",
+            "fieldType",
+        ] {
+            assert!(macro_docs(name).is_some(), "@{name}");
+        }
     }
 
     #[test]

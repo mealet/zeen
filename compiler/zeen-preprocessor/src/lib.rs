@@ -10,8 +10,9 @@ use zeen_ast::declarations::{
 };
 use zeen_ast::expressions::Literal;
 use zeen_ast::{
-    Declaration, DeclarationKind, DirectiveValue, ExprConditionalBlock, Expression, ExpressionKind,
-    PreprocessorDirective, Statement, StatementKind, StmtConditionalBlock, TypeExpr, TypeKind,
+    ComptimeBlock as ComptimeBlockDecl, Declaration, DeclarationKind, DirectiveValue,
+    ExprConditionalBlock, Expression, ExpressionKind, PreprocessorDirective, Statement,
+    StatementKind, StmtConditionalBlock, TypeExpr, TypeKind,
 };
 use zeen_driver::{CompilationMode, Target};
 
@@ -221,6 +222,47 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 ty: self.resolve_type(alias.ty),
             }),
 
+            DeclarationKind::ComptimeConst {
+                name,
+                value,
+                is_pub,
+            } => DeclarationKind::ComptimeConst {
+                name,
+                value: self.resolve_expr(value),
+                is_pub,
+            },
+
+            DeclarationKind::ComptimeFn {
+                name,
+                params,
+                return_type,
+                body,
+                is_pub,
+            } => DeclarationKind::ComptimeFn {
+                name,
+                params: self.resolve_params(params),
+                return_type: return_type.map(|ty| self.resolve_type(ty)),
+                body: body.map(|s| self.resolve_stmt(s)),
+                is_pub,
+            },
+
+            DeclarationKind::ComptimeBlock(block) => {
+                let stmts = self.resolve_stmt_list(block.stmts);
+                DeclarationKind::ComptimeBlock(self.arena.alloc(ComptimeBlockDecl { stmts }))
+            }
+
+            DeclarationKind::ComptimeStruct {
+                name,
+                is_pub,
+                fields,
+                methods,
+            } => DeclarationKind::ComptimeStruct {
+                name,
+                is_pub,
+                fields: self.resolve_fields(fields),
+                methods: self.resolve_nested_decls(methods),
+            },
+
             DeclarationKind::ConditionalBlock(_) => {
                 unreachable!("conditional blocks are expanded by resolve_block")
             }
@@ -321,6 +363,8 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
 
             TypeKind::Const(inner) => TypeKind::Const(self.resolve_type(inner)),
             TypeKind::TypeOf(expr) => TypeKind::TypeOf(self.resolve_expr(expr)),
+            TypeKind::Splice(expr) => TypeKind::Splice(self.resolve_expr(expr)),
+            TypeKind::ComptimeCall(expr) => TypeKind::ComptimeCall(self.resolve_expr(expr)),
             TypeKind::SinglePointer(inner) => TypeKind::SinglePointer(self.resolve_type(inner)),
             TypeKind::ManyPointer(inner) => TypeKind::ManyPointer(self.resolve_type(inner)),
 
@@ -640,6 +684,13 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 ExpressionKind::Block { stmts, trailing }
             }
 
+            ExpressionKind::ComptimeBlock { stmts, trailing } => {
+                let trailing = trailing.map(|e| self.resolve_expr(e));
+                let stmts = self.resolve_stmt_list(stmts);
+                let (stmts, trailing) = self.finish_block_stmts(stmts, trailing);
+                ExpressionKind::ComptimeBlock { stmts, trailing }
+            }
+
             ExpressionKind::Closure {
                 params,
                 return_type,
@@ -652,6 +703,8 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
 
             ExpressionKind::Type(ty) => ExpressionKind::Type(self.resolve_type(ty)),
 
+            ExpressionKind::Decl(decl) => ExpressionKind::Decl(self.resolve_decl(decl)),
+
             ExpressionKind::Range {
                 start,
                 end,
@@ -660,6 +713,10 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 start: start.map(|s| self.resolve_expr(s)),
                 end: end.map(|e| self.resolve_expr(e)),
                 inclusive,
+            },
+
+            ExpressionKind::Splice { expr } => ExpressionKind::Splice {
+                expr: self.resolve_expr(expr),
             },
 
             ExpressionKind::ConditionalBlock(_) => {

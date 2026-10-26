@@ -2848,6 +2848,57 @@ impl<'ctx> MirLowering<'ctx> {
         id
     }
 
+    fn ensure_layout(&mut self, ty: TypeId) {
+        let mut visited: HashSet<TypeId> = HashSet::default();
+        self.ensure_layout_inner(ty, &mut visited);
+    }
+
+    fn ensure_layout_inner(&mut self, ty: TypeId, visited: &mut HashSet<TypeId>) {
+        if !visited.insert(ty) {
+            return;
+        }
+
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Struct { def_id, .. } => {
+                self.register_struct_layout(ty, def_id);
+
+                let fields: Vec<TypeId> = self
+                    .program
+                    .struct_layouts
+                    .get(&ty)
+                    .map(|layout| layout.fields.iter().map(|field| field.ty).collect())
+                    .unwrap_or_default();
+
+                for field in fields {
+                    self.ensure_layout_inner(field, visited);
+                }
+            }
+            Type::Enum { def_id, .. } => {
+                self.register_enum_layout(ty, def_id);
+
+                let payloads: Vec<TypeId> = self
+                    .program
+                    .enum_layouts
+                    .get(&ty)
+                    .map(|layout| {
+                        layout
+                            .variants
+                            .iter()
+                            .filter_map(|variant| variant.payload)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                for payload in payloads {
+                    self.ensure_layout_inner(payload, visited);
+                }
+            }
+            Type::Slice { .. } => self.register_slice_layout(ty),
+            Type::Array { element, .. } => self.ensure_layout_inner(element, visited),
+            _ => {}
+        }
+    }
+
     fn register_reachable_slice_layouts(&mut self) {
         let mut visited: HashSet<TypeId> = HashSet::default();
         let struct_keys: Vec<TypeId> = self.program.struct_layouts.keys().copied().collect();
@@ -3228,10 +3279,12 @@ impl<'ctx> MirLowering<'ctx> {
                     _ => false,
                 };
 
-                let inner_ty = match self.typecheck.interner.get(result_ty).clone() {
-                    Type::Pointer { inner, .. } => inner,
-                    _ => self.expr_type(fb, inner),
-                };
+                let inner_ty = self.expr_type(fb, inner);
+
+                let ptr_ty = self.typecheck.interner.intern(Type::Pointer {
+                    inner: inner_ty,
+                    is_const,
+                });
 
                 let (block, inner_place) = if self.expr_is_place(inner) {
                     self.lower_expr_to_place(fb, inner, block)
@@ -3250,17 +3303,43 @@ impl<'ctx> MirLowering<'ctx> {
                 };
 
                 let temp = fb.new_temp(result_ty);
-                fb.push_stmt(
-                    block,
-                    MirStatement::Assign {
-                        place: Place::from_local(temp),
-                        rvalue: Rvalue::Ref {
-                            place: inner_place,
-                            is_const,
+                if ptr_ty == result_ty {
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Ref {
+                                place: inner_place,
+                                is_const,
+                            },
+                            source: Some(expr.source.clone()),
                         },
-                        source: Some(expr.source.clone()),
-                    },
-                );
+                    );
+                } else {
+                    let ptr_temp = fb.new_temp(ptr_ty);
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(ptr_temp),
+                            rvalue: Rvalue::Ref {
+                                place: inner_place,
+                                is_const,
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                    fb.push_stmt(
+                        block,
+                        MirStatement::Assign {
+                            place: Place::from_local(temp),
+                            rvalue: Rvalue::Cast {
+                                operand: Operand::Copy(Place::from_local(ptr_temp), None),
+                                target: result_ty,
+                            },
+                            source: Some(expr.source.clone()),
+                        },
+                    );
+                }
 
                 (
                     block,
@@ -3863,6 +3942,19 @@ impl<'ctx> MirLowering<'ctx> {
                                     def_id: struct_def,
                                     generic_args: recv_args,
                                 } => Some((struct_def, recv_args)),
+                                Type::Pointer { inner, .. } => {
+                                    match self.typecheck.interner.get(inner).clone() {
+                                        Type::Struct {
+                                            def_id: struct_def,
+                                            generic_args: recv_args,
+                                        }
+                                        | Type::Enum {
+                                            def_id: struct_def,
+                                            generic_args: recv_args,
+                                        } => Some((struct_def, recv_args)),
+                                        _ => None,
+                                    }
+                                }
                                 _ => None,
                             };
                             if let Some((struct_def, recv_args)) = recv_target {
@@ -4022,6 +4114,8 @@ impl<'ctx> MirLowering<'ctx> {
                         HirExprKind::Type(_) => self.expr_type(fb, &args[0]),
                         _ => panic!("@sizeof / @alignof arg must be a type expression"),
                     };
+
+                    self.ensure_layout(target_ty);
 
                     let result_ty = self.expr_type(fb, expr);
                     let temp = fb.new_temp(result_ty);

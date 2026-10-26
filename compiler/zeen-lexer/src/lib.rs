@@ -357,6 +357,7 @@ impl<'inp> Tokenizer<'inp> {
             '%' => TokenKind::Percent,
             '^' => TokenKind::Caret,
             '#' => TokenKind::Hashtag,
+            '$' => TokenKind::Dollar,
 
             '(' => TokenKind::OpenParen,
             ')' => TokenKind::CloseParen,

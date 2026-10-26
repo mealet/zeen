@@ -1,0 +1,13 @@
+point 8 8 4
+mixed 24 24 8
+shape 16 16 8
+counter 4 4 4
+tiny 1 1 1 1
+generic 16 16 16
+slot 16
+pointer 8 8
+array 24 4
+slice 16 8
+fat 24 8
+basic 8 1
+scalars 1 8 8 1

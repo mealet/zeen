@@ -1,0 +1,25 @@
+comptime fn triple(n: comptime_int) comptime_int {
+  return n * 3;
+}
+
+fn main() {
+  comptime {
+    @println("compile-time hello");
+  }
+
+  let value = comptime {
+    triple(14)
+  };
+
+  let other = comptime {
+    let step = triple(2);
+    step + 1
+  };
+
+  comptime {
+    let ignored = triple(1);
+    @println("step $(ignored)");
+  }
+
+  @println("{} {}", value, other);
+}

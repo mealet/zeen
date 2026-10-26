@@ -292,6 +292,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                         | CompilerKeyword::Null
                         | CompilerKeyword::SelfLower
                         | CompilerKeyword::SelfUpper
+                        | CompilerKeyword::Comptime
                 )
                 | TokenKind::Minus
                 | TokenKind::Bang
@@ -302,6 +303,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 | TokenKind::OpenBrace
                 | TokenKind::DotDot
                 | TokenKind::DotDotEq
+                | TokenKind::Dollar
         )
     }
 
@@ -353,6 +355,16 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             TokenKind::Ref => UnaryOp::AddrOf,
 
             TokenKind::DotDot | TokenKind::DotDotEq => return self.parse_prefix_range(),
+            TokenKind::Dollar => {
+                let _ = self.p.advance_not_eof()?;
+                let _ = self.p.expect(TokenKind::OpenParen, "(")?;
+                let inner = self.parse()?;
+                let close = self.p.expect(TokenKind::CloseParen, ")")?;
+                return Some(self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Splice { expr: inner },
+                    span: token.merge_span(close.span),
+                }));
+            }
 
             _ => return self.parse_postfix(),
         };
@@ -413,12 +425,21 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             TokenKind::Keyword(CompilerKeyword::If) => self.parse_if_expr(),
             TokenKind::Keyword(CompilerKeyword::Switch) => self.parse_switch(),
             TokenKind::Keyword(CompilerKeyword::Fn) => self.parse_closure(),
+            TokenKind::Keyword(CompilerKeyword::Comptime) => self.parse_comptime_block_expr(),
 
             TokenKind::Keyword(CompilerKeyword::SelfUpper | CompilerKeyword::SelfLower) => {
                 self.parse_ident_or_struct_init()
             }
 
             TokenKind::Ident => self.parse_ident_or_struct_init(),
+            TokenKind::Type(_) => {
+                let ty = crate::type_parser::TypeParser::new(self.p).parse()?;
+
+                Some(self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Type(ty),
+                    span: ty.span,
+                }))
+            }
             TokenKind::MacroIdent => self.parse_macro_call(),
             TokenKind::PreprocessorVar => self.parse_target_var(),
             TokenKind::PreprocessorIdent
@@ -931,38 +952,98 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             self.p.src[ident_span.offset() + 1..ident_span.offset() + ident_span.len()].to_owned();
         let ident_id = self.p.get_or_intern(&ident_slice);
 
-        let _open_paren = self.p.expect(TokenKind::OpenParen, "(")?;
         let mut args_buffer: SmallVec<[&'ctx Expression<'ctx>; 12]> = SmallVec::new();
+        #[allow(unused_assignments)]
+        let mut close_span = macro_ident.span;
 
-        if matches!(
-            ident_slice.as_str(),
-            "as" | "sizeof" | "alignof" | "typename" | "variantNames" | "variantCount"
-        ) {
-            let mut tp = crate::type_parser::TypeParser::new(self.p);
-            let parsed_type = tp.parse()?;
+        if self.p.at(TokenKind::OpenParen) {
+            let _ = self.p.advance_not_eof()?;
 
-            let ty_expr = self.p.arena.alloc(Expression {
-                kind: ExpressionKind::Type(parsed_type),
-                span: parsed_type.span,
-            });
+            if ident_slice.as_str() == "zeen_decl" {
+                let previous_splices = self.p.splices_allowed;
+                self.p.splices_allowed = true;
 
-            args_buffer.push(ty_expr);
-            let _ = self.p.eat(TokenKind::Comma);
-        }
+                let decl = crate::declarations::DeclParser::new(self.p)
+                    .with_name_splices()
+                    .parse();
 
-        while !matches!(
-            self.p.current().kind,
-            TokenKind::CloseParen | TokenKind::Eof
-        ) {
-            let arg = self.parse()?;
-            args_buffer.push(arg);
+                self.p.splices_allowed = previous_splices;
 
-            if !self.p.at(TokenKind::CloseParen) {
-                self.p.expect(TokenKind::Comma, ",")?;
+                let decl = decl?;
+
+                let decl_expr = self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Decl(decl),
+                    span: decl.source.span,
+                });
+
+                args_buffer.push(decl_expr);
+                let _ = self.p.eat(TokenKind::Comma);
             }
-        }
 
-        let close_paren = self.p.expect(TokenKind::CloseParen, ")")?;
+            if matches!(
+                ident_slice.as_str(),
+                "as" | "sizeof"
+                    | "alignof"
+                    | "typename"
+                    | "variantNames"
+                    | "variantCount"
+                    | "zeen_type"
+                    | "fields"
+                    | "variants"
+                    | "typeInfo"
+                    | "hasField"
+                    | "fieldType"
+            ) {
+                let previous_splices = self.p.splices_allowed;
+                self.p.splices_allowed = true;
+
+                let mut tp = crate::type_parser::TypeParser::new(self.p);
+                let parsed_type = tp.parse();
+
+                self.p.splices_allowed = previous_splices;
+
+                let parsed_type = parsed_type?;
+
+                let ty_expr = self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Type(parsed_type),
+                    span: parsed_type.span,
+                });
+
+                args_buffer.push(ty_expr);
+                let _ = self.p.eat(TokenKind::Comma);
+            }
+
+            while !matches!(
+                self.p.current().kind,
+                TokenKind::CloseParen | TokenKind::Eof
+            ) {
+                let arg = self.parse()?;
+                args_buffer.push(arg);
+
+                if !self.p.at(TokenKind::CloseParen) {
+                    self.p.expect(TokenKind::Comma, ",")?;
+                }
+            }
+
+            let close_paren = self.p.expect(TokenKind::CloseParen, ")")?;
+            close_span = close_paren.span;
+        } else if self.p.at(TokenKind::OpenBrace) {
+            let open_brace = self.p.expect(TokenKind::OpenBrace, "{")?;
+            let mut expr_parser = ExprParser::new(self.p);
+            let block_expr = expr_parser.parse()?;
+            let _close_brace = self.p.expect(TokenKind::CloseBrace, "}")?;
+
+            args_buffer.push(block_expr);
+            close_span = open_brace.merge_span(_close_brace.span);
+        } else {
+            self.p.report(ParserError::SyntaxError {
+                label: "expected `(` or `{` after macro identifier".into(),
+                help: None,
+                src: self.p.named_src(),
+                span: self.p.current.span,
+            });
+            return None;
+        }
 
         let args = self.p.arena.alloc_slice_copy(&args_buffer);
         drop(args_buffer);
@@ -972,7 +1053,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 name: (ident_id, ident_span),
                 args,
             },
-            span: macro_ident.merge_span(close_paren.span),
+            span: macro_ident.merge_span(close_span),
         });
 
         Some(expr)
@@ -1015,7 +1096,16 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
     fn parse_field_access(&mut self, object: &'ctx Expression) -> Option<&'ctx Expression<'ctx>> {
         let _ = self.p.advance_not_eof()?; // skip `.`
 
-        let field_token = self.p.expect(TokenKind::Ident, "identifier")?;
+        let field_token = if self
+            .p
+            .at(TokenKind::Keyword(zeen_lexer::token::CompilerKeyword::Type))
+        {
+            let token = self.p.current_clone();
+            self.p.advance();
+            token
+        } else {
+            self.p.expect(TokenKind::Ident, "identifier")?
+        };
         let field_span = field_token.span;
         let field_slice =
             self.p.src[field_span.offset()..field_span.offset() + field_span.len()].to_owned();
@@ -1265,7 +1355,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         Some(expr)
     }
 
-    fn parse_block(&mut self) -> Option<&'ctx Expression<'ctx>> {
+    pub(crate) fn parse_block(&mut self) -> Option<&'ctx Expression<'ctx>> {
         let open = self.p.expect(TokenKind::OpenBrace, "{")?;
 
         let mut stmts_buffer: SmallVec<[&'ctx zeen_ast::statements::Statement<'ctx>; 8]> =
@@ -1317,6 +1407,23 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         });
 
         Some(expr)
+    }
+
+    fn parse_comptime_block_expr(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let comptime_token = self.p.current_clone();
+        let _ = self.p.advance_not_eof()?;
+
+        let block = self.parse_block()?;
+
+        let (stmts, trailing) = match block.kind {
+            ExpressionKind::Block { stmts, trailing } => (stmts, trailing),
+            _ => unreachable!("parse_block must return a block expression"),
+        };
+
+        Some(self.p.arena.alloc(Expression {
+            kind: ExpressionKind::ComptimeBlock { stmts, trailing },
+            span: comptime_token.merge_span(block.span),
+        }))
     }
 
     fn parse_closure(&mut self) -> Option<&'ctx Expression<'ctx>> {

@@ -97,6 +97,30 @@ pub enum DeclarationKind<'arena> {
 
     Alias(AliasDecl<'arena>),
 
+    ComptimeConst {
+        name: (Spur, SourceSpan),
+        value: &'arena Expression<'arena>,
+        is_pub: bool,
+    },
+
+    ComptimeFn {
+        name: (Spur, SourceSpan),
+        params: &'arena [FnParam<'arena>],
+        return_type: Option<&'arena TypeExpr<'arena>>,
+        body: Option<&'arena Statement<'arena>>,
+        is_pub: bool,
+    },
+
+    ComptimeBlock(&'arena ComptimeBlock<'arena>),
+
+    ComptimeStruct {
+        name: (Spur, SourceSpan),
+        is_pub: bool,
+
+        fields: &'arena [StructField<'arena>],
+        methods: &'arena [&'arena Declaration<'arena>],
+    },
+
     /// A declaration block guarded by a target condition (`@os[linux] { ... }`).
     ConditionalBlock(&'arena ConditionalBlock<'arena>),
 }
@@ -151,6 +175,11 @@ pub struct AliasDecl<'arena> {
     pub is_pub: bool,
     pub generics: Option<&'arena [GenericType<'arena>]>,
     pub ty: &'arena TypeExpr<'arena>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ComptimeBlock<'arena> {
+    pub stmts: &'arena [&'arena Statement<'arena>],
 }
 
 // Fn

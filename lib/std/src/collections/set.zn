@@ -1,7 +1,7 @@
 use std.alloc;
 use std.collections.list;
 
-const InitialSetCapacity: usize = 8;
+comptime InitialSetCapacity = 8;
 
 fn next_pow2_set(n: usize) usize {
   let cap: usize = 1;
@@ -44,7 +44,7 @@ pub struct HashSet[T: Hash + Eq] {
   _capacity: usize,
 
   pub fn new() Self {
-    let cap = InitialSetCapacity;
+    let cap: usize = InitialSetCapacity;
     let buckets = List#[List[SetEntry[T]]].with_capacity(cap);
 
     let idx: usize = 0;

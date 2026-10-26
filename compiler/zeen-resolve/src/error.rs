@@ -11,6 +11,10 @@ pub enum ResolveError {
     #[diagnostic(transparent)]
     ModuleParseError(#[from] zeen_parser::error::ParserError),
 
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Comptime(#[from] zeen_comptime::Error),
+
     // --> Include Resolver Errors
     #[error("module is not found: `{path}`")]
     #[diagnostic(severity(Error), code(zeen::resolver::include_error))]

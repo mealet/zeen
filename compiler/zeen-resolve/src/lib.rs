@@ -47,7 +47,7 @@ pub fn resolve<'ctx>(
         arena,
         Rc::clone(&interner),
         context,
-        target,
+        target.clone(),
         mode,
     );
 
@@ -63,6 +63,30 @@ pub fn resolve<'ctx>(
         resolved_core_injections,
         miette::NamedSource::new(filename.as_str(), Arc::clone(&src)),
     )?;
+
+    let include_resolver = include_resolver;
+    let resolved_program = {
+        let module_of_decl = |decl: &Declaration<'_>| include_resolver.module_of_decl(decl);
+        let visibility: std::collections::HashMap<std::path::PathBuf, Vec<std::path::PathBuf>> =
+            include_resolver.comptime_visibility().into_iter().collect();
+
+        match zeen_comptime::evaluate(
+            resolved_program,
+            arena,
+            Rc::clone(&interner),
+            module_of_decl,
+            visibility,
+            &target,
+        ) {
+            Ok(program) => program,
+            Err(errors) => {
+                return Err(errors
+                    .into_iter()
+                    .map(ResolveError::from)
+                    .collect::<Vec<_>>());
+            }
+        }
+    };
 
     let graph = include_resolver.module_graph();
 

@@ -1,0 +1,13 @@
+comptime Text = "zeen!";
+
+comptime fn spell() void {
+  for (c : Text) {
+    @println("$(c)");
+  }
+}
+
+fn main() {
+  spell();
+  @println("$(Text[0])$(Text[4])");
+  @println("{}", Text[1]);
+}

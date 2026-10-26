@@ -1,0 +1,23 @@
+comptime fn twice(n: comptime_int) zeen_expr {
+  return @zeen_expr($(n) + $(n));
+}
+
+comptime fn sized(n: comptime_int) zeen_type {
+  return @zeen_type([$(n)]i32);
+}
+
+comptime Captured = @zeen_expr(1 + 2);
+comptime Array = sized(3);
+
+fn main() {
+  let value = $(Captured);
+  @println("{}", value);
+
+  let four = $(twice(2));
+  @println("{}", four);
+
+  let values: Array = [1, 2, 3];
+  @println("{}", values[2]);
+
+  @println($(@zeen_expr("x = $(1 + 2)")));
+}

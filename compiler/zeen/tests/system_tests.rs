@@ -239,7 +239,8 @@ fn golden_system_tests() -> anyhow::Result<()> {
             " ".repeat(tests_count_digits - current_number_digits)
         );
 
-        let expected_content = fs::read_to_string(format!("tests/test_cases/{test_path}.expected"))?;
+        let expected_content =
+            fs::read_to_string(format!("tests/test_cases/{test_path}.expected"))?;
         let expected = parse_expected(&expected_content);
 
         let is_windows = std::env::consts::OS == "windows";
