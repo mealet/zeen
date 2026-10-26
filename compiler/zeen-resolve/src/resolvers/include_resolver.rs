@@ -1169,7 +1169,6 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
             }
 
-            visible.remove(path);
             visibility.insert(path.clone(), visible.into_iter().collect());
         }
 
