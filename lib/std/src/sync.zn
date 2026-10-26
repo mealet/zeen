@@ -369,7 +369,7 @@ fn arc_fetch_sub(count: *i64) i64 {
   extern fn __atomic_fetch_sub_8(ptr: *i64, value: i64, order: i32) i64;
 }
 
-const ArcSeqCst: i32 = 5;
+comptime ArcSeqCst = 5;
 
 implement[T] Clone : Arc[T] {
   fn clone(*const self) Self {

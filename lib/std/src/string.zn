@@ -5,9 +5,9 @@ use std.alloc;
 use std.collections.list;
 
 /// String initial capacity size (initialization on first push).
-const InitialStringCapacity: usize = 8;
+comptime InitialStringCapacity = 8;
 /// Geometry string size progression by formula: Current * StringSizeProgression.
-const StringSizeProgression: usize = 2;
+comptime StringSizeProgression = 2;
 
 /// Dynamic heap-allocated string.
 pub struct String {
