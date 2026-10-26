@@ -2362,6 +2362,15 @@ impl<'arena> Interp<'arena> {
 
             (UnaryOp::Deref, value @ Value::Struct(_)) => Ok(value),
 
+            (UnaryOp::Deref, Value::Type(inner)) => {
+                let pointer = self.arena.alloc(TypeExpr {
+                    kind: TypeKind::SinglePointer(inner),
+                    span,
+                });
+
+                Ok(Value::Type(pointer))
+            }
+
             (op, value) => {
                 self.errors.push(Error::TypeMismatch {
                     message: format!(

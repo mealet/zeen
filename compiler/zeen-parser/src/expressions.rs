@@ -432,6 +432,14 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             }
 
             TokenKind::Ident => self.parse_ident_or_struct_init(),
+            TokenKind::Type(_) => {
+                let ty = crate::type_parser::TypeParser::new(self.p).parse()?;
+
+                Some(self.p.arena.alloc(Expression {
+                    kind: ExpressionKind::Type(ty),
+                    span: ty.span,
+                }))
+            }
             TokenKind::MacroIdent => self.parse_macro_call(),
             TokenKind::PreprocessorVar => self.parse_target_var(),
             TokenKind::PreprocessorIdent
@@ -915,17 +923,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             self.p.current().kind,
             TokenKind::CloseParen | TokenKind::Eof
         ) {
-            let arg = if matches!(self.p.current().kind, TokenKind::Type(_)) {
-                let ty = crate::type_parser::TypeParser::new(self.p).parse()?;
-
-                self.p.arena.alloc(Expression {
-                    kind: ExpressionKind::Type(ty),
-                    span: ty.span,
-                })
-            } else {
-                self.parse()?
-            };
-
+            let arg = self.parse()?;
             args_buffer.push(arg);
 
             if !self.p.at(TokenKind::CloseParen) {
