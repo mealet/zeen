@@ -124,17 +124,30 @@ fn role_token_type(role: Role) -> TokenType {
     }
 }
 
+fn is_comptime_type(text: &str) -> bool {
+    matches!(
+        text,
+        "comptime_int"
+            | "comptime_float"
+            | "comptime_bool"
+            | "comptime_char"
+            | "comptime_str"
+            | "zeen_type"
+            | "zeen_decl"
+    )
+}
+
 fn collect(text: &str) -> Vec<RawToken> {
     let starts = line_starts(text);
     let mut items: Vec<RawToken> = Vec::new();
 
     for token in zeen_lexer::tokenize_with_comments(text) {
-        let Some(token_type) = token_kind_index(token.kind) else {
-            continue;
-        };
-
         let start = token.span.offset().min(text.len());
         let end = start.saturating_add(token.span.len()).min(text.len());
+        let slice = &text[start..end];
+        let Some(token_type) = token_kind_index(token.kind, slice) else {
+            continue;
+        };
 
         if start >= end {
             continue;
@@ -200,7 +213,7 @@ fn encode(items: Vec<RawToken>) -> Vec<SemanticToken> {
     out
 }
 
-fn token_kind_index(kind: TokenKind) -> Option<TokenType> {
+fn token_kind_index(kind: TokenKind, text: &str) -> Option<TokenType> {
     match kind {
         TokenKind::Keyword(_) => Some(TokenType::Keyword),
         TokenKind::Type(_) => Some(TokenType::Type),
@@ -211,7 +224,13 @@ fn token_kind_index(kind: TokenKind) -> Option<TokenType> {
 
             _ => Some(TokenType::String),
         },
-        TokenKind::Ident => Some(TokenType::Variable),
+        TokenKind::Ident => {
+            if is_comptime_type(text) {
+                Some(TokenType::Type)
+            } else {
+                Some(TokenType::Variable)
+            }
+        }
         TokenKind::MacroIdent => Some(TokenType::Macro),
 
         TokenKind::PreprocessorIdent
