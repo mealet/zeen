@@ -1,0 +1,43 @@
+interface Counter {
+  fn bump(*self) void;
+  fn value(*const self) i32;
+}
+
+struct Tally {
+  pub n: i32,
+}
+
+implement Counter : Tally {
+  fn bump(*self) void {
+    self.n += 1;
+  }
+
+  fn value(*const self) i32 {
+    return self.n;
+  }
+}
+
+fn bump_twice[T: Counter](t: *T) void {
+  t.bump();
+  t.bump();
+}
+
+fn read[T: Counter](t: *const T) i32 {
+  return t.value();
+}
+
+struct Foo {}
+
+implement Display : Foo {
+  fn display[T: StrWriter](*const self, out: *T) void {
+    out.write_str("Foo");
+  }
+}
+
+fn main() {
+  let t = Tally { .n = 0 };
+  let p: *Tally = &t;
+  bump_twice(p);
+  @println("{}", read(p));
+  @println("{}", Foo {});
+}

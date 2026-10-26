@@ -476,3 +476,68 @@ fn main() {
         "zeen::typechecker::generic_bound_not_satisfied",
     );
 }
+
+#[test]
+fn generic_pointer_receiver_move_rejected() {
+    compile_fails(
+        "generic_pointer_move",
+        r#"
+interface Take {
+  fn take(self) i32;
+}
+
+struct Value {
+  pub n: i32,
+}
+
+implement Take : Value {
+  fn take(self) i32 {
+    return self.n;
+  }
+}
+
+fn read[T: Take](v: *T) i32 {
+  return v.take();
+}
+
+fn main() {
+  let v = Value { .n = 1 };
+  @println("{}", read(&v));
+}
+"#,
+        "zeen::typechecker::move_through_ptr",
+    );
+}
+
+#[test]
+fn generic_const_pointer_receiver_mutation_rejected() {
+    compile_fails(
+        "generic_pointer_const",
+        r#"
+interface Bump {
+  fn bump(*self) void;
+}
+
+struct Value {
+  pub n: i32,
+}
+
+implement Bump : Value {
+  fn bump(*self) void {
+    self.n += 1;
+  }
+}
+
+fn touch[T: Bump](v: *const T) void {
+  v.bump();
+}
+
+fn main() {
+  let v = Value { .n = 1 };
+  touch(&v);
+  @println("{}", v.n);
+}
+"#,
+        "zeen::typechecker::assign_to_const",
+    );
+}

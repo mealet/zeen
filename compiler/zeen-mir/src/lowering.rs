@@ -3914,6 +3914,19 @@ impl<'ctx> MirLowering<'ctx> {
                                     def_id: struct_def,
                                     generic_args: recv_args,
                                 } => Some((struct_def, recv_args)),
+                                Type::Pointer { inner, .. } => {
+                                    match self.typecheck.interner.get(inner).clone() {
+                                        Type::Struct {
+                                            def_id: struct_def,
+                                            generic_args: recv_args,
+                                        }
+                                        | Type::Enum {
+                                            def_id: struct_def,
+                                            generic_args: recv_args,
+                                        } => Some((struct_def, recv_args)),
+                                        _ => None,
+                                    }
+                                }
                                 _ => None,
                             };
                             if let Some((struct_def, recv_args)) = recv_target {

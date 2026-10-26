@@ -4811,7 +4811,14 @@ impl<'res> TypeChecker<'res> {
         let (field_name, _field_span) = field;
 
         let obj_ty = self.synth_expr(object);
-        let Type::GenericParam(g) = self.result.interner.get(obj_ty).clone() else {
+
+        let (recv_ty, recv_is_ptr, recv_ptr_is_const) =
+            match self.result.interner.get(obj_ty).clone() {
+                Type::Pointer { inner, is_const } => (inner, true, is_const),
+                _ => (obj_ty, false, false),
+            };
+
+        let Type::GenericParam(g) = self.result.interner.get(recv_ty).clone() else {
             return None;
         };
 
@@ -4839,6 +4846,25 @@ impl<'res> TypeChecker<'res> {
         let sig_ret = sig.ret;
         let sig_generics = sig.generics.clone();
         let has_self = sig.self_mode.is_some();
+        let self_mode = sig.self_mode;
+
+        if recv_is_ptr {
+            match self_mode {
+                Some(SelfMode::Value) | Some(SelfMode::ValueConst) => {
+                    self.report(TypeError::CannotMoveThroughPointer {
+                        src: source.src(),
+                        span: field.1,
+                    });
+                }
+                Some(SelfMode::RefMut) if recv_ptr_is_const => {
+                    self.report(TypeError::AssignToConst {
+                        src: source.src(),
+                        span: field.1,
+                    });
+                }
+                _ => {}
+            }
+        }
 
         let expected_args = sig_params.len() - usize::from(has_self);
         if args.len() != expected_args {
@@ -4858,7 +4884,7 @@ impl<'res> TypeChecker<'res> {
 
         let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
         for (param_ty, arg) in user_params.iter().zip(args.iter()) {
-            let param_ty = self.substitute_self(*param_ty, obj_ty);
+            let param_ty = self.substitute_self(*param_ty, recv_ty);
             self.infer_or_check_arg(param_ty, arg, &mut bindings, source.clone());
         }
 
@@ -4886,7 +4912,7 @@ impl<'res> TypeChecker<'res> {
         );
 
         let ret = self.substitute_generics(sig_ret, &bindings);
-        Some(self.substitute_self(ret, obj_ty))
+        Some(self.substitute_self(ret, recv_ty))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4947,6 +4973,19 @@ impl<'res> TypeChecker<'res> {
         self.type_names_as_values.remove(&object.id);
 
         if matches!(self.result.interner.get(obj_ty), Type::GenericParam(_)) {
+            return self.try_check_generic_bound_method_call(
+                call_id,
+                object,
+                field,
+                args,
+                explicit_generic_args,
+                source,
+            );
+        }
+
+        if let Type::Pointer { inner, .. } = self.result.interner.get(obj_ty).clone()
+            && matches!(self.result.interner.get(inner), Type::GenericParam(_))
+        {
             return self.try_check_generic_bound_method_call(
                 call_id,
                 object,
