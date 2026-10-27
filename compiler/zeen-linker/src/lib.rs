@@ -146,12 +146,16 @@ impl Toolchain {
                     .arg("/ENTRY:mainCRTStartup")
                     .arg("/NODEFAULTLIB:msvcrt.lib")
                     .arg("libcmt.lib")
-                    .arg("kernel32.lib")
-                    .arg("user32.lib");
+                    .arg("kernel32.lib");
 
                 for lib in link_libs {
                     command.arg(format!("{lib}.lib"));
                 }
+
+                // Keep user32 after user libraries: link.exe binds a symbol to
+                // the first library defining it, and user32 exports names that
+                // static libraries also use (e.g. raylib's `CloseWindow`).
+                command.arg("user32.lib");
 
                 command
             }
@@ -907,5 +911,26 @@ mod tests {
         assert!(args.contains(&"/LIBPATH:C:/libs".to_owned()));
         assert!(args.contains(&"/LIBPATH:C:/raylib/lib".to_owned()));
         assert!(args.contains(&"raylib.lib".to_owned()));
+    }
+
+    #[test]
+    fn msvc_toolchain_links_user32_after_user_libraries() {
+        let toolchain = Toolchain::msvc(PathBuf::from("link.exe"), Vec::new(), "x64");
+        let command = toolchain.build_command(
+            &[PathBuf::from("a.obj")],
+            &[],
+            Path::new("out.exe"),
+            &[],
+            &["raylib".to_owned(), "winmm".to_owned()],
+        );
+        let args = command_args(&command);
+        let position = |needle: &str| {
+            args.iter()
+                .position(|arg| arg.as_str() == needle)
+                .unwrap_or_else(|| panic!("`{needle}` missing from {args:?}"))
+        };
+
+        assert!(position("raylib.lib") < position("user32.lib"), "{args:?}");
+        assert!(position("winmm.lib") < position("user32.lib"), "{args:?}");
     }
 }
