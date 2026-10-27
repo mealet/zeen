@@ -1120,6 +1120,34 @@ fn extern_fn_call_uses_declared_symbol() {
 
 #[test]
 fn extern_struct_params_follow_sysv_abi() {
+    let fx = extern_struct_call_fixture();
+
+    // Pin the triple: the expected ABI must not depend on the host platform.
+    let ir = compile_for(
+        &fx,
+        CompilationMode::Debug,
+        Some("x86_64-unknown-linux-gnu"),
+    );
+
+    assert!(ir.contains("declare i32 @small_c(i32)"), "{ir}");
+    assert!(ir.contains("declare void @large_c(ptr byval("), "{ir}");
+    assert!(ir.contains("call void @large_c(ptr byval("), "{ir}");
+}
+
+#[test]
+fn extern_struct_params_follow_win64_abi() {
+    let fx = extern_struct_call_fixture();
+
+    // Win64 passes aggregates larger than 8 bytes by reference, so no byval.
+    let ir = compile_for(&fx, CompilationMode::Debug, Some("x86_64-pc-windows-msvc"));
+
+    assert!(ir.contains("declare i32 @small_c(i32)"), "{ir}");
+    assert!(ir.contains("declare void @large_c(ptr)"), "{ir}");
+    assert!(ir.contains("call void @large_c(ptr "), "{ir}");
+    assert!(!ir.contains("byval(%"), "{ir}");
+}
+
+fn extern_struct_call_fixture() -> Fixture {
     let mut fx = Fixture::new();
     let i8 = fx.i8();
     let i32 = fx.i32();
@@ -1195,11 +1223,7 @@ fn extern_struct_params_follow_sysv_abi() {
     f.ret_void();
     f.finish();
 
-    let ir = compile(&fx, CompilationMode::Debug);
-
-    assert!(ir.contains("declare i32 @small_c(i32)"), "{ir}");
-    assert!(ir.contains("declare void @large_c(ptr byval("), "{ir}");
-    assert!(ir.contains("call void @large_c(ptr byval("), "{ir}");
+    fx
 }
 
 #[test]
