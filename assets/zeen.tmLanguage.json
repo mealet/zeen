@@ -19,6 +19,9 @@
       "include": "#numbers"
     },
     {
+      "include": "#splices"
+    },
+    {
       "include": "#preprocessor"
     },
     {
@@ -89,6 +92,27 @@
             {
               "name": "constant.character.escape.zeen",
               "match": "\\\\."
+            },
+            {
+              "name": "meta.splice.zeen",
+              "begin": "\\$\\(",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.definition.splice.begin.zeen"
+                }
+              },
+              "end": "\\)",
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.definition.splice.end.zeen"
+                }
+              },
+              "patterns": [
+                {
+                  "name": "variable.other.comptime.zeen",
+                  "match": "[A-Za-z_][A-Za-z0-9_.]*"
+                }
+              ]
             }
           ]
         },
@@ -138,6 +162,31 @@
       ]
     },
 
+    "splices": {
+      "patterns": [
+        {
+          "name": "meta.splice.zeen",
+          "begin": "\\$\\(",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.splice.begin.zeen"
+            }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.splice.end.zeen"
+            }
+          },
+          "patterns": [
+            {
+              "include": "$self"
+            }
+          ]
+        }
+      ]
+    },
+
     "preprocessor": {
       "patterns": [
         {
@@ -172,6 +221,10 @@
     "macros": {
       "patterns": [
         {
+          "name": "support.function.macro.comptime.zeen",
+          "match": "@(?:zeen_type|zeen_expr|zeen_decl|emit|fresh_name|fields|variants|typeInfo|hasField|fieldType|sizeof|alignof|variantNames|variantCount)\\b"
+        },
+        {
           "name": "support.function.macro.zeen",
           "match": "@[A-Za-z_][A-Za-z0-9_]*"
         }
@@ -180,6 +233,45 @@
 
     "declarations": {
       "patterns": [
+        {
+          "match": "\\b(comptime)\\s+(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.comptime.zeen"
+            },
+            "2": {
+              "name": "keyword.declaration.function.zeen"
+            },
+            "3": {
+              "name": "entity.name.function.comptime.zeen"
+            }
+          }
+        },
+        {
+          "match": "\\b(comptime)\\s+(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.comptime.zeen"
+            },
+            "2": {
+              "name": "keyword.declaration.struct.zeen"
+            },
+            "3": {
+              "name": "entity.name.type.struct.zeen"
+            }
+          }
+        },
+        {
+          "match": "\\b(comptime)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.comptime.zeen"
+            },
+            "2": {
+              "name": "entity.name.constant.comptime.zeen"
+            }
+          }
+        },
         {
           "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
@@ -291,7 +383,7 @@
         },
         {
           "name": "storage.modifier.zeen",
-          "match": "\\b(?:pub|extern|const)\\b"
+          "match": "\\b(?:pub|extern|const|comptime)\\b"
         },
         {
           "name": "keyword.operator.type.zeen",
@@ -302,6 +394,10 @@
 
     "types": {
       "patterns": [
+        {
+          "name": "storage.type.comptime.zeen",
+          "match": "\\b(?:comptime_int|comptime_float|comptime_bool|comptime_char|comptime_str|zeen_type|zeen_expr|zeen_decl)\\b"
+        },
         {
           "name": "storage.type.primitive.zeen",
           "match": "\\b(?:i8|i16|i32|i64|isize|u8|u16|u32|u64|usize|f32|f64|char|bool|void|never)\\b"
@@ -324,7 +420,7 @@
         },
         {
           "name": "storage.type.pointer.zeen",
-          "match": "\\*(?=\\s*(?:const\\s+)?(?:[A-Z]|\\[|self\\b|void\\b|never\\b|char\\b|bool\\b|fn\\b|Fn\\b|isize\\b|usize\\b|(?:i|u)(?:8|16|32|64)\\b|f(?:32|64)\\b))"
+          "match": "\\*(?=\\s*(?:const\\s+)?(?:[A-Z]|\\[|self\\b|void\\b|never\\b|char\\b|bool\\b|fn\\b|Fn\\b|isize\\b|usize\\b|(?:i|u)(?:8|16|32|64)\\b|f(?:32|64)\\b|comptime_|zeen_))"
         }
       ]
     },
