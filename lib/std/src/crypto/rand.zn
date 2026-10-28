@@ -23,7 +23,9 @@ pub struct Rand {
 /// Seeded generator with its own state, no shared globals.
 pub struct Rng {
   state: u64,
+}
 
+implement Rng {
   /// Create a generator seeded from the system timestamp.
   pub fn new() Self {
     return Rng.from_seed(@as(u64, Time.now()));

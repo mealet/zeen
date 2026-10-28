@@ -366,23 +366,11 @@ fn check_full(
 
     typechecker.check_module(&hir_module);
 
-    let mut typechecker_result = match typechecker.finish() {
-        Ok(result) => result,
-        Err(errors) => {
-            for err in errors.iter() {
-                collector.push_source(err, None);
-            }
+    let (mut typechecker_result, type_errors) = typechecker.finish_with_errors();
 
-            let (diagnostics, by_uri) = collector.finish();
-
-            return CheckOutput {
-                diagnostics,
-                by_uri,
-                covered,
-                analysis,
-            };
-        }
-    };
+    for err in type_errors.iter() {
+        collector.push_source(err, None);
+    }
 
     analysis.apply_types(
         &typechecker_result,
@@ -421,6 +409,17 @@ fn check_full(
         Rc::clone(&interner),
         &resolution_result,
     );
+
+    if !type_errors.is_empty() {
+        let (diagnostics, by_uri) = collector.finish();
+
+        return CheckOutput {
+            diagnostics,
+            by_uri,
+            covered,
+            analysis,
+        };
+    }
 
     if !full {
         let (diagnostics, by_uri) = collector.finish();

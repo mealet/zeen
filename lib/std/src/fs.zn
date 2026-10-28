@@ -29,7 +29,9 @@ fn cpath(path: []const char) String {
 pub struct File {
   fd: c_int,
   handle: *void,
+}
 
+implement File {
   /// Open an existing file for reading.
   ///
   /// Possible IoError variants:
@@ -382,7 +384,9 @@ pub struct OpenOptions {
   _create: bool,
   _create_new: bool,
   _mode: u32,
+}
 
+implement OpenOptions {
   pub fn new() Self {
     Self {
       ._read = false,
@@ -532,7 +536,9 @@ pub struct Metadata {
   _is_file: bool,
   _is_symlink: bool,
   _mode: u32,
+}
 
+implement Metadata {
   pub fn len(*const self) u64 {
     self._len
   }
@@ -579,7 +585,9 @@ pub struct DirEntry {
   _is_dir: bool,
   _is_file: bool,
   _is_symlink: bool,
+}
 
+implement DirEntry {
   pub fn into_name(self) String {
     self._name
   }
@@ -605,7 +613,6 @@ pub struct DirEntry {
 /// Static methods on purpose: plain free functions would collide
 /// with user names once imported.
 pub struct Fs {
-
   /// Metadata of the file at `path`, following symlinks.
   ///
   /// Possible IoError variants:
@@ -960,5 +967,4 @@ pub struct Fs {
       }
     }
   }
-
 }

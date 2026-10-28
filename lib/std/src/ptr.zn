@@ -3,7 +3,9 @@ use std.alloc;
 /// Exclusive owning smart pointer to a heap value.
 pub struct Unique[T] {
   ptr: *T,
+}
 
+implement[T] Unique[T] {
   /// Move `value` into a new heap allocation.
   pub fn new(value: T) Self {
     let ptr = @as(*T, Allocator.alloc(@sizeof(T)));
@@ -86,7 +88,9 @@ implement[T: Debug] Debug : Unique[T] {
 pub struct Shared[T] {
   ptr: *T,
   count: *usize,
+}
 
+implement[T] Shared[T] {
   /// Move `value` into a new heap allocation with count one.
   pub fn new(value: T) Self {
     let ptr = @as(*T, Allocator.alloc(@sizeof(T)));

@@ -247,11 +247,10 @@ impl<'res> HirLowering<'res> {
                     .get(&NodeKey::from_decl(decl))
                 {
                     Some((iface_res, obj_res)) => (
-                        if let Resolution::Def(id) = iface_res {
-                            Some(id)
-                        } else {
-                            None
-                        },
+                        iface_res.and_then(|res| match res {
+                            Resolution::Def(id) => Some(id),
+                            _ => None,
+                        }),
                         if let Resolution::Def(id) = obj_res {
                             Some(id)
                         } else {
@@ -303,7 +302,7 @@ impl<'res> HirLowering<'res> {
 
                 HirDeclKind::Implement(Rc::new(HirImplement {
                     generics: hir_generics,
-                    interface: interface_def.copied(),
+                    interface: interface_def,
                     object: object_def.copied(),
                     object_generics_bindings: object_bindings,
                     object_generic_types,

@@ -92,7 +92,9 @@ pub struct JoinHandle[T] {
   native: NativeThread,
   slot: *T,
   done: bool,
+}
 
+implement[T] JoinHandle[T] {
   /// Wait for the thread, taking its return value.
   pub fn join(self) T {
     @os[windows] {

@@ -1,0 +1,24 @@
+interface Describe {
+  pub fn describe(*const self) []const char;
+}
+
+struct Label {
+  text: []const char,
+}
+
+implement Describe : Label {}
+
+implement Label {
+  pub fn describe(*const self) []const char {
+    return self.text;
+  }
+}
+
+fn show[T: Describe](value: *const T) []const char {
+  return value.describe();
+}
+
+fn main() {
+  let label = Label { .text = "label" };
+  @println("direct={} through={}", label.describe(), show(&label));
+}

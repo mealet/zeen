@@ -1,0 +1,28 @@
+struct Point {
+  x: i32,
+  y: i32,
+}
+
+implement Point {
+  pub fn origin() Point {
+    return Point { .x = 0, .y = 0 };
+  }
+
+  pub fn sum(*const self) i32 {
+    return self.x + self.y;
+  }
+
+  pub fn scale(*self, factor: i32) void {
+    self.x *= factor;
+    self.y *= factor;
+  }
+}
+
+fn main() {
+  let p = Point { .x = 1, .y = 2 };
+  p.scale(3);
+  @println("scaled: {}", p.sum());
+
+  let o = Point.origin();
+  @println("origin: {}", o.sum());
+}

@@ -42,7 +42,9 @@ pub struct HashSet[T: Hash + Eq] {
   buckets: List[List[SetEntry[T]]],
   _len: usize,
   _capacity: usize,
+}
 
+implement[T: Hash + Eq] HashSet[T] {
   pub fn new() Self {
     let cap: usize = InitialSetCapacity;
     let buckets = List#[List[SetEntry[T]]].with_capacity(cap);

@@ -11,7 +11,9 @@ use std.string;
 pub struct Duration {
   secs: u64,
   nanos: u32,
+}
 
+implement Duration {
   pub fn from_secs(s: u64) Self {
     return Duration { .secs = s, .nanos = 0 };
   }
@@ -56,7 +58,9 @@ implement Display : Duration {
 pub struct Instant {
   secs: i64,
   nanos: i64,
+}
 
+implement Instant {
   pub fn now() Self {
     @os[windows] {
       let freq: i64 = 0;

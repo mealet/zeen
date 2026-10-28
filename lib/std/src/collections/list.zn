@@ -10,7 +10,9 @@ pub struct List[T] {
   ptr: [*]T,
   _len: usize,
   _capacity: usize,
+}
 
+implement[T] List[T] {
   /// Create new `List` instance
   pub fn new() Self {
     Self {
@@ -30,45 +32,6 @@ pub struct List[T] {
       ._len = 0,
       ._capacity = capacity
     }
-  }
-
-  /// Allocate new `List` with copying values from slice
-  pub fn from[T: Copy](value: []const T) Self {
-    let len = value.len;
-    let capacity = align_capacity_up(value.len + 1);
-    let ptr = @as([*]T, Allocator.alloc(capacity * @sizeof(T)));
-
-    let i: usize = 0;
-    while (i < len) {
-      ptr[i] = value[i];
-      i += 1;
-    };
-
-    Self {
-      .ptr = ptr,
-      ._len = len,
-      ._capacity = capacity,
-    }
-  }
-
-  /// Allocate new `List` with cloning values from slice
-  pub fn from_clone[T: Clone](value: []const T) Self {
-    let len = value.len;
-    let capacity = align_capacity_up(value.len + 1);
-    let ptr = @as([*]T, Allocator.alloc(capacity * @sizeof(T)));
-
-    let i: usize = 0;
-    while (i < len) {
-      ptr[i] = value[i].clone();
-      i += 1;
-    };
-
-    Self {
-      .ptr = ptr,
-      ._len = len,
-      ._capacity = capacity,
-    }
-
   }
 
   /// UNSAFE: Construct `List` from raw parts (pointer must be heap allocated)
@@ -686,6 +649,48 @@ pub struct List[T] {
     };
 
     return self.get(self._len - 1);
+  }
+}
+
+implement[T: Copy] List[T] {
+  /// Allocate new `List` with copying values from slice
+  pub fn from(value: []const T) Self {
+    let len = value.len;
+    let capacity = align_capacity_up(value.len + 1);
+    let ptr = @as([*]T, Allocator.alloc(capacity * @sizeof(T)));
+
+    let i: usize = 0;
+    while (i < len) {
+      ptr[i] = value[i];
+      i += 1;
+    };
+
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity,
+    }
+  }
+}
+
+implement[T: Clone] List[T] {
+  /// Allocate new `List` with cloning values from slice
+  pub fn from(value: []const T) Self {
+    let len = value.len;
+    let capacity = align_capacity_up(value.len + 1);
+    let ptr = @as([*]T, Allocator.alloc(capacity * @sizeof(T)));
+
+    let i: usize = 0;
+    while (i < len) {
+      ptr[i] = value[i].clone();
+      i += 1;
+    };
+
+    Self {
+      .ptr = ptr,
+      ._len = len,
+      ._capacity = capacity,
+    }
   }
 }
 

@@ -1,0 +1,29 @@
+struct Point[T] {
+  pub x: T,
+  pub y: T,
+}
+
+implement Point[i32] {
+  pub fn zero() Self {
+    return Self { .x = 0, .y = 0 };
+  }
+
+  pub fn kind(*const self) []const char {
+    return "i32";
+  }
+}
+
+implement[T] Point[T] {
+  pub fn kind(*const self) []const char {
+    return "generic";
+  }
+}
+
+fn main() {
+  let z = Point.zero();
+  @println("zero: {} {}", z.x, z.y);
+  @println("zero kind: {}", z.kind());
+
+  let f: Point[f64] = Point { .x = 1.5, .y = 2.5 };
+  @println("f64 kind: {}", f.kind());
+}

@@ -1,0 +1,35 @@
+struct Point[T] {
+  pub x: T,
+  pub y: T,
+}
+
+struct Tag {
+  pub value: i32,
+}
+
+implement[T] Point[T] {
+  pub fn from(value: T, other: T) Self {
+    return Self { .x = value, .y = other };
+  }
+
+  pub fn kind(*const self) []const char {
+    return "generic";
+  }
+}
+
+implement[T: Copy] Point[T] {
+  pub fn kind(*const self) []const char {
+    return "copy";
+  }
+}
+
+fn main() {
+  let a = Point.from(3, 4);
+  @println("i32 kind: {}", a.kind());
+  @println("i32 sum: {}", a.x + a.y);
+
+  let t = Tag { .value = 7 };
+  let b: Point[Tag] = Point { .x = t, .y = Tag { .value = 8 } };
+  @println("tag kind: {}", b.kind());
+  @println("tag sum: {}", b.x.value + b.y.value);
+}

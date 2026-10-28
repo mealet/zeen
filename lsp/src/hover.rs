@@ -1232,6 +1232,33 @@ mod tests {
         assert!(!markdown.contains("function"), "{markdown}");
     }
 
+    const IMPLEMENT_SAMPLE: &str = "struct Point {\n    pub x: i32,\n    pub y: i32,\n}\n\nimplement Point {\n    pub fn kind(*const self) i32 {\n        return self.x + self.y;\n    }\n\n    pub fn origin() Point {\n        return Point { .x = 0, .y = 0 };\n    }\n}\n\nfn main() {\n    let p = Point.origin();\n    @println(\"{}\", p.kind());\n}\n";
+
+    #[test]
+    fn inherent_implement_method_decl_shows_signature() {
+        let markdown = hovering(IMPLEMENT_SAMPLE, "kind(*const self)");
+
+        assert!(markdown.contains("fn kind(*const self) i32"), "{markdown}");
+        assert!(markdown.contains("instance method"), "{markdown}");
+        assert!(markdown.contains("`Point`"), "{markdown}");
+    }
+
+    #[test]
+    fn inherent_implement_method_call_shows_instance() {
+        let markdown = hovering(IMPLEMENT_SAMPLE, "kind());");
+
+        assert!(markdown.contains("fn kind(*const self) i32"), "{markdown}");
+        assert!(markdown.contains("instance method"), "{markdown}");
+    }
+
+    #[test]
+    fn inherent_implement_static_call_shows_static() {
+        let markdown = hovering(IMPLEMENT_SAMPLE, "origin();");
+
+        assert!(markdown.contains("fn origin() Point"), "{markdown}");
+        assert!(markdown.contains("static method"), "{markdown}");
+    }
+
     #[test]
     fn use_path_shows_resolution() {
         let dir = std::env::temp_dir().join(format!("zeen-lsp-use-hover-{}", std::process::id()));

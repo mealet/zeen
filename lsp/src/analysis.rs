@@ -169,6 +169,7 @@ pub struct Member {
     pub is_static: bool,
     pub is_pub: bool,
     pub is_interface: bool,
+    pub arity: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,13 +208,23 @@ impl Analysis {
     ) -> Self {
         let interner = interner.borrow();
 
+        let mut methods: HashSet<DefId> = resolution.impls.values().flatten().copied().collect();
+
+        for decl in &module.decls {
+            if let HirDeclKind::Implement(implement) = &decl.kind
+                && implement.interface.is_none()
+            {
+                methods.extend(implement.methods.iter().map(|method| method.def_id));
+            }
+        }
+
         let mut walker = Walker {
             resolution,
             interner,
             text,
             filename,
             canonical,
-            methods: resolution.impls.values().flatten().copied().collect(),
+            methods,
             analysis: Analysis::default(),
             block_ends: Vec::new(),
             local_scopes: HashMap::new(),
@@ -844,6 +855,30 @@ fn hir_fn_takes_self(func: &HirFn) -> bool {
     }
 }
 
+fn hir_fn_arity(func: &HirFn) -> usize {
+    if func.self_param.is_some() {
+        return func.params.len();
+    }
+
+    let Some(first) = func.params.first() else {
+        return 0;
+    };
+
+    let mut current = &first.ty.kind;
+
+    loop {
+        match current {
+            HirTypeKind::SelfType(_) | HirTypeKind::SelfAlias(_) => {
+                return func.params.len().saturating_sub(1);
+            }
+            HirTypeKind::Const(inner) | HirTypeKind::SinglePointer(inner) => {
+                current = &inner.kind;
+            }
+            _ => return func.params.len(),
+        }
+    }
+}
+
 struct Walker<'ctx> {
     resolution: &'ctx ResolutionResult,
     interner: std::cell::Ref<'ctx, Rodeo>,
@@ -1111,6 +1146,7 @@ impl<'ctx> Walker<'ctx> {
             is_static: !hir_fn_takes_self(func),
             is_pub: func.is_pub,
             is_interface,
+            arity: Some(hir_fn_arity(func)),
         })
     }
 
@@ -1224,6 +1260,7 @@ impl<'ctx> Walker<'ctx> {
                             is_static: false,
                             is_pub: field.is_pub,
                             is_interface: false,
+                            arity: None,
                         });
 
                     self.walk_type(&field.ty);
@@ -1329,6 +1366,7 @@ impl<'ctx> Walker<'ctx> {
                             is_static: true,
                             is_pub: true,
                             is_interface: false,
+                            arity: None,
                         });
 
                     match &variant.payload {
@@ -2899,6 +2937,44 @@ mod tests {
         assert!(matches("doubled", Role::Function));
         assert!(matches("local", Role::Variable));
         assert!(matches("n", Role::Parameter));
+    }
+
+    const IMPLEMENT_SOURCE: &str = "struct Point {\n    pub x: i32,\n    pub y: i32,\n}\n\nimplement Point {\n    pub fn kind(*const self) i32 {\n        return self.x + self.y;\n    }\n\n    pub fn origin() Point {\n        return Point { .x = 0, .y = 0 };\n    }\n}\n\nfn main() {\n    let p = Point.origin();\n    @println(\"{}\", p.kind());\n}\n";
+
+    #[test]
+    fn inherent_implement_methods_resolve_uses() {
+        let uri: Uri = "file:///tmp/zeen-lsp-analysis-implement.zn"
+            .parse()
+            .unwrap();
+        let output = crate::diagnostics::check(&uri, IMPLEMENT_SOURCE, &[]);
+        assert!(output.diagnostics.is_empty());
+
+        let named: Vec<&Occurrence> = output
+            .analysis
+            .occurrences
+            .iter()
+            .filter(|occurrence| {
+                IMPLEMENT_SOURCE.get(occurrence.offset..occurrence.offset + occurrence.len)
+                    == Some("kind")
+            })
+            .collect();
+
+        assert_eq!(named.len(), 2);
+
+        let declaration = named
+            .iter()
+            .find(|occurrence| occurrence.def.is_some())
+            .unwrap();
+        let call = named
+            .iter()
+            .find(|occurrence| occurrence.offset != declaration.offset)
+            .unwrap();
+
+        assert_eq!(declaration.role, Role::Method);
+        assert_eq!(
+            crate::hover::method_at(&output.analysis, (call.offset, call.len)),
+            declaration.def
+        );
     }
 
     const UNNAMED_PARAM: &str = "fn put(i32) {\n}\n\nfn main() {\n    put(5);\n}\n";

@@ -21,6 +21,7 @@ pub struct ModuleMember {
     pub name: String,
     pub kind: ModuleKind,
     pub is_static: bool,
+    pub arity: Option<usize>,
 }
 
 fn fn_takes_self(params: &[zeen_ast::declarations::FnParam<'_>]) -> bool {
@@ -38,6 +39,10 @@ fn fn_takes_self(params: &[zeen_ast::declarations::FnParam<'_>]) -> bool {
             _ => return false,
         }
     }
+}
+
+fn fn_arity(params: &[zeen_ast::declarations::FnParam<'_>]) -> usize {
+    params.len() - usize::from(fn_takes_self(params))
 }
 
 pub fn use_imports(text: &str) -> Vec<String> {
@@ -251,6 +256,7 @@ fn members_of_source(content: &str, module: &str) -> Vec<ModuleMember> {
             name: interner.resolve(&name).to_string(),
             kind,
             is_static: false,
+            arity: None,
         });
     }
 
@@ -303,6 +309,7 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                         name: resolve(&field.name),
                         kind: ModuleKind::Field,
                         is_static: false,
+                        arity: None,
                     });
                 }
 
@@ -319,6 +326,7 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                             name: resolve(&name.0),
                             kind: ModuleKind::Method,
                             is_static: !fn_takes_self(params),
+                            arity: Some(fn_arity(params)),
                         });
                     }
                 }
@@ -339,6 +347,7 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                         name: resolve(&variant.name),
                         kind: ModuleKind::Variant,
                         is_static: true,
+                        arity: None,
                     });
                 }
 
@@ -355,6 +364,7 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                             name: resolve(&name.0),
                             kind: ModuleKind::Method,
                             is_static: !fn_takes_self(params),
+                            arity: Some(fn_arity(params)),
                         });
                     }
                 }
@@ -373,6 +383,7 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                             name: resolve(&name.0),
                             kind: ModuleKind::Method,
                             is_static: !fn_takes_self(params),
+                            arity: Some(fn_arity(params)),
                         });
                     }
                 }
@@ -440,6 +451,7 @@ pub fn variant_payload_fields(
                             name: resolve(&field.name),
                             kind: ModuleKind::Field,
                             is_static: false,
+                            arity: None,
                         });
                     }
                 }

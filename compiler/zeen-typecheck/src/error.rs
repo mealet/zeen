@@ -192,6 +192,22 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("`{object}` already has a method `{method}` with the same signature")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::duplicate_method),
+        help("overloads of one name must differ in bounds or in the block's type arguments")
+    )]
+    DuplicateMethod {
+        object: SmolStr,
+        method: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("`{struct_name}` already implements `{iface_name}`")]
     #[diagnostic(
         severity(Error),

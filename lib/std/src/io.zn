@@ -38,7 +38,9 @@ pub enum IoErrorKind {
 pub struct IoError {
   _kind: IoErrorKind,
   _message: String,
+}
 
+implement IoError {
   pub fn new(kind: IoErrorKind, message: []const char) Self {
     Self {
       ._kind = kind,

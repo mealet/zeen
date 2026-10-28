@@ -1,0 +1,4 @@
+i32 kind: copy
+i32 sum: 7
+tag kind: generic
+tag sum: 15

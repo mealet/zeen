@@ -26,7 +26,9 @@ pub struct Header {
 /// Header map. Lookup is case insensitive and clones the value.
 pub struct Headers {
   inner: List[Header],
+}
 
+implement Headers {
   pub fn push(*self, name: String, value: String) {
     self.inner.push(Header { .name = name, .value = value });
   }
@@ -83,7 +85,9 @@ pub struct Request {
   pub path: String,
   pub headers: Headers,
   pub body: String,
+}
 
+implement Request {
   pub fn header(*const self, name: []const char) Option[String] {
     self.headers.get(name)
   }
@@ -93,7 +97,9 @@ pub struct Request {
 pub struct Response {
   status: u16,
   body: String,
+}
 
+implement Response {
   pub fn new(status: u16, body: []const char) Self {
     Self {
       .status = status,
@@ -647,7 +653,9 @@ fn status_text(status: u16) []const char {
 /// Blocking single threaded HTTP server.
 pub struct HttpServer {
   listener: TcpListener,
+}
 
+implement HttpServer {
   pub fn bind(addr: *const SocketAddr) Result[Self, IoError] {
     switch (TcpListener.bind(addr)) {
       .Ok(listener) => Result.Ok(Self { .listener = listener }),

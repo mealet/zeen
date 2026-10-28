@@ -718,6 +718,14 @@ fn keep_module_member(member: &ModuleMember, static_context: Option<bool>) -> bo
     }
 }
 
+fn member_label(name: &str, arity: Option<usize>) -> String {
+    match arity {
+        Some(0) => format!("{name}()"),
+        Some(_) => format!("{name}(...)"),
+        None => name.to_string(),
+    }
+}
+
 fn member_rank(is_static_item: bool, static_context: Option<bool>) -> u8 {
     match static_context {
         Some(_) => 0,
@@ -917,9 +925,11 @@ fn push_type_members(
                     static_context,
                 );
                 items.push(CompletionItem {
-                    label: member.name.clone(),
+                    label: member_label(&member.name, member.arity),
                     kind: Some(member_completion_kind(member)),
                     detail: member.signature.clone(),
+                    filter_text: Some(member.name.clone()),
+                    insert_text: Some(member.name.clone()),
                     sort_text: Some(format!("{rank}_{}", member.name)),
                     ..Default::default()
                 });
@@ -950,9 +960,11 @@ fn push_type_members(
                     static_context,
                 );
                 items.push(CompletionItem {
-                    label: member.name.clone(),
+                    label: member_label(&member.name, member.arity),
                     kind: Some(module_member_completion_kind(&member)),
                     detail: Some(member.module.clone()),
+                    filter_text: Some(member.name.clone()),
+                    insert_text: Some(member.name.clone()),
                     sort_text: Some(format!("{rank}_{}", member.name)),
                     ..Default::default()
                 });
@@ -2013,13 +2025,13 @@ mod tests {
         let items = dot_complete(SAMPLE, &analysis, dot, ResolvePaths::default());
         let names = labels(&items);
 
-        assert!(names.contains(&"new"));
+        assert!(names.contains(&"new(...)"));
 
         for hidden in ["len", "x", "y"] {
             assert!(!names.contains(&hidden), "static must hide {hidden}");
         }
 
-        let new_item = items.iter().find(|item| item.label == "new").unwrap();
+        let new_item = items.iter().find(|item| item.label == "new(...)").unwrap();
         assert_eq!(new_item.kind, Some(CompletionItemKind::FUNCTION));
     }
 
@@ -2030,9 +2042,9 @@ mod tests {
         let items = dot_complete(SAMPLE, &analysis, dot, ResolvePaths::default());
         let names = labels(&items);
 
-        assert_eq!(names, vec!["len"]);
+        assert_eq!(names, vec!["len()"]);
 
-        let len_item = items.iter().find(|item| item.label == "len").unwrap();
+        let len_item = items.iter().find(|item| item.label == "len()").unwrap();
         assert_eq!(len_item.kind, Some(CompletionItemKind::METHOD));
     }
 
@@ -2072,11 +2084,11 @@ mod tests {
         );
         let names = labels(&items);
 
-        assert!(names.contains(&"len"));
+        assert!(names.contains(&"len()"));
         assert!(names.contains(&"x"));
-        assert!(!names.contains(&"new"));
+        assert!(!names.contains(&"new(...)"));
 
-        let len_item = items.iter().find(|item| item.label == "len").unwrap();
+        let len_item = items.iter().find(|item| item.label == "len()").unwrap();
         assert_eq!(len_item.kind, Some(CompletionItemKind::METHOD));
 
         let field_item = items.iter().find(|item| item.label == "x").unwrap();
@@ -2309,7 +2321,7 @@ mod tests {
 
         let dot = CHAIN_SAMPLE.find("o.inner.get").unwrap() + "o.inner".len();
         let items = dot_complete(CHAIN_SAMPLE, &analysis, dot, ResolvePaths::default());
-        assert_eq!(labels(&items), vec!["get"]);
+        assert_eq!(labels(&items), vec!["get()"]);
 
         let dot = CHAIN_SAMPLE.find("o.inner.v").unwrap() + "o.inner".len();
         let items = dot_complete(CHAIN_SAMPLE, &analysis, dot, ResolvePaths::default());
@@ -2372,7 +2384,7 @@ mod tests {
         let items = dot_complete(&broken, &analysis, dot, ResolvePaths::default());
         let names = labels(&items);
 
-        assert!(names.contains(&"get"));
+        assert!(names.contains(&"get()"));
         assert!(names.contains(&"v"));
     }
 
@@ -2388,7 +2400,7 @@ mod tests {
         let statik = PRIVATE_SAMPLE.find("Vault.make").unwrap() + "Vault".len();
         let items = dot_complete(PRIVATE_SAMPLE, &analysis, statik, ResolvePaths::default());
         let names = labels(&items);
-        assert_eq!(names, vec!["make"]);
+        assert_eq!(names, vec!["make(...)"]);
     }
 
     #[test]
@@ -2489,7 +2501,7 @@ mod tests {
         let dot = text.find("Client.make").unwrap() + "Client".len();
         let items = dot_complete(text, &output.analysis, dot, paths);
         let names = labels(&items);
-        assert!(names.contains(&"make"));
+        assert!(names.contains(&"make()"));
         assert!(!names.contains(&"get"));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2741,17 +2753,17 @@ mod tests {
         let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
         let names = labels(&items);
 
-        assert!(names.contains(&"kind"));
+        assert!(names.contains(&"kind()"));
         assert!(names.contains(&"x"));
-        assert!(!names.contains(&"label"));
+        assert!(!names.contains(&"label()"));
 
         let probe = INTERFACE_SAMPLE.replacen("Point.label()", "Point.        ()", 1);
         let dot = probe.find("Point.        ()").unwrap() + "Point".len();
         let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
         let names = labels(&items);
 
-        assert!(names.contains(&"label"));
-        assert!(!names.contains(&"kind"));
+        assert!(names.contains(&"label()"));
+        assert!(!names.contains(&"kind()"));
         assert!(!names.contains(&"x"));
     }
 
@@ -2769,7 +2781,7 @@ mod tests {
         let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
         let names = labels(&items);
 
-        assert!(names.contains(&"kind"));
+        assert!(names.contains(&"kind()"));
     }
 
     const GENERIC_BOUND_SAMPLE: &str = "interface Describe {\n    pub fn kind(*const self) i32;\n}\n\nstruct Point {\n    pub x: i32,\n}\n\nimplement Describe : Point {\n    fn kind(*const self) i32 {\n        return self.x;\n    }\n}\n\nfn show[T: Describe](x: *const T) i32 {\n    return (*x).kind();\n}\n\nfn main() {\n    let p = Point { .x = 1 };\n    @println(\"{}\", show(&p));\n}\n";
@@ -2782,7 +2794,7 @@ mod tests {
         let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
         let names = labels(&items);
 
-        assert!(names.contains(&"kind"));
+        assert!(names.contains(&"kind()"));
     }
 
     #[test]
@@ -2802,5 +2814,60 @@ mod tests {
         assert!(names.contains(&"v"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const INHERENT_SAMPLE: &str = "struct Point {\n    pub x: i32,\n    pub y: i32,\n}\n\nimplement Point {\n    pub fn kind(*const self) i32 {\n        return 1;\n    }\n\n    pub fn plus(*const self, dx: i32) i32 {\n        return self.x + dx;\n    }\n\n    pub fn origin() Point {\n        return Point { .x = 0, .y = 0 };\n    }\n}\n\nfn main() {\n    let a = Point { .x = 1, .y = 2 };\n    @println(\"{} {}\", a.kind(), Point.origin().x);\n}\n";
+
+    #[test]
+    fn inherent_implement_members_complete() {
+        let analysis = sample_analysis(INHERENT_SAMPLE);
+
+        let probe = INHERENT_SAMPLE.replacen("a.kind()", "a.        ()", 1);
+        let dot = probe.find("a.        ()").unwrap() + 1;
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"kind()"));
+        assert!(names.contains(&"plus(...)"));
+        assert!(names.contains(&"x"));
+        assert!(!names.contains(&"origin"));
+
+        let probe = INHERENT_SAMPLE.replacen("Point.origin()", "Point.        ()", 1);
+        let dot = probe.find("Point.        ()").unwrap() + "Point".len();
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"origin()"));
+        assert!(!names.contains(&"kind()"));
+        assert!(!names.contains(&"x"));
+    }
+
+    #[test]
+    fn dot_completion_works_in_file_with_type_errors() {
+        let text = "struct Point {\n    pub x: i32,\n}\n\nfn main() {\n    let a = Point { .x = 1 };\n    @println(\"{}\", a.);\n}\n";
+        let offset = text.find("a.);").unwrap() + 2;
+        let repaired = repair_for_completion(text, offset).unwrap();
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-errors.zn".parse().unwrap();
+        let output = crate::diagnostics::check_completion(&uri, &repaired, &[]);
+        let items = dot_complete(text, &output.analysis, offset - 1, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"x"));
+    }
+
+    #[test]
+    fn dot_completion_works_when_method_is_typed_as_field() {
+        let text = "struct Point {\n    pub x: i32,\n}\n\nimplement Point {\n    pub fn kind(*const self) i32 {\n        return 1;\n    }\n}\n\nfn main() {\n    let a = Point { .x = 1 };\n    let k = a.kind;\n    @println(\"{}\", k);\n}\n";
+        let uri: tower_lsp_server::ls_types::Uri = "file:///tmp/zeen-lsp-completion-typed-field.zn"
+            .parse()
+            .unwrap();
+        let output = crate::diagnostics::check(&uri, text, &[]);
+        let dot = text.find("a.kind").unwrap() + 1;
+        let items = dot_complete(text, &output.analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"kind()"));
+        assert!(!names.contains(&"x"));
     }
 }

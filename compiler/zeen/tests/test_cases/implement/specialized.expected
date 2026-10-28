@@ -1,0 +1,3 @@
+zero: 0 0
+zero kind: i32
+f64 kind: generic
