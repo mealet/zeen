@@ -10,7 +10,9 @@
 pub struct Range {
   pub start: Option[usize],
   pub end: Option[usize],
+}
 
+implement Range {
   pub fn first(*const self) Option[usize] {
     self.start
   }

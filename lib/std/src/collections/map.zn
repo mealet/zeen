@@ -39,7 +39,9 @@ pub struct Entry[K, V] {
   pub hash: u64,
   pub value: V,
   pub key: K,
+}
 
+implement[K, V] Entry[K, V] {
   pub fn value_ptr(*self) *V {
     &self.value
   }
@@ -53,7 +55,9 @@ pub struct HashMap[K: Hash + Eq, V] {
   buckets: List[List[Entry[K, V]]],
   _len: usize,
   _capacity: usize,
+}
 
+implement[K: Hash + Eq, V] HashMap[K, V] {
   pub fn new() Self {
     let cap: usize = InitialMapCapacity;
     let buckets = List#[List[Entry[K, V]]].with_capacity(cap);

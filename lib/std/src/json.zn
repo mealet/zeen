@@ -32,7 +32,9 @@ pub enum JsonValue {
   Str: String,
   Array: List[JsonValue],
   Object: JsonObject,
+}
 
+implement JsonValue {
   /// Parse a JSON document.
   pub fn parse(text: []const char) Result[JsonValue, JsonError] {
     let parser = JsonParser { .text = text, .pos = 0 };
@@ -258,7 +260,9 @@ pub enum JsonValue {
 struct JsonObject {
   map: HashMap[String, JsonValue],
   keys: List[String],
+}
 
+implement JsonObject {
   pub fn new() Self {
     return JsonObject { .map = HashMap#[String, JsonValue].new(), .keys = List#[String].new() };
   }
@@ -309,7 +313,9 @@ struct JsonObject {
 struct JsonParser {
   pub text: []const char,
   pub pos: usize,
+}
 
+implement JsonParser {
   fn peek(*const self) Option[char] {
     if (self.pos >= self.text.len) {
       return Option.None;
@@ -665,3 +671,4 @@ struct JsonParser {
     return code >= @as(u32, '0') && code <= @as(u32, '9');
   }
 }
+

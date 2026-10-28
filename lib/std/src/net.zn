@@ -22,7 +22,9 @@ fn cstr_of(s: []const char) String {
 pub struct SocketAddr {
   _ip: u32,
   _port: u16,
+}
 
+implement SocketAddr {
   pub fn new(ip: u32, port: u16) Self {
     Self { ._ip = ip, ._port = port }
   }
@@ -285,7 +287,9 @@ fn write_u32[W: StrWriter](out: *W, value: u32) void {
 /// TCP listener bound to an address.
 pub struct TcpListener {
   sock: usize,
+}
 
+implement TcpListener {
   /// Bind and listen with a 128 backlog.
   ///
   /// Possible IoError variants:
@@ -396,7 +400,9 @@ implement Drop : TcpListener {
 /// Connected TCP stream.
 pub struct TcpStream {
   sock: usize,
+}
 
+implement TcpStream {
   /// Connect to an address.
   ///
   /// Possible IoError variants:
@@ -647,7 +653,9 @@ implement Drop : TcpStream {
 /// UDP socket.
 pub struct UdpSocket {
   sock: usize,
+}
 
+implement UdpSocket {
   /// Bind to an address for sending and receiving datagrams.
   ///
   /// Possible IoError variants:

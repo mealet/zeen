@@ -22,7 +22,9 @@ pub struct Mutex[T] {
   os: OsMutex,
   data: T,
   open: bool,
+}
 
+implement[T] Mutex[T] {
   /// Create an unlocked mutex holding `value`.
   pub fn new(value: T) Self {
     let m = Mutex { .os = @uninit(), .data = value, .open = true };
@@ -136,7 +138,9 @@ pub struct RwLock[T] {
   os: OsRwLock,
   data: T,
   open: bool,
+}
 
+implement[T] RwLock[T] {
   pub fn new(value: T) Self {
     @os[windows] {
       return RwLock { .os = WinSrwLock { .ptr = nullptr }, .data = value, .open = true };
@@ -311,7 +315,9 @@ implement[T] Drop : RwWriteGuard[T] {
 pub struct Arc[T] {
   ptr: *T,
   count: *i64,
+}
 
+implement[T] Arc[T] {
   /// Move `value` into a new heap allocation with count one.
   pub fn new(value: T) Self {
     let ptr = @as(*T, Allocator.alloc(@sizeof(T)));

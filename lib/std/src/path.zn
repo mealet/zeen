@@ -3,6 +3,9 @@ use std.collections.list;
 
 /// Portable path helpers.
 pub struct Path {
+}
+
+implement Path {
   fn is_sep(c: char) bool {
     @os[windows] {
       return c == '/' || c == '\\';
@@ -176,3 +179,4 @@ pub struct Path {
     return out;
   }
 }
+

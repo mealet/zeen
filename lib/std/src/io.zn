@@ -38,7 +38,9 @@ pub enum IoErrorKind {
 pub struct IoError {
   _kind: IoErrorKind,
   _message: String,
+}
 
+implement IoError {
   pub fn new(kind: IoErrorKind, message: []const char) Self {
     Self {
       ._kind = kind,
@@ -166,6 +168,9 @@ pub struct IoError {
 
 /// Standard input handle.
 pub struct Stdin {
+}
+
+implement Stdin {
   /// Read one line, keeping trailing newline.
   pub fn read_line(buf: *String) bool {
     @os[windows] {
@@ -271,6 +276,9 @@ pub struct Stdin {
 
 /// Standard output handle.
 pub struct Stdout {
+}
+
+implement Stdout {
   /// Write string slice to output.
   pub fn write(value: []const char) void {
     let out = OutStream {};
@@ -290,6 +298,9 @@ pub struct Stdout {
 
 /// Standard error handle.
 pub struct Stderr {
+}
+
+implement Stderr {
   /// Write string slice to error output.
   pub fn write(value: []const char) void {
     let _ = fwrite(@as([*]const void, value.ptr), 1, value.len, stderr);
@@ -300,3 +311,4 @@ pub struct Stderr {
     let _ = fflush(stderr);
   }
 }
+

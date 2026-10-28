@@ -28,6 +28,9 @@ extern let __zeen_argv: [*][*]char;
 
 /// OS process: arguments, working directory and exit.
 pub struct Process {
+}
+
+implement Process {
   /// Number of process arguments, including the executable path.
   pub fn args_count() i32 {
     return __zeen_argc;
@@ -92,7 +95,9 @@ pub struct Process {
 /// Borrowed view over the process arguments, no allocation.
 pub struct ArgsIter {
   index: i32,
+}
 
+implement ArgsIter {
   pub fn new() Self {
     return ArgsIter { .index = 0 };
   }
@@ -124,7 +129,9 @@ pub enum Stdio {
 pub struct ExitStatus {
   pub exit_code: i32,
   pub term_signal: i32,
+}
 
+implement ExitStatus {
   pub fn success(*const self) bool {
     return self.term_signal == 0 && self.exit_code == 0;
   }
@@ -157,7 +164,9 @@ pub struct Output {
 pub struct PipeReader {
   pub fd: c_int,
   pub handle: *void,
+}
 
+implement PipeReader {
   pub fn read_to_string(*self, out: *String) Result[usize, IoError] {
     @os[windows] {
       return read_handle_to_string(self.handle, out);
@@ -185,7 +194,9 @@ implement Drop : PipeReader {
 pub struct PipeWriter {
   pub fd: c_int,
   pub handle: *void,
+}
 
+implement PipeWriter {
   pub fn write_all(*self, buf: []const char) Result[void, IoError] {
     @os[windows] {
       return write_handle_all(self.handle, buf);
@@ -219,7 +230,9 @@ pub struct Child {
   pub win_in: *void,
   pub win_out: *void,
   pub win_err: *void,
+}
 
+implement Child {
   pub fn id(*const self) i32 {
     return self.pid;
   }
@@ -427,7 +440,9 @@ pub struct Command {
   pub stdin_mode: Stdio,
   pub stdout_mode: Stdio,
   pub stderr_mode: Stdio,
+}
 
+implement Command {
   pub fn new(program: []const char) Self {
     return Command {
       .program = String.from(program),

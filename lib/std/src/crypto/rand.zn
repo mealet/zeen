@@ -4,6 +4,9 @@ use std.time;
 
 /// Simple deterministic random numbers over C rand.
 pub struct Rand {
+}
+
+implement Rand {
   /// Seed the generator, same seed repeats the sequence.
   pub fn seed(seed: u32) {
     srand(@as(c_uint, seed));
@@ -23,7 +26,9 @@ pub struct Rand {
 /// Seeded generator with its own state, no shared globals.
 pub struct Rng {
   state: u64,
+}
 
+implement Rng {
   /// Create a generator seeded from the system timestamp.
   pub fn new() Self {
     return Rng.from_seed(@as(u64, Time.now()));
@@ -58,3 +63,4 @@ pub struct Rng {
     return from + (self.next_u32() % (to - from));
   }
 }
+

@@ -14,7 +14,9 @@ pub struct String {
   ptr: [*]char,
   _len: usize,
   _capacity: usize,
+}
 
+implement String {
   /// String constructor (without initialization).
   pub fn new() Self {
     Self {

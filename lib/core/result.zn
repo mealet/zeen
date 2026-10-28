@@ -3,7 +3,9 @@
 pub enum Result[T, E] {
   Ok: T,
   Err: E,
+}
 
+implement[T, E] Result[T, E] {
   pub fn is_ok(*const self) bool {
     @enumTag(self) == 0
   }
