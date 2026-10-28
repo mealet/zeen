@@ -52,7 +52,7 @@ pub enum DeclarationKind<'arena> {
     },
 
     ImplementDecl {
-        interface: (Spur, SourceSpan),
+        interface: Option<(Spur, SourceSpan)>,
         object: (Spur, SourceSpan, &'arena [&'arena TypeExpr<'arena>]), // name, span, generics slots
         generics: Option<&'arena [GenericType<'arena>]>,
 

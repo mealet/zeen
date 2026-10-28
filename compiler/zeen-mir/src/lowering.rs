@@ -8611,7 +8611,12 @@ impl<'ctx> MirLowering<'ctx> {
                         .zip(struct_args.iter().copied())
                         .collect();
 
-                    for entries in self.typecheck.impl_registry.values() {
+                    for entries in self
+                        .typecheck
+                        .impl_registry
+                        .values()
+                        .chain(self.typecheck.inherent_impls.values())
+                    {
                         for entry in entries {
                             if !entry.methods.contains(&def_id) {
                                 continue;
@@ -8652,7 +8657,12 @@ impl<'ctx> MirLowering<'ctx> {
                     .zip(generic_args.iter().copied())
                     .collect();
 
-                for entries in self.typecheck.impl_registry.values() {
+                for entries in self
+                    .typecheck
+                    .impl_registry
+                    .values()
+                    .chain(self.typecheck.inherent_impls.values())
+                {
                     for entry in entries {
                         if !entry.methods.contains(&def_id) {
                             continue;

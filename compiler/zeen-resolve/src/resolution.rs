@@ -105,7 +105,7 @@ pub struct ResolutionResult {
     /// (struct, interface) -> methods
     pub impls: HashMap<(DefId, DefId), Vec<DefId>>,
     pub binding_sites: HashMap<NodeKey, DefId>,
-    pub implement_names: HashMap<NodeKey, (Resolution, Resolution)>,
+    pub implement_names: HashMap<NodeKey, (Option<Resolution>, Resolution)>,
     pub interface_self_placeholders: HashMap<DefId, DefId>,
 
     pub arm_const_values: HashMap<(NodeKey, usize), Literal>,

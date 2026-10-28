@@ -38,6 +38,7 @@ pub struct TypeCheckResult {
     pub fn_return_fats: HashMap<DefId, TypeId>,
 
     pub impl_registry: HashMap<(DefId, DefId), Vec<ImplEntry>>,
+    pub inherent_impls: HashMap<DefId, Vec<ImplEntry>>,
     pub format_arg_resolutions: HashMap<HirId, DefId>,
     pub interface_method_owners: HashMap<DefId, DefId>,
     pub for_iterator_next_methods: HashMap<HirId, DefId>,
@@ -50,6 +51,7 @@ pub struct ImplEntry {
     pub is_specialized: bool,
     pub generic_bounds: Vec<(DefId, Vec<DefId>)>,
     pub generic_bindings: Vec<(DefId, DefId)>,
+    pub generics: Vec<DefId>,
 }
 
 impl TypeCheckResult {

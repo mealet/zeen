@@ -71,7 +71,7 @@ pub struct TypeChecker<'res> {
     interface_generics: HashMap<DefId, Vec<DefId>>,
 
     struct_generics: HashMap<DefId, Vec<DefId>>,
-    struct_methods: HashMap<DefId, HashMap<Spur, DefId>>,
+    struct_methods: HashMap<DefId, HashMap<Spur, Vec<DefId>>>,
     enum_variants: HashMap<DefId, Vec<DefId>>,
     enum_generics: HashMap<DefId, Vec<DefId>>,
 
@@ -81,6 +81,7 @@ pub struct TypeChecker<'res> {
     all_generic_bounds: HashMap<DefId, Vec<DefId>>,
     method_owning_interface: HashMap<DefId, DefId>,
     extracting_typename: bool,
+    speculating: bool,
 
     type_names_as_values: HashMap<HirId, (DefId, Source)>,
 
@@ -112,6 +113,15 @@ struct InterfaceCallResult {
 struct MethodImplCtx {
     object_args: Vec<TypeId>,
     generic_bounds: Vec<(DefId, Vec<DefId>)>,
+}
+
+struct MethodSignatureEntry {
+    object: DefId,
+    name: Spur,
+    args: Vec<String>,
+    bounds: Vec<String>,
+    source: Source,
+    span: SourceSpan,
 }
 
 struct ImplSigCtx<'a> {
@@ -181,6 +191,7 @@ impl<'res> TypeChecker<'res> {
             all_generic_bounds: HashMap::default(),
             method_owning_interface: HashMap::default(),
             extracting_typename: false,
+            speculating: false,
             type_names_as_values: HashMap::default(),
             range_def: OnceCell::new(),
         }
@@ -211,6 +222,10 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn report(&mut self, err: TypeError) {
+        if self.speculating {
+            return;
+        }
+
         self.errors.push(err);
     }
 
@@ -271,6 +286,8 @@ impl<'res> TypeChecker<'res> {
         for decl in &module.decls {
             self.compute_structs_capabilities(decl);
         }
+
+        self.check_duplicate_methods(module);
 
         self.result.closure_allocs = analyze_closures(module, &self.resolution.closure_captures);
 
@@ -369,7 +386,9 @@ impl<'res> TypeChecker<'res> {
                         self.struct_methods
                             .entry(decl.def_id)
                             .or_default()
-                            .insert(f.name.0, method.def_id);
+                            .entry(f.name.0)
+                            .or_default()
+                            .push(method.def_id);
                     }
                 }
             }
@@ -482,7 +501,9 @@ impl<'res> TypeChecker<'res> {
                         self.struct_methods
                             .entry(decl.def_id)
                             .or_default()
-                            .insert(f.name.0, method.def_id);
+                            .entry(f.name.0)
+                            .or_default()
+                            .push(method.def_id);
                     }
                 }
             }
@@ -626,7 +647,9 @@ impl<'res> TypeChecker<'res> {
                 self.struct_methods
                     .entry(object_def)
                     .or_default()
-                    .insert(f.name.0, method.def_id);
+                    .entry(f.name.0)
+                    .or_default()
+                    .push(method.def_id);
 
                 if let Some(iface_def) = imp.interface {
                     self.method_owning_interface
@@ -672,7 +695,7 @@ impl<'res> TypeChecker<'res> {
                 src: source.src(),
                 span: imp.object_bindings_span,
             });
-        } else if let Some(iface_def) = imp.interface {
+        } else {
             let generic_bindings: Vec<(DefId, DefId)> = object_args
                 .iter()
                 .zip(struct_generics.iter())
@@ -682,55 +705,68 @@ impl<'res> TypeChecker<'res> {
                 })
                 .collect();
 
-            let is_duplicate = self
-                .result
-                .impl_registry
-                .get(&(object_def, iface_def))
-                .is_some_and(|existing| {
-                    existing
-                        .iter()
-                        .any(|e| e.object_args == object_args && e.is_specialized == is_specialized)
-                });
+            let entry = ImplEntry {
+                methods: imp.methods.iter().map(|m| m.def_id).collect(),
+                object_args: object_args.clone(),
+                is_specialized,
+                generic_bounds: imp
+                    .generics
+                    .iter()
+                    .map(|g| (g.def_id, g.bounds.clone()))
+                    .collect(),
+                generic_bindings,
+                generics: imp.generics.iter().map(|g| g.def_id).collect(),
+            };
 
-            if is_duplicate {
-                let struct_name = self
-                    .resolution
-                    .defs
-                    .get(&object_def)
-                    .map(|d| self.interner.borrow().resolve(&d.name).into())
-                    .unwrap_or_else(|| "?".into());
-                let iface_name = self
-                    .resolution
-                    .defs
-                    .get(&iface_def)
-                    .map(|d| self.interner.borrow().resolve(&d.name).into())
-                    .unwrap_or_else(|| "?".into());
+            if let Some(iface_def) = imp.interface {
+                let is_duplicate = self
+                    .result
+                    .impl_registry
+                    .get(&(object_def, iface_def))
+                    .is_some_and(|existing| {
+                        existing.iter().any(|e| {
+                            e.object_args == object_args && e.is_specialized == is_specialized
+                        })
+                    });
 
-                self.report(TypeError::DuplicateImpl {
-                    struct_name,
-                    iface_name,
-                    src: source.src(),
-                    span: imp.object_bindings_span,
-                });
-                return;
+                if is_duplicate {
+                    let struct_name = self
+                        .resolution
+                        .defs
+                        .get(&object_def)
+                        .map(|d| self.interner.borrow().resolve(&d.name).into())
+                        .unwrap_or_else(|| "?".into());
+                    let iface_name = self
+                        .resolution
+                        .defs
+                        .get(&iface_def)
+                        .map(|d| self.interner.borrow().resolve(&d.name).into())
+                        .unwrap_or_else(|| "?".into());
+
+                    self.report(TypeError::DuplicateImpl {
+                        struct_name,
+                        iface_name,
+                        src: source.src(),
+                        span: imp.object_bindings_span,
+                    });
+                    return;
+                }
+
+                self.result
+                    .impl_registry
+                    .entry((object_def, iface_def))
+                    .or_default()
+                    .push(entry);
+            } else {
+                self.result
+                    .inherent_impls
+                    .entry(object_def)
+                    .or_default()
+                    .push(entry);
             }
-
-            self.result
-                .impl_registry
-                .entry((object_def, iface_def))
-                .or_default()
-                .push(ImplEntry {
-                    methods: imp.methods.iter().map(|m| m.def_id).collect(),
-                    object_args: object_args.clone(),
-                    is_specialized,
-                    generic_bounds: imp
-                        .generics
-                        .iter()
-                        .map(|g| (g.def_id, g.bounds.clone()))
-                        .collect(),
-                    generic_bindings,
-                });
         }
+
+        self.substitute_impl_self_types(imp, object_def, &object_args);
 
         let Some(iface_def) = imp.interface else {
             return;
@@ -772,6 +808,54 @@ impl<'res> TypeChecker<'res> {
             &sig_ctx,
             &((source.span, source.src()).into()),
         );
+    }
+
+    fn substitute_impl_self_types(
+        &mut self,
+        imp: &zeen_hir::HirImplement,
+        object_def: DefId,
+        object_args: &[TypeId],
+    ) {
+        let owner_generics = self.type_member_generics(object_def);
+
+        if owner_generics.len() != object_args.len() {
+            return;
+        }
+
+        let bindings: HashMap<DefId, TypeId> = owner_generics
+            .iter()
+            .copied()
+            .zip(object_args.iter().copied())
+            .collect();
+
+        for method in &imp.methods {
+            let Some(sig) = self.fn_sigs.get(&method.def_id) else {
+                continue;
+            };
+
+            let params = sig.params.clone();
+            let ret = sig.ret;
+
+            let params: Vec<TypeId> = params
+                .iter()
+                .map(|&param| self.substitute_generics(param, &bindings))
+                .collect();
+            let ret = self.substitute_generics(ret, &bindings);
+
+            let Some(sig) = self.fn_sigs.get_mut(&method.def_id) else {
+                continue;
+            };
+
+            sig.params = params;
+            sig.ret = ret;
+        }
+
+        for method in &imp.methods {
+            if let Some(fn_ty) = self.result.def_types.get(&method.def_id).copied() {
+                let fn_ty = self.substitute_generics(fn_ty, &bindings);
+                self.result.def_types.insert(method.def_id, fn_ty);
+            }
+        }
     }
 
     fn impl_object_args(
@@ -1301,7 +1385,7 @@ impl<'res> TypeChecker<'res> {
 
     fn check_decl_body(&mut self, decl: &HirDecl) {
         match &decl.kind {
-            HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None, None, None),
+            HirDeclKind::Fn(hir_fn) => self.check_fn_body(decl.def_id, hir_fn, None, None),
 
             HirDeclKind::Struct(s) => {
                 let _self_ty = self.result.interner.intern(Type::Struct {
@@ -1310,20 +1394,20 @@ impl<'res> TypeChecker<'res> {
                 });
 
                 for method in &s.methods {
-                    self.check_decl_body_as_method(method, decl.def_id, None, None);
+                    self.check_decl_body_as_method(method, decl.def_id, None);
                 }
             }
 
             HirDeclKind::Enum(e) => {
                 for method in &e.methods {
-                    self.check_decl_body_as_method(method, decl.def_id, None, None);
+                    self.check_decl_body_as_method(method, decl.def_id, None);
                 }
             }
 
             HirDeclKind::Interface(i) => {
                 for method in &i.methods {
                     if let HirDeclKind::Fn(f) = &method.kind {
-                        self.check_fn_body(method.def_id, f, None, None, None);
+                        self.check_fn_body(method.def_id, f, None, None);
                     }
                 }
             }
@@ -1338,17 +1422,12 @@ impl<'res> TypeChecker<'res> {
                     let impl_ctx = self.impl_method_ctx(imp);
 
                     for method in &imp.methods {
-                        self.check_decl_body_as_method(
-                            method,
-                            object_def,
-                            imp.interface,
-                            impl_ctx.as_ref(),
-                        );
+                        self.check_decl_body_as_method(method, object_def, impl_ctx.as_ref());
                     }
                 } else {
                     for method in &imp.methods {
                         if let HirDeclKind::Fn(f) = &method.kind {
-                            self.check_fn_body(method.def_id, f, None, None, None);
+                            self.check_fn_body(method.def_id, f, None, None);
                         }
                     }
                 }
@@ -1370,11 +1449,10 @@ impl<'res> TypeChecker<'res> {
         &mut self,
         method: &HirDecl,
         struct_def: DefId,
-        iface_def: Option<DefId>,
         impl_ctx: Option<&MethodImplCtx>,
     ) {
         if let HirDeclKind::Fn(f) = &method.kind {
-            self.check_fn_body(method.def_id, f, Some(struct_def), iface_def, impl_ctx);
+            self.check_fn_body(method.def_id, f, Some(struct_def), impl_ctx);
         }
     }
 
@@ -1383,7 +1461,6 @@ impl<'res> TypeChecker<'res> {
         def_id: DefId,
         hir_fn: &HirFn,
         struct_def: Option<DefId>,
-        iface_def: Option<DefId>,
         impl_ctx: Option<&MethodImplCtx>,
     ) {
         let Some(body) = &hir_fn.body else {
@@ -1417,7 +1494,6 @@ impl<'res> TypeChecker<'res> {
             };
 
             let generic_args: Vec<TypeId> = if let Some(ictx) = impl_ctx
-                && iface_def.is_some()
                 && ictx.object_args.len() == owner_generics.len()
             {
                 ictx.object_args.clone()
@@ -1979,7 +2055,7 @@ impl<'res> TypeChecker<'res> {
 
     fn check_closure(&mut self, def_id: DefId, def: &Rc<HirFn>, source: &Source) -> TypeId {
         self.declare_fn_signature(def_id, def);
-        self.check_fn_body(def_id, def, None, None, None);
+        self.check_fn_body(def_id, def, None, None);
 
         let fn_ty = *self
             .result
@@ -5082,7 +5158,13 @@ impl<'res> TypeChecker<'res> {
         }
 
         let method_def_id = {
-            let Some(method_def_id) = self.struct_methods.get(&struct_def)?.get(&field_name) else {
+            if !self.struct_methods.contains_key(&struct_def) {
+                return None;
+            }
+
+            let Some(method_def_id) =
+                self.select_method_candidate(struct_def, field_name, &struct_generic_args)
+            else {
                 let field = self.interner.borrow().resolve(&field_name).into();
                 self.report(TypeError::UnknownField {
                     struct_name: self.display_type(obj_ty).into(),
@@ -5092,7 +5174,8 @@ impl<'res> TypeChecker<'res> {
                 });
                 return Some(self.result.interner.error());
             };
-            *method_def_id
+
+            method_def_id
         };
         let sig = &self.fn_sigs[&method_def_id];
         let self_mode = sig.self_mode;
@@ -5155,10 +5238,7 @@ impl<'res> TypeChecker<'res> {
             .zip(struct_generic_args.iter().copied())
             .collect();
 
-        if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
-            && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
-            && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
-        {
+        if let Some(entry) = self.method_impl_entry(struct_def, method_def_id) {
             for (imp_g, struct_g) in &entry.generic_bindings {
                 if let Some(&concrete) = bindings.get(struct_g) {
                     bindings.insert(*imp_g, concrete);
@@ -5230,38 +5310,7 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
-        if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
-            && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
-            && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
-        {
-            for (imp_g, ifaces) in &entry.generic_bounds.clone() {
-                let Some(&concrete_ty) = bindings.get(imp_g) else {
-                    continue;
-                };
-
-                for iface_def in ifaces {
-                    if !self.type_satisfies_interface(concrete_ty, *iface_def) {
-                        let interner = self.interner.borrow();
-
-                        let generic = interner.resolve(&self.resolution.defs[imp_g].name).into();
-                        let bound = interner
-                            .resolve(&self.resolution.defs[iface_def].name)
-                            .into();
-                        let ty = self.display_type(concrete_ty).into();
-
-                        drop(interner);
-
-                        self.report(TypeError::GenericBoundNotSatisfied {
-                            generic,
-                            bound,
-                            ty,
-                            src: source.src(),
-                            span: source.span,
-                        });
-                    }
-                }
-            }
-        }
+        self.check_impl_entry_bounds(struct_def, method_def_id, &bindings, &source);
 
         let mut monomorphized_args: Vec<TypeId> = struct_generic_args;
         monomorphized_args.extend(resolved_generic_args);
@@ -5897,7 +5946,26 @@ impl<'res> TypeChecker<'res> {
         let (call_id, caller_expr) = caller;
         let (field_name, field_span) = field;
 
-        let method_def_id = *self.struct_methods.get(&struct_def)?.get(&field_name)?;
+        let candidates = self
+            .struct_methods
+            .get(&struct_def)?
+            .get(&field_name)?
+            .clone();
+        let probe = *candidates.first()?;
+
+        let method_def_id = if candidates.len() == 1 {
+            probe
+        } else {
+            self.pick_associated_candidate(
+                struct_def,
+                &candidates,
+                args,
+                explicit_generic_args,
+                expected,
+                source,
+            )?
+        };
+
         let self_mode = self.fn_sigs[&method_def_id].self_mode;
 
         if self_mode.is_some() {
@@ -5951,6 +6019,24 @@ impl<'res> TypeChecker<'res> {
             self.seed_inference_bindings(sig_ret, expected, &mut bindings);
         }
 
+        if let Some(entry) = self.method_impl_entry(struct_def, method_def_id) {
+            if entry.is_specialized {
+                for (g, arg) in type_generics.iter().zip(entry.object_args.iter()) {
+                    bindings.insert(*g, *arg);
+                }
+            }
+
+            for (imp_g, struct_g) in &entry.generic_bindings {
+                if let Some(&concrete) = bindings.get(imp_g) {
+                    bindings.entry(*struct_g).or_insert(concrete);
+                }
+
+                if let Some(&concrete) = bindings.get(struct_g) {
+                    bindings.entry(*imp_g).or_insert(concrete);
+                }
+            }
+        }
+
         for g in &sig_generics {
             if !bindings.contains_key(g) {
                 let interner = self.interner.borrow();
@@ -6000,38 +6086,7 @@ impl<'res> TypeChecker<'res> {
 
         let resolved_generic_args: Vec<TypeId> = sig_generics.iter().map(|g| bindings[g]).collect();
 
-        if let Some(&owning_iface) = self.method_owning_interface.get(&method_def_id)
-            && let Some(entries) = self.result.impl_registry.get(&(struct_def, owning_iface))
-            && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method_def_id))
-        {
-            for (imp_g, ifaces) in &entry.generic_bounds.clone() {
-                let Some(&concrete_ty) = bindings.get(imp_g) else {
-                    continue;
-                };
-
-                for iface_def in ifaces {
-                    if !self.type_satisfies_interface(concrete_ty, *iface_def) {
-                        let interner = self.interner.borrow();
-
-                        let generic = interner.resolve(&self.resolution.defs[imp_g].name).into();
-                        let bound = interner
-                            .resolve(&self.resolution.defs[iface_def].name)
-                            .into();
-                        let ty = self.display_type(concrete_ty).into();
-
-                        drop(interner);
-
-                        self.report(TypeError::GenericBoundNotSatisfied {
-                            generic,
-                            bound,
-                            ty,
-                            src: source.src(),
-                            span: source.span,
-                        });
-                    }
-                }
-            }
-        }
+        self.check_impl_entry_bounds(struct_def, method_def_id, &bindings, source);
 
         for g in &type_generics {
             if !bindings.contains_key(g) {
@@ -6692,6 +6747,351 @@ impl<'res> TypeChecker<'res> {
             .iter()
             .find(|e| !e.is_specialized && e.generic_bounds.is_empty())
             .cloned()
+    }
+
+    fn check_impl_entry_bounds(
+        &mut self,
+        object: DefId,
+        method: DefId,
+        bindings: &HashMap<DefId, TypeId>,
+        source: &Source,
+    ) {
+        let Some(entry) = self.method_impl_entry(object, method) else {
+            return;
+        };
+
+        for (imp_g, ifaces) in &entry.generic_bounds {
+            let Some(&concrete_ty) = bindings.get(imp_g) else {
+                continue;
+            };
+
+            for &iface_def in ifaces {
+                if self.type_satisfies_interface(concrete_ty, iface_def) {
+                    continue;
+                }
+
+                let interner = self.interner.borrow();
+
+                let generic = interner.resolve(&self.resolution.defs[imp_g].name).into();
+                let bound = interner
+                    .resolve(&self.resolution.defs[&iface_def].name)
+                    .into();
+                let ty = self.display_type(concrete_ty).into();
+
+                drop(interner);
+
+                self.report(TypeError::GenericBoundNotSatisfied {
+                    generic,
+                    bound,
+                    ty,
+                    src: source.src(),
+                    span: source.span,
+                });
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pick_associated_candidate(
+        &mut self,
+        struct_def: DefId,
+        candidates: &[DefId],
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        expected: Option<TypeId>,
+        source: &Source,
+    ) -> Option<DefId> {
+        let type_generics = self.type_member_generics(struct_def);
+        let mut best: Option<(u8, DefId)> = None;
+
+        self.speculating = true;
+
+        for &candidate in candidates {
+            let sig_params = self.fn_sigs[&candidate].params.clone();
+            let sig_ret = self.fn_sigs[&candidate].ret;
+            let sig_generics = self.fn_sigs[&candidate].generics.clone();
+
+            let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+
+            let bind_order: Vec<DefId> = type_generics
+                .iter()
+                .copied()
+                .chain(sig_generics.iter().copied())
+                .collect();
+
+            for (g, explicit) in bind_order.iter().zip(explicit_generic_args.iter()) {
+                let ty = self.lower_hir_type(explicit);
+                bindings.insert(*g, ty);
+            }
+
+            let entry = self.method_impl_entry(struct_def, candidate);
+
+            if let Some(entry) = &entry
+                && entry.is_specialized
+            {
+                for (g, arg) in type_generics.iter().zip(entry.object_args.iter()) {
+                    bindings.insert(*g, *arg);
+                }
+            }
+
+            for (param_ty, arg) in sig_params.iter().zip(args.iter()) {
+                self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+            }
+
+            if let Some(expected) = expected {
+                self.seed_inference_bindings(sig_ret, expected, &mut bindings);
+            }
+
+            if let Some(entry) = &entry {
+                for (imp_g, struct_g) in &entry.generic_bindings {
+                    if let Some(&concrete) = bindings.get(imp_g) {
+                        bindings.entry(*struct_g).or_insert(concrete);
+                    }
+                }
+            }
+
+            let struct_args: Vec<TypeId> = type_generics
+                .iter()
+                .map(|g| {
+                    bindings
+                        .get(g)
+                        .copied()
+                        .unwrap_or_else(|| self.result.interner.error())
+                })
+                .collect();
+
+            let Some(rank) = self.method_candidate_rank(struct_def, candidate, &struct_args) else {
+                continue;
+            };
+
+            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
+                best = Some((rank, candidate));
+            }
+        }
+
+        self.speculating = false;
+
+        best.map(|(_, method)| method)
+    }
+
+    fn method_impl_entry(&self, object: DefId, method: DefId) -> Option<ImplEntry> {
+        if let Some(&iface_def) = self.method_owning_interface.get(&method)
+            && let Some(entries) = self.result.impl_registry.get(&(object, iface_def))
+            && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method))
+        {
+            return Some(entry.clone());
+        }
+
+        self.result
+            .inherent_impls
+            .get(&object)?
+            .iter()
+            .find(|e| e.methods.contains(&method))
+            .cloned()
+    }
+
+    fn select_method_candidate(
+        &self,
+        object: DefId,
+        name: Spur,
+        struct_args: &[TypeId],
+    ) -> Option<DefId> {
+        let candidates = self.struct_methods.get(&object)?.get(&name)?;
+
+        let mut best: Option<(u8, DefId)> = None;
+
+        for &candidate in candidates {
+            let Some(rank) = self.method_candidate_rank(object, candidate, struct_args) else {
+                continue;
+            };
+
+            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
+                best = Some((rank, candidate));
+            }
+        }
+
+        best.map(|(_, method)| method)
+    }
+
+    fn method_candidate_rank(
+        &self,
+        object: DefId,
+        method: DefId,
+        struct_args: &[TypeId],
+    ) -> Option<u8> {
+        let Some(entry) = self.method_impl_entry(object, method) else {
+            return Some(3);
+        };
+
+        if entry.is_specialized {
+            return (entry.object_args.as_slice() == struct_args).then_some(0);
+        }
+
+        let has_bounds = entry
+            .generic_bounds
+            .iter()
+            .any(|(_, ifaces)| !ifaces.is_empty());
+
+        if !has_bounds {
+            return Some(2);
+        }
+
+        let owner_generics = self.type_member_generics(object);
+
+        let bounds_hold = entry.generic_bounds.iter().all(|(imp_g, ifaces)| {
+            let Some(struct_g) = entry
+                .generic_bindings
+                .iter()
+                .find(|(g, _)| g == imp_g)
+                .map(|(_, struct_g)| *struct_g)
+            else {
+                return true;
+            };
+
+            let Some(index) = owner_generics.iter().position(|g| *g == struct_g) else {
+                return true;
+            };
+
+            let Some(&concrete) = struct_args.get(index) else {
+                return true;
+            };
+
+            ifaces
+                .iter()
+                .all(|&iface_def| self.type_satisfies_interface(concrete, iface_def))
+        });
+
+        Some(if bounds_hold { 1 } else { 4 })
+    }
+
+    fn impl_entry_signature(&self, entry: &ImplEntry) -> (Vec<String>, Vec<String>) {
+        let generic_slot = |generic: DefId| {
+            entry
+                .generics
+                .iter()
+                .position(|g| *g == generic)
+                .map(|index| format!("#{index}"))
+                .unwrap_or_default()
+        };
+
+        let args: Vec<String> = entry
+            .object_args
+            .iter()
+            .map(|&arg| match self.result.interner.get(arg) {
+                Type::GenericParam(g) => generic_slot(*g),
+                _ => self.display_type(arg),
+            })
+            .collect();
+
+        let mut bounds: Vec<String> = entry
+            .generic_bounds
+            .iter()
+            .flat_map(|(generic, ifaces)| {
+                let slot = generic_slot(*generic);
+
+                ifaces.iter().map(move |&iface_def| {
+                    let name = self.def_name(iface_def).unwrap_or_default();
+                    format!("{slot}:{name}")
+                })
+            })
+            .collect();
+
+        bounds.sort();
+
+        (args, bounds)
+    }
+
+    fn check_duplicate_methods(&mut self, module: &HirModule) {
+        let mut entries: Vec<MethodSignatureEntry> = Vec::new();
+
+        for decl in &module.decls {
+            match &decl.kind {
+                HirDeclKind::Struct(s) => {
+                    for method in &s.methods {
+                        if let HirDeclKind::Fn(f) = &method.kind {
+                            entries.push(MethodSignatureEntry {
+                                object: decl.def_id,
+                                name: f.name.0,
+                                args: Vec::new(),
+                                bounds: Vec::new(),
+                                source: method.source.clone(),
+                                span: f.name.1,
+                            });
+                        }
+                    }
+                }
+
+                HirDeclKind::Enum(e) => {
+                    for method in &e.methods {
+                        if let HirDeclKind::Fn(f) = &method.kind {
+                            entries.push(MethodSignatureEntry {
+                                object: decl.def_id,
+                                name: f.name.0,
+                                args: Vec::new(),
+                                bounds: Vec::new(),
+                                source: method.source.clone(),
+                                span: f.name.1,
+                            });
+                        }
+                    }
+                }
+
+                HirDeclKind::Implement(imp) if imp.interface.is_none() => {
+                    let Some(object) = imp.object else { continue };
+
+                    let Some(entry) = self
+                        .result
+                        .inherent_impls
+                        .get(&object)
+                        .and_then(|entries| {
+                            entries.iter().find(|entry| {
+                                imp.methods
+                                    .iter()
+                                    .any(|m| entry.methods.contains(&m.def_id))
+                            })
+                        })
+                        .cloned()
+                    else {
+                        continue;
+                    };
+
+                    let (args, bounds) = self.impl_entry_signature(&entry);
+
+                    for method in &imp.methods {
+                        if let HirDeclKind::Fn(f) = &method.kind {
+                            entries.push(MethodSignatureEntry {
+                                object,
+                                name: f.name.0,
+                                args: args.clone(),
+                                bounds: bounds.clone(),
+                                source: method.source.clone(),
+                                span: f.name.1,
+                            });
+                        }
+                    }
+                }
+
+                _ => {}
+            }
+        }
+
+        let mut seen: HashMap<(DefId, Spur, Vec<String>, Vec<String>), ()> = HashMap::default();
+
+        for entry in entries {
+            let key = (entry.object, entry.name, entry.args, entry.bounds);
+
+            if seen.insert(key, ()).is_some() {
+                let object = self.def_name(entry.object).unwrap_or_default().into();
+                let method: smol_str::SmolStr = self.interner.borrow().resolve(&entry.name).into();
+
+                self.report(TypeError::DuplicateMethod {
+                    object,
+                    method,
+                    src: entry.source.src(),
+                    span: entry.span,
+                });
+            }
+        }
     }
 
     fn for_iterator_elem(

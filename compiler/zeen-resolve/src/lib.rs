@@ -340,8 +340,8 @@ mod tests {
     fn implement_names_tie_interface_and_object() {
         let fx = resolve_ok("struct Foo {} implement Foo : Copy {}");
 
-        let is_user_entry = |(iface, _): &(Resolution, Resolution)| match iface {
-            Resolution::Def(def_id) => {
+        let is_user_entry = |(iface, _): &(Option<Resolution>, Resolution)| match iface {
+            Some(Resolution::Def(def_id)) => {
                 fx.resolution
                     .defs
                     .get(def_id)
@@ -359,7 +359,7 @@ mod tests {
             .filter(|entry| is_user_entry(entry))
             .collect();
         assert_eq!(entries.len(), 1);
-        assert!(matches!(entries[0].0, Resolution::Def(_)));
+        assert!(matches!(entries[0].0, Some(Resolution::Def(_))));
         assert!(matches!(entries[0].1, Resolution::Def(_)));
     }
 

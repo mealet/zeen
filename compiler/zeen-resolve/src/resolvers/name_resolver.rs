@@ -925,20 +925,25 @@ impl<'ctx> NameResolver {
                     .map(|gs| gs.iter().map(|g| g.name.0).collect())
                     .unwrap_or_default();
 
-                let interface_ambiguous = self.check_ambiguous_type(interface.0, interface.1);
-                let interface_def = if interface_ambiguous {
-                    None
-                } else {
-                    self.table.lookup_type(interface.0)
+                let interface_ambiguous = interface
+                    .map(|(name, span)| self.check_ambiguous_type(name, span))
+                    .unwrap_or(false);
+
+                let interface_def = match interface {
+                    Some((name, _)) if !interface_ambiguous => self.table.lookup_type(name),
+                    _ => None,
                 };
 
-                if interface_def.is_none() && !interface_ambiguous {
-                    let interface_name = self.interner_resolve(&interface.0);
+                if let Some((name, span)) = interface
+                    && interface_def.is_none()
+                    && !interface_ambiguous
+                {
+                    let interface_name = self.interner_resolve(&name);
 
                     self.report(ResolveError::UnresolvedType {
                         name: interface_name,
                         src: decl.source.src(),
-                        span: interface.1,
+                        span,
                     });
                 }
 
@@ -963,9 +968,7 @@ impl<'ctx> NameResolver {
                 self.result.implement_names.insert(
                     NodeKey::from_decl(decl),
                     (
-                        interface_def
-                            .map(Resolution::Def)
-                            .unwrap_or(Resolution::Error),
+                        interface_def.map(Resolution::Def),
                         object_def.map(Resolution::Def).unwrap_or(Resolution::Error),
                     ),
                 );
