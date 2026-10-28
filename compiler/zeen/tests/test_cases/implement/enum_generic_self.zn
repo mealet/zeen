@@ -1,0 +1,30 @@
+enum Maybe[T] {
+  Nothing,
+  Just: T,
+}
+
+implement[T] Maybe[T] {
+  pub fn cleared(self) Maybe[T] {
+    return switch (self) {
+      .Nothing => Maybe.Nothing,
+      .Just(_) => Maybe.Nothing,
+    };
+  }
+
+  pub fn or_default(self, default: T) Maybe[T] {
+    return switch (self) {
+      .Nothing => Maybe.Just(default),
+      .Just(value) => Maybe.Just(value),
+    };
+  }
+
+  pub fn is_nothing(*const self) bool {
+    return @enumTag(self) == 0;
+  }
+}
+
+fn main() {
+  let empty: Maybe[i32] = Maybe.Nothing;
+  let full: Maybe[i32] = Maybe.Just(7);
+  @println("cleared={} empty={} restored={}", empty.cleared().is_nothing(), full.cleared().is_nothing(), @enumTag(empty.or_default(3)));
+}

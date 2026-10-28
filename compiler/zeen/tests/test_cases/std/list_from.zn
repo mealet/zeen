@@ -1,0 +1,27 @@
+use std.collections.list;
+use std.string;
+
+struct Payload {
+  pub value: i32,
+}
+
+implement Clone : Payload {
+  pub fn clone(*const self) Payload {
+    return Payload { .value = self.value };
+  }
+}
+
+fn main() i32 {
+  let nums = List.from([1, 2, 3][..]);
+  @println("copy-len={} first={}", nums.len(), nums.get(0).unwrap());
+
+  let text = String.from("abc");
+  let chars = text.to_list();
+  @println("chars={}", chars.len());
+
+  let payloads = [Payload { .value = 7 }, Payload { .value = 8 }];
+  let cloned = List.from(payloads[..]);
+  @println("clone-len={} first={}", cloned.len(), cloned.get_ptr(0).unwrap().value);
+
+  return 0;
+}

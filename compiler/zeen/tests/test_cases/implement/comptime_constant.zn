@@ -1,0 +1,20 @@
+comptime Offset = 10;
+
+struct Counter {
+  value: i32,
+}
+
+implement Counter {
+  pub fn bumped(*const self) i32 {
+    return self.value + Offset;
+  }
+
+  pub fn scaled(*const self) i32 {
+    return self.value * Offset;
+  }
+}
+
+fn main() {
+  let counter = Counter { .value = 4 };
+  @println("bumped={} scaled={}", counter.bumped(), counter.scaled());
+}
