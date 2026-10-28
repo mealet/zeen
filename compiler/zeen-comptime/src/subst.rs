@@ -321,6 +321,75 @@ impl<'arena> Interp<'arena> {
                 }
             }
 
+            DeclarationKind::ImplementDecl {
+                interface,
+                object,
+                generics,
+                methods,
+            } => {
+                self.push_shadow();
+                if let Some(generics) = generics {
+                    for generic in generics.iter() {
+                        self.bind_shadow(generic.name.0);
+                    }
+                }
+
+                let (object_name, object_span, object_args) = object;
+                let mut new_object_args: Vec<&'arena TypeExpr<'arena>> =
+                    Vec::with_capacity(object_args.len());
+                let mut changed = false;
+
+                for slot in object_args.iter() {
+                    match self.substitute_type(module, slot) {
+                        Ok(None) => new_object_args.push(*slot),
+                        Ok(Some(new_slot)) => {
+                            changed = true;
+                            new_object_args.push(new_slot);
+                        }
+                        Err(errors) => {
+                            self.pop_shadow();
+                            return Err(errors);
+                        }
+                    }
+                }
+
+                let mut new_methods: Vec<&'arena Declaration<'arena>> =
+                    Vec::with_capacity(methods.len());
+                for method in methods.iter() {
+                    match self.substitute_decl(module, method) {
+                        Ok(None) => new_methods.push(*method),
+                        Ok(Some(new_method)) => {
+                            changed = true;
+                            new_methods.push(new_method);
+                        }
+                        Err(errors) => {
+                            self.pop_shadow();
+                            return Err(errors);
+                        }
+                    }
+                }
+
+                self.pop_shadow();
+
+                if changed {
+                    Ok(Some(self.arena.alloc(Declaration {
+                        kind: DeclarationKind::ImplementDecl {
+                            interface: *interface,
+                            object: (
+                                *object_name,
+                                *object_span,
+                                self.arena.alloc_slice_copy(&new_object_args),
+                            ),
+                            generics: *generics,
+                            methods: self.arena.alloc_slice_copy(&new_methods),
+                        },
+                        source: decl.source.clone(),
+                    })))
+                } else {
+                    Ok(None)
+                }
+            }
+
             DeclarationKind::ExternVar { name, ty, is_pub } => {
                 self.push_shadow();
 
