@@ -197,16 +197,23 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    pub fn finish(mut self) -> Result<TypeCheckResult, Vec<TypeError>> {
+    pub fn finish(self) -> Result<TypeCheckResult, Vec<TypeError>> {
+        let (result, errors) = self.finish_with_errors();
+
+        if errors.is_empty() {
+            Ok(result)
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn finish_with_errors(mut self) -> (TypeCheckResult, Vec<TypeError>) {
         self.result.struct_generics = self.struct_generics;
         self.result.enum_variants = self.enum_variants;
         self.result.enum_generics = self.enum_generics;
         self.result.interface_registry = self.interface_registry.into_name_map();
 
-        if self.errors.is_empty() {
-            return Ok(self.result);
-        }
-        Err(self.errors)
+        (self.result, self.errors)
     }
 
     // --> Helpers

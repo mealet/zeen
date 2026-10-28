@@ -481,9 +481,13 @@ fn push_decl_symbols(
                 push_decl_symbols(content, interner, method, Some(iface_name.clone()), out);
             }
         }
-        DeclarationKind::ImplementDecl { methods, .. } => {
+        DeclarationKind::ImplementDecl {
+            object, methods, ..
+        } => {
+            let object_name = resolve(&object.0);
+
             for method in *methods {
-                push_decl_symbols(content, interner, method, container.clone(), out);
+                push_decl_symbols(content, interner, method, Some(object_name.clone()), out);
             }
         }
         DeclarationKind::Alias(alias) => {
@@ -578,6 +582,40 @@ mod tests {
         let add = symbols.iter().find(|symbol| symbol.name == "add").unwrap();
         assert_eq!(add.kind, SymbolKind::FUNCTION);
         assert!(add.detail.as_deref().unwrap_or("").contains("fn add"));
+    }
+
+    const IMPLEMENT_SAMPLE: &str = "struct Point {\n    pub x: i32,\n}\n\nimplement Point {\n    pub fn kind(*const self) i32 {\n        return self.x;\n    }\n}\n\nfn main() {\n    let p = Point { .x = 1 };\n    @println(\"{}\", p.kind());\n}\n";
+
+    #[test]
+    fn inherent_implement_methods_belong_to_type() {
+        let analysis = sample_analysis(IMPLEMENT_SAMPLE);
+        let symbols = document_symbols(IMPLEMENT_SAMPLE, &analysis);
+        let top = names(&symbols);
+
+        assert!(top.contains(&"Point"));
+        assert!(!top.contains(&"kind"));
+
+        let point = symbols
+            .iter()
+            .find(|symbol| symbol.name == "Point")
+            .unwrap();
+        let kids = names(point.children.as_deref().unwrap_or(&[]));
+        assert!(kids.contains(&"kind"));
+
+        let dir =
+            std::env::temp_dir().join(format!("zeen-lsp-symbols-implement-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.zn"), IMPLEMENT_SAMPLE).unwrap();
+
+        let mut index = SymbolIndex::default();
+        index.refresh(std::slice::from_ref(&dir));
+
+        let found = index.query("kind");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1.container.as_deref(), Some("Point"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

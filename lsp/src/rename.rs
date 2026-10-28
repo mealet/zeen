@@ -415,6 +415,22 @@ mod tests {
         assert!(!result.contains("get"));
     }
 
+    const IMPLEMENT_SAMPLE: &str = "struct Point {\n    pub x: i32,\n}\n\nimplement Point {\n    pub fn kind(*const self) i32 {\n        return self.x;\n    }\n}\n\nfn main() {\n    let p = Point { .x = 1 };\n    @println(\"{}\", p.kind());\n}\n";
+
+    #[test]
+    fn renames_inherent_implement_method() {
+        let fixture = Fixture::check(&[("main", IMPLEMENT_SAMPLE)]);
+        let docs = fixture.docs();
+        let offset = fixture.offset(0, "p.kind()") + "p.".len();
+        let edits = rename_edits(&docs, &fixture.uris[0], offset, "rank");
+
+        let result = applied(&fixture.texts[0], &edits[&fixture.uris[0]]);
+
+        assert!(result.contains("fn rank(*const self) i32"), "{result}");
+        assert!(result.contains("p.rank()"), "{result}");
+        assert!(!result.contains("kind"), "{result}");
+    }
+
     const FIELD_SAMPLE: &str = "struct Box {\n    pub v: i32,\n}\n\nfn main() {\n    let b = Box { .v = 2 };\n    @println(\"{}\", b.v);\n}\n";
 
     #[test]
