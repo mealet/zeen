@@ -541,3 +541,55 @@ fn main() {
         "zeen::typechecker::assign_to_const",
     );
 }
+
+#[test]
+fn duplicate_inherent_method_reported() {
+    compile_fails(
+        "duplicate_inherent_method",
+        r#"
+struct Point {
+  pub x: i32,
+
+  pub fn len(*const self) i32 {
+    return 0;
+  }
+}
+
+implement Point {
+  pub fn len(*const self) i32 {
+    return 1;
+  }
+}
+
+fn main() {
+  let p = Point { .x = 1 };
+  @println("{}", p.len());
+}
+"#,
+        "zeen::typechecker::duplicate_method",
+    );
+}
+
+#[test]
+fn specialized_block_miss_reports_error() {
+    compile_fails(
+        "specialized_miss",
+        r#"
+struct Point[T] {
+  pub x: T,
+}
+
+implement Point[i32] {
+  pub fn kind(*const self) i32 {
+    return 1;
+  }
+}
+
+fn main() {
+  let p: Point[f64] = Point { .x = 1.5 };
+  @println("{}", p.kind());
+}
+"#,
+        "zeen::typechecker::unknown_field",
+    );
+}

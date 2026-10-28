@@ -1,0 +1,23 @@
+enum Shape {
+  circle: i32,
+  square: i32,
+}
+
+implement Shape {
+  pub fn area(*const self) i32 {
+    return switch (*self) {
+      .circle(r) => r * r,
+      .square(s) => s * s,
+    };
+  }
+
+  pub fn unit() Shape {
+    return Shape.square(1);
+  }
+}
+
+fn main() {
+  let c = Shape.circle(3);
+  @println("circle: {}", c.area());
+  @println("unit: {}", Shape.unit().area());
+}
