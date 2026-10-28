@@ -13,7 +13,7 @@ use miette::{NamedSource, SourceSpan};
 use smol_str::SmolStr;
 
 use crate::error::ResolveError;
-use zeen_ast::declarations::{Declaration, DeclarationKind};
+use zeen_ast::declarations::{Declaration, DeclarationKind, EnumVariantPayload};
 use zeen_ast::{
     Source,
     expressions::{Expression, ExpressionKind},
@@ -119,6 +119,14 @@ impl<'ctx> IncludeResolver<'ctx> {
         self.modules.contains_key(Path::new(raw))
     }
 
+    fn is_core_decl(&self, decl: &Declaration<'ctx>) -> bool {
+        let source = decl.source.src();
+
+        self.modules
+            .get(Path::new(source.name()))
+            .is_some_and(|module| module.is_core)
+    }
+
     fn get_or_intern(&self, value: &str) -> Spur {
         self.interner.borrow_mut().get_or_intern(value)
     }
@@ -155,6 +163,27 @@ impl<'ctx> IncludeResolver<'ctx> {
             } => {
                 for field in fields.iter() {
                     self.type_usage(field.ty, flags);
+                }
+                for method in methods.iter() {
+                    self.decl_usage(method, flags);
+                }
+            }
+
+            DeclarationKind::EnumDecl {
+                variants, methods, ..
+            } => {
+                for variant in variants.iter() {
+                    match &variant.payload {
+                        Some(EnumVariantPayload::Single(ty)) => {
+                            self.type_usage(ty, flags);
+                        }
+                        Some(EnumVariantPayload::Anonymous(fields)) => {
+                            for field in fields.iter() {
+                                self.type_usage(field.ty, flags);
+                            }
+                        }
+                        None => {}
+                    }
                 }
                 for method in methods.iter() {
                     self.decl_usage(method, flags);
@@ -628,7 +657,13 @@ impl<'ctx> IncludeResolver<'ctx> {
                 if module.is_core {
                     continue;
                 }
-                let missing = self.missing_synthetic_uses(module.decls);
+                let relevant: Vec<&'ctx Declaration<'ctx>> = module
+                    .decls
+                    .iter()
+                    .copied()
+                    .filter(|decl| !self.is_core_decl(decl))
+                    .collect();
+                let missing = self.missing_synthetic_uses(&relevant);
                 if missing.is_empty() {
                     continue;
                 }
