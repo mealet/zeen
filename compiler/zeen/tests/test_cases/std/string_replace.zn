@@ -1,0 +1,34 @@
+use std.string;
+
+fn main() {
+  let grow = String.from("aaaa");
+  grow.replace("a", "BBBB");
+  @println("{} |{}|", grow.len(), grow);
+  @println("{}", grow.contains_cstr("BBBB"));
+
+  let exact = String.from("ab");
+  exact.replace("ab", "12345678");
+  exact.push('!');
+  @println("{} |{}|", exact.len(), exact);
+
+  let shrink = String.from("hello world");
+  shrink.replace("world", "zeen");
+  @println("{} |{}|", shrink.len(), shrink);
+  @println("{}", shrink.find_cstr("zeen").unwrap_or(99));
+
+  let drop_all = String.from("a.b.c");
+  drop_all.replace(".", "");
+  @println("{} |{}|", drop_all.len(), drop_all);
+
+  let longer_from = String.from("abc");
+  longer_from.replace("abcd", "x");
+  @println("{} |{}|", longer_from.len(), longer_from);
+
+  let blank = String.from("");
+  blank.replace("a", "bb");
+  @println("{} |{}|", blank.len(), blank);
+
+  let none = String.from("abc");
+  none.replace("", "x");
+  @println("{} |{}|", none.len(), none);
+}

@@ -3,6 +3,8 @@ use std.collections.list;
 use std.io;
 use std.net;
 
+comptime MaxRequestBodySize = 8 * 1024 * 1024;
+
 /// HTTP request method.
 pub enum Method {
   Get,
@@ -866,21 +868,33 @@ fn trim_view(ptr: [*]const char, len: usize) []const char {
 }
 
 fn parse_digits(s: *const String) Option[usize] {
-  if ((*s).len() == 0) {
+  let len = (*s).len();
+
+  if (len == 0) {
     return Option.None;
   };
 
-  let num: u32 = 0;
+  let max: u64 = @as(u64, MaxRequestBodySize);
+  let cutoff = max / @as(u64, 10);
+  let cutlim = max % @as(u64, 10);
+
+  let num: u64 = 0;
   let i: usize = 0;
 
-  while (i < (*s).len()) {
-    let d = @as(u32, (*s).get(i).unwrap());
+  while (i < len) {
+    let d = @as(u64, (*s).get(i).unwrap());
 
-    if (d < @as(u32, '0') || d > @as(u32, '9')) {
+    if (d < @as(u64, '0') || d > @as(u64, '9')) {
       return Option.None;
     };
 
-    num = num * 10 + (d - @as(u32, '0'));
+    let digit = d - @as(u64, '0');
+
+    if (num > cutoff || (num == cutoff && digit > cutlim)) {
+      return Option.None;
+    };
+
+    num = num * 10 + digit;
     i += 1;
   };
 

@@ -377,30 +377,35 @@ pub struct String {
       return;
     };
 
-    let temp: *char = Allocator.alloc(src_len * 2 + 1);
+    let temp_capacity = src_len + (src_len / from_len) * to_len + 1;
+    let temp: *char = Allocator.alloc(@sizeof(char) * temp_capacity);
 
     let src_ptr = @as(*char, self.ptr);
     let temp_ptr = temp;
+    let left = src_len;
 
-    while (*src_ptr != '\0') {
-      if (strncmp(@as([*]char, src_ptr), from, from_len) == 0) {
+    while (left > 0) {
+      if (left >= from_len && strncmp(@as([*]char, src_ptr), from, from_len) == 0) {
         let _ = strncpy(@as([*]char, temp_ptr), to, to_len);
         temp_ptr += to_len;
         src_ptr += from_len;
+        left -= from_len;
       } else {
         *temp_ptr = *src_ptr;
         temp_ptr += 1;
         src_ptr += 1;
+        left -= 1;
       };
     };
 
     *temp_ptr = '\0';
 
     let new_len = @as(usize, temp_ptr - temp);
-    let new_capacity = next_capacity(new_len);
-    let new_ptr = @as([*]char, Allocator.realloc(@as(*void, self.ptr), new_capacity));
+    let new_capacity = next_capacity(new_len + 1);
+    let new_ptr = @as([*]char, Allocator.realloc(@as(*void, self.ptr), @sizeof(char) * new_capacity));
 
     let _ = strncpy(new_ptr, @as([*]const char, temp), new_len);
+    new_ptr[new_len] = '\0';
 
     Allocator.dealloc(temp);
 
