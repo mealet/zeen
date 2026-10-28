@@ -28,9 +28,6 @@ extern let __zeen_argv: [*][*]char;
 
 /// OS process: arguments, working directory and exit.
 pub struct Process {
-}
-
-implement Process {
   /// Number of process arguments, including the executable path.
   pub fn args_count() i32 {
     return __zeen_argc;

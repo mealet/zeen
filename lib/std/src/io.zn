@@ -168,9 +168,6 @@ implement IoError {
 
 /// Standard input handle.
 pub struct Stdin {
-}
-
-implement Stdin {
   /// Read one line, keeping trailing newline.
   pub fn read_line(buf: *String) bool {
     @os[windows] {
@@ -276,9 +273,6 @@ implement Stdin {
 
 /// Standard output handle.
 pub struct Stdout {
-}
-
-implement Stdout {
   /// Write string slice to output.
   pub fn write(value: []const char) void {
     let out = OutStream {};
@@ -298,9 +292,6 @@ implement Stdout {
 
 /// Standard error handle.
 pub struct Stderr {
-}
-
-implement Stderr {
   /// Write string slice to error output.
   pub fn write(value: []const char) void {
     let _ = fwrite(@as([*]const void, value.ptr), 1, value.len, stderr);
@@ -311,4 +302,3 @@ implement Stderr {
     let _ = fflush(stderr);
   }
 }
-

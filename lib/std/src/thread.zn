@@ -42,9 +42,6 @@ struct SpawnPacket[T] {
 
 /// OS thread spawning and joining.
 pub struct Thread {
-}
-
-implement Thread {
   /// Spawn a thread running `f`, move it there.
   pub fn spawn[T](f: FnOnce() T) JoinHandle[T] {
     let slot = @as(*T, Allocator.alloc(@sizeof(T)));

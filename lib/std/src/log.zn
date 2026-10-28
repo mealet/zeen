@@ -10,9 +10,6 @@ let level: Level = Level.Info;
 
 /// Leveled logging to stdout.
 pub struct Log {
-}
-
-implement Log {
   /// Messages below the level are skipped.
   pub fn set_level(l: Level) {
     level = l;
@@ -44,4 +41,3 @@ implement Log {
     Log.log(Level.Error, msg);
   }
 }
-

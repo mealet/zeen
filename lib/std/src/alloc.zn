@@ -2,9 +2,6 @@ use std.c.stdlib;
 
 /// Main standard library allocator
 pub struct Allocator {
-}
-
-implement Allocator {
   pub fn alloc(size: usize) *void {
     let ptr = G_ALLOC(size);
     

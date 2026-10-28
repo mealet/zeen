@@ -1,8 +1,5 @@
 /// RFC 4648 base64.
 pub struct Base64 {
-}
-
-implement Base64 {
   /// Encode bytes as base64 text.
   pub fn encode(data: []const char) String {
     let alphabet: []const char = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -102,4 +99,3 @@ implement Base64 {
     return Option.None;
   }
 }
-

@@ -114,9 +114,6 @@ implement Instant {
 
 /// Thread sleep.
 pub struct Time {
-}
-
-implement Time {
   /// Current system timestamp in seconds.
   pub fn now() i64 {
     return @as(i64, time(nullptr));
@@ -136,4 +133,3 @@ implement Time {
     }
   }
 }
-

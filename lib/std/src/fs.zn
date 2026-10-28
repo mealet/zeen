@@ -613,9 +613,6 @@ implement DirEntry {
 /// Static methods on purpose: plain free functions would collide
 /// with user names once imported.
 pub struct Fs {
-}
-
-implement Fs {
   /// Metadata of the file at `path`, following symlinks.
   ///
   /// Possible IoError variants:
@@ -971,4 +968,3 @@ implement Fs {
     }
   }
 }
-

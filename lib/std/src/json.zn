@@ -671,4 +671,3 @@ implement JsonParser {
     return code >= @as(u32, '0') && code <= @as(u32, '9');
   }
 }
-
