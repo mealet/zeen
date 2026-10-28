@@ -85,6 +85,8 @@ pub struct TypeChecker<'res> {
 
     type_names_as_values: HashMap<HirId, (DefId, Source)>,
 
+    pending_impl_checks: Vec<PendingImplCheck>,
+
     range_def: OnceCell<Option<DefId>>,
 }
 
@@ -113,6 +115,16 @@ struct InterfaceCallResult {
 struct MethodImplCtx {
     object_args: Vec<TypeId>,
     generic_bounds: Vec<(DefId, Vec<DefId>)>,
+}
+
+struct PendingImplCheck {
+    methods: Vec<DefId>,
+    iface_def: DefId,
+    object_def: DefId,
+    imp_generics: Vec<DefId>,
+    object_args: Vec<TypeId>,
+    is_specialized: bool,
+    source: Source,
 }
 
 struct MethodSignatureEntry {
@@ -193,6 +205,7 @@ impl<'res> TypeChecker<'res> {
             extracting_typename: false,
             speculating: false,
             type_names_as_values: HashMap::default(),
+            pending_impl_checks: Vec::new(),
             range_def: OnceCell::new(),
         }
     }
@@ -288,6 +301,24 @@ impl<'res> TypeChecker<'res> {
 
         for decl in &module.decls {
             self.declare_signature(decl);
+        }
+
+        let pending_impl_checks = std::mem::take(&mut self.pending_impl_checks);
+
+        for pending in pending_impl_checks {
+            let sig_ctx = ImplSigCtx {
+                imp_generics: &pending.imp_generics,
+                object_args: &pending.object_args,
+                is_specialized: pending.is_specialized,
+            };
+
+            self.check_implement_matches_interface(
+                &pending.methods,
+                pending.iface_def,
+                pending.object_def,
+                &sig_ctx,
+                &((pending.source.span, pending.source.src()).into()),
+            );
         }
 
         for decl in &module.decls {
@@ -800,21 +831,15 @@ impl<'res> TypeChecker<'res> {
             });
         }
 
-        let imp_generics: Vec<DefId> = imp.generics.iter().map(|g| g.def_id).collect();
-
-        let sig_ctx = ImplSigCtx {
-            imp_generics: &imp_generics,
-            object_args: &object_args,
-            is_specialized,
-        };
-
-        self.check_implement_matches_interface(
-            imp,
+        self.pending_impl_checks.push(PendingImplCheck {
+            methods: imp.methods.iter().map(|method| method.def_id).collect(),
             iface_def,
             object_def,
-            &sig_ctx,
-            &((source.span, source.src()).into()),
-        );
+            imp_generics: imp.generics.iter().map(|g| g.def_id).collect(),
+            object_args,
+            is_specialized,
+            source,
+        });
     }
 
     fn substitute_impl_self_types(
@@ -1550,10 +1575,13 @@ impl<'res> TypeChecker<'res> {
             } else {
                 self.struct_generics.get(&sd).cloned().unwrap_or_default()
             };
-            for generic in owner_generics {
-                generic_bindings
-                    .entry(generic)
-                    .or_insert_with(|| self.result.interner.intern(Type::GenericParam(generic)));
+            for (idx, generic) in owner_generics.iter().copied().enumerate() {
+                let binding = impl_ctx
+                    .and_then(|ictx| ictx.object_args.get(idx))
+                    .copied()
+                    .unwrap_or_else(|| self.result.interner.intern(Type::GenericParam(generic)));
+
+                generic_bindings.entry(generic).or_insert(binding);
 
                 if let Some(bounds) = self.all_generic_bounds.get(&generic).cloned() {
                     generic_bounds.entry(generic).or_insert(bounds);
@@ -6226,6 +6254,16 @@ impl<'res> TypeChecker<'res> {
                     def_id: e_def,
                     generic_args: e_args,
                 },
+            )
+            | (
+                Type::Enum {
+                    def_id: p_def,
+                    generic_args: p_args,
+                },
+                Type::Enum {
+                    def_id: e_def,
+                    generic_args: e_args,
+                },
             ) if p_def == e_def => {
                 for (p, e) in p_args.iter().zip(e_args.iter()) {
                     self.seed_inference_bindings(*p, *e, bindings);
@@ -7490,7 +7528,7 @@ impl<'res> TypeChecker<'res> {
 
     fn check_implement_matches_interface(
         &mut self,
-        imp: &zeen_hir::HirImplement,
+        impl_methods: &[DefId],
         iface_def: DefId,
         object_def: DefId,
         sig_ctx: &ImplSigCtx,
@@ -7536,9 +7574,9 @@ impl<'res> TypeChecker<'res> {
         };
 
         let mut impl_method_names: HashMap<String, DefId> = HashMap::default();
-        for method in &imp.methods {
-            if let Some(name) = self.def_name(method.def_id) {
-                impl_method_names.insert(name, method.def_id);
+        for method in impl_methods {
+            if let Some(name) = self.def_name(*method) {
+                impl_method_names.insert(name, *method);
             }
         }
 
@@ -7550,7 +7588,26 @@ impl<'res> TypeChecker<'res> {
             };
             matched_names.insert(method_name.clone());
 
-            match impl_method_names.get(&method_name) {
+            let inherent_method = self
+                .resolution
+                .defs
+                .get(&iface_method_def)
+                .map(|def| def.name)
+                .and_then(|key| {
+                    self.struct_methods
+                        .get(&object_def)
+                        .and_then(|methods| methods.get(&key))
+                })
+                .and_then(|candidates| {
+                    candidates
+                        .iter()
+                        .copied()
+                        .find(|candidate| !self.method_owning_interface.contains_key(candidate))
+                });
+
+            let explicit_method = impl_method_names.get(&method_name).copied();
+
+            match explicit_method.or(inherent_method) {
                 None => {
                     self.report(TypeError::InterfaceMethodMissing {
                         interface: self.def_name(iface_def).unwrap_or_default().into(),
@@ -7559,7 +7616,16 @@ impl<'res> TypeChecker<'res> {
                         span: source.span,
                     });
                 }
-                Some(&impl_method_def) => {
+                Some(impl_method_def) => {
+                    if explicit_method.is_none() {
+                        self.record_inherent_interface_method(
+                            object_def,
+                            iface_def,
+                            sig_ctx,
+                            impl_method_def,
+                        );
+                    }
+
                     self.check_method_signature_matches(
                         iface_def,
                         iface_method_def,
@@ -7579,6 +7645,29 @@ impl<'res> TypeChecker<'res> {
                     }
                 }
             }
+        }
+    }
+
+    fn record_inherent_interface_method(
+        &mut self,
+        object_def: DefId,
+        iface_def: DefId,
+        sig_ctx: &ImplSigCtx,
+        method_def: DefId,
+    ) {
+        let Some(entries) = self.result.impl_registry.get_mut(&(object_def, iface_def)) else {
+            return;
+        };
+
+        let Some(entry) = entries.iter_mut().find(|entry| {
+            entry.is_specialized == sig_ctx.is_specialized
+                && entry.object_args.as_slice() == sig_ctx.object_args
+        }) else {
+            return;
+        };
+
+        if !entry.methods.contains(&method_def) {
+            entry.methods.push(method_def);
         }
     }
 
