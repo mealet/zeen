@@ -9,6 +9,7 @@ use miette::SourceSpan;
 
 use zeen_ast::expressions::{Expression, ExpressionKind, Pattern};
 use zeen_ast::statements::{Statement, StatementKind};
+use zeen_ast::types::BuiltinShape;
 use zeen_ast::{Declaration, DeclarationKind};
 use zeen_hir::{
     HirDecl, HirDeclKind, HirEnumVariantPayload, HirExpr, HirExprKind, HirFn, HirGenericParam,
@@ -116,6 +117,14 @@ pub struct Analysis {
     pub implements: Vec<(DefId, DefId)>,
     pub interfaces: HashMap<String, Vec<Member>>,
     pub generic_bounds: HashMap<DefId, Vec<DefId>>,
+    pub builtin_targets: Vec<BuiltinTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltinTarget {
+    pub def: DefId,
+    pub name: String,
+    pub shape: BuiltinShape,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,6 +227,26 @@ impl Analysis {
             }
         }
 
+        let mut builtin_targets: Vec<BuiltinTarget> = resolution
+            .defs
+            .iter()
+            .filter_map(|(def, info)| {
+                let shape = match &info.kind {
+                    DefKind::Builtin(builtin) => BuiltinShape::Scalar(*builtin),
+                    DefKind::BuiltinShape(shape) => shape.clone(),
+                    _ => return None,
+                };
+
+                Some(BuiltinTarget {
+                    def: *def,
+                    name: interner.resolve(&info.name).to_string(),
+                    shape,
+                })
+            })
+            .collect();
+
+        builtin_targets.sort_by_key(|target| target.def.0);
+
         let mut walker = Walker {
             resolution,
             interner,
@@ -225,7 +254,10 @@ impl Analysis {
             filename,
             canonical,
             methods,
-            analysis: Analysis::default(),
+            analysis: Analysis {
+                builtin_targets,
+                ..Analysis::default()
+            },
             block_ends: Vec::new(),
             local_scopes: HashMap::new(),
         };

@@ -3,10 +3,11 @@ use std::collections::HashSet;
 use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, CompletionItemLabelDetails, InsertTextFormat,
 };
+use zeen_ast::types::BuiltinShape;
 use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
-use crate::analysis::{Analysis, Member, MemberKind, Role};
+use crate::analysis::{Analysis, BuiltinTarget, Member, MemberKind, Role};
 use crate::modules::{ModuleKind, ModuleMember};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -644,15 +645,25 @@ fn forward_ident(text: &str, offset: usize) -> &str {
 }
 
 fn find_type_def(analysis: &Analysis, text: &str, name: &str) -> Option<zeen_resolve::DefId> {
-    analysis.occurrences.iter().find_map(|occurrence| {
-        if occurrence.role == Role::Type
-            && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
-        {
-            occurrence.def
-        } else {
-            None
-        }
-    })
+    analysis
+        .occurrences
+        .iter()
+        .find_map(|occurrence| {
+            if occurrence.role == Role::Type
+                && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
+            {
+                occurrence.def
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            analysis
+                .builtin_targets
+                .iter()
+                .find(|target| target.name == name)
+                .map(|target| target.def)
+        })
 }
 
 fn find_variant_def(analysis: &Analysis, text: &str, name: &str) -> Option<zeen_resolve::DefId> {
@@ -763,24 +774,46 @@ pub fn dot_complete(
     let filter = forward_ident(text, dot_offset + 1).to_string();
     let mut static_context: Option<bool> = None;
     let mut type_name: Option<String> = None;
+    let mut raw_type: Option<String> = None;
 
-    if let Some(ty) = analysis
-        .access_types
-        .get(&(start, dot_offset - start))
-        .and_then(|ty| normalize_type_name(ty))
-    {
-        static_context = Some(false);
-        type_name = Some(ty);
-    } else if let Some(receiver) = analysis.at(start) {
-        if receiver.role == Role::Type {
-            if let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) {
-                static_context = Some(true);
-                type_name = Some(name.to_string());
-            }
-        } else if let Some(ty) = receiver.ty.as_deref().and_then(normalize_type_name) {
+    if let Some(rendered) = analysis.access_types.get(&(start, dot_offset - start)) {
+        raw_type = Some(rendered.clone());
+
+        if let Some(ty) = normalize_type_name(rendered) {
             static_context = Some(false);
             type_name = Some(ty);
         }
+    } else if let Some(receiver) = analysis.at(start) {
+        if receiver.role == Role::Type {
+            let builtin = receiver.def.and_then(|def| {
+                analysis
+                    .builtin_targets
+                    .iter()
+                    .find(|target| target.def == def)
+            });
+
+            if let Some(target) = builtin {
+                static_context = Some(true);
+                type_name = Some(target.name.clone());
+            } else if let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) {
+                static_context = Some(true);
+                type_name = Some(name.to_string());
+            }
+        } else {
+            raw_type = receiver.ty.clone();
+
+            if let Some(ty) = receiver.ty.as_deref().and_then(normalize_type_name) {
+                static_context = Some(false);
+                type_name = Some(ty);
+            }
+        }
+    } else if analysis
+        .builtin_targets
+        .iter()
+        .any(|target| target.name == receiver_name)
+    {
+        static_context = Some(true);
+        type_name = Some(receiver_name.to_string());
     }
 
     let lookup = type_name.as_deref().unwrap_or(receiver_name).to_string();
@@ -794,17 +827,24 @@ pub fn dot_complete(
         return items;
     }
 
-    push_type_members(
-        analysis,
-        text,
-        &lookup,
-        static_context,
-        dot_offset,
-        &filter,
-        paths,
-        &mut items,
-        &mut seen,
-    );
+    let shape_matched = static_context != Some(true)
+        && raw_type.as_deref().is_some_and(|ty| {
+            push_builtin_target_members(analysis, ty, &filter, &mut items, &mut seen)
+        });
+
+    if !shape_matched {
+        push_type_members(
+            analysis,
+            text,
+            &lookup,
+            static_context,
+            dot_offset,
+            &filter,
+            paths,
+            &mut items,
+            &mut seen,
+        );
+    }
 
     items
 }
@@ -973,6 +1013,156 @@ fn push_type_members(
     }
 }
 
+fn push_builtin_target_members(
+    analysis: &Analysis,
+    ty: &str,
+    filter: &str,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) -> bool {
+    let ty = strip_pointer_wrappers(ty);
+    let mut matched: Vec<(&BuiltinTarget, bool)> = Vec::new();
+
+    for target in &analysis.builtin_targets {
+        if matches!(target.shape, BuiltinShape::Scalar(_)) {
+            continue;
+        }
+
+        let mut bindings = Vec::new();
+
+        if builtin_shape_matches(&target.shape, ty, &mut bindings) {
+            matched.push((target, target.shape.has_params()));
+        }
+    }
+
+    if matched.is_empty() {
+        return false;
+    }
+
+    matched.sort_by_key(|(target, has_params)| (*has_params, target.def.0));
+
+    for (target, _) in matched {
+        let Some(members) = analysis.members.get(&target.def) else {
+            continue;
+        };
+
+        for member in members {
+            if !keep_local_member(member, Some(false)) || !member.name.starts_with(filter) {
+                continue;
+            }
+
+            if !seen.insert(member.name.clone()) {
+                continue;
+            }
+
+            let rank = member_rank(false, Some(false));
+
+            items.push(CompletionItem {
+                label: member_label(&member.name, member.arity),
+                kind: Some(member_completion_kind(member)),
+                detail: member.signature.clone(),
+                filter_text: Some(member.name.clone()),
+                insert_text: Some(member.name.clone()),
+                sort_text: Some(format!("{rank}_{}", member.name)),
+                ..Default::default()
+            });
+        }
+    }
+
+    true
+}
+
+fn strip_pointer_wrappers(ty: &str) -> &str {
+    let mut name = ty.trim();
+
+    loop {
+        if name.starts_with('[') {
+            return name;
+        }
+
+        if let Some(rest) = name.strip_prefix("*const ") {
+            name = rest.trim_start();
+            continue;
+        }
+
+        if let Some(rest) = name.strip_prefix('*') {
+            name = rest.trim_start();
+            continue;
+        }
+
+        return name;
+    }
+}
+
+fn builtin_shape_matches(
+    shape: &BuiltinShape,
+    ty: &str,
+    bindings: &mut Vec<(u32, String)>,
+) -> bool {
+    let ty = ty.trim();
+
+    match shape {
+        BuiltinShape::Scalar(builtin) => ty == builtin.to_string(),
+
+        BuiltinShape::Slice { element, is_const } => {
+            let Some(rest) = ty.strip_prefix("[]") else {
+                return false;
+            };
+
+            let (found_const, rest) = strip_const(rest);
+
+            found_const == *is_const && builtin_shape_matches(element, rest, bindings)
+        }
+
+        BuiltinShape::ManyPointer { element, is_const } => {
+            let Some(rest) = ty.strip_prefix("[*]") else {
+                return false;
+            };
+
+            let (found_const, rest) = strip_const(rest);
+
+            found_const == *is_const && builtin_shape_matches(element, rest, bindings)
+        }
+
+        BuiltinShape::Array { element, len } => {
+            let Some(rest) = ty.strip_prefix('[') else {
+                return false;
+            };
+
+            let Some(close) = rest.find(']') else {
+                return false;
+            };
+
+            let digits = &rest[..close];
+
+            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                return false;
+            }
+
+            if digits.parse::<u64>() != Ok(*len) {
+                return false;
+            }
+
+            builtin_shape_matches(element, &rest[close + 1..], bindings)
+        }
+
+        BuiltinShape::Param(index) => match bindings.iter().find(|(slot, _)| slot == index) {
+            Some((_, bound)) => bound == ty,
+            None => {
+                bindings.push((*index, ty.to_string()));
+                true
+            }
+        },
+    }
+}
+
+fn strip_const(ty: &str) -> (bool, &str) {
+    match ty.trim_start().strip_prefix("const ") {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, ty.trim_start()),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallTrigger {
     pub callee: (usize, usize),
@@ -1091,28 +1281,34 @@ pub fn call_complete(
     trigger: CallTrigger,
     paths: ResolvePaths<'_>,
 ) -> Vec<CompletionItem> {
-    let Some(ty) = analysis
-        .call_types
-        .get(&trigger.callee)
-        .and_then(|ty| normalize_type_name(ty))
-    else {
+    let Some(rendered) = analysis.call_types.get(&trigger.callee) else {
         return Vec::new();
     };
 
     let filter = forward_ident(text, trigger.dot + 1).to_string();
     let mut items = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    push_type_members(
-        analysis,
-        text,
-        &ty,
-        Some(false),
-        trigger.dot,
-        &filter,
-        paths,
-        &mut items,
-        &mut seen,
-    );
+
+    let shape_matched =
+        push_builtin_target_members(analysis, rendered, &filter, &mut items, &mut seen);
+
+    if !shape_matched {
+        let Some(ty) = normalize_type_name(rendered) else {
+            return items;
+        };
+
+        push_type_members(
+            analysis,
+            text,
+            &ty,
+            Some(false),
+            trigger.dot,
+            &filter,
+            paths,
+            &mut items,
+            &mut seen,
+        );
+    }
 
     items
 }
@@ -2869,5 +3065,80 @@ mod tests {
 
         assert!(names.contains(&"kind()"));
         assert!(!names.contains(&"x"));
+    }
+
+    const BUILTIN_SAMPLE: &str = "implement builtin i32 {\n    fn is_even(*const self) bool {\n        return (*self) % 2 == 0;\n    }\n\n    fn bump(*self) void {\n        *self += 1;\n    }\n\n    fn max_value() i32 {\n        return 2147483647;\n    }\n}\n\nfn main() {\n    let n: i32 = 4;\n    let p: *i32 = &n;\n    n.bump();\n    @println(\"{} {} {}\", n.is_even(), p.is_even(), i32.max_value());\n}\n";
+
+    #[test]
+    fn builtin_value_dot_completes_methods() {
+        let analysis = sample_analysis(BUILTIN_SAMPLE);
+        let dot = BUILTIN_SAMPLE.find("n.is_even").unwrap() + "n".len();
+        let items = dot_complete(BUILTIN_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["is_even()"]);
+
+        let even = items.iter().find(|item| item.label == "is_even()").unwrap();
+        assert_eq!(even.kind, Some(CompletionItemKind::METHOD));
+    }
+
+    #[test]
+    fn builtin_pointer_receiver_dot_completes_methods() {
+        let analysis = sample_analysis(BUILTIN_SAMPLE);
+        let dot = BUILTIN_SAMPLE.find("p.is_even").unwrap() + "p".len();
+        let items = dot_complete(BUILTIN_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["is_even()"]);
+    }
+
+    #[test]
+    fn builtin_static_dot_completes_functions() {
+        let analysis = sample_analysis(BUILTIN_SAMPLE);
+        let dot = BUILTIN_SAMPLE.find("i32.max_value").unwrap() + "i32".len();
+        let items = dot_complete(BUILTIN_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["max_value()"]);
+
+        let max = items
+            .iter()
+            .find(|item| item.label == "max_value()")
+            .unwrap();
+        assert_eq!(max.kind, Some(CompletionItemKind::FUNCTION));
+    }
+
+    const BUILTIN_SLICE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n\n    fn first(*const self) Option[T] {\n        return Option.Some((*self)[0]);\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{} {}\", slice.count(), slice.first().unwrap());\n}\n";
+
+    #[test]
+    fn builtin_slice_receiver_dot_completes_shape_methods() {
+        let analysis = sample_analysis(BUILTIN_SLICE_SAMPLE);
+        let dot = BUILTIN_SLICE_SAMPLE.find("slice.count").unwrap() + "slice".len();
+        let items = dot_complete(
+            BUILTIN_SLICE_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["count()"]);
+    }
+
+    const BUILTIN_ARRAY_SAMPLE: &str = "implement builtin [4]u8 {\n    fn total(*const self) u32 {\n        return @as(u32, (*self)[0]) + @as(u32, (*self)[1]);\n    }\n}\n\nfn main() {\n    let data: [4]u8 = [1, 2, 3, 4];\n    @println(\"{}\", data.total());\n}\n";
+
+    #[test]
+    fn builtin_array_receiver_dot_completes_shape_methods() {
+        let analysis = sample_analysis(BUILTIN_ARRAY_SAMPLE);
+        let dot = BUILTIN_ARRAY_SAMPLE.find("data.total").unwrap() + "data".len();
+        let items = dot_complete(
+            BUILTIN_ARRAY_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["total()"]);
     }
 }

@@ -370,14 +370,27 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                 }
             }
             DeclarationKind::ImplementDecl {
-                object, methods, ..
+                builtin,
+                object,
+                methods,
+                ..
             } => {
                 if resolve(&object.0) != type_name {
                     continue;
                 }
 
                 for method in *methods {
-                    if let DeclarationKind::FnDecl { name, params, .. } = &method.kind {
+                    if let DeclarationKind::FnDecl {
+                        name,
+                        params,
+                        is_pub,
+                        ..
+                    } = &method.kind
+                    {
+                        if builtin.is_some() && !is_pub {
+                            continue;
+                        }
+
                         members.push(ModuleMember {
                             module: module.to_string(),
                             name: resolve(&name.0),
@@ -777,5 +790,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(prefixed_modules(&dir, "root").is_empty());
+    }
+
+    #[test]
+    fn imported_builtin_methods_respect_privacy() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-builtin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lib.zn"),
+            "implement builtin i32 {\n    pub fn shown(*const self) bool {\n        return true;\n    }\n\n    fn hidden(*const self) bool {\n        return false;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let members = type_members(&dir, &dir, None, &[], &["lib".to_string()], "i32");
+        let names: Vec<&str> = members.iter().map(|member| member.name.as_str()).collect();
+
+        assert!(names.contains(&"shown"));
+        assert!(!names.contains(&"hidden"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
