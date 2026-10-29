@@ -1,0 +1,7 @@
+use std.string;
+
+implement builtin bool {
+  pub fn to_string(self) String {
+    return @format("{}", self);
+  }
+}

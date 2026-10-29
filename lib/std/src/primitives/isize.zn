@@ -1,0 +1,557 @@
+use std.primitives;
+use std.string;
+
+implement builtin isize {
+  pub fn bits() u32 {
+    return @as(u32, 8 * @sizeof(isize));
+  }
+
+  pub fn min_value() isize {
+    let max = isize.max_value();
+    return 0 - max - 1;
+  }
+
+  pub fn max_value() isize {
+    return @as(isize, @as(usize, ~@as(usize, 0)) >> 1);
+  }
+
+  pub fn count_ones(self) u32 {
+    let v = @as(usize, self);
+    let count: u32 = 0;
+    while (v != 0) {
+      v = v & (v - 1);
+      count += 1;
+    };
+    return count;
+  }
+
+  pub fn count_zeros(self) u32 {
+    return isize.bits() - self.count_ones();
+  }
+
+  pub fn leading_zeros(self) u32 {
+    let v = @as(usize, self);
+    if (v == 0) { return isize.bits(); };
+    let mask: usize = @as(usize, 1) << @as(usize, isize.bits() - 1);
+    let count: u32 = 0;
+    while ((v & mask) == 0) {
+      count += 1;
+      mask = mask >> 1;
+    };
+    return count;
+  }
+
+  pub fn trailing_zeros(self) u32 {
+    let v = @as(usize, self);
+    if (v == 0) { return isize.bits(); };
+    let count: u32 = 0;
+    while ((v & 1) == 0) {
+      count += 1;
+      v = v >> 1;
+    };
+    return count;
+  }
+
+  pub fn leading_ones(self) u32 {
+    let inverted = ~self;
+    return inverted.leading_zeros();
+  }
+
+  pub fn trailing_ones(self) u32 {
+    let inverted = ~self;
+    return inverted.trailing_zeros();
+  }
+
+  pub fn rotate_left(self, n: u32) isize {
+    let bits = isize.bits();
+    let shift = n % bits;
+    if (shift == 0) { return self; };
+    let v = @as(usize, self);
+    return @as(isize, (v << @as(usize, shift)) | (v >> @as(usize, bits - shift)));
+  }
+
+  pub fn rotate_right(self, n: u32) isize {
+    let bits = isize.bits();
+    let shift = n % bits;
+    if (shift == 0) { return self; };
+    let v = @as(usize, self);
+    return @as(isize, (v >> @as(usize, shift)) | (v << @as(usize, bits - shift)));
+  }
+
+  pub fn swap_bytes(self) isize {
+    let v = @as(usize, self);
+    let out: usize = 0;
+    let i: u32 = 0;
+    while (i < 8) {
+      out = (out << 8) | (v & 0xFF);
+      v = v >> 8;
+      i += 1;
+    };
+    return @as(isize, out);
+  }
+
+  pub fn reverse_bits(self) isize {
+    let v = @as(usize, self);
+    let out: usize = 0;
+    let i: u32 = 0;
+    while (i < isize.bits()) {
+      out = (out << 1) | (v & 1);
+      v = v >> 1;
+      i += 1;
+    };
+    return @as(isize, out);
+  }
+
+  pub fn checked_add(self, rhs: isize) Option[isize] {
+    if (rhs > 0 && self > isize.max_value() - rhs) { return Option.None; };
+    if (rhs < 0 && self < isize.min_value() - rhs) { return Option.None; };
+    return Option.Some(self + rhs);
+  }
+
+  pub fn checked_sub(self, rhs: isize) Option[isize] {
+    if (rhs > 0 && self < isize.min_value() + rhs) { return Option.None; };
+    if (rhs < 0 && self > isize.max_value() + rhs) { return Option.None; };
+    return Option.Some(self - rhs);
+  }
+
+  pub fn checked_mul(self, rhs: isize) Option[isize] {
+    if (self == 0 || rhs == 0) { return Option.Some(@as(isize, 0)); };
+    if (self == -1 && rhs == isize.min_value()) { return Option.None; };
+    if (rhs == -1 && self == isize.min_value()) { return Option.None; };
+    let product = self * rhs;
+    if (product / rhs != self) { return Option.None; };
+    return Option.Some(product);
+  }
+
+  pub fn checked_div(self, rhs: isize) Option[isize] {
+    if (rhs == 0) { return Option.None; };
+    if (self == isize.min_value() && rhs == -1) { return Option.None; };
+    return Option.Some(self / rhs);
+  }
+
+  pub fn checked_rem(self, rhs: isize) Option[isize] {
+    if (rhs == 0) { return Option.None; };
+    if (self == isize.min_value() && rhs == -1) { return Option.None; };
+    return Option.Some(self % rhs);
+  }
+
+  pub fn checked_neg(self) Option[isize] {
+    if (self == isize.min_value()) { return Option.None; };
+    return Option.Some(0 - self);
+  }
+
+  pub fn checked_abs(self) Option[isize] {
+    if (self == isize.min_value()) { return Option.None; };
+    if (self < 0) { return Option.Some(0 - self); };
+    return Option.Some(self);
+  }
+
+  pub fn checked_pow(self, exp: u32) Option[isize] {
+    let result: isize = 1;
+    let base = self;
+    let e = exp;
+    while (e > 0) {
+      if ((e & 1) == 1) {
+        let next = result.checked_mul(base);
+        if (next.is_none()) { return Option.None; };
+        result = next.unwrap();
+      };
+      e = e >> 1;
+      if (e > 0) {
+        let squared = base.checked_mul(base);
+        if (squared.is_none()) { return Option.None; };
+        base = squared.unwrap();
+      };
+    };
+    return Option.Some(result);
+  }
+
+  pub fn checked_shl(self, rhs: u32) Option[isize] {
+    if (rhs >= isize.bits()) { return Option.None; };
+    return Option.Some(self << @as(isize, rhs));
+  }
+
+  pub fn checked_shr(self, rhs: u32) Option[isize] {
+    if (rhs >= isize.bits()) { return Option.None; };
+    return Option.Some(self >> @as(isize, rhs));
+  }
+
+  pub fn wrapping_add(self, rhs: isize) isize {
+    return self + rhs;
+  }
+
+  pub fn wrapping_sub(self, rhs: isize) isize {
+    return self - rhs;
+  }
+
+  pub fn wrapping_mul(self, rhs: isize) isize {
+    return self * rhs;
+  }
+
+  pub fn wrapping_div(self, rhs: isize) isize {
+    return self / rhs;
+  }
+
+  pub fn wrapping_rem(self, rhs: isize) isize {
+    return self % rhs;
+  }
+
+  pub fn wrapping_pow(self, exp: u32) isize {
+    let result: isize = 1;
+    let base = self;
+    let e = exp;
+    while (e > 0) {
+      if ((e & 1) == 1) { result = result * base; };
+      e = e >> 1;
+      if (e > 0) { base = base * base; };
+    };
+    return result;
+  }
+
+  pub fn wrapping_shl(self, rhs: u32) isize {
+    let shift = rhs % isize.bits();
+    return self << @as(isize, shift);
+  }
+
+  pub fn wrapping_shr(self, rhs: u32) isize {
+    let shift = rhs % isize.bits();
+    return self >> @as(isize, shift);
+  }
+
+  pub fn wrapping_neg(self) isize {
+    return 0 - self;
+  }
+
+  pub fn wrapping_abs(self) isize {
+    if (self < 0) { return 0 - self; };
+    return self;
+  }
+
+  pub fn overflowing_add(self, rhs: isize) Overflowing[isize] {
+    let sum = self + rhs;
+    let overflowed = (rhs > 0 && sum < self) || (rhs < 0 && sum > self);
+    return Overflowing { .value = sum, .overflowed = overflowed };
+  }
+
+  pub fn overflowing_sub(self, rhs: isize) Overflowing[isize] {
+    let difference = self - rhs;
+    let overflowed = (rhs > 0 && difference > self) || (rhs < 0 && difference < self);
+    return Overflowing { .value = difference, .overflowed = overflowed };
+  }
+
+  pub fn overflowing_mul(self, rhs: isize) Overflowing[isize] {
+    let product = self * rhs;
+    let overflowed = if (self == 0 || rhs == 0) {
+      false
+    } else if (rhs == -1) {
+      self == isize.min_value()
+    } else {
+      product / rhs != self
+    };
+    return Overflowing { .value = product, .overflowed = overflowed };
+  }
+
+  pub fn overflowing_neg(self) Overflowing[isize] {
+    let value = 0 - self;
+    return Overflowing { .value = value, .overflowed = self == isize.min_value() };
+  }
+
+  pub fn overflowing_abs(self) Overflowing[isize] {
+    let value = if (self < 0) { 0 - self } else { self };
+    return Overflowing { .value = value, .overflowed = self == isize.min_value() };
+  }
+
+  pub fn overflowing_pow(self, exp: u32) Overflowing[isize] {
+    let result: isize = 1;
+    let base = self;
+    let e = exp;
+    let overflowed = false;
+    while (e > 0) {
+      if ((e & 1) == 1) {
+        let next = result.overflowing_mul(base);
+        result = next.value;
+        overflowed = overflowed || next.overflowed;
+      };
+      e = e >> 1;
+      if (e > 0) {
+        let squared = base.overflowing_mul(base);
+        base = squared.value;
+        overflowed = overflowed || squared.overflowed;
+      };
+    };
+    return Overflowing { .value = result, .overflowed = overflowed };
+  }
+
+  pub fn overflowing_shl(self, rhs: u32) Overflowing[isize] {
+    let shift = rhs % isize.bits();
+    let value = self << @as(isize, shift);
+    return Overflowing { .value = value, .overflowed = rhs >= isize.bits() };
+  }
+
+  pub fn overflowing_shr(self, rhs: u32) Overflowing[isize] {
+    let shift = rhs % isize.bits();
+    let value = self >> @as(isize, shift);
+    return Overflowing { .value = value, .overflowed = rhs >= isize.bits() };
+  }
+
+  pub fn saturating_add(self, rhs: isize) isize {
+    let sum = self.checked_add(rhs);
+    if (sum.is_some()) { return sum.unwrap(); };
+    if (rhs > 0) { return isize.max_value(); };
+    return isize.min_value();
+  }
+
+  pub fn saturating_sub(self, rhs: isize) isize {
+    let difference = self.checked_sub(rhs);
+    if (difference.is_some()) { return difference.unwrap(); };
+    if (rhs > 0) { return isize.min_value(); };
+    return isize.max_value();
+  }
+
+  pub fn saturating_mul(self, rhs: isize) isize {
+    let product = self.checked_mul(rhs);
+    if (product.is_some()) { return product.unwrap(); };
+    if ((self > 0) == (rhs > 0)) { return isize.max_value(); };
+    return isize.min_value();
+  }
+
+  pub fn saturating_div(self, rhs: isize) isize {
+    return self / rhs;
+  }
+
+  pub fn saturating_neg(self) isize {
+    if (self == isize.min_value()) { return isize.max_value(); };
+    return 0 - self;
+  }
+
+  pub fn saturating_abs(self) isize {
+    if (self == isize.min_value()) { return isize.max_value(); };
+    if (self < 0) { return 0 - self; };
+    return self;
+  }
+
+  pub fn saturating_pow(self, exp: u32) isize {
+    let powered = self.checked_pow(exp);
+    if (powered.is_some()) { return powered.unwrap(); };
+    if ((exp & 1) == 1 && self < 0) { return isize.min_value(); };
+    return isize.max_value();
+  }
+
+  pub fn pow(self, exp: u32) isize {
+    return self.wrapping_pow(exp);
+  }
+
+  pub fn div_euclid(self, rhs: isize) isize {
+    let quotient = self / rhs;
+    let remainder = self % rhs;
+    if (remainder < 0) {
+      if (rhs > 0) { return quotient - 1; };
+      return quotient + 1;
+    };
+    return quotient;
+  }
+
+  pub fn rem_euclid(self, rhs: isize) isize {
+    let remainder = self % rhs;
+    if (remainder < 0) {
+      if (rhs > 0) { return remainder + rhs; };
+      return remainder - rhs;
+    };
+    return remainder;
+  }
+
+  pub fn checked_div_euclid(self, rhs: isize) Option[isize] {
+    let quotient = self.checked_div(rhs);
+    if (quotient.is_none()) { return Option.None; };
+    let remainder = self % rhs;
+    if (remainder < 0) {
+      if (rhs > 0) { return Option.Some(quotient.unwrap() - 1); };
+      return Option.Some(quotient.unwrap() + 1);
+    };
+    return quotient;
+  }
+
+  pub fn checked_rem_euclid(self, rhs: isize) Option[isize] {
+    let remainder = self.checked_rem(rhs);
+    if (remainder.is_none()) { return Option.None; };
+    if (remainder.unwrap() < 0) {
+      if (rhs > 0) { return Option.Some(remainder.unwrap() + rhs); };
+      return Option.Some(remainder.unwrap() - rhs);
+    };
+    return remainder;
+  }
+
+  pub fn div_ceil(self, rhs: isize) isize {
+    let quotient = self / rhs;
+    let remainder = self % rhs;
+    if ((remainder > 0 && rhs > 0) || (remainder < 0 && rhs < 0)) { return quotient + 1; };
+    return quotient;
+  }
+
+  pub fn next_multiple_of(self, rhs: isize) isize {
+    let remainder = self % rhs;
+    if (remainder == 0) { return self; };
+    if ((remainder > 0) == (rhs > 0)) { return self + (rhs - remainder); };
+    return self - remainder;
+  }
+
+  pub fn checked_next_multiple_of(self, rhs: isize) Option[isize] {
+    let remainder = self % rhs;
+    if (remainder == 0) { return Option.Some(self); };
+    if ((remainder > 0) == (rhs > 0)) { return self.checked_add(rhs - remainder); };
+    return self.checked_sub(remainder);
+  }
+
+  pub fn abs_diff(self, other: isize) usize {
+    if (self > other) { return @as(usize, self) - @as(usize, other); };
+    return @as(usize, other) - @as(usize, self);
+  }
+
+  pub fn midpoint(self, other: isize) isize {
+    let sign: usize = @as(usize, 1) << @as(usize, isize.bits() - 1);
+    let a = @as(usize, self) ^ sign;
+    let b = @as(usize, other) ^ sign;
+    let middle = (a & b) + ((a ^ b) >> 1);
+    return @as(isize, middle ^ sign);
+  }
+
+  pub fn min(self, other: isize) isize {
+    if (self < other) { return self; };
+    return other;
+  }
+
+  pub fn max(self, other: isize) isize {
+    if (self > other) { return self; };
+    return other;
+  }
+
+  pub fn clamp(self, min: isize, max: isize) isize {
+    if (self < min) { return min; };
+    if (self > max) { return max; };
+    return self;
+  }
+
+  pub fn abs(self) isize {
+    if (self < 0) { return 0 - self; };
+    return self;
+  }
+
+  pub fn unsigned_abs(self) usize {
+    if (self < 0) { return @as(usize, 0) - @as(usize, self); };
+    return @as(usize, self);
+  }
+
+  pub fn signum(self) isize {
+    if (self > 0) { return 1; };
+    if (self < 0) { return -1; };
+    return 0;
+  }
+
+  pub fn is_positive(self) bool {
+    return self > 0;
+  }
+
+  pub fn is_negative(self) bool {
+    return self < 0;
+  }
+
+  pub fn ilog2(self) u32 {
+    if (self <= 0) { @panic("ilog2: argument must be positive"); };
+    let value = @as(usize, self);
+    return isize.bits() - 1 - value.leading_zeros();
+  }
+
+  pub fn ilog10(self) u32 {
+    if (self <= 0) { @panic("ilog10: argument must be positive"); };
+    let value = @as(u64, self);
+    let count: u32 = 0;
+    while (value >= 10) {
+      value = value / 10;
+      count += 1;
+    };
+    return count;
+  }
+
+  pub fn ilog(self, base: u32) u32 {
+    if (self <= 0) { @panic("ilog: argument must be positive"); };
+    if (base < 2) { @panic("ilog: base must be at least 2"); };
+    let value = @as(u64, self);
+    let step = @as(u64, base);
+    let count: u32 = 0;
+    while (value >= step) {
+      value = value / step;
+      count += 1;
+    };
+    return count;
+  }
+
+  pub fn to_be(self) isize {
+    return self.swap_bytes();
+  }
+
+  pub fn to_le(self) isize {
+    return self;
+  }
+
+  pub fn from_be(value: isize) isize {
+    return value.swap_bytes();
+  }
+
+  pub fn from_le(value: isize) isize {
+    return value;
+  }
+
+  pub fn to_be_bytes(self) [8]u8 {
+    let v = @as(u64, self);
+    let bytes: [8]u8 = [0; 8];
+    let i: u32 = 0;
+    while (i < 8) {
+      bytes[@as(usize, i)] = @as(u8, v >> @as(u64, (7 - i) * 8));
+      i += 1;
+    };
+    return bytes;
+  }
+
+  pub fn to_le_bytes(self) [8]u8 {
+    let v = @as(u64, self);
+    let bytes: [8]u8 = [0; 8];
+    let i: u32 = 0;
+    while (i < 8) {
+      bytes[@as(usize, i)] = @as(u8, v >> @as(u64, i * 8));
+      i += 1;
+    };
+    return bytes;
+  }
+
+  pub fn to_ne_bytes(self) [8]u8 {
+    return self.to_le_bytes();
+  }
+
+  pub fn from_be_bytes(bytes: [8]u8) isize {
+    let v: u64 = 0;
+    let i: usize = 0;
+    while (i < 8) {
+      v = (v << 8) | @as(u64, bytes[i]);
+      i += 1;
+    };
+    return @as(isize, v);
+  }
+
+  pub fn from_le_bytes(bytes: [8]u8) isize {
+    let v: u64 = 0;
+    let i: usize = 0;
+    while (i < 8) {
+      v = v | (@as(u64, bytes[i]) << @as(u64, i * 8));
+      i += 1;
+    };
+    return @as(isize, v);
+  }
+
+  pub fn from_ne_bytes(bytes: [8]u8) isize {
+    return isize.from_le_bytes(bytes);
+  }
+
+  pub fn to_string(self) String {
+    return @format("{}", self);
+  }
+}
