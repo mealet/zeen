@@ -131,14 +131,15 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("provided `{provided}` is not a struct")]
-    #[diagnostic(severity(Error), code(zeen::typechecker::not_a_struct))]
-    NotAStruct {
-        provided: SmolStr,
+    #[error("`{object}` has no method `{name}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::unknown_method))]
+    UnknownMethod {
+        object: SmolStr,
+        name: SmolStr,
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label]
+        #[label("not found in `{object}`")]
         span: SourceSpan,
     },
 

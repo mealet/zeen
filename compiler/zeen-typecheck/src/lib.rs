@@ -3639,24 +3639,24 @@ impl<'res> TypeChecker<'res> {
                 } => (def_id, generic_args),
                 Type::Error => return self.result.interner.error(),
                 _ => {
-                    self.report(TypeError::NotAStruct {
-                        provided: self.display_type(obj_ty).into(),
-                        src: object.source.src(),
-                        span: field_span,
-                    });
-                    return self.result.interner.error();
+                    return self.report_unknown_shape_field(
+                        inner,
+                        field_name,
+                        field_span,
+                        &object.source,
+                    );
                 }
             },
 
             Type::Error => return self.result.interner.error(),
 
             _ => {
-                self.report(TypeError::NotAStruct {
-                    provided: self.display_type(obj_ty).into(),
-                    src: object.source.src(),
-                    span: field_span,
-                });
-                return self.result.interner.error();
+                return self.report_unknown_shape_field(
+                    obj_ty,
+                    field_name,
+                    field_span,
+                    &object.source,
+                );
             }
         };
 
@@ -5386,7 +5386,9 @@ impl<'res> TypeChecker<'res> {
                         .get(&def_id)
                         .is_some_and(|methods| methods.contains_key(&field_name))
                     {
-                        return None;
+                        return Some(
+                            self.report_unknown_method(obj_ty, field_name, field_span, &source),
+                        );
                     }
 
                     (def_id, Vec::new(), false, false)
@@ -5429,7 +5431,9 @@ impl<'res> TypeChecker<'res> {
                                 .get(&def_id)
                                 .is_some_and(|methods| methods.contains_key(&field_name))
                             {
-                                return None;
+                                return Some(self.report_unknown_method(
+                                    obj_ty, field_name, field_span, &source,
+                                ));
                             }
 
                             (def_id, Vec::new(), true, is_const)
@@ -7353,6 +7357,26 @@ impl<'res> TypeChecker<'res> {
         self.report(TypeError::UnknownField {
             struct_name,
             field,
+            src: source.src(),
+            span: field_span,
+        });
+
+        self.result.interner.error()
+    }
+
+    fn report_unknown_method(
+        &mut self,
+        recv_ty: TypeId,
+        field_name: Spur,
+        field_span: SourceSpan,
+        source: &Source,
+    ) -> TypeId {
+        let name = self.interner.borrow().resolve(&field_name).into();
+        let object = self.display_type(recv_ty).into();
+
+        self.report(TypeError::UnknownMethod {
+            object,
+            name,
             src: source.src(),
             span: field_span,
         });
@@ -9319,6 +9343,44 @@ mod tests {
         assert!(
             result.is_ok(),
             "builtin method with a receiver must typecheck"
+        );
+    }
+
+    #[test]
+    fn builtin_unknown_method_reports_unknown_method() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let c: char = 'a';
+                let x = c.nope();
+            }
+            "#,
+        )
+        .expect_err("unknown builtin method must be an error");
+
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::UnknownMethod { name, .. } if name == "nope"
+            )),
+            "expected UnknownMethod error, got: {errors:?}"
+        );
+
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let c: char = 'a';
+                let x = c.nope;
+            }
+            "#,
+        )
+        .expect_err("unknown builtin field must be an error");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownField { .. })),
+            "expected UnknownField error, got: {errors:?}"
         );
     }
 
