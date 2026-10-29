@@ -143,6 +143,19 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("`char` literal must be ASCII")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::non_ascii_char),
+        help("`char` holds a single byte, use a string literal for text")
+    )]
+    NonAsciiChar {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a single byte")]
+        span: SourceSpan,
+    },
+
     #[error("type `{ty}` is not callable")]
     #[diagnostic(severity(Error), code(zeen::typechecker::not_callable))]
     NotCallable {

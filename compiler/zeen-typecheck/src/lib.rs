@@ -2368,8 +2368,30 @@ impl<'res> TypeChecker<'res> {
             HirExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => self.result.interner.int_literal(),
                 Literal::Float(_) => self.result.interner.float_literal(),
-                Literal::Char(_) => self.result.interner.builtin(BuiltinType::char),
-                Literal::ByteChar(_) => self.result.interner.builtin(BuiltinType::u8),
+                Literal::Char(c) => {
+                    if !c.is_ascii() {
+                        self.report(TypeError::NonAsciiChar {
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+
+                        return self.result.interner.error();
+                    }
+
+                    self.result.interner.builtin(BuiltinType::char)
+                }
+                Literal::ByteChar(c) => {
+                    if !c.is_ascii() {
+                        self.report(TypeError::NonAsciiChar {
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+
+                        return self.result.interner.error();
+                    }
+
+                    self.result.interner.builtin(BuiltinType::u8)
+                }
                 Literal::Bool(_) => self.result.interner.builtin(BuiltinType::bool),
                 Literal::String(str_lit) => {
                     let interner = self.interner.borrow();
@@ -9343,6 +9365,25 @@ mod tests {
         assert!(
             result.is_ok(),
             "builtin method with a receiver must typecheck"
+        );
+    }
+
+    #[test]
+    fn non_ascii_char_literal_is_error() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let c: char = '€';
+            }
+            "#,
+        )
+        .expect_err("non ascii char literal must be an error");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::NonAsciiChar { .. })),
+            "expected NonAsciiChar error, got: {errors:?}"
         );
     }
 

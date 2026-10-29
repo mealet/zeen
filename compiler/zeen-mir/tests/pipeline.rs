@@ -231,8 +231,8 @@ fn main() {
 }
 
 #[test]
-fn unicode_char_literal_single_codepoint() {
-    compile_ok("fn main() { let c = 'λ'; }");
+fn unicode_char_literal_is_rejected() {
+    compile_err_contains("fn main() { let c = 'λ'; }", "must be ASCII");
 }
 
 #[test]
