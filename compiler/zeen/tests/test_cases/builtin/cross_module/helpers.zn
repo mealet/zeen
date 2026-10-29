@@ -1,0 +1,5 @@
+implement builtin i32 {
+  pub fn tripled(*const self) i32 {
+    return (*self) * 3;
+  }
+}

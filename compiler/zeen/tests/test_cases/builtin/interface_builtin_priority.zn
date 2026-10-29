@@ -1,0 +1,14 @@
+implement builtin i32 {
+  fn hash(*const self) u64 {
+    return 7;
+  }
+}
+
+fn main() {
+  let n: i32 = 123;
+  @println("{}", n.hash());
+  @println("{}", 123.hash());
+
+  let big: u64 = 123;
+  @println("{}", big.hash() == big.hash());
+}

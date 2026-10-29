@@ -1,0 +1,25 @@
+implement builtin i32 {
+  fn is_even(*const self) bool {
+    return (*self) % 2 == 0;
+  }
+
+  fn bump(*self) void {
+    *self += 1;
+  }
+
+  fn doubled(const self) i32 {
+    return self * 2;
+  }
+}
+
+comptime START = 7;
+
+fn main() {
+  let n: i32 = 4;
+  @println("{}", n.is_even());
+  n.bump();
+  @println("{}", n);
+  @println("{}", n.doubled());
+  @println("{}", 6.is_even());
+  @println("{}", START.doubled());
+}

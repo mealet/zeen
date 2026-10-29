@@ -1,0 +1,17 @@
+implement builtin i32 {
+  fn name(*const self) []const char {
+    return "i32";
+  }
+}
+
+implement builtin u64 {
+  fn name(*const self) []const char {
+    return "u64";
+  }
+}
+
+fn main() {
+  let a: i32 = 1;
+  let b: u64 = 2;
+  @println("{} {}", a.name(), b.name());
+}
