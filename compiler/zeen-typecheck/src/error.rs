@@ -928,9 +928,7 @@ pub enum TypeError {
     #[diagnostic(
         severity(Error),
         code(zeen::typechecker::type_name_as_value),
-        help(
-            "a type name has no value: construct an instance (`{name} {{ ... }}`) or call a static method on it"
-        )
+        help("a type name has no value: use it as a type, or call a static method on it")
     )]
     TypeNameAsValue {
         name: SmolStr,

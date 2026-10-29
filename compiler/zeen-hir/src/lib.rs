@@ -711,7 +711,11 @@ impl<'res> HirLowering<'res> {
                     },
                     Some(Resolution::GenericParam(id)) => HirExprKind::GenericParamRef(id),
                     Some(Resolution::SelfValue(id)) => HirExprKind::SelfValue(id),
-                    Some(Resolution::SelfType(_)) => HirExprKind::Error,
+                    Some(Resolution::SelfType(id)) => HirExprKind::Type(Rc::new(HirTypeExpr {
+                        id: self.fresh_id(),
+                        kind: HirTypeKind::SelfType(id),
+                        source: (expr.span, self.current_src.clone()).into(),
+                    })),
                     Some(Resolution::Builtin) | Some(Resolution::Error) | None => {
                         HirExprKind::Error
                     }
@@ -836,28 +840,30 @@ impl<'res> HirLowering<'res> {
                 let lowered_object = self.lower_expr(object);
                 // `Self.foo` names the enclosing type, like `Type.foo`.
                 let object = match &lowered_object.kind {
-                    HirExprKind::Error => match self.resolution.resolution_of_expr(object) {
-                        Some(zeen_resolve::Resolution::SelfType(id))
-                            if matches!(
-                                self.resolution.defs.get(&id).map(|i| &i.kind),
-                                Some(
-                                    zeen_resolve::DefKind::Struct
-                                        | zeen_resolve::DefKind::Enum
-                                        | zeen_resolve::DefKind::Builtin(_)
-                                )
-                            ) =>
-                        {
-                            Rc::new(HirExpr {
-                                id: self.fresh_id(),
-                                kind: HirExprKind::VarRef {
-                                    def: id,
-                                    generic_args: Vec::new(),
-                                },
-                                source: lowered_object.source.clone(),
-                            })
+                    HirExprKind::Error | HirExprKind::Type(_) => {
+                        match self.resolution.resolution_of_expr(object) {
+                            Some(zeen_resolve::Resolution::SelfType(id))
+                                if matches!(
+                                    self.resolution.defs.get(&id).map(|i| &i.kind),
+                                    Some(
+                                        zeen_resolve::DefKind::Struct
+                                            | zeen_resolve::DefKind::Enum
+                                            | zeen_resolve::DefKind::Builtin(_)
+                                    )
+                                ) =>
+                            {
+                                Rc::new(HirExpr {
+                                    id: self.fresh_id(),
+                                    kind: HirExprKind::VarRef {
+                                        def: id,
+                                        generic_args: Vec::new(),
+                                    },
+                                    source: lowered_object.source.clone(),
+                                })
+                            }
+                            _ => Rc::new(lowered_object),
                         }
-                        _ => Rc::new(lowered_object),
-                    },
+                    }
                     _ => Rc::new(lowered_object),
                 };
 

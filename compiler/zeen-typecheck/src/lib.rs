@@ -2671,10 +2671,16 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirExprKind::Type(ty) => {
-                if let HirTypeKind::Builtin(builtin) = ty.kind {
-                    let builtin_ty = self.result.interner.builtin(builtin);
-                    let name = self.display_type(builtin_ty).into();
+                let name: Option<SmolStr> = match ty.kind {
+                    HirTypeKind::Builtin(builtin) => {
+                        let builtin_ty = self.result.interner.builtin(builtin);
+                        Some(self.display_type(builtin_ty).into())
+                    }
+                    HirTypeKind::SelfType(def) => self.def_name(def).map(Into::into),
+                    _ => None,
+                };
 
+                if let Some(name) = name {
                     self.report(TypeError::TypeNameAsValue {
                         name,
                         src: expr.source.src(),
@@ -9074,6 +9080,56 @@ mod tests {
             "#,
         )
         .expect_err("builtin type names must not be usable as values");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::TypeNameAsValue { .. })),
+            "expected TypeNameAsValue error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn self_type_as_value_is_error() {
+        let errors = typecheck(
+            r#"
+            struct Foo {}
+
+            implement Foo {
+                pub fn broken() i32 {
+                    let value = Self;
+                    return 0;
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("`Self` must not be usable as a value");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::TypeNameAsValue { .. })),
+            "expected TypeNameAsValue error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_self_type_as_value_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn broken() i32 {
+                    let value = Self;
+                    return 0;
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("`Self` must not be usable as a value inside builtin blocks");
 
         assert!(
             errors
