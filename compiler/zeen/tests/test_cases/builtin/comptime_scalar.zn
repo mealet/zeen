@@ -1,0 +1,23 @@
+implement builtin i32 {
+  fn is_even(*const self) bool {
+    return (*self) % 2 == 0;
+  }
+
+  fn max_value() i32 {
+    return 2147483647;
+  }
+}
+
+comptime LIMIT = 4;
+
+fn double(value: i32) i32 {
+  return value * 2;
+}
+
+fn main() {
+  let n: i32 = LIMIT;
+  @println("{}", n.is_even());
+  @println("{}", (LIMIT + 1).is_even());
+  @println("{}", double(LIMIT).is_even());
+  @println("{}", i32.max_value());
+}
