@@ -71,6 +71,20 @@ pub fn use_imports(text: &str) -> Vec<String> {
     imports
 }
 
+pub fn implicit_imports(std_root: Option<&Path>) -> Vec<String> {
+    let Some(root) = std_root else {
+        return Vec::new();
+    };
+
+    prefixed_modules(&root.join("primitives"), "std.primitives")
+}
+
+pub fn imports_for(text: &str, std_root: Option<&Path>) -> Vec<String> {
+    let mut imports = use_imports(text);
+    imports.extend(implicit_imports(std_root));
+    imports
+}
+
 pub(crate) fn resolve_import(
     open_dir: &Path,
     project_root: &Path,
@@ -876,6 +890,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(prefixed_modules(&dir, "root").is_empty());
+    }
+
+    #[test]
+    fn implicit_imports_list_primitive_modules() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-implicit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("primitives")).unwrap();
+        std::fs::write(
+            dir.join("primitives").join("i8.zn"),
+            "implement builtin i8 {\n    pub fn abs(*const self) i8 {\n        return *self;\n    }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("primitives").join("u8.zn"), "").unwrap();
+        std::fs::write(dir.join("primitives").join("notes.txt"), "").unwrap();
+
+        assert_eq!(
+            implicit_imports(Some(&dir)),
+            vec![
+                "std.primitives.i8".to_string(),
+                "std.primitives.u8".to_string()
+            ]
+        );
+
+        let imports = imports_for("use std.string;\n", Some(&dir));
+        assert_eq!(
+            imports,
+            vec![
+                "std.string".to_string(),
+                "std.primitives.i8".to_string(),
+                "std.primitives.u8".to_string()
+            ]
+        );
+
+        let signature = method_source_sig(&dir, &dir, Some(&dir), &[], &imports, "i8", "abs");
+        assert_eq!(signature.as_deref(), Some("fn abs(*const self) i8"));
+
+        assert!(implicit_imports(None).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -543,7 +543,7 @@ fn imported_method_sig(
         root,
         paths.std,
         paths.packages(),
-        &crate::modules::use_imports(text),
+        &crate::modules::imports_for(text, paths.std),
         &ty,
         method,
     )
@@ -588,7 +588,7 @@ fn imported_payload_ty(text: &str, paths: ResolvePaths<'_>, variant: &str) -> Op
         root,
         paths.std,
         paths.packages(),
-        &crate::modules::use_imports(text),
+        &crate::modules::imports_for(text, paths.std),
         variant,
     )
 }
@@ -609,7 +609,7 @@ fn lookup_imported_static(
         root,
         paths.std,
         paths.packages(),
-        &crate::modules::use_imports(text),
+        &crate::modules::imports_for(text, paths.std),
         ty,
     )
     .into_iter()

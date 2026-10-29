@@ -281,7 +281,7 @@ pub fn complete(
     }
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
-        for import in crate::modules::use_imports(text) {
+        for import in crate::modules::imports_for(text, paths.std) {
             for member in
                 crate::modules::members_of_use(dir, root, paths.std, paths.packages(), &import)
             {
@@ -894,7 +894,7 @@ fn push_variant_payload_members(
             root,
             paths.std,
             paths.packages(),
-            &crate::modules::use_imports(text),
+            &crate::modules::imports_for(text, paths.std),
             variant_name,
         );
         payload.sort_by(|a, b| a.name.cmp(&b.name));
@@ -983,7 +983,7 @@ fn push_type_members(
             root,
             paths.std,
             paths.packages(),
-            &crate::modules::use_imports(text),
+            &crate::modules::imports_for(text, paths.std),
             lookup,
         );
         imported.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1091,7 +1091,7 @@ fn push_imported_builtin_members(
         root,
         paths.std,
         paths.packages(),
-        &crate::modules::use_imports(text),
+        &crate::modules::imports_for(text, paths.std),
         ty,
     );
     imported.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1478,7 +1478,7 @@ pub fn struct_init_complete(
     }
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
-        let imports = crate::modules::use_imports(text);
+        let imports = crate::modules::imports_for(text, paths.std);
         let mut imported = crate::modules::type_members(
             dir,
             root,
@@ -3035,6 +3035,38 @@ mod tests {
 
         let even = items.iter().find(|item| item.label == "is_even()").unwrap();
         assert_eq!(even.kind, Some(CompletionItemKind::METHOD));
+    }
+
+    #[test]
+    fn primitive_module_methods_complete_without_import() {
+        let std_root =
+            std::env::temp_dir().join(format!("zeen-lsp-primitive-std-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&std_root);
+        std::fs::create_dir_all(std_root.join("primitives")).unwrap();
+        std::fs::write(
+            std_root.join("primitives").join("i8.zn"),
+            "implement builtin i8 {\n    pub fn abs(*const self) i8 {\n        return *self;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let text = "fn main() {\n    let n: i8 = 3;\n    let x = n;\n}\n";
+        let analysis = sample_analysis(text);
+        let probe = text.replacen("let x = n;", "let x = n.   ();", 1);
+        let dot = probe.find("n.   ()").unwrap() + 1;
+
+        let paths = ResolvePaths {
+            dir: Some(std_root.as_path()),
+            root: Some(std_root.as_path()),
+            std: Some(std_root.as_path()),
+            packages: None,
+        };
+
+        let items = dot_complete(&probe, &analysis, dot, paths);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["abs()"]);
+
+        let _ = std::fs::remove_dir_all(&std_root);
     }
 
     #[test]
