@@ -80,6 +80,12 @@ pub(crate) struct RawAccess {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RawExpr {
+    pub span: (usize, usize),
+    pub id: HirId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldTarget {
     pub field_def: DefId,
     pub ty: String,
@@ -98,6 +104,7 @@ pub struct Analysis {
     pub scopes: Vec<Scope>,
     pub full_spans: HashMap<DefId, (usize, usize)>,
     pub access_types: HashMap<(usize, usize), String>,
+    pub expr_types: HashMap<(usize, usize), String>,
     pub call_types: HashMap<(usize, usize), String>,
     pub call_generics: HashMap<(usize, usize), String>,
     pub method_calls: HashMap<(usize, usize), DefId>,
@@ -114,6 +121,7 @@ pub struct Analysis {
     pub(crate) raw_calls: Vec<RawCall>,
     pub(crate) raw_fields: Vec<RawFieldInit>,
     pub(crate) raw_access: Vec<RawAccess>,
+    pub(crate) raw_exprs: Vec<RawExpr>,
     pub implements: Vec<(DefId, DefId)>,
     pub interfaces: HashMap<String, Vec<Member>>,
     pub generic_bounds: HashMap<DefId, Vec<DefId>>,
@@ -587,6 +595,19 @@ impl Analysis {
 
             self.access_types.insert(
                 raw.field,
+                types
+                    .interner
+                    .display_type(id, interner.clone(), resolution),
+            );
+        }
+
+        for raw in &self.raw_exprs {
+            let Some(id) = types.expr_types.get(&raw.id).copied() else {
+                continue;
+            };
+
+            self.expr_types.insert(
+                raw.span,
                 types
                     .interner
                     .display_type(id, interner.clone(), resolution),
@@ -1739,6 +1760,11 @@ impl<'ctx> Walker<'ctx> {
     }
 
     fn walk_expr(&mut self, expr: &HirExpr) {
+        self.analysis.raw_exprs.push(RawExpr {
+            span: (expr.source.span.offset(), expr.source.span.len()),
+            id: expr.id,
+        });
+
         match &expr.kind {
             HirExprKind::Literal(_) | HirExprKind::Error => {}
             HirExprKind::VarRef {

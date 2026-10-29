@@ -763,13 +763,7 @@ pub fn dot_complete(
         start -= 1;
     }
 
-    if start == dot_offset {
-        return Vec::new();
-    }
-
-    let Some(receiver_name) = text.get(start..dot_offset) else {
-        return Vec::new();
-    };
+    let receiver_name = text.get(start..dot_offset).unwrap_or_default();
 
     let filter = forward_ident(text, dot_offset + 1).to_string();
     let mut static_context: Option<bool> = None;
@@ -783,7 +777,16 @@ pub fn dot_complete(
             static_context = Some(false);
             type_name = Some(ty);
         }
-    } else if let Some(receiver) = analysis.at(start) {
+    } else if let Some(rendered) = expr_type_before(analysis, text, dot_offset) {
+        raw_type = Some(rendered.clone());
+
+        if let Some(ty) = normalize_type_name(&rendered) {
+            static_context = Some(false);
+            type_name = Some(ty);
+        }
+    } else if start < dot_offset
+        && let Some(receiver) = analysis.at(start)
+    {
         if receiver.role == Role::Type {
             let builtin = receiver.def.and_then(|def| {
                 analysis
@@ -814,6 +817,10 @@ pub fn dot_complete(
     {
         static_context = Some(true);
         type_name = Some(receiver_name.to_string());
+    }
+
+    if type_name.is_none() && raw_type.is_none() && receiver_name.is_empty() {
+        return Vec::new();
     }
 
     let lookup = type_name.as_deref().unwrap_or(receiver_name).to_string();
@@ -847,6 +854,41 @@ pub fn dot_complete(
     }
 
     items
+}
+
+fn expr_type_before(analysis: &Analysis, text: &str, dot_offset: usize) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut best: Option<(&(usize, usize), &String)> = None;
+
+    for (span, rendered) in &analysis.expr_types {
+        let end = span.0.saturating_add(span.1);
+
+        if end == 0 || end > dot_offset || end > bytes.len() {
+            continue;
+        }
+
+        if !bytes[end..dot_offset]
+            .iter()
+            .all(|byte| *byte == b')' || byte.is_ascii_whitespace())
+        {
+            continue;
+        }
+
+        let better = match best {
+            Some((current, _)) => match end.cmp(&(current.0 + current.1)) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => span.0 < current.0,
+                std::cmp::Ordering::Less => false,
+            },
+            None => true,
+        };
+
+        if better {
+            best = Some((span, rendered));
+        }
+    }
+
+    best.map(|(_, rendered)| rendered.clone())
 }
 
 fn push_variant_payload_members(
@@ -3077,6 +3119,72 @@ mod tests {
         let names = labels(&items);
 
         assert_eq!(names, vec!["is_even()"]);
+    }
+
+    const EXPR_RECEIVER_SAMPLE: &str = "struct Marker {\n    pub fn count(*const self) i32 {\n        return 0;\n    }\n}\n\nfn make() Marker {\n    return Marker {};\n}\n\nfn main() {\n    let a = (Marker {}).count();\n    let b = make().count();\n}\n";
+
+    #[test]
+    fn grouped_expression_dot_completes_methods() {
+        let analysis = sample_analysis(EXPR_RECEIVER_SAMPLE);
+        let dot = EXPR_RECEIVER_SAMPLE.find(").count").unwrap() + 1;
+        let items = dot_complete(
+            EXPR_RECEIVER_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+
+        assert_eq!(labels(&items), vec!["count()"]);
+    }
+
+    #[test]
+    fn call_expression_dot_completes_methods() {
+        let analysis = sample_analysis(EXPR_RECEIVER_SAMPLE);
+        let dot = EXPR_RECEIVER_SAMPLE.find("make().count").unwrap() + "make()".len();
+        let items = dot_complete(
+            EXPR_RECEIVER_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+
+        assert_eq!(labels(&items), vec!["count()"]);
+    }
+
+    #[test]
+    fn literal_receiver_dot_completes_methods() {
+        let std_root =
+            std::env::temp_dir().join(format!("zeen-lsp-literal-std-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&std_root);
+        std::fs::create_dir_all(std_root.join("primitives")).unwrap();
+        std::fs::write(
+            std_root.join("primitives").join("i32.zn"),
+            "implement builtin i32 {\n    pub fn abs(*const self) i32 {\n        return *self;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let paths = ResolvePaths {
+            dir: Some(std_root.as_path()),
+            root: Some(std_root.as_path()),
+            std: Some(std_root.as_path()),
+            packages: None,
+        };
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-literal-probe.zn".parse().unwrap();
+
+        for text in [
+            "fn main() {\n    let a = 42.abs();\n}\n",
+            "fn main() {\n    let a = (42).abs();\n}\n",
+        ] {
+            let analysis = crate::diagnostics::check(&uri, text, &[]).analysis;
+            let dot = text.find("42").unwrap() + 2;
+            let items = dot_complete(text, &analysis, dot, paths);
+
+            assert_eq!(labels(&items), vec!["abs()"], "text: {text}");
+        }
+
+        let _ = std::fs::remove_dir_all(&std_root);
     }
 
     #[test]
