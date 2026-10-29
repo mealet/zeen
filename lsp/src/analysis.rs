@@ -517,6 +517,29 @@ impl Analysis {
 
         self.calls = calls;
 
+        let mut method_fields: HashSet<(usize, usize)> = HashSet::new();
+
+        for raw in &self.raw_calls {
+            let (Some(field), Some(resolved)) = (raw.field, types.call_resolutions.get(&raw.call))
+            else {
+                continue;
+            };
+
+            if self.member_owner.contains_key(&resolved.fn_def)
+                || self.method_self.contains_key(&resolved.fn_def)
+            {
+                method_fields.insert(field);
+            }
+        }
+
+        for occurrence in &mut self.occurrences {
+            if occurrence.role == Role::Property
+                && method_fields.contains(&(occurrence.offset, occurrence.len))
+            {
+                occurrence.role = Role::Method;
+            }
+        }
+
         for raw in &self.raw_calls {
             let Some(id) = types.expr_types.get(&raw.call).copied() else {
                 continue;

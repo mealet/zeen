@@ -57,6 +57,7 @@ fn def_at(docs: &[HierarchyDoc<'_>], uri: &Uri, offset: usize) -> Option<zeen_re
         .method_calls
         .get(&(occurrence.offset, occurrence.len))
         .copied()
+        .or_else(|| crate::hover::method_at(analysis, (occurrence.offset, occurrence.len)))
         .or(occurrence.def)
 }
 
@@ -92,7 +93,7 @@ pub fn prepare(docs: &[HierarchyDoc<'_>], uri: &Uri, offset: usize) -> Option<Ca
     let key = (occurrence.offset, occurrence.len);
     let def = def_at(docs, uri, offset)?;
 
-    if !is_callable(occurrence.role) && !analysis.method_calls.contains_key(&key) {
+    if !is_callable(occurrence.role) && crate::hover::method_at(analysis, key).is_none() {
         return None;
     }
 
@@ -395,5 +396,31 @@ mod tests {
         let children = subtypes(&docs, &parents[0]);
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].name, "Point");
+    }
+
+    const BUILTIN_SAMPLE: &str = "implement builtin i32 {\n    pub fn is_even(*const self) bool {\n        return (*self) % 2 == 0;\n    }\n}\n\nfn main() {\n    let n: i32 = 4;\n    @println(\"{}\", n.is_even());\n}\n";
+
+    #[test]
+    fn builtin_method_call_hierarchy() {
+        let uri: Uri = "file:///tmp/zeen-lsp-hierarchy-builtin.zn".parse().unwrap();
+        let analysis = analyze(&uri, BUILTIN_SAMPLE);
+        let store = [(BUILTIN_SAMPLE, uri.clone(), analysis)];
+        let docs = docs(&store);
+
+        let call_at = BUILTIN_SAMPLE.find("n.is_even").unwrap() + "n.".len();
+        let item = prepare(&docs, &uri, call_at).unwrap();
+
+        assert_eq!(item.name, "is_even");
+        assert_eq!(item.kind, SymbolKind::METHOD);
+
+        let callers = incoming(&docs, &item);
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].from.name, "main");
+
+        let decl_at = BUILTIN_SAMPLE.find("is_even").unwrap();
+        let item = prepare(&docs, &uri, decl_at).unwrap();
+
+        assert_eq!(item.name, "is_even");
+        assert!(outgoing(&docs, &item).is_empty());
     }
 }

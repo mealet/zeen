@@ -29,6 +29,12 @@ pub fn document_symbols(text: &str, analysis: &Analysis) -> Vec<DocumentSymbol> 
     }
 
     let mut children: HashMap<zeen_resolve::DefId, Vec<DocumentSymbol>> = HashMap::new();
+    let mut floating: Vec<DocumentSymbol> = Vec::new();
+    let builtin_owners: HashSet<zeen_resolve::DefId> = analysis
+        .builtin_targets
+        .iter()
+        .map(|target| target.def)
+        .collect();
 
     for (owner, members) in &analysis.members {
         let mut owned: Vec<DocumentSymbol> = Vec::new();
@@ -39,7 +45,13 @@ pub fn document_symbols(text: &str, analysis: &Analysis) -> Vec<DocumentSymbol> 
             };
 
             let (kind, detail) = match member.kind {
-                MemberKind::Method => (SymbolKind::METHOD, member.signature.clone()),
+                MemberKind::Method => (
+                    SymbolKind::METHOD,
+                    member
+                        .signature
+                        .clone()
+                        .or_else(|| analysis.fn_source_sig.get(&member.def).cloned()),
+                ),
                 MemberKind::Field => (SymbolKind::FIELD, member.signature.clone()),
                 MemberKind::Variant => (SymbolKind::ENUM_MEMBER, None),
             };
@@ -58,7 +70,13 @@ pub fn document_symbols(text: &str, analysis: &Analysis) -> Vec<DocumentSymbol> 
 
         owned.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character));
 
-        if !owned.is_empty() {
+        if owned.is_empty() {
+            continue;
+        }
+
+        if builtin_owners.contains(owner) {
+            floating.extend(owned);
+        } else {
             children.insert(*owner, owned);
         }
     }
@@ -127,6 +145,7 @@ pub fn document_symbols(text: &str, analysis: &Analysis) -> Vec<DocumentSymbol> 
         });
     }
 
+    top.extend(floating);
     top.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character));
     top
 }
@@ -665,5 +684,28 @@ mod tests {
         assert_eq!(index.query("beta").len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const BUILTIN_SAMPLE: &str = "implement builtin i32 {\n    pub fn is_even(*const self) bool {\n        return (*self) % 2 == 0;\n    }\n}\n\nfn main() {\n    let n: i32 = 4;\n    @println(\"{}\", n.is_even());\n}\n";
+
+    #[test]
+    fn builtin_implement_methods_are_document_symbols() {
+        let analysis = sample_analysis(BUILTIN_SAMPLE);
+        let symbols = document_symbols(BUILTIN_SAMPLE, &analysis);
+        let top = names(&symbols);
+
+        assert!(top.contains(&"is_even"), "{top:?}");
+        assert!(top.contains(&"main"));
+
+        let method = symbols
+            .iter()
+            .find(|symbol| symbol.name == "is_even")
+            .unwrap();
+        assert_eq!(method.kind, SymbolKind::METHOD);
+        assert!(
+            method.detail.as_deref().unwrap_or("").contains("bool"),
+            "{:?}",
+            method.detail
+        );
     }
 }

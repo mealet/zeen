@@ -472,4 +472,35 @@ mod tests {
             1
         );
     }
+
+    const BUILTIN_SAMPLE: &str = "implement builtin i32 {\n    pub fn is_even(*const self) bool {\n        return (*self) % 2 == 0;\n    }\n}\n\nfn main() {\n    let n: i32 = 4;\n    @println(\"{}\", n.is_even());\n}\n";
+
+    #[test]
+    fn renames_builtin_implement_method() {
+        let fixture = Fixture::check(&[("main", BUILTIN_SAMPLE)]);
+        let docs = fixture.docs();
+        let offset = fixture.offset(0, "n.is_even()") + "n.".len();
+        let edits = rename_edits(&docs, &fixture.uris[0], offset, "even");
+
+        let result = applied(&fixture.texts[0], &edits[&fixture.uris[0]]);
+
+        assert!(result.contains("fn even(*const self) bool"), "{result}");
+        assert!(result.contains("n.even()"), "{result}");
+        assert!(!result.contains("is_even"), "{result}");
+    }
+
+    #[test]
+    fn builtin_method_call_declares_at_implement_block() {
+        let fixture = Fixture::check(&[("main", BUILTIN_SAMPLE)]);
+        let docs = fixture.docs();
+        let offset = fixture.offset(0, "n.is_even()") + "n.".len();
+        let (uri, range) = decl_position(&docs, &fixture.uris[0], offset).unwrap();
+        let line = BUILTIN_SAMPLE
+            .lines()
+            .nth(range.start.line as usize)
+            .unwrap();
+
+        assert_eq!(uri, fixture.uris[0]);
+        assert!(line[range.start.character as usize..].starts_with("is_even"));
+    }
 }
