@@ -6,7 +6,7 @@ use zeen_ast::{
     Declaration, Expression, Source, Statement, TypeExpr,
     declarations::{EnumVariant, FnParam, GenericType, StructField},
     expressions::{Arm, Literal},
-    types::BuiltinType,
+    types::{BuiltinShape, BuiltinType},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,6 +57,7 @@ pub struct BindingSlotKey(pub usize, pub usize);
 pub struct DefId(pub u32);
 
 pub const BUILTIN_DEF_BASE: u32 = 0xF000_0000;
+pub const BUILTIN_SHAPE_DEF_BASE: u32 = 0xF100_0000;
 
 pub fn builtin_def_id(builtin: BuiltinType) -> DefId {
     let offset = match builtin {
@@ -120,6 +121,7 @@ pub enum DefKind {
     ExternVar,
     GlobalVar { is_const: bool },
     Builtin(BuiltinType),
+    BuiltinShape(BuiltinShape),
 }
 
 /// Final output of Name Resolver

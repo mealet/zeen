@@ -5,7 +5,7 @@ use crate::{
     Source,
     expressions::Expression,
     statements::Statement,
-    types::{BuiltinType, TypeExpr},
+    types::{BuiltinShape, TypeExpr},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,7 +58,7 @@ pub enum DeclarationKind<'arena> {
 
     ImplementDecl {
         interface: Option<(Spur, SourceSpan)>,
-        builtin: Option<BuiltinType>,
+        builtin: Option<&'arena BuiltinShape>,
         object: (Spur, SourceSpan, &'arena [&'arena TypeExpr<'arena>]), // name, span, generics slots
         generics: Option<&'arena [GenericType<'arena>]>,
 

@@ -1852,6 +1852,30 @@ fn printed_mir_renders_builtin_static_method_calls() {
 }
 
 #[test]
+fn printed_mir_renders_builtin_shape_method_calls() {
+    let printed = print_mir_ok(
+        "implement[T] builtin []T { \
+             fn count(*const self) usize { return (*self).len; } \
+         } \
+         implement builtin [4]u8 { \
+             fn first(*const self) u8 { return (*self)[0]; } \
+         } \
+         fn main() { \
+             let arr: [3]i32 = [1, 2, 3]; \
+             let slice = arr[..]; \
+             let bytes: [4]u8 = [1, 2, 3, 4]; \
+             @println(\"{}\", slice.count()); \
+             @println(\"{}\", bytes.first()); \
+         }",
+    );
+
+    assert!(printed.contains("fn []i32.count("), "{printed}");
+    assert!(printed.contains("fn [4]u8.first("), "{printed}");
+    assert!(printed.contains("[]i32.count("), "{printed}");
+    assert!(printed.contains("[4]u8.first("), "{printed}");
+}
+
+#[test]
 fn printed_mir_renders_enum_constructs() {
     let printed = print_mir_ok(
         "enum Shape { dot, rect: i32 } \

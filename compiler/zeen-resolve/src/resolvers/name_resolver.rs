@@ -49,6 +49,7 @@ pub struct NameResolver {
     global_deps: HashMap<DefId, Vec<DefId>>,
 
     next_def_id: u32,
+    next_builtin_shape_def: u32,
     current_src: NamedSource<Arc<String>>,
 
     graph: ModuleGraph,
@@ -96,6 +97,7 @@ impl<'ctx> NameResolver {
             global_deps: HashMap::default(),
 
             next_def_id: 0,
+            next_builtin_shape_def: crate::resolution::BUILTIN_SHAPE_DEF_BASE,
             current_src: NamedSource::new(filename.as_str(), src.clone()),
 
             graph,
@@ -951,8 +953,8 @@ impl<'ctx> NameResolver {
                 let (object_name, object_span, object_bindings) = object;
 
                 let object_def = match builtin {
-                    Some(builtin) => {
-                        Some(self.register_builtin_def(builtin, object_name, object_span))
+                    Some(shape) => {
+                        Some(self.register_builtin_target_def(shape, object_name, object_span))
                     }
                     None => {
                         let object_ambiguous = self.check_ambiguous_type(object_name, object_span);
@@ -1446,6 +1448,32 @@ impl<'ctx> NameResolver {
         self.table.pop();
 
         method_id
+    }
+
+    fn register_builtin_target_def(
+        &mut self,
+        shape: &zeen_ast::types::BuiltinShape,
+        name: Spur,
+        span: SourceSpan,
+    ) -> DefId {
+        let zeen_ast::types::BuiltinShape::Scalar(builtin) = shape else {
+            let def_id = DefId(self.next_builtin_shape_def);
+            self.next_builtin_shape_def += 1;
+
+            let info = DefInfo {
+                name,
+                kind: DefKind::BuiltinShape(shape.clone()),
+                span: (span, self.named_src()).into(),
+                decl: None,
+                is_pub: true,
+            };
+
+            self.result.defs.insert(def_id, info);
+
+            return def_id;
+        };
+
+        self.register_builtin_def(*builtin, name, span)
     }
 
     fn register_builtin_def(

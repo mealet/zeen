@@ -20,7 +20,7 @@ use crate::{error::TypeError, format_str::FormatParseError};
 
 use zeen_ast::{
     expressions::{BinaryOp, Literal, UnaryOp},
-    types::BuiltinType,
+    types::{BuiltinShape, BuiltinType},
 };
 use zeen_driver::{CompilationContext, CompilationOutput};
 use zeen_hir::{
@@ -129,11 +129,18 @@ struct PendingImplCheck {
 
 struct MethodSignatureEntry {
     object: DefId,
+    owner_key: MethodOwnerKey,
     name: Spur,
     args: Vec<String>,
     bounds: Vec<String>,
     source: Source,
     span: SourceSpan,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum MethodOwnerKey {
+    Def(DefId),
+    Shape(String),
 }
 
 struct ImplSigCtx<'a> {
@@ -157,6 +164,16 @@ enum SwitchValue {
     Bool(bool),
     Char(char),
     String(Spur),
+}
+
+enum ShapeMethodSelection {
+    None,
+    Mismatch,
+    Selected {
+        owner: DefId,
+        args: Vec<TypeId>,
+        method: DefId,
+    },
 }
 
 fn literal_kind_word(lit: &Literal) -> &'static str {
@@ -677,6 +694,15 @@ impl<'res> TypeChecker<'res> {
                 .insert(generic.def_id, generic.bounds.clone());
         }
 
+        if let Some(object_def) = imp.object
+            && let Some(DefKind::BuiltinShape(shape)) = self.def_kind(object_def).cloned()
+        {
+            self.result.builtin_shapes.insert(object_def, shape);
+            self.result
+                .builtin_shape_generics
+                .insert(object_def, imp.generics.iter().map(|g| g.def_id).collect());
+        }
+
         for method in &imp.methods {
             self.declare_signature(method);
 
@@ -700,12 +726,38 @@ impl<'res> TypeChecker<'res> {
 
         if !matches!(
             self.def_kind(object_def),
-            Some(DefKind::Struct) | Some(DefKind::Enum) | Some(DefKind::Builtin(_))
+            Some(DefKind::Struct)
+                | Some(DefKind::Enum)
+                | Some(DefKind::Builtin(_))
+                | Some(DefKind::BuiltinShape(_))
         ) {
             self.report(TypeError::ImplementNonStruct {
                 src: source.src(),
                 span: imp.object_bindings_span,
             });
+            return;
+        }
+
+        if let Some(DefKind::BuiltinShape(shape)) = self.def_kind(object_def).cloned() {
+            let entry = ImplEntry {
+                methods: imp.methods.iter().map(|m| m.def_id).collect(),
+                object_args: Vec::new(),
+                is_specialized: !shape.has_params(),
+                generic_bounds: imp
+                    .generics
+                    .iter()
+                    .map(|g| (g.def_id, g.bounds.clone()))
+                    .collect(),
+                generic_bindings: Vec::new(),
+                generics: imp.generics.iter().map(|g| g.def_id).collect(),
+            };
+
+            self.result
+                .inherent_impls
+                .entry(object_def)
+                .or_default()
+                .push(entry);
+
             return;
         }
 
@@ -951,6 +1003,44 @@ impl<'res> TypeChecker<'res> {
         (self.lower_hir_type_inner(ty), false)
     }
 
+    fn builtin_shape_type(&mut self, shape: &BuiltinShape, generics: &[DefId]) -> TypeId {
+        match shape {
+            BuiltinShape::Scalar(builtin) => self.result.interner.builtin(*builtin),
+
+            BuiltinShape::Slice { element, is_const } => {
+                let element = self.builtin_shape_type(element, generics);
+
+                self.result.interner.intern(Type::Slice {
+                    element,
+                    is_const: *is_const,
+                })
+            }
+
+            BuiltinShape::ManyPointer { element, is_const } => {
+                let element = self.builtin_shape_type(element, generics);
+
+                self.result.interner.intern(Type::ManyPointer {
+                    inner: element,
+                    is_const: *is_const,
+                })
+            }
+
+            BuiltinShape::Array { element, len } => {
+                let element = self.builtin_shape_type(element, generics);
+
+                self.result.interner.intern(Type::Array {
+                    element,
+                    len: Some(*len),
+                })
+            }
+
+            BuiltinShape::Param(index) => match generics.get(*index as usize).copied() {
+                Some(generic) => self.result.interner.intern(Type::GenericParam(generic)),
+                None => self.result.interner.error(),
+            },
+        }
+    }
+
     fn lower_alias_ref(&mut self, def_id: DefId, args: Vec<TypeId>, ty: &HirTypeExpr) -> TypeId {
         let Some(alias) = self.type_aliases.get(&def_id).cloned() else {
             return self.result.interner.error();
@@ -1051,6 +1141,11 @@ impl<'res> TypeChecker<'res> {
                     _ => {
                         if let Some(DefKind::Builtin(builtin)) = self.def_kind(*def_id) {
                             return self.result.interner.builtin(*builtin);
+                        }
+
+                        if let Some(shape) = self.result.builtin_shapes.get(def_id).cloned() {
+                            let generics = self.type_member_generics(*def_id);
+                            return self.builtin_shape_type(&shape, &generics);
                         }
 
                         let generic_args: Vec<TypeId> = self
@@ -1408,9 +1503,11 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn type_member_generics(&self, def: DefId) -> Vec<DefId> {
-        self.struct_generics
+        self.result
+            .builtin_shape_generics
             .get(&def)
             .cloned()
+            .or_else(|| self.struct_generics.get(&def).cloned())
             .or_else(|| self.enum_generics.get(&def).cloned())
             .unwrap_or_default()
     }
@@ -1532,6 +1629,18 @@ impl<'res> TypeChecker<'res> {
 
             if let Some(DefKind::Builtin(builtin)) = self.def_kind(sd) {
                 let base_ty = self.result.interner.builtin(*builtin);
+                return self_mode_ty(base_ty, &mut self.result.interner);
+            }
+
+            let shape = match self.def_kind(sd) {
+                Some(DefKind::BuiltinShape(shape)) => Some(shape.clone()),
+                _ => None,
+            };
+
+            if let Some(shape) = shape {
+                let generics = self.type_member_generics(sd);
+                let base_ty = self.builtin_shape_type(&shape, &generics);
+
                 return self_mode_ty(base_ty, &mut self.result.interner);
             }
 
@@ -4957,7 +5066,10 @@ impl<'res> TypeChecker<'res> {
             return;
         }
 
-        if matches!(self.def_kind(owner_struct), Some(DefKind::Builtin(_))) {
+        if matches!(
+            self.def_kind(owner_struct),
+            Some(DefKind::Builtin(_)) | Some(DefKind::BuiltinShape(_))
+        ) {
             let caller = self.ctx.current_fn_def();
 
             let same_module = match (
@@ -5254,6 +5366,8 @@ impl<'res> TypeChecker<'res> {
             _ => {}
         }
 
+        let mut preselected_method: Option<DefId> = None;
+
         let (struct_def, struct_generic_args, obj_is_ptr, ptr_is_const) =
             match self.result.interner.get(obj_ty).clone() {
                 Type::Struct {
@@ -5276,6 +5390,26 @@ impl<'res> TypeChecker<'res> {
                     }
 
                     (def_id, Vec::new(), false, false)
+                }
+                Type::Slice { .. } | Type::ManyPointer { .. } | Type::Array { .. } => {
+                    match self.select_builtin_shape_method(obj_ty, field_name) {
+                        ShapeMethodSelection::Selected {
+                            owner,
+                            args,
+                            method,
+                        } => {
+                            preselected_method = Some(method);
+                            (owner, args, false, false)
+                        }
+
+                        ShapeMethodSelection::Mismatch => {
+                            return Some(self.report_unknown_shape_field(
+                                obj_ty, field_name, field_span, &source,
+                            ));
+                        }
+
+                        ShapeMethodSelection::None => return None,
+                    }
                 }
                 Type::Pointer { inner, is_const } => {
                     match self.result.interner.get(inner).clone() {
@@ -5300,6 +5434,26 @@ impl<'res> TypeChecker<'res> {
 
                             (def_id, Vec::new(), true, is_const)
                         }
+                        Type::Slice { .. } | Type::ManyPointer { .. } | Type::Array { .. } => {
+                            match self.select_builtin_shape_method(inner, field_name) {
+                                ShapeMethodSelection::Selected {
+                                    owner,
+                                    args,
+                                    method,
+                                } => {
+                                    preselected_method = Some(method);
+                                    (owner, args, true, is_const)
+                                }
+
+                                ShapeMethodSelection::Mismatch => {
+                                    return Some(self.report_unknown_shape_field(
+                                        obj_ty, field_name, field_span, &source,
+                                    ));
+                                }
+
+                                ShapeMethodSelection::None => return None,
+                            }
+                        }
                         _ => return None,
                     }
                 }
@@ -5318,24 +5472,28 @@ impl<'res> TypeChecker<'res> {
         }
 
         let method_def_id = {
-            if !self.struct_methods.contains_key(&struct_def) {
-                return None;
+            if let Some(method) = preselected_method {
+                method
+            } else {
+                if !self.struct_methods.contains_key(&struct_def) {
+                    return None;
+                }
+
+                let Some(method_def_id) =
+                    self.select_method_candidate(struct_def, field_name, &struct_generic_args)
+                else {
+                    let field = self.interner.borrow().resolve(&field_name).into();
+                    self.report(TypeError::UnknownField {
+                        struct_name: self.display_type(obj_ty).into(),
+                        field,
+                        src: source.src(),
+                        span: field_span,
+                    });
+                    return Some(self.result.interner.error());
+                };
+
+                method_def_id
             }
-
-            let Some(method_def_id) =
-                self.select_method_candidate(struct_def, field_name, &struct_generic_args)
-            else {
-                let field = self.interner.borrow().resolve(&field_name).into();
-                self.report(TypeError::UnknownField {
-                    struct_name: self.display_type(obj_ty).into(),
-                    field,
-                    src: source.src(),
-                    span: field_span,
-                });
-                return Some(self.result.interner.error());
-            };
-
-            method_def_id
         };
         let sig = &self.fn_sigs[&method_def_id];
         let self_mode = sig.self_mode;
@@ -7121,6 +7279,186 @@ impl<'res> TypeChecker<'res> {
             .cloned()
     }
 
+    fn match_builtin_shape(
+        &self,
+        shape: &BuiltinShape,
+        ty: TypeId,
+        generics: &[DefId],
+        bindings: &mut HashMap<DefId, TypeId>,
+    ) -> bool {
+        match shape {
+            BuiltinShape::Scalar(builtin) => {
+                matches!(self.result.interner.get(ty), Type::Builtin(found) if found == builtin)
+            }
+
+            BuiltinShape::Slice { element, is_const } => match self.result.interner.get(ty) {
+                Type::Slice {
+                    element: found,
+                    is_const: found_const,
+                } => {
+                    found_const == is_const
+                        && self.match_builtin_shape(element, *found, generics, bindings)
+                }
+                _ => false,
+            },
+
+            BuiltinShape::ManyPointer { element, is_const } => match self.result.interner.get(ty) {
+                Type::ManyPointer {
+                    inner: found,
+                    is_const: found_const,
+                } => {
+                    found_const == is_const
+                        && self.match_builtin_shape(element, *found, generics, bindings)
+                }
+                _ => false,
+            },
+
+            BuiltinShape::Array { element, len } => match self.result.interner.get(ty) {
+                Type::Array {
+                    element: found,
+                    len: found_len,
+                } => {
+                    *found_len == Some(*len)
+                        && self.match_builtin_shape(element, *found, generics, bindings)
+                }
+                _ => false,
+            },
+
+            BuiltinShape::Param(index) => {
+                let Some(&generic) = generics.get(*index as usize) else {
+                    return false;
+                };
+
+                match bindings.get(&generic) {
+                    Some(existing) => *existing == ty,
+                    None => {
+                        bindings.insert(generic, ty);
+                        true
+                    }
+                }
+            }
+        }
+    }
+
+    fn report_unknown_shape_field(
+        &mut self,
+        recv_ty: TypeId,
+        field_name: Spur,
+        field_span: SourceSpan,
+        source: &Source,
+    ) -> TypeId {
+        let field = self.interner.borrow().resolve(&field_name).into();
+        let struct_name = self.display_type(recv_ty).into();
+
+        self.report(TypeError::UnknownField {
+            struct_name,
+            field,
+            src: source.src(),
+            span: field_span,
+        });
+
+        self.result.interner.error()
+    }
+
+    fn select_builtin_shape_method(&mut self, recv_ty: TypeId, name: Spur) -> ShapeMethodSelection {
+        if self.result.builtin_shapes.is_empty() {
+            return ShapeMethodSelection::None;
+        }
+
+        let mut owners: Vec<DefId> = self.result.builtin_shapes.keys().copied().collect();
+        owners.sort();
+
+        let mut named = false;
+        let mut best: Option<(u8, DefId, Vec<TypeId>, DefId)> = None;
+
+        for owner in owners {
+            let Some(&method) = self
+                .struct_methods
+                .get(&owner)
+                .and_then(|methods| methods.get(&name))
+                .and_then(|candidates| candidates.first())
+            else {
+                continue;
+            };
+
+            named = true;
+
+            let shape = self.result.builtin_shapes[&owner].clone();
+            let generics = self.type_member_generics(owner);
+
+            let mut matched: HashMap<DefId, TypeId> = HashMap::default();
+
+            if !self.match_builtin_shape(&shape, recv_ty, &generics, &mut matched) {
+                continue;
+            }
+
+            let args: Vec<TypeId> = generics
+                .iter()
+                .map(|&generic| {
+                    matched
+                        .get(&generic)
+                        .copied()
+                        .unwrap_or_else(|| self.result.interner.error())
+                })
+                .collect();
+
+            let rank = self.builtin_shape_rank(owner, method, &shape, &matched);
+
+            if best
+                .as_ref()
+                .is_none_or(|(best_rank, ..)| rank < *best_rank)
+            {
+                best = Some((rank, owner, args, method));
+            }
+        }
+
+        match best {
+            Some((_, owner, args, method)) => ShapeMethodSelection::Selected {
+                owner,
+                args,
+                method,
+            },
+            None if named => ShapeMethodSelection::Mismatch,
+            None => ShapeMethodSelection::None,
+        }
+    }
+
+    fn builtin_shape_rank(
+        &self,
+        owner: DefId,
+        method: DefId,
+        shape: &BuiltinShape,
+        bindings: &HashMap<DefId, TypeId>,
+    ) -> u8 {
+        if !shape.has_params() {
+            return 0;
+        }
+
+        let Some(entry) = self.method_impl_entry(owner, method) else {
+            return 2;
+        };
+
+        if !entry
+            .generic_bounds
+            .iter()
+            .any(|(_, ifaces)| !ifaces.is_empty())
+        {
+            return 2;
+        }
+
+        let bounds_hold = entry.generic_bounds.iter().all(|(generic, ifaces)| {
+            let Some(&concrete) = bindings.get(generic) else {
+                return true;
+            };
+
+            ifaces
+                .iter()
+                .all(|&iface_def| self.type_satisfies_interface(concrete, iface_def))
+        });
+
+        if bounds_hold { 1 } else { 4 }
+    }
+
     fn select_method_candidate(
         &self,
         object: DefId,
@@ -7242,6 +7580,7 @@ impl<'res> TypeChecker<'res> {
                         if let HirDeclKind::Fn(f) = &method.kind {
                             entries.push(MethodSignatureEntry {
                                 object: decl.def_id,
+                                owner_key: MethodOwnerKey::Def(decl.def_id),
                                 name: f.name.0,
                                 args: Vec::new(),
                                 bounds: Vec::new(),
@@ -7257,6 +7596,7 @@ impl<'res> TypeChecker<'res> {
                         if let HirDeclKind::Fn(f) = &method.kind {
                             entries.push(MethodSignatureEntry {
                                 object: decl.def_id,
+                                owner_key: MethodOwnerKey::Def(decl.def_id),
                                 name: f.name.0,
                                 args: Vec::new(),
                                 bounds: Vec::new(),
@@ -7269,6 +7609,11 @@ impl<'res> TypeChecker<'res> {
 
                 HirDeclKind::Implement(imp) if imp.interface.is_none() => {
                     let Some(object) = imp.object else { continue };
+
+                    let owner_key = match self.def_kind(object) {
+                        Some(DefKind::BuiltinShape(shape)) => MethodOwnerKey::Shape(shape.key()),
+                        _ => MethodOwnerKey::Def(object),
+                    };
 
                     let Some(entry) = self
                         .result
@@ -7292,6 +7637,7 @@ impl<'res> TypeChecker<'res> {
                         if let HirDeclKind::Fn(f) = &method.kind {
                             entries.push(MethodSignatureEntry {
                                 object,
+                                owner_key: owner_key.clone(),
                                 name: f.name.0,
                                 args: args.clone(),
                                 bounds: bounds.clone(),
@@ -7306,10 +7652,11 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        let mut seen: HashMap<(DefId, Spur, Vec<String>, Vec<String>), ()> = HashMap::default();
+        let mut seen: HashMap<(MethodOwnerKey, Spur, Vec<String>, Vec<String>), ()> =
+            HashMap::default();
 
         for entry in entries {
-            let key = (entry.object, entry.name, entry.args, entry.bounds);
+            let key = (entry.owner_key, entry.name, entry.args, entry.bounds);
 
             if seen.insert(key, ()).is_some() {
                 let object = self.def_name(entry.object).unwrap_or_default().into();
@@ -9211,6 +9558,195 @@ mod tests {
             "#,
         )
         .expect_err("duplicate builtin methods must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::DuplicateMethod { .. })),
+            "expected DuplicateMethod error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_slice_shape_method_works() {
+        let result = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn main() {
+                let arr: [3]i32 = [1, 2, 3];
+                let slice = arr[..];
+                let n = slice.count();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "slice shape methods must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_array_shape_method_works() {
+        let result = typecheck_full(
+            r#"
+            implement builtin [4]u8 {
+                fn total(*const self) u32 {
+                    return @as(u32, (*self)[0]);
+                }
+            }
+
+            fn main() {
+                let bytes: [4]u8 = [1, 2, 3, 4];
+                let n = bytes.total();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "array shape methods must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_shape_method_through_pointer_works() {
+        let result = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn main() {
+                let arr: [3]i32 = [1, 2, 3];
+                let slice = arr[..];
+                let ptr: *[]i32 = &slice;
+                let n = ptr.count();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "shape methods must be callable through pointers: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_shape_method_in_generic_fn_works() {
+        let result = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn len_of[T](items: []T) usize {
+                return items.count();
+            }
+
+            fn main() {
+                let arr: [3]i32 = [1, 2, 3];
+                let n = len_of(arr[..]);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "shape methods must work on generic slices: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_shape_concrete_target_wins() {
+        let result = typecheck_full(
+            r#"
+            implement[T] builtin [4]T {
+                fn label(*const self) i32 {
+                    return 1;
+                }
+            }
+
+            implement builtin [4]u8 {
+                fn label(*const self) i32 {
+                    return 2;
+                }
+            }
+
+            fn main() {
+                let bytes: [4]u8 = [1, 2, 3, 4];
+                let n = bytes.label();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "concrete shape targets must overload generic ones: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_shape_receiver_mismatch_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn main() {
+                let arr: [3]i32 = [1, 2, 3];
+                let n = arr.count();
+            }
+            "#,
+        )
+        .expect_err("shape methods must not match other receiver shapes");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownField { .. })),
+            "expected UnknownField error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_shape_duplicate_method_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            implement[U] builtin []U {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("duplicate shape methods must be rejected");
 
         assert!(
             errors

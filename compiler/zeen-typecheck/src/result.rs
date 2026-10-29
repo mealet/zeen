@@ -1,6 +1,7 @@
 use rustc_hash::FxHashMap as HashMap;
 
 use zeen_ast::Source;
+use zeen_ast::types::BuiltinShape;
 use zeen_hir::HirId;
 use zeen_resolve::DefId;
 use zeen_types::{EnumTypeInfo, StructTypeInfo, Type, TypeId, TypeInterner};
@@ -24,6 +25,8 @@ pub struct TypeCheckResult {
     pub struct_generics: HashMap<DefId, Vec<DefId>>,
     pub enum_info: HashMap<DefId, EnumTypeInfo>,
     pub enum_generics: HashMap<DefId, Vec<DefId>>,
+    pub builtin_shapes: HashMap<DefId, BuiltinShape>,
+    pub builtin_shape_generics: HashMap<DefId, Vec<DefId>>,
 
     pub interface_registry: HashMap<String, DefId>,
     pub enum_variants: HashMap<DefId, Vec<DefId>>,

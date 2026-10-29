@@ -7,6 +7,7 @@ use smol_str::SmolStr;
 use zeen_ast::{
     Source,
     expressions::{BinaryOp, Literal, UnaryOp},
+    types::BuiltinShape,
 };
 use zeen_driver::CompilationMode;
 use zeen_hir::{
@@ -6891,7 +6892,7 @@ impl<'ctx> MirLowering<'ctx> {
             .is_some_and(|owner| {
                 matches!(
                     self.resolution.defs.get(owner).map(|info| &info.kind),
-                    Some(DefKind::Builtin(_))
+                    Some(DefKind::Builtin(_)) | Some(DefKind::BuiltinShape(_))
                 )
             })
     }
@@ -8426,6 +8427,10 @@ impl<'ctx> MirLowering<'ctx> {
 
 impl<'ctx> MirLowering<'ctx> {
     fn owner_generics(&self, owner: DefId) -> Vec<DefId> {
+        if let Some(generics) = self.typecheck.builtin_shape_generics.get(&owner) {
+            return generics.clone();
+        }
+
         if matches!(
             self.resolution.defs.get(&owner).map(|i| &i.kind),
             Some(DefKind::Enum)
@@ -8551,6 +8556,14 @@ impl<'ctx> MirLowering<'ctx> {
         };
 
         if let Some(struct_def) = owner_struct {
+            if let Some(DefKind::BuiltinShape(shape)) =
+                self.resolution.defs.get(&struct_def).map(|i| &i.kind)
+            {
+                let rendered = self.render_builtin_shape_name(shape, generic_args);
+
+                return format!("{}.{}", rendered, base_name);
+            }
+
             let struct_name = self
                 .rodeo
                 .borrow()
@@ -8585,6 +8598,35 @@ impl<'ctx> MirLowering<'ctx> {
         }
 
         base
+    }
+
+    fn render_builtin_shape_name(&self, shape: &BuiltinShape, generic_args: &[TypeId]) -> String {
+        match shape {
+            BuiltinShape::Scalar(builtin) => builtin.to_string(),
+
+            BuiltinShape::Slice { element, is_const } => {
+                let element = self.render_builtin_shape_name(element, generic_args);
+
+                format!("[]{}{}", if *is_const { "const " } else { "" }, element)
+            }
+
+            BuiltinShape::ManyPointer { element, is_const } => {
+                let element = self.render_builtin_shape_name(element, generic_args);
+
+                format!("[*]{}{}", if *is_const { "const " } else { "" }, element)
+            }
+
+            BuiltinShape::Array { element, len } => {
+                let element = self.render_builtin_shape_name(element, generic_args);
+
+                format!("[{len}]{element}")
+            }
+
+            BuiltinShape::Param(index) => generic_args
+                .get(*index as usize)
+                .map(|&arg| self.display_type_name(arg))
+                .unwrap_or_default(),
+        }
     }
 
     fn normalize_return_operand(&mut self, fb: &FnBuilder, operand: Operand) -> Operand {
