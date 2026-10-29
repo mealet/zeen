@@ -202,6 +202,7 @@ pub enum CompilerKeyword {
 
     Interface,
     Implement,
+    Builtin,
     Type,
 
     TypeOf,
@@ -242,6 +243,7 @@ impl CompilerKeyword {
 
             "interface" => Some(CompilerKeyword::Interface),
             "implement" => Some(CompilerKeyword::Implement),
+            "builtin" => Some(CompilerKeyword::Builtin),
             "type" => Some(CompilerKeyword::Type),
 
             "typeof" => Some(CompilerKeyword::TypeOf),
@@ -284,6 +286,7 @@ impl CompilerKeyword {
 
             CompilerKeyword::Interface => "interface",
             CompilerKeyword::Implement => "implement",
+            CompilerKeyword::Builtin => "builtin",
             CompilerKeyword::Type => "type",
 
             CompilerKeyword::TypeOf => "typeof",

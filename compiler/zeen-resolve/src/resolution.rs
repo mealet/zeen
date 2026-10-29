@@ -6,6 +6,7 @@ use zeen_ast::{
     Declaration, Expression, Source, Statement, TypeExpr,
     declarations::{EnumVariant, FnParam, GenericType, StructField},
     expressions::{Arm, Literal},
+    types::BuiltinType,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +56,35 @@ pub struct BindingSlotKey(pub usize, pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DefId(pub u32);
 
+pub const BUILTIN_DEF_BASE: u32 = 0xF000_0000;
+
+pub fn builtin_def_id(builtin: BuiltinType) -> DefId {
+    let offset = match builtin {
+        BuiltinType::i8 => 0,
+        BuiltinType::i16 => 1,
+        BuiltinType::i32 => 2,
+        BuiltinType::i64 => 3,
+        BuiltinType::isize => 4,
+
+        BuiltinType::u8 => 5,
+        BuiltinType::u16 => 6,
+        BuiltinType::u32 => 7,
+        BuiltinType::u64 => 8,
+        BuiltinType::usize => 9,
+
+        BuiltinType::f32 => 10,
+        BuiltinType::f64 => 11,
+
+        BuiltinType::bool => 12,
+        BuiltinType::char => 13,
+
+        BuiltinType::void => 14,
+        BuiltinType::never => 15,
+    };
+
+    DefId(BUILTIN_DEF_BASE + offset)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Resolution {
     Def(DefId),
@@ -89,6 +119,7 @@ pub enum DefKind {
     GenericParam,
     ExternVar,
     GlobalVar { is_const: bool },
+    Builtin(BuiltinType),
 }
 
 /// Final output of Name Resolver

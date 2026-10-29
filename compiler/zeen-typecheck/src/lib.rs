@@ -677,6 +677,10 @@ impl<'res> TypeChecker<'res> {
                 .insert(generic.def_id, generic.bounds.clone());
         }
 
+        let is_builtin = imp.object.is_some_and(|object_def| {
+            matches!(self.def_kind(object_def), Some(DefKind::Builtin(_)))
+        });
+
         for method in &imp.methods {
             self.declare_signature(method);
 
@@ -694,13 +698,30 @@ impl<'res> TypeChecker<'res> {
                         .insert(method.def_id, iface_def);
                 }
             }
+
+            if is_builtin
+                && self
+                    .fn_sigs
+                    .get(&method.def_id)
+                    .is_some_and(|sig| sig.self_mode.is_none())
+                && let HirDeclKind::Fn(f) = &method.kind
+            {
+                let method_name: smol_str::SmolStr =
+                    self.interner.borrow().resolve(&f.name.0).into();
+
+                self.report(TypeError::BuiltinStaticMethod {
+                    method: method_name,
+                    src: method.source.src(),
+                    span: f.name.1,
+                });
+            }
         }
 
         let Some(object_def) = imp.object else { return };
 
         if !matches!(
             self.def_kind(object_def),
-            Some(DefKind::Struct) | Some(DefKind::Enum)
+            Some(DefKind::Struct) | Some(DefKind::Enum) | Some(DefKind::Builtin(_))
         ) {
             self.report(TypeError::ImplementNonStruct {
                 src: source.src(),
@@ -1049,6 +1070,10 @@ impl<'res> TypeChecker<'res> {
                         .intern(Type::InterfaceSelfPlaceholder(*def_id)),
 
                     _ => {
+                        if let Some(DefKind::Builtin(builtin)) = self.def_kind(*def_id) {
+                            return self.result.interner.builtin(*builtin);
+                        }
+
                         let generic_args: Vec<TypeId> = self
                             .type_member_generics(*def_id)
                             .iter()
@@ -1446,11 +1471,6 @@ impl<'res> TypeChecker<'res> {
 
             HirDeclKind::Implement(imp) => {
                 if let Some(object_def) = imp.object {
-                    let _self_ty = self.result.interner.intern(Type::Struct {
-                        def_id: object_def,
-                        generic_args: Vec::new(),
-                    });
-
                     let impl_ctx = self.impl_method_ctx(imp);
 
                     for method in &imp.methods {
@@ -1518,6 +1538,24 @@ impl<'res> TypeChecker<'res> {
         };
 
         let self_type = struct_def.map(|sd| {
+            let self_mode_ty =
+                |base_ty: TypeId, interner: &mut zeen_types::TypeInterner| match self_mode {
+                    Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_ty,
+                    Some(SelfMode::RefMut) => interner.intern(Type::Pointer {
+                        inner: base_ty,
+                        is_const: false,
+                    }),
+                    Some(SelfMode::RefConst) => interner.intern(Type::Pointer {
+                        inner: base_ty,
+                        is_const: true,
+                    }),
+                };
+
+            if let Some(DefKind::Builtin(builtin)) = self.def_kind(sd) {
+                let base_ty = self.result.interner.builtin(*builtin);
+                return self_mode_ty(base_ty, &mut self.result.interner);
+            }
+
             let is_enum = matches!(self.def_kind(sd), Some(DefKind::Enum));
             let owner_generics = if is_enum {
                 self.enum_generics.get(&sd).cloned().unwrap_or_default()
@@ -1548,19 +1586,8 @@ impl<'res> TypeChecker<'res> {
                 })
             };
 
-            match self_mode {
-                Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_ty,
-                Some(SelfMode::RefMut) => self.result.interner.intern(Type::Pointer {
-                    inner: base_ty,
-                    is_const: false,
-                }),
-                Some(SelfMode::RefConst) => self.result.interner.intern(Type::Pointer {
-                    inner: base_ty,
-                    is_const: true,
-                }),
-            }
+            self_mode_ty(base_ty, &mut self.result.interner)
         });
-
         let mut generic_bindings = HashMap::default();
         let mut generic_bounds = HashMap::default();
 
@@ -4899,15 +4926,33 @@ impl<'res> TypeChecker<'res> {
 
         let current_struct = self.ctx.current().struct_def;
 
-        if Some(owner_struct) != current_struct {
-            let name = self.def_name(method_def_id).unwrap_or_default().into();
-
-            self.report(TypeError::PrivateItemNotAccessible {
-                name,
-                src: source.src(),
-                span: source.span,
-            });
+        if Some(owner_struct) == current_struct {
+            return;
         }
+
+        if matches!(self.def_kind(owner_struct), Some(DefKind::Builtin(_))) {
+            let caller = self.ctx.current_fn_def();
+
+            let same_module = match (
+                self.resolution.def_modules.get(&method_def_id),
+                caller.and_then(|def| self.resolution.def_modules.get(&def)),
+            ) {
+                (Some(method_module), Some(caller_module)) => method_module == caller_module,
+                _ => false,
+            };
+
+            if same_module {
+                return;
+            }
+        }
+
+        let name = self.def_name(method_def_id).unwrap_or_default().into();
+
+        self.report(TypeError::PrivateItemNotAccessible {
+            name,
+            src: source.src(),
+            span: source.span,
+        });
     }
 
     fn try_check_generic_bound_method_call(
@@ -5080,7 +5125,7 @@ impl<'res> TypeChecker<'res> {
             );
         }
 
-        let obj_ty = self.synth_expr(object);
+        let mut obj_ty = self.synth_expr(object);
         self.type_names_as_values.remove(&object.id);
 
         if matches!(self.result.interner.get(obj_ty), Type::GenericParam(_)) {
@@ -5115,41 +5160,55 @@ impl<'res> TypeChecker<'res> {
                     Type::Builtin(b) => b,
                     _ => unreachable!(),
                 };
-                let field_str = self.interner.borrow().resolve(&field_name).to_string();
-                for iface_name in Self::builtin_interface_names(builtin_ty) {
-                    let Some(iface_def) = self.interface_registry.get(iface_name) else {
-                        continue;
-                    };
-                    if let Some(methods) = self.interface_methods.get(&iface_def) {
-                        for &method_def in methods {
-                            let mname = self.def_name(method_def).unwrap_or_default();
-                            if mname != field_str {
-                                continue;
-                            }
-                            let (sig_params_len, sig_ret) = {
-                                let Some(sig) = self.fn_sigs.get(&method_def) else {
-                                    panic!("interface method sig missing for {}", mname);
+
+                let builtin_owner = zeen_resolve::builtin_def_id(builtin_ty);
+                let has_inherent = self
+                    .struct_methods
+                    .get(&builtin_owner)
+                    .is_some_and(|methods| methods.contains_key(&field_name));
+
+                if !has_inherent {
+                    let field_str = self.interner.borrow().resolve(&field_name).to_string();
+                    for iface_name in Self::builtin_interface_names(builtin_ty) {
+                        let Some(iface_def) = self.interface_registry.get(iface_name) else {
+                            continue;
+                        };
+                        if let Some(methods) = self.interface_methods.get(&iface_def) {
+                            for &method_def in methods {
+                                let mname = self.def_name(method_def).unwrap_or_default();
+                                if mname != field_str {
+                                    continue;
+                                }
+                                let (sig_params_len, sig_ret) = {
+                                    let Some(sig) = self.fn_sigs.get(&method_def) else {
+                                        panic!("interface method sig missing for {}", mname);
+                                    };
+                                    (sig.params.len(), sig.ret)
                                 };
-                                (sig.params.len(), sig.ret)
-                            };
-                            if args.len() != sig_params_len - 1 {
-                                self.report(TypeError::ArgCountMismatch {
-                                    expected: sig_params_len - 1,
-                                    found: args.len(),
-                                    src: source.src(),
-                                    span: source.span,
-                                });
+                                if args.len() != sig_params_len - 1 {
+                                    self.report(TypeError::ArgCountMismatch {
+                                        expected: sig_params_len - 1,
+                                        found: args.len(),
+                                        src: source.src(),
+                                        span: source.span,
+                                    });
+                                }
+                                self.result.call_resolutions.insert(
+                                    call_id,
+                                    crate::result::CallResolution {
+                                        fn_def: method_def,
+                                        generic_args: Vec::new(),
+                                    },
+                                );
+                                return Some(sig_ret);
                             }
-                            self.result.call_resolutions.insert(
-                                call_id,
-                                crate::result::CallResolution {
-                                    fn_def: method_def,
-                                    generic_args: Vec::new(),
-                                },
-                            );
-                            return Some(sig_ret);
                         }
                     }
+                }
+
+                if !matches!(self.result.interner.get(obj_ty), Type::Builtin(_)) {
+                    obj_ty = self.result.interner.builtin(builtin_ty);
+                    self.result.record_expr_type(object.id, obj_ty);
                 }
             }
             _ => {}
@@ -5165,6 +5224,19 @@ impl<'res> TypeChecker<'res> {
                     def_id,
                     generic_args,
                 } => (def_id, generic_args, false, false),
+                Type::Builtin(builtin) => {
+                    let def_id = zeen_resolve::builtin_def_id(builtin);
+
+                    if !self
+                        .struct_methods
+                        .get(&def_id)
+                        .is_some_and(|methods| methods.contains_key(&field_name))
+                    {
+                        return None;
+                    }
+
+                    (def_id, Vec::new(), false, false)
+                }
                 Type::Pointer { inner, is_const } => {
                     match self.result.interner.get(inner).clone() {
                         Type::Struct {
@@ -5175,6 +5247,19 @@ impl<'res> TypeChecker<'res> {
                             def_id,
                             generic_args,
                         } => (def_id, generic_args, true, is_const),
+                        Type::Builtin(builtin) => {
+                            let def_id = zeen_resolve::builtin_def_id(builtin);
+
+                            if !self
+                                .struct_methods
+                                .get(&def_id)
+                                .is_some_and(|methods| methods.contains_key(&field_name))
+                            {
+                                return None;
+                            }
+
+                            (def_id, Vec::new(), true, is_const)
+                        }
                         _ => return None,
                     }
                 }
@@ -8752,6 +8837,106 @@ mod tests {
         assert!(
             result.is_ok(),
             "interface method declared pub must be publicly callable"
+        );
+    }
+
+    #[test]
+    fn builtin_method_call_with_receiver_works() {
+        let result = typecheck(
+            r#"
+            implement builtin i32 {
+                fn is_even(*const self) bool {
+                    return (*self) % 2 == 0;
+                }
+            }
+
+            fn main() {
+                let n: i32 = 4;
+                let even = n.is_even();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "builtin method with a receiver must typecheck"
+        );
+    }
+
+    #[test]
+    fn builtin_method_without_pub_is_callable_in_same_module() {
+        let result = typecheck(
+            r#"
+            implement builtin i32 {
+                fn doubled(const self) i32 {
+                    return self * 2;
+                }
+            }
+
+            fn main() {
+                let n: i32 = 4;
+                let doubled = n.doubled();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "non-pub builtin methods must be visible inside their module"
+        );
+    }
+
+    #[test]
+    fn builtin_static_method_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn zero() i32 {
+                    return 0;
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("static methods in builtin blocks must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::BuiltinStaticMethod { .. })),
+            "expected BuiltinStaticMethod error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_duplicate_method_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn doubled(const self) i32 {
+                    return self * 2;
+                }
+            }
+
+            implement builtin i32 {
+                fn doubled(const self) i32 {
+                    return self * 3;
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("duplicate builtin methods must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::DuplicateMethod { .. })),
+            "expected DuplicateMethod error, got: {errors:?}"
         );
     }
 

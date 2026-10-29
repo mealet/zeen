@@ -5,9 +5,11 @@ use crate::{
 
 use smallvec::SmallVec;
 
+use lasso::Spur;
+use smol_str::SmolStr;
 use zeen_ast::{
     Declaration, DeclarationKind, Expression, ExpressionKind, PreprocessorDirective, Statement,
-    StatementKind, TypeExpr, declarations,
+    StatementKind, TypeExpr, declarations, types::BuiltinType,
 };
 use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
@@ -1058,23 +1060,58 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let mut type_parser = TypeParser::new(self.p);
         let generics = type_parser.parse_generics_declarations();
 
-        let first_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let first_span = first_token.span;
-        let first_slice =
-            self.p.src[first_span.offset()..first_span.offset() + first_span.len()].to_owned();
+        let builtin_target = if self.p.at(TokenKind::Keyword(CompilerKeyword::Builtin)) {
+            if generics.is_some() {
+                self.p.report(ParserError::SyntaxError {
+                    label: SmolStr::from(
+                        "generic parameters are not allowed on builtin implement blocks",
+                    ),
+                    help: None,
+                    src: self.p.named_src(),
+                    span: start_span,
+                });
 
-        let first = (self.p.get_or_intern(first_slice), first_span);
+                return None;
+            }
 
-        let (interface, object_name, object_span) = if self.p.eat(TokenKind::Colon) {
-            let object_token = self.p.expect(TokenKind::Ident, "identifier")?;
-            let object_span = object_token.span;
-            let object_slice = self.p.src
-                [object_span.offset()..object_span.offset() + object_span.len()]
-                .to_owned();
-
-            (Some(first), self.p.get_or_intern(object_slice), object_span)
+            Some(self.parse_builtin_implement_target()?)
         } else {
-            (None, first.0, first_span)
+            None
+        };
+
+        let (interface, object_name, object_span) = if let Some((_, name, span)) = builtin_target {
+            (None, name, span)
+        } else {
+            let first_token = self.p.expect(TokenKind::Ident, "identifier")?;
+            let first_span = first_token.span;
+            let first_slice =
+                self.p.src[first_span.offset()..first_span.offset() + first_span.len()].to_owned();
+
+            let first = (self.p.get_or_intern(first_slice), first_span);
+
+            if self.p.eat(TokenKind::Colon) {
+                if self.p.at(TokenKind::Keyword(CompilerKeyword::Builtin)) {
+                    self.p.report(ParserError::UnsupportedAction {
+                        label: SmolStr::from(
+                            "interface implementations for builtin types are not supported",
+                        ),
+                        src: self.p.named_src(),
+                        span: self.p.current().span,
+                    });
+
+                    return None;
+                }
+
+                let object_token = self.p.expect(TokenKind::Ident, "identifier")?;
+                let object_span = object_token.span;
+                let object_slice = self.p.src
+                    [object_span.offset()..object_span.offset() + object_span.len()]
+                    .to_owned();
+
+                (Some(first), self.p.get_or_intern(object_slice), object_span)
+            } else {
+                (None, first.0, first_span)
+            }
         };
 
         let mut generic_bindings: Vec<&'ctx TypeExpr<'ctx>> = Vec::new();
@@ -1124,6 +1161,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::ImplementDecl {
                 interface,
+                builtin: builtin_target.map(|(builtin, _, _)| builtin),
                 object,
                 generics,
                 methods,
@@ -1132,6 +1170,55 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         });
 
         Some(decl)
+    }
+
+    fn parse_builtin_implement_target(
+        &mut self,
+    ) -> Option<(BuiltinType, Spur, miette::SourceSpan)> {
+        let _ = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Builtin), "builtin")?;
+
+        let token = self.p.current_clone();
+
+        let TokenKind::Type(compiler_type) = token.kind else {
+            self.p.report(ParserError::ExpectedToken {
+                expected: SmolStr::from("builtin type"),
+                src: self.p.named_src(),
+                span: token.span,
+            });
+
+            return None;
+        };
+
+        let _ = self.p.advance();
+
+        let builtin = BuiltinType::try_lexer_type(compiler_type);
+
+        if matches!(builtin, BuiltinType::void | BuiltinType::never) {
+            self.p.report(ParserError::UnsupportedAction {
+                label: SmolStr::from("`void` and `never` cannot have builtin implement blocks"),
+                src: self.p.named_src(),
+                span: token.span,
+            });
+
+            return None;
+        }
+
+        if self.p.at(TokenKind::OpenBracket) {
+            self.p.report(ParserError::UnsupportedAction {
+                label: SmolStr::from("builtin implement blocks cannot carry type arguments"),
+                src: self.p.named_src(),
+                span: self.p.current().span,
+            });
+
+            return None;
+        }
+
+        let slice =
+            self.p.src[token.span.offset()..token.span.offset() + token.span.len()].to_owned();
+
+        Some((builtin, self.p.get_or_intern(slice), token.span))
     }
 
     fn parse_global_var(
@@ -2294,6 +2381,7 @@ mod tests {
             Ok([Declaration {
                 kind: DeclarationKind::ImplementDecl {
                     interface: _,
+                    builtin: _,
                     object: _,
                     generics: None,
                     methods: [Declaration {
@@ -2308,6 +2396,79 @@ mod tests {
                 ..
             }])
         );
+    }
+
+    #[test]
+    fn implement_builtin_block_parses() {
+        const SRC: &str = "implement builtin i32 {
+            fn is_even(*const self) bool {
+                return (*self) % 2 == 0;
+            }
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ImplementDecl {
+                    interface: None,
+                    builtin: Some(zeen_ast::types::BuiltinType::i32),
+                    generics: None,
+                    methods: [Declaration {
+                        kind: DeclarationKind::FnDecl { .. },
+                        ..
+                    }],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn implement_builtin_rejects_void() {
+        const SRC: &str = "implement builtin void {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_generics() {
+        const SRC: &str = "implement[T] builtin i32 {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_type_args() {
+        const SRC: &str = "implement builtin i32[i32] {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_interface_form() {
+        const SRC: &str = "implement Show : builtin i32 {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_non_builtin_name() {
+        const SRC: &str = "implement builtin Foo {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
     }
 
     #[test]

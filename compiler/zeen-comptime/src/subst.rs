@@ -323,6 +323,7 @@ impl<'arena> Interp<'arena> {
 
             DeclarationKind::ImplementDecl {
                 interface,
+                builtin,
                 object,
                 generics,
                 methods,
@@ -375,6 +376,7 @@ impl<'arena> Interp<'arena> {
                     Ok(Some(self.arena.alloc(Declaration {
                         kind: DeclarationKind::ImplementDecl {
                             interface: *interface,
+                            builtin: *builtin,
                             object: (
                                 *object_name,
                                 *object_span,
@@ -774,7 +776,7 @@ impl<'arena> Interp<'arena> {
             ExpressionKind::Ident { .. } => false,
 
             ExpressionKind::FieldAccess { object, .. } => {
-                self.is_comptime_value_expr(module, object)
+                self.is_comptime_method_receiver(module, object)
             }
 
             ExpressionKind::SliceAccess { object, index } => {
@@ -800,7 +802,7 @@ impl<'arena> Interp<'arena> {
 
             ExpressionKind::Call { callee, .. } => match &callee.kind {
                 ExpressionKind::FieldAccess { object, .. } => {
-                    self.is_comptime_value_expr(module, object)
+                    self.is_comptime_method_receiver(module, object)
                 }
                 ExpressionKind::Ident {
                     name,
@@ -811,6 +813,80 @@ impl<'arena> Interp<'arena> {
 
             _ => false,
         }
+    }
+
+    fn is_comptime_method_receiver(
+        &mut self,
+        module: &PathBuf,
+        expr: &'arena Expression<'arena>,
+    ) -> bool {
+        if !self.is_comptime_value_expr(module, expr) {
+            return false;
+        }
+
+        match &expr.kind {
+            ExpressionKind::Literal(_) => false,
+
+            ExpressionKind::Ident {
+                name,
+                generic_args: None,
+            } => matches!(
+                self.comptime_const_value(module, *name),
+                Some(Value::Struct(_) | Value::Array(_))
+            ),
+
+            ExpressionKind::FieldAccess { object, .. }
+            | ExpressionKind::SliceAccess { object, .. } => {
+                self.is_comptime_method_receiver(module, object)
+            }
+
+            ExpressionKind::Call { callee, .. } => match &callee.kind {
+                ExpressionKind::Ident {
+                    name,
+                    generic_args: None,
+                } => self.comptime_fn_returns_struct(module, *name, expr.span),
+                ExpressionKind::FieldAccess { object, .. } => {
+                    self.is_comptime_method_receiver(module, object)
+                }
+                _ => false,
+            },
+
+            _ => false,
+        }
+    }
+
+    fn comptime_fn_returns_struct(
+        &mut self,
+        module: &PathBuf,
+        name: Spur,
+        span: miette::SourceSpan,
+    ) -> bool {
+        let Ok(Some(owner)) = self.resolve_comptime_fn(module, name, span) else {
+            return false;
+        };
+
+        let ret = self
+            .scopes
+            .get(&owner)
+            .and_then(|scope| scope.fns.get(&name))
+            .and_then(|decl| match &decl.kind {
+                DeclarationKind::ComptimeFn { return_type, .. } => *return_type,
+                _ => None,
+            });
+
+        let Some(ret) = ret else {
+            return false;
+        };
+
+        let TypeKind::Named { name, .. } = &ret.kind else {
+            return false;
+        };
+
+        let ret_name = *name;
+
+        self.scopes
+            .get(&owner)
+            .is_some_and(|scope| scope.comptime_structs.contains_key(&ret_name))
     }
 
     fn is_void_comptime_call(

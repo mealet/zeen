@@ -6884,6 +6884,18 @@ impl<'ctx> MirLowering<'ctx> {
         )
     }
 
+    fn is_user_builtin_method(&self, fn_def: DefId) -> bool {
+        self.typecheck
+            .method_owner
+            .get(&fn_def)
+            .is_some_and(|owner| {
+                matches!(
+                    self.resolution.defs.get(owner).map(|info| &info.kind),
+                    Some(DefKind::Builtin(_))
+                )
+            })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn try_lower_builtin_display(
         &mut self,
@@ -6895,6 +6907,10 @@ impl<'ctx> MirLowering<'ctx> {
         args: &[Rc<HirExpr>],
         source: Option<Source>,
     ) -> Option<(BlockId, Operand)> {
+        if self.is_user_builtin_method(fn_def) {
+            return None;
+        }
+
         let method_name = {
             let r = self.rodeo.borrow();
             r.resolve(&self.resolution.defs[&fn_def].name).to_string()
@@ -6980,6 +6996,10 @@ impl<'ctx> MirLowering<'ctx> {
         fn_def: DefId,
         source: Option<Source>,
     ) -> Option<(BlockId, Operand)> {
+        if self.is_user_builtin_method(fn_def) {
+            return None;
+        }
+
         let method_name = {
             let r = self.rodeo.borrow();
             r.resolve(&self.resolution.defs[&fn_def].name).to_string()

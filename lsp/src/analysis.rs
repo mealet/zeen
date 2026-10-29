@@ -948,6 +948,7 @@ impl<'ctx> Walker<'ctx> {
             | DefKind::TypeAlias
             | DefKind::Enum
             | DefKind::GenericParam
+            | DefKind::Builtin(_)
             | DefKind::InterfaceSelfPlaceholder => Role::Type,
 
             DefKind::EnumVariant => Role::EnumMember,

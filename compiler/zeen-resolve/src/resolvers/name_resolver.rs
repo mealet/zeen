@@ -14,7 +14,7 @@ use zeen_ast::{
     declarations::{Declaration, DeclarationKind, EnumVariantPayload, GenericType},
     expressions::{Expression, ExpressionKind, Literal, Pattern, UnaryOp},
     statements::{Statement, StatementKind},
-    types::{TypeExpr, TypeKind},
+    types::{BuiltinType, TypeExpr, TypeKind},
 };
 
 use crate::{
@@ -914,6 +914,7 @@ impl<'ctx> NameResolver {
 
             DeclarationKind::ImplementDecl {
                 interface,
+                builtin,
                 object,
                 methods,
                 generics,
@@ -948,22 +949,32 @@ impl<'ctx> NameResolver {
                 }
 
                 let (object_name, object_span, object_bindings) = object;
-                let object_ambiguous = self.check_ambiguous_type(object_name, object_span);
-                let object_def = if object_ambiguous {
-                    None
-                } else {
-                    self.table.lookup_type(object_name)
+
+                let object_def = match builtin {
+                    Some(builtin) => {
+                        Some(self.register_builtin_def(builtin, object_name, object_span))
+                    }
+                    None => {
+                        let object_ambiguous = self.check_ambiguous_type(object_name, object_span);
+                        let object_def = if object_ambiguous {
+                            None
+                        } else {
+                            self.table.lookup_type(object_name)
+                        };
+
+                        if object_def.is_none() && !object_ambiguous {
+                            let object_name = self.interner_resolve(&object_name);
+
+                            self.report(ResolveError::UnresolvedType {
+                                name: object_name,
+                                src: decl.source.src(),
+                                span: object_span,
+                            });
+                        }
+
+                        object_def
+                    }
                 };
-
-                if object_def.is_none() && !object_ambiguous {
-                    let object_name = self.interner_resolve(&object_name);
-
-                    self.report(ResolveError::UnresolvedType {
-                        name: object_name,
-                        src: decl.source.src(),
-                        span: object_span,
-                    });
-                }
 
                 self.result.implement_names.insert(
                     NodeKey::from_decl(decl),
@@ -1435,6 +1446,29 @@ impl<'ctx> NameResolver {
         self.table.pop();
 
         method_id
+    }
+
+    fn register_builtin_def(
+        &mut self,
+        builtin: BuiltinType,
+        name: Spur,
+        span: SourceSpan,
+    ) -> DefId {
+        let def_id = crate::resolution::builtin_def_id(builtin);
+
+        if !self.result.defs.contains_key(&def_id) {
+            let info = DefInfo {
+                name,
+                kind: DefKind::Builtin(builtin),
+                span: (span, self.named_src()).into(),
+                decl: None,
+                is_pub: true,
+            };
+
+            self.result.defs.insert(def_id, info);
+        }
+
+        def_id
     }
 
     fn resolve_interface_method(

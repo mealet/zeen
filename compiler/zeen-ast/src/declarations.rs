@@ -1,7 +1,12 @@
 use lasso::Spur;
 use miette::SourceSpan;
 
-use crate::{Source, expressions::Expression, statements::Statement, types::TypeExpr};
+use crate::{
+    Source,
+    expressions::Expression,
+    statements::Statement,
+    types::{BuiltinType, TypeExpr},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Declaration<'arena> {
@@ -53,6 +58,7 @@ pub enum DeclarationKind<'arena> {
 
     ImplementDecl {
         interface: Option<(Spur, SourceSpan)>,
+        builtin: Option<BuiltinType>,
         object: (Spur, SourceSpan, &'arena [&'arena TypeExpr<'arena>]), // name, span, generics slots
         generics: Option<&'arena [GenericType<'arena>]>,
 

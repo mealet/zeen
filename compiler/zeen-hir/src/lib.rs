@@ -237,6 +237,7 @@ impl<'res> HirLowering<'res> {
 
             DeclarationKind::ImplementDecl {
                 interface: _,
+                builtin: _,
                 object,
                 methods,
                 generics,

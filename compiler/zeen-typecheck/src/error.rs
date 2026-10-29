@@ -647,6 +647,21 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("static methods are not supported in builtin implement blocks")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::builtin_static_method),
+        help("declare the method with a `self`, `const self`, `*self` or `*const self` receiver")
+    )]
+    BuiltinStaticMethod {
+        method: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("`{method}` has no receiver")]
+        span: SourceSpan,
+    },
+
     #[error("private item is not accessible: `{name}`")]
     #[diagnostic(severity(Error), code(zeen::typecheck::private_item))]
     PrivateItemNotAccessible {

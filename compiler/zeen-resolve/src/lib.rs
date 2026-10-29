@@ -11,7 +11,8 @@ use zeen_ast::Declaration;
 use zeen_driver::CompilationContext;
 
 pub use resolution::{
-    BindingSlotKey, DefId, DefInfo, DefKind, NodeKey, Resolution, ResolutionResult,
+    BUILTIN_DEF_BASE, BindingSlotKey, DefId, DefInfo, DefKind, NodeKey, Resolution,
+    ResolutionResult, builtin_def_id,
 };
 
 mod error;
