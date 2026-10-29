@@ -143,6 +143,20 @@ mod tests {
     }
 
     fn resolve_full(src: &str) -> Result<Fixture, Vec<ResolveError>> {
+        resolve_full_with(src, None)
+    }
+
+    fn resolve_full_with_std(src: &str) -> Result<Fixture, Vec<ResolveError>> {
+        resolve_full_with(
+            src,
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")),
+        )
+    }
+
+    fn resolve_full_with(
+        src: &str,
+        std_root: Option<PathBuf>,
+    ) -> Result<Fixture, Vec<ResolveError>> {
         let rodeo = Rc::new(RefCell::new(Rodeo::default()));
         let bump = Bump::default();
         let content = Arc::new(src.to_string());
@@ -151,11 +165,18 @@ mod tests {
         let mut context = CompilationContext {
             paths: PathsConfig {
                 project_root: PathBuf::from("/"),
-                std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")),
+                std_root: std_root.clone(),
                 linked: HashSet::default(),
                 packages: Vec::new(),
             },
-            core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
+            core_files: if std_root.is_some() {
+                zeen_driver::CORE_FILES
+                    .iter()
+                    .map(|file| file.to_basic())
+                    .collect()
+            } else {
+                vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)]
+            },
             mode: CompilationMode::Debug,
             output: CompilationOutput::EmitMIR,
             target: None,
@@ -213,20 +234,32 @@ mod tests {
         })
     }
 
+    fn resolve_ok_with_std(src: &str) -> Fixture {
+        resolve_full_with_std(src).unwrap_or_else(|errors| {
+            panic!(
+                "expected resolution to succeed, got errors:\n{}",
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        })
+    }
+
     fn resolve_files(
         tag: &str,
         files: &[(&str, &str)],
         entry: &str,
     ) -> Result<Fixture, Vec<ResolveError>> {
-        let std_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src");
-        resolve_files_with_std(tag, files, entry, std_root)
+        resolve_files_with_std(tag, files, entry, None)
     }
 
     fn resolve_files_with_std(
         tag: &str,
         files: &[(&str, &str)],
         entry: &str,
-        std_root: PathBuf,
+        std_root: Option<PathBuf>,
     ) -> Result<Fixture, Vec<ResolveError>> {
         let dir = std::env::temp_dir().join(format!("zeen-resolve-{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -244,11 +277,14 @@ mod tests {
         let mut context = CompilationContext {
             paths: PathsConfig {
                 project_root: dir,
-                std_root: Some(std_root),
+                std_root,
                 linked: HashSet::default(),
                 packages: Vec::new(),
             },
-            core_files: vec![("core.ops", CORE_OPS), ("core.out", CORE_OUT)],
+            core_files: zeen_driver::CORE_FILES
+                .iter()
+                .map(|file| file.to_basic())
+                .collect(),
             mode: CompilationMode::Debug,
             output: CompilationOutput::EmitMIR,
             target: None,
@@ -330,7 +366,7 @@ mod tests {
                 ("helpers.zn", "pub fn neg() i8 {\n    return -1;\n}\n"),
             ],
             "main.zn",
-            std_root.clone(),
+            Some(std_root.clone()),
         )
         .unwrap_or_else(|errors| {
             panic!(
@@ -898,7 +934,7 @@ mod tests {
 
     #[test]
     fn closure_registers_def_and_captures_local() {
-        let fx = resolve_ok("fn main() { let x = 1; let c = fn() i32 { return x; }; }");
+        let fx = resolve_ok_with_std("fn main() { let x = 1; let c = fn() i32 { return x; }; }");
 
         let closure = fx
             .def_id_by_name("closure0")
@@ -911,7 +947,7 @@ mod tests {
 
     #[test]
     fn zero_capture_closure_has_no_captures() {
-        let fx = resolve_ok("fn main() { let x = 1; let c = fn() i32 { return 0; }; }");
+        let fx = resolve_ok_with_std("fn main() { let x = 1; let c = fn() i32 { return 0; }; }");
 
         let closure = fx
             .def_id_by_name("closure0")
@@ -922,7 +958,7 @@ mod tests {
 
     #[test]
     fn nested_closure_capture_cascades_to_outer() {
-        let fx = resolve_ok(
+        let fx = resolve_ok_with_std(
             "fn main() { let x = 1; let outer = fn() i32 { let y = 2; let inner = fn() i32 { return x + y; }; return inner(); }; }",
         );
 
@@ -942,7 +978,7 @@ mod tests {
 
     #[test]
     fn closure_dedups_and_keeps_first_use_order() {
-        let fx = resolve_ok(
+        let fx = resolve_ok_with_std(
             "fn main() { let a = 1; let b = 2; let c = fn() i32 { return a + b + a + a; }; }",
         );
 
@@ -958,7 +994,7 @@ mod tests {
 
     #[test]
     fn closure_inside_nested_fn_captures_only_nested_fn_frame() {
-        let fx = resolve_ok(
+        let fx = resolve_ok_with_std(
             "fn main() { let x = 1; fn nested() i32 { let y = 2; let c = fn() i32 { return y; }; return c(); } return x; }",
         );
 
@@ -971,7 +1007,7 @@ mod tests {
 
     #[test]
     fn closure_in_nested_fn_cannot_reach_enclosing_frame() {
-        let errs = resolve_full(
+        let errs = resolve_full_with_std(
             "fn main() { let x = 1; fn nested() i32 { let c = fn() i32 { return x; }; return c(); } return 0; }",
         )
         .unwrap_err();
@@ -983,7 +1019,7 @@ mod tests {
 
     #[test]
     fn nested_fn_inside_closure_cannot_capture_closure_frame() {
-        let errs = resolve_full(
+        let errs = resolve_full_with_std(
             "fn main() { let x = 1; let c = fn() i32 { fn nested() i32 { return x; } return nested(); }; }",
         )
         .unwrap_err();
@@ -995,7 +1031,7 @@ mod tests {
 
     #[test]
     fn self_inside_closure_is_reported() {
-        let errs = resolve_full(
+        let errs = resolve_full_with_std(
             "interface Getter { fn get(self) i32; } struct Foo { v: i32 } implement Getter: Foo { fn get(self) i32 { let c = fn() i32 { return self.v; }; return c(); } }",
         )
         .unwrap_err();
@@ -1008,7 +1044,8 @@ mod tests {
 
     #[test]
     fn closure_param_named_self_is_reported() {
-        let errs = resolve_full("fn main() { let c = fn(self) i32 { return 1; }; }").unwrap_err();
+        let errs =
+            resolve_full_with_std("fn main() { let c = fn(self) i32 { return 1; }; }").unwrap_err();
 
         assert!(
             errs.iter()
@@ -1018,7 +1055,9 @@ mod tests {
 
     #[test]
     fn closure_capturing_generic_param_is_recorded() {
-        let fx = resolve_ok("fn generic[T](v: T) T { let c = fn() T { return v; }; return c(); }");
+        let fx = resolve_ok_with_std(
+            "fn generic[T](v: T) T { let c = fn() T { return v; }; return c(); }",
+        );
 
         let closure = fx
             .def_id_by_name("closure0")
@@ -1032,7 +1071,7 @@ mod tests {
 
     #[test]
     fn closure_calling_sibling_function_is_not_a_capture() {
-        let fx = resolve_ok(
+        let fx = resolve_ok_with_std(
             "fn helper() i32 { return 1; } fn main() { let c = fn() i32 { return helper(); }; }",
         );
 

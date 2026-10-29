@@ -766,7 +766,15 @@ fn global_initialized_from_another_global() {
          fn main() {}",
     );
 
-    assert_eq!(mir.program.global_vars.len(), 2);
+    let names: Vec<&str> = mir
+        .program
+        .global_vars
+        .iter()
+        .map(|global| global.symbol_name.as_str())
+        .collect();
+
+    assert!(names.contains(&"ZERO"));
+    assert!(names.contains(&"ALIAS"));
 }
 
 use crate::{
@@ -1839,15 +1847,15 @@ fn print_mir_ok(src: &str) -> String {
 fn printed_mir_renders_builtin_static_method_calls() {
     let printed = print_mir_ok(
         "implement builtin i32 { \
-             fn max_value() i32 { return 2147483647; } \
+             fn largest() i32 { return 2147483647; } \
              fn pick[T](value: T) T { return value; } \
          } \
-         fn main() { let a = i32.max_value(); let b = i32.pick(7); @println(\"{}\", a); @println(\"{}\", b); }",
+         fn main() { let a = i32.largest(); let b = i32.pick(7); @println(\"{}\", a); @println(\"{}\", b); }",
     );
 
-    assert!(printed.contains("fn i32.max_value() i32"), "{printed}");
+    assert!(printed.contains("fn i32.largest() i32"), "{printed}");
     assert!(printed.contains("fn i32.pick("), "{printed}");
-    assert!(printed.contains("i32.max_value() ->"), "{printed}");
+    assert!(printed.contains("i32.largest() ->"), "{printed}");
     assert!(printed.contains("i32.pick(7) ->"), "{printed}");
 }
 

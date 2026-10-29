@@ -1123,8 +1123,6 @@ mod tests {
     use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
     use zeen_parser::Parser;
 
-    const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
-
     #[derive(Debug)]
     struct Fixture {
         rodeo: Rc<RefCell<Rodeo>>,
@@ -1172,15 +1170,23 @@ mod tests {
                 .expect("enum not found")
         }
 
-        fn implement_decl(&self) -> Rc<HirImplement> {
+        fn implement_with_method(&self, method: &str) -> Rc<HirImplement> {
             self.module
                 .decls
                 .iter()
-                .find_map(|decl| match &decl.kind {
-                    HirDeclKind::Implement(i) => Some(i.clone()),
+                .find_map(|decl| {
+                    match &decl.kind {
+                    HirDeclKind::Implement(i)
+                        if i.methods.iter().any(|m| {
+                            matches!(&m.kind, HirDeclKind::Fn(f) if self.name(f.name.0) == method)
+                        }) =>
+                    {
+                        Some(i.clone())
+                    }
                     _ => None,
+                }
                 })
-                .expect("no implement decl in module")
+                .expect("no implement decl with method")
         }
 
         fn global_var(&self, name: &str) -> (Spur, Rc<HirTypeExpr>, Rc<HirExpr>, bool, bool) {
@@ -1227,7 +1233,10 @@ mod tests {
                 linked: HashSet::default(),
                 packages: Vec::new(),
             },
-            core_files: vec![("core.ops", CORE_OPS)],
+            core_files: zeen_driver::CORE_FILES
+                .iter()
+                .map(|file| file.to_basic())
+                .collect(),
             mode: CompilationMode::Debug,
             output: CompilationOutput::EmitMIR,
             target: None,
@@ -1467,7 +1476,7 @@ mod tests {
              struct Foo { value: i32 } \
              implement Pretty : Foo { fn pretty(self) i32 { return self.value; } }",
         );
-        let implement = fx.implement_decl();
+        let implement = fx.implement_with_method("pretty");
 
         assert!(implement.interface.is_some());
         assert!(implement.object.is_some());

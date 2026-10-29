@@ -1,7 +1,7 @@
 use helpers;
 
 fn main() {
-  @println("{}", i32.max_value());
+  @println("{}", i32.largest());
   @println("{}", i32.pick(9));
   @println("{}", i32.pick('z'));
 }

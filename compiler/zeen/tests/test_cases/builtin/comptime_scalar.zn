@@ -3,7 +3,7 @@ implement builtin i32 {
     return (*self) % 2 == 0;
   }
 
-  fn max_value() i32 {
+  fn largest() i32 {
     return 2147483647;
   }
 }
@@ -19,5 +19,5 @@ fn main() {
   @println("{}", n.is_even());
   @println("{}", (LIMIT + 1).is_even());
   @println("{}", double(LIMIT).is_even());
-  @println("{}", i32.max_value());
+  @println("{}", i32.largest());
 }
