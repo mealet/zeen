@@ -67,6 +67,9 @@ pub struct IncludeResolver<'ctx> {
     decl_owner: HashMap<usize, u32>,
     module_ids: Vec<PathBuf>,
 
+    primitives: Vec<String>,
+    primitives_dir: Option<PathBuf>,
+
     src: Arc<String>,
     filename: Rc<String>,
     errors: Vec<ResolveError>,
@@ -83,6 +86,13 @@ impl<'ctx> IncludeResolver<'ctx> {
         target: Target,
         mode: CompilationMode,
     ) -> Self {
+        let primitives = zeen_driver::primitive_modules(context.paths.std_root.as_deref());
+        let primitives_dir = context
+            .paths
+            .std_root
+            .as_ref()
+            .map(|root| canonicalize_best_effort(&root.join("primitives")));
+
         Self {
             arena,
             interner,
@@ -99,6 +109,10 @@ impl<'ctx> IncludeResolver<'ctx> {
             edges: HashMap::default(),
             decl_owner: HashMap::default(),
             module_ids: Vec::new(),
+
+            primitives,
+            primitives_dir,
+
             errors: Vec::new(),
         }
     }
@@ -630,22 +644,34 @@ impl<'ctx> IncludeResolver<'ctx> {
         available || (module == "std.string" && has_format)
     }
 
-    fn missing_synthetic_uses(&self, decls: &[&'ctx Declaration<'ctx>]) -> Vec<&'static str> {
+    fn missing_synthetic_uses(&self, decls: &[&'ctx Declaration<'ctx>]) -> Vec<String> {
         let usage = self.usage_flags(decls);
         let candidates = [
             ("std.string", usage.has_string || usage.has_format),
             ("std.collections.list", usage.has_list),
             ("std.fn", usage.has_fat),
         ];
-        candidates
-            .into_iter()
-            .filter(|(module, needed)| {
-                *needed
-                    && !self.module_has_use(decls, module)
-                    && self.synth_file_available(module, usage.has_format)
-            })
-            .map(|(module, _)| module)
-            .collect()
+
+        let mut modules = self.primitives.clone();
+
+        modules.extend(
+            candidates
+                .into_iter()
+                .filter(|(module, needed)| {
+                    *needed && self.synth_file_available(module, usage.has_format)
+                })
+                .map(|(module, _)| module.to_string()),
+        );
+
+        modules.retain(|module| !self.module_has_use(decls, module));
+
+        modules
+    }
+
+    fn is_primitive_module(&self, path: &Path) -> bool {
+        self.primitives_dir
+            .as_deref()
+            .is_some_and(|dir| canonicalize_best_effort(path).starts_with(dir))
     }
 
     fn inject_prelude_uses(&mut self) {
@@ -654,7 +680,7 @@ impl<'ctx> IncludeResolver<'ctx> {
             let keys: Vec<PathBuf> = self.modules.keys().cloned().collect();
             for key in &keys {
                 let module = &self.modules[key];
-                if module.is_core {
+                if module.is_core || self.is_primitive_module(&module.canonical_path) {
                     continue;
                 }
                 let relevant: Vec<&'ctx Declaration<'ctx>> = module
@@ -670,12 +696,13 @@ impl<'ctx> IncludeResolver<'ctx> {
                 let span = SourceSpan::new(0.into(), 0);
                 let source = module
                     .decls
-                    .first()
+                    .iter()
+                    .find(|decl| !self.is_core_decl(decl))
                     .map(|decl| decl.source.clone())
                     .unwrap_or_else(|| Source::from((span, module.named_src.clone())));
                 let mut grown: Vec<&'ctx Declaration<'ctx>> = module.decls.to_vec();
                 for synth in missing {
-                    self.push_synthetic_use(&mut grown, synth, span, source.clone());
+                    self.push_synthetic_use(&mut grown, &synth, span, source.clone());
                 }
                 self.modules.get_mut(key).expect("module present").decls =
                     self.arena.alloc_slice_copy(&grown);

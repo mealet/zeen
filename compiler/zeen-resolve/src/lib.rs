@@ -218,6 +218,16 @@ mod tests {
         files: &[(&str, &str)],
         entry: &str,
     ) -> Result<Fixture, Vec<ResolveError>> {
+        let std_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src");
+        resolve_files_with_std(tag, files, entry, std_root)
+    }
+
+    fn resolve_files_with_std(
+        tag: &str,
+        files: &[(&str, &str)],
+        entry: &str,
+        std_root: PathBuf,
+    ) -> Result<Fixture, Vec<ResolveError>> {
         let dir = std::env::temp_dir().join(format!("zeen-resolve-{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir must be created");
@@ -234,7 +244,7 @@ mod tests {
         let mut context = CompilationContext {
             paths: PathsConfig {
                 project_root: dir,
-                std_root: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")),
+                std_root: Some(std_root),
                 linked: HashSet::default(),
                 packages: Vec::new(),
             },
@@ -294,6 +304,65 @@ mod tests {
                     .join("\n")
             )
         })
+    }
+
+    #[test]
+    fn primitive_modules_reach_every_module() {
+        let std_root = std::env::temp_dir().join(format!(
+            "zeen-resolve-primitives-std-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&std_root);
+        std::fs::create_dir_all(std_root.join("primitives")).unwrap();
+        std::fs::write(
+            std_root.join("primitives").join("i8.zn"),
+            "implement builtin i8 {\n    pub fn abs(*const self) i8 {\n        return *self;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let fx = resolve_files_with_std(
+            "primitives",
+            &[
+                (
+                    "main.zn",
+                    "use helpers;\nfn main() {\n    let v: i8 = neg();\n    @println(\"{}\", v.abs());\n}\n",
+                ),
+                ("helpers.zn", "pub fn neg() i8 {\n    return -1;\n}\n"),
+            ],
+            "main.zn",
+            std_root.clone(),
+        )
+        .unwrap_or_else(|errors| {
+            panic!(
+                "expected resolution to succeed, got errors:\n{}",
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        });
+
+        let (abs_id, _) = fx
+            .resolution
+            .defs
+            .iter()
+            .find(|(_, def)| fx.name(def) == "abs")
+            .expect("primitive method must be resolved");
+
+        assert_eq!(
+            fx.resolution.def_modules.get(abs_id).map(String::as_str),
+            Some("std.primitives.i8")
+        );
+
+        assert!(
+            fx.resolution
+                .def_modules
+                .values()
+                .any(|module| module == "helpers")
+        );
+
+        let _ = std::fs::remove_dir_all(&std_root);
     }
 
     #[test]

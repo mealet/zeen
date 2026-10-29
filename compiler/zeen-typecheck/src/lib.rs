@@ -9106,6 +9106,19 @@ mod tests {
         target: Option<&str>,
         full: bool,
     ) -> Result<TypeCheckResult, Vec<TypeError>> {
+        let std_root = full.then(|| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")
+        });
+
+        typecheck_fixture_with_std(source, target, full, std_root)
+    }
+
+    fn typecheck_fixture_with_std(
+        source: &str,
+        target: Option<&str>,
+        full: bool,
+        std_root: Option<std::path::PathBuf>,
+    ) -> Result<TypeCheckResult, Vec<TypeError>> {
         let rodeo = Rc::new(RefCell::new(Rodeo::default()));
         let bump = Bump::default();
         let content = Arc::new(source.to_string());
@@ -9127,9 +9140,7 @@ mod tests {
         let mut context = CompilationContext {
             paths: PathsConfig {
                 project_root: std::env::temp_dir(),
-                std_root: full.then(|| {
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")
-                }),
+                std_root,
                 linked: HashSet::default(),
                 packages: Vec::new(),
             },
@@ -9308,6 +9319,40 @@ mod tests {
         assert!(
             result.is_ok(),
             "builtin method with a receiver must typecheck"
+        );
+    }
+
+    #[test]
+    fn primitive_modules_expose_builtin_methods() {
+        let std_root = std::env::temp_dir().join(format!(
+            "zeen-typecheck-primitives-std-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&std_root);
+        std::fs::create_dir_all(std_root.join("primitives")).unwrap();
+        std::fs::write(
+            std_root.join("primitives").join("i8.zn"),
+            "implement builtin i8 {\n    pub fn abs(*const self) i8 {\n        return *self;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let result = typecheck_fixture_with_std(
+            r#"
+            fn main() {
+                let value: i8 = -3;
+                let magnitude = value.abs();
+            }
+            "#,
+            None,
+            false,
+            Some(std_root.clone()),
+        );
+
+        let _ = std::fs::remove_dir_all(&std_root);
+
+        assert!(
+            result.is_ok(),
+            "primitive module methods must be callable without an import"
         );
     }
 

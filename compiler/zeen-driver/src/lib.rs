@@ -1,5 +1,5 @@
 use rustc_hash::FxHashSet as HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod target;
 mod warnings;
@@ -111,6 +111,34 @@ pub struct PathsConfig {
     pub packages: Vec<(String, PathBuf)>,
 }
 
+pub fn primitive_modules(std_root: Option<&Path>) -> Vec<String> {
+    let Some(root) = std_root else {
+        return Vec::new();
+    };
+
+    let Ok(entries) = std::fs::read_dir(root.join("primitives")) else {
+        return Vec::new();
+    };
+
+    let mut modules: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+
+            if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("zn") {
+                return None;
+            }
+
+            let stem = path.file_stem().and_then(|stem| stem.to_str())?;
+
+            Some(format!("std.primitives.{stem}"))
+        })
+        .collect();
+
+    modules.sort();
+    modules
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +158,28 @@ mod tests {
     #[test]
     fn main_required_for_wasi() {
         assert!(target_requires_main(Some("wasm32-unknown-wasip1")));
+    }
+
+    #[test]
+    fn primitive_modules_are_sorted_and_filtered() {
+        let root =
+            std::env::temp_dir().join(format!("zeen-driver-primitives-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("primitives").join("nested.zn")).unwrap();
+        std::fs::write(root.join("primitives").join("u8.zn"), "").unwrap();
+        std::fs::write(root.join("primitives").join("i8.zn"), "").unwrap();
+        std::fs::write(root.join("primitives").join("notes.txt"), "").unwrap();
+
+        assert_eq!(
+            primitive_modules(Some(&root)),
+            vec![
+                "std.primitives.i8".to_string(),
+                "std.primitives.u8".to_string()
+            ]
+        );
+        assert!(primitive_modules(None).is_empty());
+        assert!(primitive_modules(Some(&root.join("missing"))).is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
