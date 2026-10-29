@@ -3,6 +3,7 @@
 mod actions;
 mod analysis;
 mod backend;
+mod builtin;
 mod codelens;
 mod completion;
 mod diagnostics;

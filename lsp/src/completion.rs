@@ -829,7 +829,7 @@ pub fn dot_complete(
 
     let shape_matched = static_context != Some(true)
         && raw_type.as_deref().is_some_and(|ty| {
-            push_builtin_target_members(analysis, ty, &filter, &mut items, &mut seen)
+            push_builtin_target_members(analysis, text, ty, &filter, paths, &mut items, &mut seen)
         });
 
     if !shape_matched {
@@ -1015,12 +1015,14 @@ fn push_type_members(
 
 fn push_builtin_target_members(
     analysis: &Analysis,
+    text: &str,
     ty: &str,
     filter: &str,
+    paths: ResolvePaths<'_>,
     items: &mut Vec<CompletionItem>,
     seen: &mut std::collections::HashSet<String>,
 ) -> bool {
-    let ty = strip_pointer_wrappers(ty);
+    let ty = crate::builtin::strip_pointer_wrappers(ty);
     let mut matched: Vec<(&BuiltinTarget, bool)> = Vec::new();
 
     for target in &analysis.builtin_targets {
@@ -1028,9 +1030,7 @@ fn push_builtin_target_members(
             continue;
         }
 
-        let mut bindings = Vec::new();
-
-        if builtin_shape_matches(&target.shape, ty, &mut bindings) {
+        if crate::builtin::shape_matches_type(&target.shape, ty) {
             matched.push((target, target.shape.has_params()));
         }
     }
@@ -1041,7 +1041,7 @@ fn push_builtin_target_members(
 
     matched.sort_by_key(|(target, has_params)| (*has_params, target.def.0));
 
-    for (target, _) in matched {
+    for (target, _) in &matched {
         let Some(members) = analysis.members.get(&target.def) else {
             continue;
         };
@@ -1069,97 +1069,51 @@ fn push_builtin_target_members(
         }
     }
 
+    push_imported_builtin_members(text, ty, filter, paths, items, seen);
+
     true
 }
 
-fn strip_pointer_wrappers(ty: &str) -> &str {
-    let mut name = ty.trim();
-
-    loop {
-        if name.starts_with('[') {
-            return name;
-        }
-
-        if let Some(rest) = name.strip_prefix("*const ") {
-            name = rest.trim_start();
-            continue;
-        }
-
-        if let Some(rest) = name.strip_prefix('*') {
-            name = rest.trim_start();
-            continue;
-        }
-
-        return name;
-    }
-}
-
-fn builtin_shape_matches(
-    shape: &BuiltinShape,
+fn push_imported_builtin_members(
+    text: &str,
     ty: &str,
-    bindings: &mut Vec<(u32, String)>,
-) -> bool {
-    let ty = ty.trim();
+    filter: &str,
+    paths: ResolvePaths<'_>,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let (Some(dir), Some(root)) = (paths.dir, paths.project()) else {
+        return;
+    };
 
-    match shape {
-        BuiltinShape::Scalar(builtin) => ty == builtin.to_string(),
+    let mut imported = crate::modules::builtin_shape_members(
+        dir,
+        root,
+        paths.std,
+        paths.packages(),
+        &crate::modules::use_imports(text),
+        ty,
+    );
+    imported.sort_by(|a, b| a.name.cmp(&b.name));
 
-        BuiltinShape::Slice { element, is_const } => {
-            let Some(rest) = ty.strip_prefix("[]") else {
-                return false;
-            };
-
-            let (found_const, rest) = strip_const(rest);
-
-            found_const == *is_const && builtin_shape_matches(element, rest, bindings)
+    for member in imported {
+        if !member.name.starts_with(filter) || !keep_module_member(&member, Some(false)) {
+            continue;
         }
 
-        BuiltinShape::ManyPointer { element, is_const } => {
-            let Some(rest) = ty.strip_prefix("[*]") else {
-                return false;
-            };
+        if seen.insert(member.name.clone()) {
+            let rank = member_rank(false, Some(false));
 
-            let (found_const, rest) = strip_const(rest);
-
-            found_const == *is_const && builtin_shape_matches(element, rest, bindings)
+            items.push(CompletionItem {
+                label: member_label(&member.name, member.arity),
+                kind: Some(module_member_completion_kind(&member)),
+                detail: Some(member.module.clone()),
+                filter_text: Some(member.name.clone()),
+                insert_text: Some(member.name.clone()),
+                sort_text: Some(format!("{rank}_{}", member.name)),
+                ..Default::default()
+            });
         }
-
-        BuiltinShape::Array { element, len } => {
-            let Some(rest) = ty.strip_prefix('[') else {
-                return false;
-            };
-
-            let Some(close) = rest.find(']') else {
-                return false;
-            };
-
-            let digits = &rest[..close];
-
-            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-                return false;
-            }
-
-            if digits.parse::<u64>() != Ok(*len) {
-                return false;
-            }
-
-            builtin_shape_matches(element, &rest[close + 1..], bindings)
-        }
-
-        BuiltinShape::Param(index) => match bindings.iter().find(|(slot, _)| slot == index) {
-            Some((_, bound)) => bound == ty,
-            None => {
-                bindings.push((*index, ty.to_string()));
-                true
-            }
-        },
-    }
-}
-
-fn strip_const(ty: &str) -> (bool, &str) {
-    match ty.trim_start().strip_prefix("const ") {
-        Some(rest) => (true, rest.trim_start()),
-        None => (false, ty.trim_start()),
     }
 }
 
@@ -1289,8 +1243,9 @@ pub fn call_complete(
     let mut items = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let shape_matched =
-        push_builtin_target_members(analysis, rendered, &filter, &mut items, &mut seen);
+    let shape_matched = push_builtin_target_members(
+        analysis, text, rendered, &filter, paths, &mut items, &mut seen,
+    );
 
     if !shape_matched {
         let Some(ty) = normalize_type_name(rendered) else {
@@ -3125,6 +3080,44 @@ mod tests {
         assert_eq!(names, vec!["count()"]);
     }
 
+    #[test]
+    fn imported_builtin_shape_receiver_dot_completes_methods() {
+        let dir = import_project("builtin-shape");
+        std::fs::write(
+            dir.join("sub").join("lib.zn"),
+            "implement[T] builtin []T {\n    pub fn first(*const self) T {\n        return (*self)[0];\n    }\n}\n",
+        )
+        .unwrap();
+
+        let text = "use sub.lib;\n\nfn main() {\n    let nums: [3]i32 = [1, 2, 3];\n    let slice = nums[..];\n    @println(\"{}\", slice.first());\n}\n";
+        let uri: tower_lsp_server::ls_types::Uri =
+            format!("file://{}", dir.join("main.zn").display())
+                .parse()
+                .unwrap();
+        let output = crate::diagnostics::check(&uri, text, &[]);
+        let errors = crate::diagnostics::only_errors(&output.diagnostics);
+        assert!(
+            errors.is_empty(),
+            "shape import sample must check cleanly: {:?}",
+            errors
+        );
+
+        let probe = text.replacen("slice.first()", "slice.     ()", 1);
+        let dot = probe.find("slice.     ()").unwrap() + "slice".len();
+        let paths = ResolvePaths {
+            dir: Some(dir.as_path()),
+            root: Some(dir.as_path()),
+            std: None,
+            packages: None,
+        };
+        let items = dot_complete(&probe, &output.analysis, dot, paths);
+        let names = labels(&items);
+
+        assert!(names.contains(&"first()"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     const BUILTIN_ARRAY_SAMPLE: &str = "implement builtin [4]u8 {\n    fn total(*const self) u32 {\n        return @as(u32, (*self)[0]) + @as(u32, (*self)[1]);\n    }\n}\n\nfn main() {\n    let data: [4]u8 = [1, 2, 3, 4];\n    @println(\"{}\", data.total());\n}\n";
 
     #[test]
@@ -3140,5 +3133,34 @@ mod tests {
         let names = labels(&items);
 
         assert_eq!(names, vec!["total()"]);
+    }
+
+    const BUILTIN_MANY_POINTER_SAMPLE: &str = "implement builtin [*]i32 {\n    fn head(*const self) i32 {\n        return (*self)[0];\n    }\n}\n\nfn main() {\n    let p: [*]i32 = @uninit();\n    @println(\"{}\", p.head());\n}\n";
+
+    #[test]
+    fn builtin_many_pointer_receiver_dot_completes_shape_methods() {
+        let analysis = sample_analysis(BUILTIN_MANY_POINTER_SAMPLE);
+        let dot = BUILTIN_MANY_POINTER_SAMPLE.find("p.head").unwrap() + "p".len();
+        let items = dot_complete(
+            BUILTIN_MANY_POINTER_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["head()"]);
+    }
+
+    const BUILTIN_SELF_SAMPLE: &str = "implement builtin i32 {\n    fn zero() i32 {\n        return 0;\n    }\n\n    fn forward() i32 {\n        return Self.zero();\n    }\n}\n\nfn main() {\n    @println(\"{}\", i32.forward());\n}\n";
+
+    #[test]
+    fn builtin_self_dot_completes_static_functions() {
+        let analysis = sample_analysis(BUILTIN_SELF_SAMPLE);
+        let dot = BUILTIN_SELF_SAMPLE.find("Self.zero").unwrap() + "Self".len();
+        let items = dot_complete(BUILTIN_SELF_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["zero()"]);
     }
 }
