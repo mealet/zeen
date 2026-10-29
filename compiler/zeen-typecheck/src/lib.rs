@@ -677,10 +677,6 @@ impl<'res> TypeChecker<'res> {
                 .insert(generic.def_id, generic.bounds.clone());
         }
 
-        let is_builtin = imp.object.is_some_and(|object_def| {
-            matches!(self.def_kind(object_def), Some(DefKind::Builtin(_)))
-        });
-
         for method in &imp.methods {
             self.declare_signature(method);
 
@@ -697,23 +693,6 @@ impl<'res> TypeChecker<'res> {
                     self.method_owning_interface
                         .insert(method.def_id, iface_def);
                 }
-            }
-
-            if is_builtin
-                && self
-                    .fn_sigs
-                    .get(&method.def_id)
-                    .is_some_and(|sig| sig.self_mode.is_none())
-                && let HirDeclKind::Fn(f) = &method.kind
-            {
-                let method_name: smol_str::SmolStr =
-                    self.interner.borrow().resolve(&f.name.0).into();
-
-                self.report(TypeError::BuiltinStaticMethod {
-                    method: method_name,
-                    src: method.source.src(),
-                    span: f.name.1,
-                });
             }
         }
 
@@ -2691,7 +2670,20 @@ impl<'res> TypeChecker<'res> {
                 })
             }
 
-            HirExprKind::Type(_) => self.result.interner.error(),
+            HirExprKind::Type(ty) => {
+                if let HirTypeKind::Builtin(builtin) = ty.kind {
+                    let builtin_ty = self.result.interner.builtin(builtin);
+                    let name = self.display_type(builtin_ty).into();
+
+                    self.report(TypeError::TypeNameAsValue {
+                        name,
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+                }
+
+                self.result.interner.error()
+            }
             HirExprKind::Error => self.result.interner.error(),
         }
     }
@@ -3413,6 +3405,35 @@ impl<'res> TypeChecker<'res> {
         expected: Option<TypeId>,
     ) -> TypeId {
         let (field_name, field_span) = *field;
+
+        if let Some((builtin, owner)) = self.builtin_expr_owner(object) {
+            let builtin_ty = self.result.interner.builtin(builtin);
+            let object_name = self.display_type(builtin_ty).into();
+            let name = self.interner.borrow().resolve(&field_name).into();
+            let src = object.source.src();
+
+            if self
+                .struct_methods
+                .get(&owner)
+                .is_some_and(|methods| methods.contains_key(&field_name))
+            {
+                self.report(TypeError::AssociatedFnAsValue {
+                    object: object_name,
+                    name,
+                    src,
+                    span: field_span,
+                });
+            } else {
+                self.report(TypeError::UnknownAssociatedFn {
+                    object: object_name,
+                    name,
+                    src,
+                    span: field_span,
+                });
+            }
+
+            return self.result.interner.error();
+        }
 
         if let HirExprKind::VarRef {
             def: referenced_def,
@@ -5084,6 +5105,19 @@ impl<'res> TypeChecker<'res> {
     ) -> Option<TypeId> {
         let (field_name, field_span) = field;
 
+        if let Some((builtin, owner)) = self.builtin_expr_owner(object) {
+            return Some(self.check_builtin_associated_fn_call(
+                (call_id, object),
+                builtin,
+                owner,
+                (field_name, field_span),
+                args,
+                explicit_generic_args,
+                &source,
+                expected,
+            ));
+        }
+
         if let HirExprKind::VarRef {
             def: referenced_def,
             ..
@@ -6050,6 +6084,67 @@ impl<'res> TypeChecker<'res> {
         }
 
         enum_ty
+    }
+
+    fn builtin_expr_owner(&self, object: &HirExpr) -> Option<(BuiltinType, DefId)> {
+        match &object.kind {
+            HirExprKind::Type(ty) => match ty.kind {
+                HirTypeKind::Builtin(builtin) => {
+                    Some((builtin, zeen_resolve::builtin_def_id(builtin)))
+                }
+                _ => None,
+            },
+            HirExprKind::VarRef { def, .. } => match self.def_kind(*def) {
+                Some(DefKind::Builtin(builtin)) => Some((*builtin, *def)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_builtin_associated_fn_call(
+        &mut self,
+        caller: (HirId, &HirExpr),
+        builtin: BuiltinType,
+        owner: DefId,
+        field: (Spur, SourceSpan),
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        source: &Source,
+        expected: Option<TypeId>,
+    ) -> TypeId {
+        let (field_name, field_span) = field;
+
+        if !self
+            .struct_methods
+            .get(&owner)
+            .is_some_and(|methods| methods.contains_key(&field_name))
+        {
+            let builtin_ty = self.result.interner.builtin(builtin);
+            let object = self.display_type(builtin_ty).into();
+            let name = self.interner.borrow().resolve(&field_name).into();
+
+            self.report(TypeError::UnknownAssociatedFn {
+                object,
+                name,
+                src: source.src(),
+                span: field_span,
+            });
+
+            return self.result.interner.error();
+        }
+
+        self.check_associated_fn_call(
+            caller,
+            owner,
+            field,
+            args,
+            explicit_generic_args,
+            source,
+            expected,
+        )
+        .unwrap_or_else(|| self.result.interner.error())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -8887,26 +8982,155 @@ mod tests {
     }
 
     #[test]
-    fn builtin_static_method_is_error() {
-        let errors = typecheck(
+    fn builtin_static_method_call_works() {
+        let result = typecheck(
             r#"
             implement builtin i32 {
-                fn zero() i32 {
-                    return 0;
+                fn max_value() i32 {
+                    return 2147483647;
+                }
+
+                fn min_value() Self {
+                    return Self.max_value() * -1 - 1;
+                }
+
+                fn pick[T](value: T) T {
+                    return value;
                 }
             }
 
             fn main() {
+                let max = i32.max_value();
+                let min = i32.min_value();
+                let picked = i32.pick(7);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "static builtin methods must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_unknown_associated_fn_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn max_value() i32 {
+                    return 2147483647;
+                }
+            }
+
+            fn main() {
+                let value = i32.unknown();
             }
             "#,
         )
-        .expect_err("static methods in builtin blocks must be rejected");
+        .expect_err("unknown builtin associated functions must be rejected");
 
         assert!(
             errors
                 .iter()
-                .any(|err| matches!(err, TypeError::BuiltinStaticMethod { .. })),
-            "expected BuiltinStaticMethod error, got: {errors:?}"
+                .any(|err| matches!(err, TypeError::UnknownAssociatedFn { .. })),
+            "expected UnknownAssociatedFn error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_associated_fn_as_value_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn max_value() i32 {
+                    return 2147483647;
+                }
+            }
+
+            fn main() {
+                let max = i32.max_value;
+            }
+            "#,
+        )
+        .expect_err("builtin associated functions used as values must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AssociatedFnAsValue { .. })),
+            "expected AssociatedFnAsValue error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_type_name_as_value_is_error() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let value = i32;
+            }
+            "#,
+        )
+        .expect_err("builtin type names must not be usable as values");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::TypeNameAsValue { .. })),
+            "expected TypeNameAsValue error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_static_method_on_instance_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn max_value() i32 {
+                    return 2147483647;
+                }
+            }
+
+            fn main() {
+                let n: i32 = 4;
+                let max = n.max_value();
+            }
+            "#,
+        )
+        .expect_err("static builtin methods called on instances must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::StaticMethodOnInstance { .. })),
+            "expected StaticMethodOnInstance error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_instance_method_via_type_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn is_even(*const self) bool {
+                    return (*self) % 2 == 0;
+                }
+            }
+
+            fn main() {
+                let even = i32.is_even();
+            }
+            "#,
+        )
+        .expect_err("builtin instance methods called via the type must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AssociatedCallOnInstaneMethod { .. })),
+            "expected AssociatedCallOnInstaneMethod error, got: {errors:?}"
         );
     }
 

@@ -647,18 +647,31 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("static methods are not supported in builtin implement blocks")]
-    #[diagnostic(
-        severity(Error),
-        code(zeen::typechecker::builtin_static_method),
-        help("declare the method with a `self`, `const self`, `*self` or `*const self` receiver")
-    )]
-    BuiltinStaticMethod {
-        method: SmolStr,
+    #[error("`{object}` has no associated function `{name}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::unknown_associated_fn))]
+    UnknownAssociatedFn {
+        object: SmolStr,
+        name: SmolStr,
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("`{method}` has no receiver")]
+        #[label("not found in `{object}`")]
+        span: SourceSpan,
+    },
+
+    #[error("associated function `{object}.{name}` must be called")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::associated_fn_as_value),
+        help("call it as `{object}.{name}()`")
+    )]
+    AssociatedFnAsValue {
+        object: SmolStr,
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("used without a call")]
         span: SourceSpan,
     },
 

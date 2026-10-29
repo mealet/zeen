@@ -1836,6 +1836,22 @@ fn print_mir_ok(src: &str) -> String {
 }
 
 #[test]
+fn printed_mir_renders_builtin_static_method_calls() {
+    let printed = print_mir_ok(
+        "implement builtin i32 { \
+             fn max_value() i32 { return 2147483647; } \
+             fn pick[T](value: T) T { return value; } \
+         } \
+         fn main() { let a = i32.max_value(); let b = i32.pick(7); @println(\"{}\", a); @println(\"{}\", b); }",
+    );
+
+    assert!(printed.contains("fn i32.max_value() i32"), "{printed}");
+    assert!(printed.contains("fn i32.pick("), "{printed}");
+    assert!(printed.contains("i32.max_value() ->"), "{printed}");
+    assert!(printed.contains("i32.pick(7) ->"), "{printed}");
+}
+
+#[test]
 fn printed_mir_renders_enum_constructs() {
     let printed = print_mir_ok(
         "enum Shape { dot, rect: i32 } \
