@@ -4,6 +4,7 @@ use std.string;
 implement builtin f64 {
   pub fn min_value() f64 {
     let max = f64.max_value();
+
     return 0.0 - max;
   }
 
@@ -25,6 +26,7 @@ implement builtin f64 {
 
   pub fn neg_infinity() f64 {
     let infinity = f64.infinity();
+
     return 0.0 - infinity;
   }
 
@@ -34,11 +36,13 @@ implement builtin f64 {
 
   pub fn to_bits(self) u64 {
     let p = @as(*u64, @as(*void, @as(*f64, &self)));
+
     return *p;
   }
 
   pub fn from_bits(bits: u64) f64 {
     let p = @as(*f64, @as(*void, @as(*u64, &bits)));
+
     return *p;
   }
 
@@ -46,6 +50,7 @@ implement builtin f64 {
     let bits = self.to_bits();
     let exponent = (bits >> 52) & 0x7FF;
     let mantissa = bits & 0x000FFFFFFFFFFFFF;
+
     return exponent == 0x7FF && mantissa != 0;
   }
 
@@ -53,12 +58,14 @@ implement builtin f64 {
     let bits = self.to_bits();
     let exponent = (bits >> 52) & 0x7FF;
     let mantissa = bits & 0x000FFFFFFFFFFFFF;
+
     return exponent == 0x7FF && mantissa == 0;
   }
 
   pub fn is_finite(self) bool {
     let bits = self.to_bits();
     let exponent = (bits >> 52) & 0x7FF;
+
     return exponent != 0x7FF;
   }
 
@@ -76,6 +83,7 @@ implement builtin f64 {
 
   pub fn signum(self) f64 {
     if (self.is_nan()) { return f64.nan(); };
+
     return copysign(1.0, self);
   }
 
@@ -99,6 +107,7 @@ implement builtin f64 {
     if (n < 0) {
       return 1.0 / self.pow_positive(@as(u32, 0 - n));
     };
+
     return self.pow_positive(@as(u32, n));
   }
 
@@ -106,11 +115,14 @@ implement builtin f64 {
     let result: f64 = 1.0;
     let base = self;
     let e = exp;
+
     while (e > 0) {
       if ((e & 1) == 1) { result = result * base; };
+
       base = base * base;
       e = e >> 1;
     };
+
     return result;
   }
 
@@ -239,60 +251,75 @@ implement builtin f64 {
   }
 
   pub fn min(self, other: f64) f64 {
-    if (self.is_nan()) { return other; };
-    if (other.is_nan()) { return self; };
-    if (self < other) { return self; };
-    if (other < self) { return other; };
-    if (self.is_sign_positive()) { return other; };
-    return self;
+    return switch (true) {
+      _ if (self.is_nan()) => other,
+      _ if (other.is_nan()) => self,
+      _ if (self < other) => self,
+      _ if (other < self) => other,
+      _ if (self.is_sign_positive()) => other,
+      _ => self,
+    };
   }
 
   pub fn max(self, other: f64) f64 {
-    if (self.is_nan()) { return other; };
-    if (other.is_nan()) { return self; };
-    if (self > other) { return self; };
-    if (other > self) { return other; };
-    if (self.is_sign_positive()) { return self; };
-    return other;
+    return switch (true) {
+      _ if (self.is_nan()) => other,
+      _ if (other.is_nan()) => self,
+      _ if (self > other) => self,
+      _ if (other > self) => other,
+      _ if (self.is_sign_positive()) => self,
+      _ => other,
+    };
   }
 
   pub fn minimum(self, other: f64) f64 {
-    if (self.is_nan() || other.is_nan()) { return f64.nan(); };
-    if (self < other) { return self; };
-    if (other < self) { return other; };
-    if (self.is_sign_negative()) { return self; };
-    return other;
+    return switch (true) {
+      _ if (self.is_nan() || other.is_nan()) => f64.nan(),
+      _ if (self < other) => self,
+      _ if (other < self) => other,
+      _ if (self.is_sign_negative()) => self,
+      _ => other,
+    };
   }
 
   pub fn maximum(self, other: f64) f64 {
-    if (self.is_nan() || other.is_nan()) { return f64.nan(); };
-    if (self > other) { return self; };
-    if (other > self) { return other; };
-    if (self.is_sign_negative()) { return other; };
-    return self;
+    return switch (true) {
+      _ if (self.is_nan() || other.is_nan()) => f64.nan(),
+      _ if (self > other) => self,
+      _ if (other > self) => other,
+      _ if (self.is_sign_negative()) => other,
+      _ => self,
+    };
   }
 
   pub fn clamp(self, min: f64, max: f64) f64 {
     if (min.is_nan() || max.is_nan() || min > max) { @panic("clamp: min > max"); };
-    if (self < min) { return min; };
-    if (self > max) { return max; };
-    return self;
+
+    return switch (true) {
+      _ if (self < min) => min,
+      _ if (self > max) => max,
+      _ => self,
+    };
   }
 
   pub fn div_euclid(self, rhs: f64) f64 {
     let quotient = trunc(self / rhs);
-    if (self % rhs < 0.0) {
-      if (rhs > 0.0) { return quotient - 1.0; };
-      return quotient + 1.0;
+    let remainder = self % rhs;
+
+    return switch (true) {
+      _ if (remainder < 0.0 && rhs > 0.0) => quotient - 1.0,
+      _ if (remainder < 0.0) => quotient + 1.0,
+      _ => quotient,
     };
-    return quotient;
   }
 
   pub fn rem_euclid(self, rhs: f64) f64 {
     let remainder = self % rhs;
+
     if (remainder < 0.0) {
       return remainder + fabs(rhs);
     };
+
     return remainder;
   }
 

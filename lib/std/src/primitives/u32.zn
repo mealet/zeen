@@ -17,10 +17,12 @@ implement builtin u32 {
   pub fn count_ones(self) u32 {
     let v = @as(u32, self);
     let count: u32 = 0;
+
     while (v != 0) {
       v = v & (v - 1);
       count += 1;
     };
+
     return count;
   }
 
@@ -30,50 +32,62 @@ implement builtin u32 {
 
   pub fn leading_zeros(self) u32 {
     let v = @as(u32, self);
+
     if (v == 0) { return u32.bits(); };
     let mask: u32 = @as(u32, 1) << @as(u32, u32.bits() - 1);
     let count: u32 = 0;
+
     while ((v & mask) == 0) {
       count += 1;
       mask = mask >> 1;
     };
+
     return count;
   }
 
   pub fn trailing_zeros(self) u32 {
     let v = @as(u32, self);
+
     if (v == 0) { return u32.bits(); };
     let count: u32 = 0;
+
     while ((v & 1) == 0) {
       count += 1;
       v = v >> 1;
     };
+
     return count;
   }
 
   pub fn leading_ones(self) u32 {
     let inverted = ~self;
+
     return inverted.leading_zeros();
   }
 
   pub fn trailing_ones(self) u32 {
     let inverted = ~self;
+
     return inverted.trailing_zeros();
   }
 
   pub fn rotate_left(self, n: u32) u32 {
     let bits = u32.bits();
     let shift = n % bits;
+
     if (shift == 0) { return self; };
     let v = @as(u32, self);
+
     return @as(u32, (v << @as(u32, shift)) | (v >> @as(u32, bits - shift)));
   }
 
   pub fn rotate_right(self, n: u32) u32 {
     let bits = u32.bits();
     let shift = n % bits;
+
     if (shift == 0) { return self; };
     let v = @as(u32, self);
+
     return @as(u32, (v >> @as(u32, shift)) | (v << @as(u32, bits - shift)));
   }
 
@@ -81,11 +95,13 @@ implement builtin u32 {
     let v = @as(u32, self);
     let out: u32 = 0;
     let i: u32 = 0;
+
     while (i < 4) {
       out = (out << 8) | (v & 0xFF);
       v = v >> 8;
       i += 1;
     };
+
     return @as(u32, out);
   }
 
@@ -93,37 +109,44 @@ implement builtin u32 {
     let v = @as(u32, self);
     let out: u32 = 0;
     let i: u32 = 0;
+
     while (i < u32.bits()) {
       out = (out << 1) | (v & 1);
       v = v >> 1;
       i += 1;
     };
+
     return @as(u32, out);
   }
 
   pub fn checked_add(self, rhs: u32) Option[u32] {
     if (self > u32.max_value() - rhs) { return Option.None; };
+
     return Option.Some(self + rhs);
   }
 
   pub fn checked_sub(self, rhs: u32) Option[u32] {
     if (self < rhs) { return Option.None; };
+
     return Option.Some(self - rhs);
   }
 
   pub fn checked_mul(self, rhs: u32) Option[u32] {
     if (rhs == 0) { return Option.Some(@as(u32, 0)); };
     if (self > u32.max_value() / rhs) { return Option.None; };
+
     return Option.Some(self * rhs);
   }
 
   pub fn checked_div(self, rhs: u32) Option[u32] {
     if (rhs == 0) { return Option.None; };
+
     return Option.Some(self / rhs);
   }
 
   pub fn checked_rem(self, rhs: u32) Option[u32] {
     if (rhs == 0) { return Option.None; };
+
     return Option.Some(self % rhs);
   }
 
@@ -131,29 +154,38 @@ implement builtin u32 {
     let result: u32 = 1;
     let base = self;
     let e = exp;
+
     while (e > 0) {
       if ((e & 1) == 1) {
         let next = result.checked_mul(base);
+
         if (next.is_none()) { return Option.None; };
+
         result = next.unwrap();
       };
+
       e = e >> 1;
       if (e > 0) {
         let squared = base.checked_mul(base);
+
         if (squared.is_none()) { return Option.None; };
+
         base = squared.unwrap();
       };
     };
+
     return Option.Some(result);
   }
 
   pub fn checked_shl(self, rhs: u32) Option[u32] {
     if (rhs >= u32.bits()) { return Option.None; };
+
     return Option.Some(self << @as(u32, rhs));
   }
 
   pub fn checked_shr(self, rhs: u32) Option[u32] {
     if (rhs >= u32.bits()) { return Option.None; };
+
     return Option.Some(self >> @as(u32, rhs));
   }
 
@@ -181,37 +213,45 @@ implement builtin u32 {
     let result: u32 = 1;
     let base = self;
     let e = exp;
+
     while (e > 0) {
       if ((e & 1) == 1) { result = result * base; };
+
       e = e >> 1;
       if (e > 0) { base = base * base; };
     };
+
     return result;
   }
 
   pub fn wrapping_shl(self, rhs: u32) u32 {
     let shift = rhs % u32.bits();
+
     return self << @as(u32, shift);
   }
 
   pub fn wrapping_shr(self, rhs: u32) u32 {
     let shift = rhs % u32.bits();
+
     return self >> @as(u32, shift);
   }
 
   pub fn overflowing_add(self, rhs: u32) Overflowing[u32] {
     let sum = self + rhs;
+
     return Overflowing { .value = sum, .overflowed = sum < self };
   }
 
   pub fn overflowing_sub(self, rhs: u32) Overflowing[u32] {
     let difference = self - rhs;
+
     return Overflowing { .value = difference, .overflowed = self < rhs };
   }
 
   pub fn overflowing_mul(self, rhs: u32) Overflowing[u32] {
     let product = self * rhs;
     let overflowed = rhs != 0 && self > u32.max_value() / rhs;
+
     return Overflowing { .value = product, .overflowed = overflowed };
   }
 
@@ -220,12 +260,14 @@ implement builtin u32 {
     let base = self;
     let e = exp;
     let overflowed = false;
+
     while (e > 0) {
       if ((e & 1) == 1) {
         let next = result.overflowing_mul(base);
         result = next.value;
         overflowed = overflowed || next.overflowed;
       };
+
       e = e >> 1;
       if (e > 0) {
         let squared = base.overflowing_mul(base);
@@ -233,36 +275,45 @@ implement builtin u32 {
         overflowed = overflowed || squared.overflowed;
       };
     };
+
     return Overflowing { .value = result, .overflowed = overflowed };
   }
 
   pub fn overflowing_shl(self, rhs: u32) Overflowing[u32] {
     let shift = rhs % u32.bits();
     let value = self << @as(u32, shift);
+
     return Overflowing { .value = value, .overflowed = rhs >= u32.bits() };
   }
 
   pub fn overflowing_shr(self, rhs: u32) Overflowing[u32] {
     let shift = rhs % u32.bits();
     let value = self >> @as(u32, shift);
+
     return Overflowing { .value = value, .overflowed = rhs >= u32.bits() };
   }
 
   pub fn saturating_add(self, rhs: u32) u32 {
     let sum = self.checked_add(rhs);
+
     if (sum.is_some()) { return sum.unwrap(); };
+
     return u32.max_value();
   }
 
   pub fn saturating_sub(self, rhs: u32) u32 {
     let difference = self.checked_sub(rhs);
+
     if (difference.is_some()) { return difference.unwrap(); };
+
     return 0;
   }
 
   pub fn saturating_mul(self, rhs: u32) u32 {
     let product = self.checked_mul(rhs);
+
     if (product.is_some()) { return product.unwrap(); };
+
     return u32.max_value();
   }
 
@@ -272,7 +323,9 @@ implement builtin u32 {
 
   pub fn saturating_pow(self, exp: u32) u32 {
     let powered = self.checked_pow(exp);
+
     if (powered.is_some()) { return powered.unwrap(); };
+
     return u32.max_value();
   }
 
@@ -298,24 +351,31 @@ implement builtin u32 {
 
   pub fn div_ceil(self, rhs: u32) u32 {
     let quotient = self / rhs;
+
     if (self % rhs == 0) { return quotient; };
+
     return quotient + 1;
   }
 
   pub fn next_multiple_of(self, rhs: u32) u32 {
     let remainder = self % rhs;
+
     if (remainder == 0) { return self; };
+
     return self + (rhs - remainder);
   }
 
   pub fn checked_next_multiple_of(self, rhs: u32) Option[u32] {
     let remainder = self % rhs;
+
     if (remainder == 0) { return Option.Some(self); };
+
     return self.checked_add(rhs - remainder);
   }
 
   pub fn abs_diff(self, other: u32) u32 {
     if (self > other) { return @as(u32, self) - @as(u32, other); };
+
     return @as(u32, other) - @as(u32, self);
   }
 
@@ -325,18 +385,22 @@ implement builtin u32 {
 
   pub fn min(self, other: u32) u32 {
     if (self < other) { return self; };
+
     return other;
   }
 
   pub fn max(self, other: u32) u32 {
     if (self > other) { return self; };
+
     return other;
   }
 
   pub fn clamp(self, min: u32, max: u32) u32 {
-    if (self < min) { return min; };
-    if (self > max) { return max; };
-    return self;
+    return switch (true) {
+      _ if (self < min) => min,
+      _ if (self > max) => max,
+      _ => self,
+    };
   }
 
   pub fn is_power_of_two(self) bool {
@@ -347,17 +411,21 @@ implement builtin u32 {
     if (self <= 1) { return 1; };
     let v = self - 1;
     let shift: u32 = 1;
+
     while (shift < u32.bits()) {
       v = v | (v >> @as(u32, shift));
       shift = shift * 2;
     };
+
     return v + 1;
   }
 
   pub fn checked_next_power_of_two(self) Option[u32] {
     if (self <= 1) { return Option.Some(@as(u32, 1)); };
     let next = self.next_power_of_two();
+
     if (next == 0) { return Option.None; };
+
     return Option.Some(next);
   }
 
@@ -365,15 +433,18 @@ implement builtin u32 {
     if (self < 2) { return self; };
     let x = self;
     let y = x / 2 + 1;
+
     while (y < x) {
       x = y;
       y = (x + self / x) / 2;
     };
+
     return x;
   }
 
   pub fn ilog2(self) u32 {
     if (self == 0) { @panic("ilog2: argument must be positive"); };
+
     return u32.bits() - 1 - self.leading_zeros();
   }
 
@@ -381,10 +452,12 @@ implement builtin u32 {
     if (self == 0) { @panic("ilog10: argument must be positive"); };
     let value = @as(u64, self);
     let count: u32 = 0;
+
     while (value >= 10) {
       value = value / 10;
       count += 1;
     };
+
     return count;
   }
 
@@ -394,10 +467,12 @@ implement builtin u32 {
     let value = @as(u64, self);
     let step = @as(u64, base);
     let count: u32 = 0;
+
     while (value >= step) {
       value = value / step;
       count += 1;
     };
+
     return count;
   }
 
@@ -421,10 +496,12 @@ implement builtin u32 {
     let v = @as(u32, self);
     let bytes: [4]u8 = [0; 4];
     let i: u32 = 0;
+
     while (i < 4) {
       bytes[@as(usize, i)] = @as(u8, v >> @as(u32, (4 - 1 - i) * 8));
       i += 1;
     };
+
     return bytes;
   }
 
@@ -432,10 +509,12 @@ implement builtin u32 {
     let v = @as(u32, self);
     let bytes: [4]u8 = [0; 4];
     let i: u32 = 0;
+
     while (i < 4) {
       bytes[@as(usize, i)] = @as(u8, v >> @as(u32, i * 8));
       i += 1;
     };
+
     return bytes;
   }
 
@@ -446,20 +525,24 @@ implement builtin u32 {
   pub fn from_be_bytes(bytes: [4]u8) u32 {
     let v: u32 = 0;
     let i: usize = 0;
+
     while (i < 4) {
       v = (v << 8) | @as(u32, bytes[i]);
       i += 1;
     };
+
     return @as(u32, v);
   }
 
   pub fn from_le_bytes(bytes: [4]u8) u32 {
     let v: u32 = 0;
     let i: usize = 0;
+
     while (i < 4) {
       v = v | (@as(u32, bytes[i]) << @as(u32, i * 8));
       i += 1;
     };
+
     return @as(u32, v);
   }
 

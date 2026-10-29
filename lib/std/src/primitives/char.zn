@@ -6,12 +6,15 @@ implement builtin char {
   }
 
   pub fn is_ascii_alphabetic(self) bool {
-    let code = @as(u32, self);
-    return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    return switch (self) {
+      'A'..='Z' | 'a'..='z' => true,
+      _ => false,
+    };
   }
 
   pub fn is_ascii_digit(self) bool {
     let code = @as(u32, self);
+
     return code >= 48 && code <= 57;
   }
 
@@ -20,41 +23,48 @@ implement builtin char {
   }
 
   pub fn is_ascii_whitespace(self) bool {
-    let code = @as(u32, self);
-    return code == 32 || (code >= 9 && code <= 13);
+    return switch (@as(u32, self)) {
+      32 | 9..=13 => true,
+      _ => false,
+    };
   }
 
   pub fn is_ascii_uppercase(self) bool {
     let code = @as(u32, self);
+
     return code >= 65 && code <= 90;
   }
 
   pub fn is_ascii_lowercase(self) bool {
     let code = @as(u32, self);
+
     return code >= 97 && code <= 122;
   }
 
   pub fn is_ascii_punctuation(self) bool {
-    let code = @as(u32, self);
-    if (code < 33 || code > 126) { return false; };
-    return !self.is_ascii_alphanumeric();
+    return switch (@as(u32, self)) {
+      33..=126 => !self.is_ascii_alphanumeric(),
+      _ => false,
+    };
   }
 
   pub fn is_ascii_control(self) bool {
     let code = @as(u32, self);
+
     return code < 32 || code == 127;
   }
 
   pub fn is_ascii_graphic(self) bool {
     let code = @as(u32, self);
+
     return code > 32 && code < 127;
   }
 
   pub fn is_ascii_hexdigit(self) bool {
-    let code = @as(u32, self);
-    if (code >= 48 && code <= 57) { return true; };
-    if (code >= 97 && code <= 102) { return true; };
-    return code >= 65 && code <= 70;
+    return switch (self) {
+      '0'..='9' | 'a'..='f' | 'A'..='F' => true,
+      _ => false,
+    };
   }
 
   pub fn is_alphabetic(self) bool {
@@ -89,6 +99,7 @@ implement builtin char {
     if (self.is_ascii_lowercase()) {
       return @as(char, @as(u32, self) - 32);
     };
+
     return self;
   }
 
@@ -96,6 +107,7 @@ implement builtin char {
     if (self.is_ascii_uppercase()) {
       return @as(char, @as(u32, self) + 32);
     };
+
     return self;
   }
 
@@ -104,44 +116,46 @@ implement builtin char {
   }
 
   pub fn to_digit(self, radix: u32) Option[u32] {
-    let code = @as(u32, self);
-    let value: u32 = 0;
-    if (code >= 48 && code <= 57) {
-      value = code - 48;
-    } else if (code >= 97 && code <= 122) {
-      value = code - 97 + 10;
-    } else if (code >= 65 && code <= 90) {
-      value = code - 65 + 10;
-    } else {
-      return Option.None;
+    let value = switch (self) {
+      '0'..='9' => @as(u32, self) - 48,
+      'a'..='z' => @as(u32, self) - 97 + 10,
+      'A'..='Z' => @as(u32, self) - 65 + 10,
+      _ => { return Option.None; },
     };
+
     if (value >= radix) { return Option.None; };
+
     return Option.Some(value);
   }
 
   pub fn from_digit(num: u32, radix: u32) Option[char] {
     if (num >= radix) { return Option.None; };
     if (num < 10) { return Option.Some(@as(char, num + 48)); };
+
     return Option.Some(@as(char, num - 10 + 97));
   }
 
   pub fn from_u32(value: u32) Option[char] {
-    if (value > 0x10FFFF) { return Option.None; };
-    if (value >= 0xD800 && value <= 0xDFFF) { return Option.None; };
-    return Option.Some(@as(char, value));
+    return switch (value) {
+      0..=0xD7FF | 0xE000..=0x10FFFF => Option.Some(@as(char, value)),
+      _ => Option.None,
+    };
   }
 
   pub fn len_utf8(self) u32 {
-    let code = @as(u32, self);
-    if (code < 0x80) { return 1; };
-    if (code < 0x800) { return 2; };
-    if (code < 0x10000) { return 3; };
-    return 4;
+    return switch (@as(u32, self)) {
+      0..=0x7F => 1,
+      0x80..=0x7FF => 2,
+      0x800..=0xFFFF => 3,
+      _ => 4,
+    };
   }
 
   pub fn len_utf16(self) u32 {
-    if (@as(u32, self) < 0x10000) { return 1; };
-    return 2;
+    return switch (@as(u32, self)) {
+      0..=0xFFFF => 1,
+      _ => 2,
+    };
   }
 
   pub fn to_string(self) String {

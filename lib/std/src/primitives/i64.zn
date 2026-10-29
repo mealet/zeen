@@ -8,6 +8,7 @@ implement builtin i64 {
 
   pub fn min_value() i64 {
     let max = i64.max_value();
+
     return 0 - max - 1;
   }
 
@@ -18,10 +19,12 @@ implement builtin i64 {
   pub fn count_ones(self) u32 {
     let v = @as(u64, self);
     let count: u32 = 0;
+
     while (v != 0) {
       v = v & (v - 1);
       count += 1;
     };
+
     return count;
   }
 
@@ -31,50 +34,62 @@ implement builtin i64 {
 
   pub fn leading_zeros(self) u32 {
     let v = @as(u64, self);
+
     if (v == 0) { return i64.bits(); };
     let mask: u64 = @as(u64, 1) << @as(u64, i64.bits() - 1);
     let count: u32 = 0;
+
     while ((v & mask) == 0) {
       count += 1;
       mask = mask >> 1;
     };
+
     return count;
   }
 
   pub fn trailing_zeros(self) u32 {
     let v = @as(u64, self);
+
     if (v == 0) { return i64.bits(); };
     let count: u32 = 0;
+
     while ((v & 1) == 0) {
       count += 1;
       v = v >> 1;
     };
+
     return count;
   }
 
   pub fn leading_ones(self) u32 {
     let inverted = ~self;
+
     return inverted.leading_zeros();
   }
 
   pub fn trailing_ones(self) u32 {
     let inverted = ~self;
+
     return inverted.trailing_zeros();
   }
 
   pub fn rotate_left(self, n: u32) i64 {
     let bits = i64.bits();
     let shift = n % bits;
+
     if (shift == 0) { return self; };
     let v = @as(u64, self);
+
     return @as(i64, (v << @as(u64, shift)) | (v >> @as(u64, bits - shift)));
   }
 
   pub fn rotate_right(self, n: u32) i64 {
     let bits = i64.bits();
     let shift = n % bits;
+
     if (shift == 0) { return self; };
     let v = @as(u64, self);
+
     return @as(i64, (v >> @as(u64, shift)) | (v << @as(u64, bits - shift)));
   }
 
@@ -82,11 +97,13 @@ implement builtin i64 {
     let v = @as(u64, self);
     let out: u64 = 0;
     let i: u32 = 0;
+
     while (i < 8) {
       out = (out << 8) | (v & 0xFF);
       v = v >> 8;
       i += 1;
     };
+
     return @as(i64, out);
   }
 
@@ -94,23 +111,27 @@ implement builtin i64 {
     let v = @as(u64, self);
     let out: u64 = 0;
     let i: u32 = 0;
+
     while (i < i64.bits()) {
       out = (out << 1) | (v & 1);
       v = v >> 1;
       i += 1;
     };
+
     return @as(i64, out);
   }
 
   pub fn checked_add(self, rhs: i64) Option[i64] {
     if (rhs > 0 && self > i64.max_value() - rhs) { return Option.None; };
     if (rhs < 0 && self < i64.min_value() - rhs) { return Option.None; };
+
     return Option.Some(self + rhs);
   }
 
   pub fn checked_sub(self, rhs: i64) Option[i64] {
     if (rhs > 0 && self < i64.min_value() + rhs) { return Option.None; };
     if (rhs < 0 && self > i64.max_value() + rhs) { return Option.None; };
+
     return Option.Some(self - rhs);
   }
 
@@ -119,60 +140,76 @@ implement builtin i64 {
     if (self == -1 && rhs == i64.min_value()) { return Option.None; };
     if (rhs == -1 && self == i64.min_value()) { return Option.None; };
     let product = self * rhs;
+
     if (product / rhs != self) { return Option.None; };
+
     return Option.Some(product);
   }
 
   pub fn checked_div(self, rhs: i64) Option[i64] {
     if (rhs == 0) { return Option.None; };
     if (self == i64.min_value() && rhs == -1) { return Option.None; };
+
     return Option.Some(self / rhs);
   }
 
   pub fn checked_rem(self, rhs: i64) Option[i64] {
     if (rhs == 0) { return Option.None; };
     if (self == i64.min_value() && rhs == -1) { return Option.None; };
+
     return Option.Some(self % rhs);
   }
 
   pub fn checked_neg(self) Option[i64] {
     if (self == i64.min_value()) { return Option.None; };
+
     return Option.Some(0 - self);
   }
 
   pub fn checked_abs(self) Option[i64] {
-    if (self == i64.min_value()) { return Option.None; };
-    if (self < 0) { return Option.Some(0 - self); };
-    return Option.Some(self);
+    return switch (true) {
+      _ if (self == i64.min_value()) => Option.None,
+      _ if (self < 0) => Option.Some(0 - self),
+      _ => Option.Some(self),
+    };
   }
 
   pub fn checked_pow(self, exp: u32) Option[i64] {
     let result: i64 = 1;
     let base = self;
     let e = exp;
+
     while (e > 0) {
       if ((e & 1) == 1) {
         let next = result.checked_mul(base);
+
         if (next.is_none()) { return Option.None; };
+
         result = next.unwrap();
       };
+
       e = e >> 1;
       if (e > 0) {
         let squared = base.checked_mul(base);
+
         if (squared.is_none()) { return Option.None; };
+
         base = squared.unwrap();
       };
     };
+
     return Option.Some(result);
   }
 
   pub fn checked_shl(self, rhs: u32) Option[i64] {
     if (rhs >= i64.bits()) { return Option.None; };
+
     return Option.Some(self << @as(i64, rhs));
   }
 
   pub fn checked_shr(self, rhs: u32) Option[i64] {
     if (rhs >= i64.bits()) { return Option.None; };
+
     return Option.Some(self >> @as(i64, rhs));
   }
 
@@ -200,21 +237,26 @@ implement builtin i64 {
     let result: i64 = 1;
     let base = self;
     let e = exp;
+
     while (e > 0) {
       if ((e & 1) == 1) { result = result * base; };
+
       e = e >> 1;
       if (e > 0) { base = base * base; };
     };
+
     return result;
   }
 
   pub fn wrapping_shl(self, rhs: u32) i64 {
     let shift = rhs % i64.bits();
+
     return self << @as(i64, shift);
   }
 
   pub fn wrapping_shr(self, rhs: u32) i64 {
     let shift = rhs % i64.bits();
+
     return self >> @as(i64, shift);
   }
 
@@ -224,40 +266,45 @@ implement builtin i64 {
 
   pub fn wrapping_abs(self) i64 {
     if (self < 0) { return 0 - self; };
+
     return self;
   }
 
   pub fn overflowing_add(self, rhs: i64) Overflowing[i64] {
     let sum = self + rhs;
     let overflowed = (rhs > 0 && sum < self) || (rhs < 0 && sum > self);
+
     return Overflowing { .value = sum, .overflowed = overflowed };
   }
 
   pub fn overflowing_sub(self, rhs: i64) Overflowing[i64] {
     let difference = self - rhs;
     let overflowed = (rhs > 0 && difference > self) || (rhs < 0 && difference < self);
+
     return Overflowing { .value = difference, .overflowed = overflowed };
   }
 
   pub fn overflowing_mul(self, rhs: i64) Overflowing[i64] {
     let product = self * rhs;
-    let overflowed = if (self == 0 || rhs == 0) {
-      false
-    } else if (rhs == -1) {
-      self == i64.min_value()
-    } else {
-      product / rhs != self
+
+    let overflowed = switch (true) {
+      _ if (self == 0 || rhs == 0) => false,
+      _ if (rhs == -1) => self == i64.min_value(),
+      _ => product / rhs != self,
     };
+
     return Overflowing { .value = product, .overflowed = overflowed };
   }
 
   pub fn overflowing_neg(self) Overflowing[i64] {
     let value = 0 - self;
+
     return Overflowing { .value = value, .overflowed = self == i64.min_value() };
   }
 
   pub fn overflowing_abs(self) Overflowing[i64] {
     let value = if (self < 0) { 0 - self } else { self };
+
     return Overflowing { .value = value, .overflowed = self == i64.min_value() };
   }
 
@@ -266,12 +313,14 @@ implement builtin i64 {
     let base = self;
     let e = exp;
     let overflowed = false;
+
     while (e > 0) {
       if ((e & 1) == 1) {
         let next = result.overflowing_mul(base);
         result = next.value;
         overflowed = overflowed || next.overflowed;
       };
+
       e = e >> 1;
       if (e > 0) {
         let squared = base.overflowing_mul(base);
@@ -279,40 +328,55 @@ implement builtin i64 {
         overflowed = overflowed || squared.overflowed;
       };
     };
+
     return Overflowing { .value = result, .overflowed = overflowed };
   }
 
   pub fn overflowing_shl(self, rhs: u32) Overflowing[i64] {
     let shift = rhs % i64.bits();
     let value = self << @as(i64, shift);
+
     return Overflowing { .value = value, .overflowed = rhs >= i64.bits() };
   }
 
   pub fn overflowing_shr(self, rhs: u32) Overflowing[i64] {
     let shift = rhs % i64.bits();
     let value = self >> @as(i64, shift);
+
     return Overflowing { .value = value, .overflowed = rhs >= i64.bits() };
   }
 
   pub fn saturating_add(self, rhs: i64) i64 {
     let sum = self.checked_add(rhs);
+
     if (sum.is_some()) { return sum.unwrap(); };
-    if (rhs > 0) { return i64.max_value(); };
-    return i64.min_value();
+
+    return switch (rhs > 0) {
+      true => i64.max_value(),
+      false => i64.min_value(),
+    };
   }
 
   pub fn saturating_sub(self, rhs: i64) i64 {
     let difference = self.checked_sub(rhs);
+
     if (difference.is_some()) { return difference.unwrap(); };
-    if (rhs > 0) { return i64.min_value(); };
-    return i64.max_value();
+
+    return switch (rhs > 0) {
+      true => i64.min_value(),
+      false => i64.max_value(),
+    };
   }
 
   pub fn saturating_mul(self, rhs: i64) i64 {
     let product = self.checked_mul(rhs);
+
     if (product.is_some()) { return product.unwrap(); };
-    if ((self > 0) == (rhs > 0)) { return i64.max_value(); };
-    return i64.min_value();
+
+    return switch ((self > 0) == (rhs > 0)) {
+      true => i64.max_value(),
+      false => i64.min_value(),
+    };
   }
 
   pub fn saturating_div(self, rhs: i64) i64 {
@@ -321,20 +385,27 @@ implement builtin i64 {
 
   pub fn saturating_neg(self) i64 {
     if (self == i64.min_value()) { return i64.max_value(); };
+
     return 0 - self;
   }
 
   pub fn saturating_abs(self) i64 {
-    if (self == i64.min_value()) { return i64.max_value(); };
-    if (self < 0) { return 0 - self; };
-    return self;
+    return switch (true) {
+      _ if (self == i64.min_value()) => i64.max_value(),
+      _ if (self < 0) => 0 - self,
+      _ => self,
+    };
   }
 
   pub fn saturating_pow(self, exp: u32) i64 {
     let powered = self.checked_pow(exp);
+
     if (powered.is_some()) { return powered.unwrap(); };
-    if ((exp & 1) == 1 && self < 0) { return i64.min_value(); };
-    return i64.max_value();
+
+    return switch ((exp & 1) == 1 && self < 0) {
+      true => i64.min_value(),
+      false => i64.max_value(),
+    };
   }
 
   pub fn pow(self, exp: u32) i64 {
@@ -344,66 +415,82 @@ implement builtin i64 {
   pub fn div_euclid(self, rhs: i64) i64 {
     let quotient = self / rhs;
     let remainder = self % rhs;
-    if (remainder < 0) {
-      if (rhs > 0) { return quotient - 1; };
-      return quotient + 1;
+
+    return switch (true) {
+      _ if (remainder >= 0) => quotient,
+      _ if (rhs > 0) => quotient - 1,
+      _ => quotient + 1,
     };
-    return quotient;
   }
 
   pub fn rem_euclid(self, rhs: i64) i64 {
     let remainder = self % rhs;
-    if (remainder < 0) {
-      if (rhs > 0) { return remainder + rhs; };
-      return remainder - rhs;
+
+    return switch (true) {
+      _ if (remainder >= 0) => remainder,
+      _ if (rhs > 0) => remainder + rhs,
+      _ => remainder - rhs,
     };
-    return remainder;
   }
 
   pub fn checked_div_euclid(self, rhs: i64) Option[i64] {
     let quotient = self.checked_div(rhs);
+
     if (quotient.is_none()) { return Option.None; };
+
     let remainder = self % rhs;
-    if (remainder < 0) {
-      if (rhs > 0) { return Option.Some(quotient.unwrap() - 1); };
-      return Option.Some(quotient.unwrap() + 1);
+
+    return switch (true) {
+      _ if (remainder >= 0) => quotient,
+      _ if (rhs > 0) => Option.Some(quotient.unwrap() - 1),
+      _ => Option.Some(quotient.unwrap() + 1),
     };
-    return quotient;
   }
 
   pub fn checked_rem_euclid(self, rhs: i64) Option[i64] {
     let remainder = self.checked_rem(rhs);
+
     if (remainder.is_none()) { return Option.None; };
-    if (remainder.unwrap() < 0) {
-      if (rhs > 0) { return Option.Some(remainder.unwrap() + rhs); };
-      return Option.Some(remainder.unwrap() - rhs);
+
+    return switch (true) {
+      _ if (remainder.unwrap() >= 0) => remainder,
+      _ if (rhs > 0) => Option.Some(remainder.unwrap() + rhs),
+      _ => Option.Some(remainder.unwrap() - rhs),
     };
-    return remainder;
   }
 
   pub fn div_ceil(self, rhs: i64) i64 {
     let quotient = self / rhs;
     let remainder = self % rhs;
+
     if ((remainder > 0 && rhs > 0) || (remainder < 0 && rhs < 0)) { return quotient + 1; };
+
     return quotient;
   }
 
   pub fn next_multiple_of(self, rhs: i64) i64 {
     let remainder = self % rhs;
-    if (remainder == 0) { return self; };
-    if ((remainder > 0) == (rhs > 0)) { return self + (rhs - remainder); };
-    return self - remainder;
+
+    return switch (true) {
+      _ if (remainder == 0) => self,
+      _ if ((remainder > 0) == (rhs > 0)) => self + (rhs - remainder),
+      _ => self - remainder,
+    };
   }
 
   pub fn checked_next_multiple_of(self, rhs: i64) Option[i64] {
     let remainder = self % rhs;
-    if (remainder == 0) { return Option.Some(self); };
-    if ((remainder > 0) == (rhs > 0)) { return self.checked_add(rhs - remainder); };
-    return self.checked_sub(remainder);
+
+    return switch (true) {
+      _ if (remainder == 0) => Option.Some(self),
+      _ if ((remainder > 0) == (rhs > 0)) => self.checked_add(rhs - remainder),
+      _ => self.checked_sub(remainder),
+    };
   }
 
   pub fn abs_diff(self, other: i64) u64 {
     if (self > other) { return @as(u64, self) - @as(u64, other); };
+
     return @as(u64, other) - @as(u64, self);
   }
 
@@ -412,39 +499,48 @@ implement builtin i64 {
     let a = @as(u64, self) ^ sign;
     let b = @as(u64, other) ^ sign;
     let middle = (a & b) + ((a ^ b) >> 1);
+
     return @as(i64, middle ^ sign);
   }
 
   pub fn min(self, other: i64) i64 {
     if (self < other) { return self; };
+
     return other;
   }
 
   pub fn max(self, other: i64) i64 {
     if (self > other) { return self; };
+
     return other;
   }
 
   pub fn clamp(self, min: i64, max: i64) i64 {
-    if (self < min) { return min; };
-    if (self > max) { return max; };
-    return self;
+    return switch (true) {
+      _ if (self < min) => min,
+      _ if (self > max) => max,
+      _ => self,
+    };
   }
 
   pub fn abs(self) i64 {
     if (self < 0) { return 0 - self; };
+
     return self;
   }
 
   pub fn unsigned_abs(self) u64 {
     if (self < 0) { return @as(u64, 0) - @as(u64, self); };
+
     return @as(u64, self);
   }
 
   pub fn signum(self) i64 {
-    if (self > 0) { return 1; };
-    if (self < 0) { return -1; };
-    return 0;
+    return switch (self) {
+      0 => 0,
+      _ if (self > 0) => 1,
+      _ => -1,
+    };
   }
 
   pub fn is_positive(self) bool {
@@ -458,6 +554,7 @@ implement builtin i64 {
   pub fn ilog2(self) u32 {
     if (self <= 0) { @panic("ilog2: argument must be positive"); };
     let value = @as(u64, self);
+
     return i64.bits() - 1 - value.leading_zeros();
   }
 
@@ -465,10 +562,12 @@ implement builtin i64 {
     if (self <= 0) { @panic("ilog10: argument must be positive"); };
     let value = @as(u64, self);
     let count: u32 = 0;
+
     while (value >= 10) {
       value = value / 10;
       count += 1;
     };
+
     return count;
   }
 
@@ -478,10 +577,12 @@ implement builtin i64 {
     let value = @as(u64, self);
     let step = @as(u64, base);
     let count: u32 = 0;
+
     while (value >= step) {
       value = value / step;
       count += 1;
     };
+
     return count;
   }
 
@@ -505,10 +606,12 @@ implement builtin i64 {
     let v = @as(u64, self);
     let bytes: [8]u8 = [0; 8];
     let i: u32 = 0;
+
     while (i < 8) {
       bytes[@as(usize, i)] = @as(u8, v >> @as(u64, (8 - 1 - i) * 8));
       i += 1;
     };
+
     return bytes;
   }
 
@@ -516,10 +619,12 @@ implement builtin i64 {
     let v = @as(u64, self);
     let bytes: [8]u8 = [0; 8];
     let i: u32 = 0;
+
     while (i < 8) {
       bytes[@as(usize, i)] = @as(u8, v >> @as(u64, i * 8));
       i += 1;
     };
+
     return bytes;
   }
 
@@ -530,20 +635,24 @@ implement builtin i64 {
   pub fn from_be_bytes(bytes: [8]u8) i64 {
     let v: u64 = 0;
     let i: usize = 0;
+
     while (i < 8) {
       v = (v << 8) | @as(u64, bytes[i]);
       i += 1;
     };
+
     return @as(i64, v);
   }
 
   pub fn from_le_bytes(bytes: [8]u8) i64 {
     let v: u64 = 0;
     let i: usize = 0;
+
     while (i < 8) {
       v = v | (@as(u64, bytes[i]) << @as(u64, i * 8));
       i += 1;
     };
+
     return @as(i64, v);
   }
 
