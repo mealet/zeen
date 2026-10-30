@@ -63,14 +63,6 @@ impl Default for CodegenOptions {
     }
 }
 
-fn source_line(source: &str, offset: usize) -> usize {
-    1 + source
-        .as_bytes()
-        .get(..offset)
-        .map(|prefix| prefix.iter().filter(|&&b| b == b'\n').count())
-        .unwrap_or(0)
-}
-
 const PANIC_STACK_DEPTH: u32 = 256;
 
 pub struct CodeGen<'ctx, 'prog> {
@@ -3210,18 +3202,13 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
                 let source = source.clone().expect("unhandled None source");
 
-                let debug_source = &source.src.inner()
-                    [source.span.offset()..source.span.offset() + source.span.len()];
+                let debug_source = source.text();
                 let debug_inner = debug_source
                     .strip_prefix("@dbg(")
                     .and_then(|s| s.strip_suffix(')'))
                     .unwrap_or(debug_source);
 
-                let debug_location = format!(
-                    "{}:{}",
-                    source.src.name(),
-                    source_line(source.src.inner(), source.span.offset())
-                );
+                let debug_location = format!("{}:{}", source.src.name(), source.line_number());
 
                 let printf = self.get_or_declare_runtime_fn(
                     "printf",
@@ -3386,10 +3373,7 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
         let (module, line) = match self.resolution.defs.get(&func.source_def) {
             Some(info) => {
                 let source = &info.span;
-                (
-                    source.src().name().to_string(),
-                    source_line(source.src().inner(), source.span.offset()),
-                )
+                (source.src().name().to_string(), source.line_number())
             }
             None => ("?".to_string(), 0),
         };
