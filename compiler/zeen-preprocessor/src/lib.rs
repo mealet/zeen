@@ -164,6 +164,7 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
 
             DeclarationKind::ImplementDecl {
                 interface,
+                builtin,
                 object,
                 generics,
                 methods,
@@ -171,6 +172,7 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 let object = self.resolve_object_generics(object);
                 DeclarationKind::ImplementDecl {
                     interface,
+                    builtin,
                     object,
                     generics: self.resolve_generics(generics),
                     methods: self.resolve_nested_decls(methods),

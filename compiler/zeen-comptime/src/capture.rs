@@ -871,6 +871,7 @@ impl<'arena> Interp<'arena> {
 
             DeclarationKind::ImplementDecl {
                 interface,
+                builtin,
                 object,
                 generics,
                 methods,
@@ -884,6 +885,7 @@ impl<'arena> Interp<'arena> {
                 Ok(self.arena.alloc(Declaration {
                     kind: DeclarationKind::ImplementDecl {
                         interface,
+                        builtin,
                         object,
                         generics,
                         methods: new_methods,

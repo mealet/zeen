@@ -766,7 +766,15 @@ fn global_initialized_from_another_global() {
          fn main() {}",
     );
 
-    assert_eq!(mir.program.global_vars.len(), 2);
+    let names: Vec<&str> = mir
+        .program
+        .global_vars
+        .iter()
+        .map(|global| global.symbol_name.as_str())
+        .collect();
+
+    assert!(names.contains(&"ZERO"));
+    assert!(names.contains(&"ALIAS"));
 }
 
 use crate::{
@@ -1833,6 +1841,75 @@ fn print_mir_ok(src: &str) -> String {
     .expect("MIR lowering must succeed");
 
     crate::printer::print_mir_program(&lowered_mir.program, &typecheck, &resolution_result, &rodeo)
+}
+
+#[test]
+fn printed_mir_renders_builtin_static_method_calls() {
+    let printed = print_mir_ok(
+        "implement builtin i32 { \
+             fn largest() i32 { return 2147483647; } \
+             fn pick[T](value: T) T { return value; } \
+         } \
+         fn main() { let a = i32.largest(); let b = i32.pick(7); @println(\"{}\", a); @println(\"{}\", b); }",
+    );
+
+    assert!(printed.contains("fn i32.largest() i32"), "{printed}");
+    assert!(printed.contains("fn i32.pick("), "{printed}");
+    assert!(printed.contains("i32.largest() ->"), "{printed}");
+    assert!(printed.contains("i32.pick(7) ->"), "{printed}");
+}
+
+#[test]
+fn printed_mir_renders_builtin_shape_method_calls() {
+    let printed = print_mir_ok(
+        "implement[T] builtin []T { \
+             fn count(*const self) usize { return (*self).len; } \
+         } \
+         implement builtin [4]u8 { \
+             fn first(*const self) u8 { return (*self)[0]; } \
+         } \
+         fn main() { \
+             let arr: [3]i32 = [1, 2, 3]; \
+             let slice = arr[..]; \
+             let bytes: [4]u8 = [1, 2, 3, 4]; \
+             @println(\"{}\", slice.count()); \
+             @println(\"{}\", bytes.first()); \
+         }",
+    );
+
+    assert!(printed.contains("fn []i32.count("), "{printed}");
+    assert!(printed.contains("fn [4]u8.first("), "{printed}");
+    assert!(printed.contains("[]i32.count("), "{printed}");
+    assert!(printed.contains("[4]u8.first("), "{printed}");
+}
+
+#[test]
+fn printed_mir_renders_builtin_interface_ops() {
+    let printed = print_mir_ok(
+        "fn main() { \
+             let a: i32 = 3; \
+             let b: i32 = 4; \
+             @println(\"{}\", a.eq(&b)); \
+             @println(\"{:?}\", a.cmp(&b)); \
+             @println(\"{}\", a.add(b)); \
+             @println(\"{}\", a.neg()); \
+             @println(\"{}\", a.bit_not()); \
+             @println(\"{}\", true.not()); \
+         }",
+    );
+
+    assert!(printed.contains("= Eq("), "{printed}");
+    assert!(printed.contains("= Lt("), "{printed}");
+    assert!(printed.contains("= Add("), "{printed}");
+    assert!(printed.contains("= Neg("), "{printed}");
+    assert!(printed.contains("= BitNot("), "{printed}");
+    assert!(printed.contains("= Not("), "{printed}");
+    assert!(!printed.contains("= eq("), "{printed}");
+    assert!(!printed.contains("= cmp("), "{printed}");
+    assert!(!printed.contains("= add("), "{printed}");
+    assert!(!printed.contains("= neg("), "{printed}");
+    assert!(!printed.contains("= bit_not("), "{printed}");
+    assert!(!printed.contains("= not("), "{printed}");
 }
 
 #[test]

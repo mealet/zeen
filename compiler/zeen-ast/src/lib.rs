@@ -27,6 +27,23 @@ impl Source {
     pub fn src(&self) -> NamedSource<Arc<String>> {
         self.src.clone()
     }
+
+    pub fn line_number(&self) -> usize {
+        let text = self.src.inner();
+        let offset = self.span.offset().min(text.len());
+
+        1 + text
+            .as_bytes()
+            .get(..offset)
+            .map(|prefix| prefix.iter().filter(|&&b| b == b'\n').count())
+            .unwrap_or(0)
+    }
+
+    pub fn text(&self) -> &str {
+        let text = self.src.inner();
+        text.get(self.span.offset()..self.span.offset() + self.span.len())
+            .unwrap_or_default()
+    }
 }
 
 impl From<(SourceSpan, NamedSource<Arc<String>>)> for Source {

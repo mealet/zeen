@@ -1,0 +1,44 @@
+implement[T] builtin []T {
+  fn first(*const self) Option[T] {
+    if ((*self).len == 0) {
+      return Option.None;
+    }
+
+    return Option.Some((*self)[0]);
+  }
+
+  fn last(*const self) Option[T] {
+    if ((*self).len == 0) {
+      return Option.None;
+    }
+
+    return Option.Some((*self)[(*self).len - 1]);
+  }
+
+  fn count(*const self) usize {
+    return (*self).len;
+  }
+}
+
+implement[T] builtin []const T {
+  fn frozen(*const self) bool {
+    return true;
+  }
+}
+
+fn len_of[T](items: []T) usize {
+  return items.count();
+}
+
+fn main() {
+  let nums: [4]i32 = [10, 20, 30, 40];
+  let slice = nums[..];
+
+  @println("{}", slice.first().unwrap());
+  @println("{}", slice.last().unwrap());
+  @println("{}", slice.count());
+  @println("{}", len_of(slice));
+
+  let frozen: []const i32 = nums[..];
+  @println("{}", frozen.frozen());
+}

@@ -131,14 +131,28 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
-    #[error("provided `{provided}` is not a struct")]
-    #[diagnostic(severity(Error), code(zeen::typechecker::not_a_struct))]
-    NotAStruct {
-        provided: SmolStr,
+    #[error("`{object}` has no method `{name}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::unknown_method))]
+    UnknownMethod {
+        object: SmolStr,
+        name: SmolStr,
 
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label]
+        #[label("not found in `{object}`")]
+        span: SourceSpan,
+    },
+
+    #[error("`char` literal must be ASCII")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::non_ascii_char),
+        help("`char` holds a single byte, use a string literal for text")
+    )]
+    NonAsciiChar {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a single byte")]
         span: SourceSpan,
     },
 
@@ -647,6 +661,34 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("`{object}` has no associated function `{name}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::unknown_associated_fn))]
+    UnknownAssociatedFn {
+        object: SmolStr,
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not found in `{object}`")]
+        span: SourceSpan,
+    },
+
+    #[error("associated function `{object}.{name}` must be called")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::associated_fn_as_value),
+        help("call it as `{object}.{name}()`")
+    )]
+    AssociatedFnAsValue {
+        object: SmolStr,
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("used without a call")]
+        span: SourceSpan,
+    },
+
     #[error("private item is not accessible: `{name}`")]
     #[diagnostic(severity(Error), code(zeen::typecheck::private_item))]
     PrivateItemNotAccessible {
@@ -900,9 +942,7 @@ pub enum TypeError {
     #[diagnostic(
         severity(Error),
         code(zeen::typechecker::type_name_as_value),
-        help(
-            "a type name has no value: construct an instance (`{name} {{ ... }}`) or call a static method on it"
-        )
+        help("a type name has no value: use it as a type, or call a static method on it")
     )]
     TypeNameAsValue {
         name: SmolStr,

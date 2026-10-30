@@ -71,6 +71,20 @@ pub fn use_imports(text: &str) -> Vec<String> {
     imports
 }
 
+pub fn implicit_imports(std_root: Option<&Path>) -> Vec<String> {
+    let Some(root) = std_root else {
+        return Vec::new();
+    };
+
+    prefixed_modules(&root.join("primitives"), "std.primitives")
+}
+
+pub fn imports_for(text: &str, std_root: Option<&Path>) -> Vec<String> {
+    let mut imports = use_imports(text);
+    imports.extend(implicit_imports(std_root));
+    imports
+}
+
 pub(crate) fn resolve_import(
     open_dir: &Path,
     project_root: &Path,
@@ -201,6 +215,92 @@ pub fn type_members(
         };
 
         members.extend(members_of_type(&content, &module, type_name));
+    }
+
+    members.sort_by(|a, b| a.name.cmp(&b.name));
+    members
+}
+
+pub fn builtin_shape_members(
+    open_dir: &Path,
+    project_root: &Path,
+    std_root: Option<&Path>,
+    packages: &[(String, std::path::PathBuf)],
+    imports: &[String],
+    type_name: &str,
+) -> Vec<ModuleMember> {
+    let mut members = Vec::new();
+
+    for import in imports {
+        let Some((module, content)) =
+            resolve_import(open_dir, project_root, std_root, packages, import)
+        else {
+            continue;
+        };
+
+        members.extend(members_of_builtin_shape(&content, &module, type_name));
+    }
+
+    members.sort_by(|a, b| a.name.cmp(&b.name));
+    members
+}
+
+fn members_of_builtin_shape(content: &str, module: &str, type_name: &str) -> Vec<ModuleMember> {
+    let filename = Rc::new(format!("{module}.zn"));
+    let source = Arc::new(content.to_string());
+    let interner = Rc::new(RefCell::new(lasso::Rodeo::default()));
+    let bump = bumpalo::Bump::new();
+    let mut tokens = zeen_lexer::tokenize(content);
+
+    let mut parser = zeen_parser::Parser::new(
+        Rc::clone(&filename),
+        Arc::clone(&source),
+        &mut tokens,
+        &bump,
+        Rc::clone(&interner),
+    );
+
+    let Ok(program) = parser.parse_program() else {
+        return Vec::new();
+    };
+
+    let interner = interner.borrow();
+    let resolve = |spur: &lasso::Spur| interner.resolve(spur).to_string();
+    let mut members = Vec::new();
+
+    for decl in program {
+        let DeclarationKind::ImplementDecl {
+            builtin: Some(shape),
+            methods,
+            ..
+        } = &decl.kind
+        else {
+            continue;
+        };
+
+        if !crate::builtin::shape_matches_type(shape, type_name) {
+            continue;
+        }
+
+        for method in *methods {
+            let DeclarationKind::FnDecl {
+                name,
+                params,
+                is_pub: true,
+                ..
+            } = &method.kind
+            else {
+                continue;
+            };
+
+            members.push(ModuleMember {
+                module: module.to_string(),
+                name: resolve(&name.0),
+                kind: ModuleKind::Method,
+                is_static: !fn_takes_self(params),
+                arity: Some(fn_arity(params)),
+            });
+        }
     }
 
     members.sort_by(|a, b| a.name.cmp(&b.name));
@@ -370,14 +470,27 @@ fn members_of_type(content: &str, module: &str, type_name: &str) -> Vec<ModuleMe
                 }
             }
             DeclarationKind::ImplementDecl {
-                object, methods, ..
+                builtin,
+                object,
+                methods,
+                ..
             } => {
                 if resolve(&object.0) != type_name {
                     continue;
                 }
 
                 for method in *methods {
-                    if let DeclarationKind::FnDecl { name, params, .. } = &method.kind {
+                    if let DeclarationKind::FnDecl {
+                        name,
+                        params,
+                        is_pub,
+                        ..
+                    } = &method.kind
+                    {
+                        if builtin.is_some() && !is_pub {
+                            continue;
+                        }
+
                         members.push(ModuleMember {
                             module: module.to_string(),
                             name: resolve(&name.0),
@@ -777,5 +890,91 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(prefixed_modules(&dir, "root").is_empty());
+    }
+
+    #[test]
+    fn implicit_imports_list_primitive_modules() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-implicit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("primitives")).unwrap();
+        std::fs::write(
+            dir.join("primitives").join("i8.zn"),
+            "implement builtin i8 {\n    pub fn abs(*const self) i8 {\n        return *self;\n    }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("primitives").join("u8.zn"), "").unwrap();
+        std::fs::write(dir.join("primitives").join("notes.txt"), "").unwrap();
+
+        assert_eq!(
+            implicit_imports(Some(&dir)),
+            vec![
+                "std.primitives.i8".to_string(),
+                "std.primitives.u8".to_string()
+            ]
+        );
+
+        let imports = imports_for("use std.string;\n", Some(&dir));
+        assert_eq!(
+            imports,
+            vec![
+                "std.string".to_string(),
+                "std.primitives.i8".to_string(),
+                "std.primitives.u8".to_string()
+            ]
+        );
+
+        let signature = method_source_sig(&dir, &dir, Some(&dir), &[], &imports, "i8", "abs");
+        assert_eq!(signature.as_deref(), Some("fn abs(*const self) i8"));
+
+        assert!(implicit_imports(None).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn imported_builtin_methods_respect_privacy() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-builtin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lib.zn"),
+            "implement builtin i32 {\n    pub fn shown(*const self) bool {\n        return true;\n    }\n\n    fn hidden(*const self) bool {\n        return false;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let members = type_members(&dir, &dir, None, &[], &["lib".to_string()], "i32");
+        let names: Vec<&str> = members.iter().map(|member| member.name.as_str()).collect();
+
+        assert!(names.contains(&"shown"));
+        assert!(!names.contains(&"hidden"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn imported_shape_methods_match_receiver_type() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-shape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lib.zn"),
+            "implement[T] builtin []T {\n    pub fn count(*const self) usize {\n        return (*self).len;\n    }\n\n    fn hidden(*const self) bool {\n        return false;\n    }\n}\n\nimplement builtin [4]u8 {\n    pub fn total(*const self) u32 {\n        return 0;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let slice = builtin_shape_members(&dir, &dir, None, &[], &["lib".to_string()], "[]i32");
+        let names: Vec<&str> = slice.iter().map(|member| member.name.as_str()).collect();
+
+        assert_eq!(names, vec!["count"]);
+
+        let array = builtin_shape_members(&dir, &dir, None, &[], &["lib".to_string()], "[4]u8");
+        let names: Vec<&str> = array.iter().map(|member| member.name.as_str()).collect();
+
+        assert_eq!(names, vec!["total"]);
+        assert!(
+            builtin_shape_members(&dir, &dir, None, &[], &["lib".to_string()], "[8]u8").is_empty()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

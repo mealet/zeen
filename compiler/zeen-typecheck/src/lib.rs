@@ -20,7 +20,7 @@ use crate::{error::TypeError, format_str::FormatParseError};
 
 use zeen_ast::{
     expressions::{BinaryOp, Literal, UnaryOp},
-    types::BuiltinType,
+    types::{BuiltinShape, BuiltinType},
 };
 use zeen_driver::{CompilationContext, CompilationOutput};
 use zeen_hir::{
@@ -129,11 +129,18 @@ struct PendingImplCheck {
 
 struct MethodSignatureEntry {
     object: DefId,
+    owner_key: MethodOwnerKey,
     name: Spur,
     args: Vec<String>,
     bounds: Vec<String>,
     source: Source,
     span: SourceSpan,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum MethodOwnerKey {
+    Def(DefId),
+    Shape(String),
 }
 
 struct ImplSigCtx<'a> {
@@ -157,6 +164,16 @@ enum SwitchValue {
     Bool(bool),
     Char(char),
     String(Spur),
+}
+
+enum ShapeMethodSelection {
+    None,
+    Mismatch,
+    Selected {
+        owner: DefId,
+        args: Vec<TypeId>,
+        method: DefId,
+    },
 }
 
 fn literal_kind_word(lit: &Literal) -> &'static str {
@@ -677,6 +694,15 @@ impl<'res> TypeChecker<'res> {
                 .insert(generic.def_id, generic.bounds.clone());
         }
 
+        if let Some(object_def) = imp.object
+            && let Some(DefKind::BuiltinShape(shape)) = self.def_kind(object_def).cloned()
+        {
+            self.result.builtin_shapes.insert(object_def, shape);
+            self.result
+                .builtin_shape_generics
+                .insert(object_def, imp.generics.iter().map(|g| g.def_id).collect());
+        }
+
         for method in &imp.methods {
             self.declare_signature(method);
 
@@ -700,12 +726,38 @@ impl<'res> TypeChecker<'res> {
 
         if !matches!(
             self.def_kind(object_def),
-            Some(DefKind::Struct) | Some(DefKind::Enum)
+            Some(DefKind::Struct)
+                | Some(DefKind::Enum)
+                | Some(DefKind::Builtin(_))
+                | Some(DefKind::BuiltinShape(_))
         ) {
             self.report(TypeError::ImplementNonStruct {
                 src: source.src(),
                 span: imp.object_bindings_span,
             });
+            return;
+        }
+
+        if let Some(DefKind::BuiltinShape(shape)) = self.def_kind(object_def).cloned() {
+            let entry = ImplEntry {
+                methods: imp.methods.iter().map(|m| m.def_id).collect(),
+                object_args: Vec::new(),
+                is_specialized: !shape.has_params(),
+                generic_bounds: imp
+                    .generics
+                    .iter()
+                    .map(|g| (g.def_id, g.bounds.clone()))
+                    .collect(),
+                generic_bindings: Vec::new(),
+                generics: imp.generics.iter().map(|g| g.def_id).collect(),
+            };
+
+            self.result
+                .inherent_impls
+                .entry(object_def)
+                .or_default()
+                .push(entry);
+
             return;
         }
 
@@ -951,6 +1003,44 @@ impl<'res> TypeChecker<'res> {
         (self.lower_hir_type_inner(ty), false)
     }
 
+    fn builtin_shape_type(&mut self, shape: &BuiltinShape, generics: &[DefId]) -> TypeId {
+        match shape {
+            BuiltinShape::Scalar(builtin) => self.result.interner.builtin(*builtin),
+
+            BuiltinShape::Slice { element, is_const } => {
+                let element = self.builtin_shape_type(element, generics);
+
+                self.result.interner.intern(Type::Slice {
+                    element,
+                    is_const: *is_const,
+                })
+            }
+
+            BuiltinShape::ManyPointer { element, is_const } => {
+                let element = self.builtin_shape_type(element, generics);
+
+                self.result.interner.intern(Type::ManyPointer {
+                    inner: element,
+                    is_const: *is_const,
+                })
+            }
+
+            BuiltinShape::Array { element, len } => {
+                let element = self.builtin_shape_type(element, generics);
+
+                self.result.interner.intern(Type::Array {
+                    element,
+                    len: Some(*len),
+                })
+            }
+
+            BuiltinShape::Param(index) => match generics.get(*index as usize).copied() {
+                Some(generic) => self.result.interner.intern(Type::GenericParam(generic)),
+                None => self.result.interner.error(),
+            },
+        }
+    }
+
     fn lower_alias_ref(&mut self, def_id: DefId, args: Vec<TypeId>, ty: &HirTypeExpr) -> TypeId {
         let Some(alias) = self.type_aliases.get(&def_id).cloned() else {
             return self.result.interner.error();
@@ -1049,6 +1139,15 @@ impl<'res> TypeChecker<'res> {
                         .intern(Type::InterfaceSelfPlaceholder(*def_id)),
 
                     _ => {
+                        if let Some(DefKind::Builtin(builtin)) = self.def_kind(*def_id) {
+                            return self.result.interner.builtin(*builtin);
+                        }
+
+                        if let Some(shape) = self.result.builtin_shapes.get(def_id).cloned() {
+                            let generics = self.type_member_generics(*def_id);
+                            return self.builtin_shape_type(&shape, &generics);
+                        }
+
                         let generic_args: Vec<TypeId> = self
                             .type_member_generics(*def_id)
                             .iter()
@@ -1404,9 +1503,11 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn type_member_generics(&self, def: DefId) -> Vec<DefId> {
-        self.struct_generics
+        self.result
+            .builtin_shape_generics
             .get(&def)
             .cloned()
+            .or_else(|| self.struct_generics.get(&def).cloned())
             .or_else(|| self.enum_generics.get(&def).cloned())
             .unwrap_or_default()
     }
@@ -1446,11 +1547,6 @@ impl<'res> TypeChecker<'res> {
 
             HirDeclKind::Implement(imp) => {
                 if let Some(object_def) = imp.object {
-                    let _self_ty = self.result.interner.intern(Type::Struct {
-                        def_id: object_def,
-                        generic_args: Vec::new(),
-                    });
-
                     let impl_ctx = self.impl_method_ctx(imp);
 
                     for method in &imp.methods {
@@ -1518,6 +1614,36 @@ impl<'res> TypeChecker<'res> {
         };
 
         let self_type = struct_def.map(|sd| {
+            let self_mode_ty =
+                |base_ty: TypeId, interner: &mut zeen_types::TypeInterner| match self_mode {
+                    Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_ty,
+                    Some(SelfMode::RefMut) => interner.intern(Type::Pointer {
+                        inner: base_ty,
+                        is_const: false,
+                    }),
+                    Some(SelfMode::RefConst) => interner.intern(Type::Pointer {
+                        inner: base_ty,
+                        is_const: true,
+                    }),
+                };
+
+            if let Some(DefKind::Builtin(builtin)) = self.def_kind(sd) {
+                let base_ty = self.result.interner.builtin(*builtin);
+                return self_mode_ty(base_ty, &mut self.result.interner);
+            }
+
+            let shape = match self.def_kind(sd) {
+                Some(DefKind::BuiltinShape(shape)) => Some(shape.clone()),
+                _ => None,
+            };
+
+            if let Some(shape) = shape {
+                let generics = self.type_member_generics(sd);
+                let base_ty = self.builtin_shape_type(&shape, &generics);
+
+                return self_mode_ty(base_ty, &mut self.result.interner);
+            }
+
             let is_enum = matches!(self.def_kind(sd), Some(DefKind::Enum));
             let owner_generics = if is_enum {
                 self.enum_generics.get(&sd).cloned().unwrap_or_default()
@@ -1548,19 +1674,8 @@ impl<'res> TypeChecker<'res> {
                 })
             };
 
-            match self_mode {
-                Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_ty,
-                Some(SelfMode::RefMut) => self.result.interner.intern(Type::Pointer {
-                    inner: base_ty,
-                    is_const: false,
-                }),
-                Some(SelfMode::RefConst) => self.result.interner.intern(Type::Pointer {
-                    inner: base_ty,
-                    is_const: true,
-                }),
-            }
+            self_mode_ty(base_ty, &mut self.result.interner)
         });
-
         let mut generic_bindings = HashMap::default();
         let mut generic_bounds = HashMap::default();
 
@@ -2253,8 +2368,30 @@ impl<'res> TypeChecker<'res> {
             HirExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => self.result.interner.int_literal(),
                 Literal::Float(_) => self.result.interner.float_literal(),
-                Literal::Char(_) => self.result.interner.builtin(BuiltinType::char),
-                Literal::ByteChar(_) => self.result.interner.builtin(BuiltinType::u8),
+                Literal::Char(c) => {
+                    if !c.is_ascii() {
+                        self.report(TypeError::NonAsciiChar {
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+
+                        return self.result.interner.error();
+                    }
+
+                    self.result.interner.builtin(BuiltinType::char)
+                }
+                Literal::ByteChar(c) => {
+                    if !c.is_ascii() {
+                        self.report(TypeError::NonAsciiChar {
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+
+                        return self.result.interner.error();
+                    }
+
+                    self.result.interner.builtin(BuiltinType::u8)
+                }
                 Literal::Bool(_) => self.result.interner.builtin(BuiltinType::bool),
                 Literal::String(str_lit) => {
                     let interner = self.interner.borrow();
@@ -2664,7 +2801,26 @@ impl<'res> TypeChecker<'res> {
                 })
             }
 
-            HirExprKind::Type(_) => self.result.interner.error(),
+            HirExprKind::Type(ty) => {
+                let name: Option<SmolStr> = match ty.kind {
+                    HirTypeKind::Builtin(builtin) => {
+                        let builtin_ty = self.result.interner.builtin(builtin);
+                        Some(self.display_type(builtin_ty).into())
+                    }
+                    HirTypeKind::SelfType(def) => self.def_name(def).map(Into::into),
+                    _ => None,
+                };
+
+                if let Some(name) = name {
+                    self.report(TypeError::TypeNameAsValue {
+                        name,
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+                }
+
+                self.result.interner.error()
+            }
             HirExprKind::Error => self.result.interner.error(),
         }
     }
@@ -3122,9 +3278,10 @@ impl<'res> TypeChecker<'res> {
                 self.type_implements_display(inner)
             }
 
-            Type::Array { element, .. } | Type::Slice { element, .. } => {
-                self.type_implements_display(element)
-            }
+            Type::Array { element, .. } | Type::Slice { element, .. } => matches!(
+                self.result.interner.get(element).clone(),
+                Type::Builtin(BuiltinType::char)
+            ),
 
             Type::GenericParam(g) => {
                 let cur = self.ctx.current();
@@ -3387,6 +3544,35 @@ impl<'res> TypeChecker<'res> {
     ) -> TypeId {
         let (field_name, field_span) = *field;
 
+        if let Some((builtin, owner)) = self.builtin_expr_owner(object) {
+            let builtin_ty = self.result.interner.builtin(builtin);
+            let object_name = self.display_type(builtin_ty).into();
+            let name = self.interner.borrow().resolve(&field_name).into();
+            let src = object.source.src();
+
+            if self
+                .struct_methods
+                .get(&owner)
+                .is_some_and(|methods| methods.contains_key(&field_name))
+            {
+                self.report(TypeError::AssociatedFnAsValue {
+                    object: object_name,
+                    name,
+                    src,
+                    span: field_span,
+                });
+            } else {
+                self.report(TypeError::UnknownAssociatedFn {
+                    object: object_name,
+                    name,
+                    src,
+                    span: field_span,
+                });
+            }
+
+            return self.result.interner.error();
+        }
+
         if let HirExprKind::VarRef {
             def: referenced_def,
             ..
@@ -3476,24 +3662,24 @@ impl<'res> TypeChecker<'res> {
                 } => (def_id, generic_args),
                 Type::Error => return self.result.interner.error(),
                 _ => {
-                    self.report(TypeError::NotAStruct {
-                        provided: self.display_type(obj_ty).into(),
-                        src: object.source.src(),
-                        span: field_span,
-                    });
-                    return self.result.interner.error();
+                    return self.report_unknown_shape_field(
+                        inner,
+                        field_name,
+                        field_span,
+                        &object.source,
+                    );
                 }
             },
 
             Type::Error => return self.result.interner.error(),
 
             _ => {
-                self.report(TypeError::NotAStruct {
-                    provided: self.display_type(obj_ty).into(),
-                    src: object.source.src(),
-                    span: field_span,
-                });
-                return self.result.interner.error();
+                return self.report_unknown_shape_field(
+                    obj_ty,
+                    field_name,
+                    field_span,
+                    &object.source,
+                );
             }
         };
 
@@ -4899,15 +5085,36 @@ impl<'res> TypeChecker<'res> {
 
         let current_struct = self.ctx.current().struct_def;
 
-        if Some(owner_struct) != current_struct {
-            let name = self.def_name(method_def_id).unwrap_or_default().into();
-
-            self.report(TypeError::PrivateItemNotAccessible {
-                name,
-                src: source.src(),
-                span: source.span,
-            });
+        if Some(owner_struct) == current_struct {
+            return;
         }
+
+        if matches!(
+            self.def_kind(owner_struct),
+            Some(DefKind::Builtin(_)) | Some(DefKind::BuiltinShape(_))
+        ) {
+            let caller = self.ctx.current_fn_def();
+
+            let same_module = match (
+                self.resolution.def_modules.get(&method_def_id),
+                caller.and_then(|def| self.resolution.def_modules.get(&def)),
+            ) {
+                (Some(method_module), Some(caller_module)) => method_module == caller_module,
+                _ => false,
+            };
+
+            if same_module {
+                return;
+            }
+        }
+
+        let name = self.def_name(method_def_id).unwrap_or_default().into();
+
+        self.report(TypeError::PrivateItemNotAccessible {
+            name,
+            src: source.src(),
+            span: source.span,
+        });
     }
 
     fn try_check_generic_bound_method_call(
@@ -5026,6 +5233,71 @@ impl<'res> TypeChecker<'res> {
         Some(self.substitute_self(ret, recv_ty))
     }
 
+    fn check_builtin_interface_method(
+        &mut self,
+        call_id: HirId,
+        builtin_ty: zeen_ast::types::BuiltinType,
+        field_name: Spur,
+        args: &[Rc<HirExpr>],
+        source: &Source,
+    ) -> Option<TypeId> {
+        let field_str = self.interner.borrow().resolve(&field_name).to_string();
+        for iface_name in Self::builtin_interface_names(builtin_ty) {
+            let Some(iface_def) = self.interface_registry.get(iface_name) else {
+                continue;
+            };
+            if let Some(methods) = self.interface_methods.get(&iface_def) {
+                for &method_def in methods {
+                    let mname = self.def_name(method_def).unwrap_or_default();
+                    if mname != field_str {
+                        continue;
+                    }
+                    let (sig_params, sig_ret, sig_generics) = {
+                        let Some(sig) = self.fn_sigs.get(&method_def) else {
+                            panic!("interface method sig missing for {}", mname);
+                        };
+                        (sig.params.clone(), sig.ret, sig.generics.clone())
+                    };
+                    let expected = sig_params.len() - 1;
+                    if args.len() != expected {
+                        self.report(TypeError::ArgCountMismatch {
+                            expected,
+                            found: args.len(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+                    let recv_ty = self.result.interner.builtin(builtin_ty);
+                    let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+                    for (param_ty, arg) in sig_params.iter().skip(1).zip(args.iter()) {
+                        let param_ty = self.substitute_self(*param_ty, recv_ty);
+                        self.infer_or_check_arg(param_ty, arg, &mut bindings, source.clone());
+                    }
+                    let resolved_generic_args: Vec<TypeId> = sig_generics
+                        .iter()
+                        .map(|g| {
+                            bindings
+                                .get(g)
+                                .copied()
+                                .unwrap_or_else(|| self.result.interner.error())
+                        })
+                        .collect();
+                    self.result.call_resolutions.insert(
+                        call_id,
+                        crate::result::CallResolution {
+                            fn_def: method_def,
+                            generic_args: resolved_generic_args,
+                        },
+                    );
+                    let ret = self.substitute_generics(sig_ret, &bindings);
+                    return Some(self.substitute_self(ret, recv_ty));
+                }
+            }
+        }
+
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn try_check_method_call(
         &mut self,
@@ -5038,6 +5310,19 @@ impl<'res> TypeChecker<'res> {
         expected: Option<TypeId>,
     ) -> Option<TypeId> {
         let (field_name, field_span) = field;
+
+        if let Some((builtin, owner)) = self.builtin_expr_owner(object) {
+            return Some(self.check_builtin_associated_fn_call(
+                (call_id, object),
+                builtin,
+                owner,
+                (field_name, field_span),
+                args,
+                explicit_generic_args,
+                &source,
+                expected,
+            ));
+        }
 
         if let HirExprKind::VarRef {
             def: referenced_def,
@@ -5080,7 +5365,7 @@ impl<'res> TypeChecker<'res> {
             );
         }
 
-        let obj_ty = self.synth_expr(object);
+        let mut obj_ty = self.synth_expr(object);
         self.type_names_as_values.remove(&object.id);
 
         if matches!(self.result.interner.get(obj_ty), Type::GenericParam(_)) {
@@ -5115,45 +5400,30 @@ impl<'res> TypeChecker<'res> {
                     Type::Builtin(b) => b,
                     _ => unreachable!(),
                 };
-                let field_str = self.interner.borrow().resolve(&field_name).to_string();
-                for iface_name in Self::builtin_interface_names(builtin_ty) {
-                    let Some(iface_def) = self.interface_registry.get(iface_name) else {
-                        continue;
-                    };
-                    if let Some(methods) = self.interface_methods.get(&iface_def) {
-                        for &method_def in methods {
-                            let mname = self.def_name(method_def).unwrap_or_default();
-                            if mname != field_str {
-                                continue;
-                            }
-                            let (sig_params_len, sig_ret) = {
-                                let Some(sig) = self.fn_sigs.get(&method_def) else {
-                                    panic!("interface method sig missing for {}", mname);
-                                };
-                                (sig.params.len(), sig.ret)
-                            };
-                            if args.len() != sig_params_len - 1 {
-                                self.report(TypeError::ArgCountMismatch {
-                                    expected: sig_params_len - 1,
-                                    found: args.len(),
-                                    src: source.src(),
-                                    span: source.span,
-                                });
-                            }
-                            self.result.call_resolutions.insert(
-                                call_id,
-                                crate::result::CallResolution {
-                                    fn_def: method_def,
-                                    generic_args: Vec::new(),
-                                },
-                            );
-                            return Some(sig_ret);
-                        }
-                    }
+
+                let builtin_owner = zeen_resolve::builtin_def_id(builtin_ty);
+                let has_inherent = self
+                    .struct_methods
+                    .get(&builtin_owner)
+                    .is_some_and(|methods| methods.contains_key(&field_name));
+
+                if !has_inherent
+                    && let Some(ret) = self.check_builtin_interface_method(
+                        call_id, builtin_ty, field_name, args, &source,
+                    )
+                {
+                    return Some(ret);
+                }
+
+                if !matches!(self.result.interner.get(obj_ty), Type::Builtin(_)) {
+                    obj_ty = self.result.interner.builtin(builtin_ty);
+                    self.result.record_expr_type(object.id, obj_ty);
                 }
             }
             _ => {}
         }
+
+        let mut preselected_method: Option<DefId> = None;
 
         let (struct_def, struct_generic_args, obj_is_ptr, ptr_is_const) =
             match self.result.interner.get(obj_ty).clone() {
@@ -5165,6 +5435,41 @@ impl<'res> TypeChecker<'res> {
                     def_id,
                     generic_args,
                 } => (def_id, generic_args, false, false),
+                Type::Builtin(builtin) => {
+                    let def_id = zeen_resolve::builtin_def_id(builtin);
+
+                    if !self
+                        .struct_methods
+                        .get(&def_id)
+                        .is_some_and(|methods| methods.contains_key(&field_name))
+                    {
+                        return Some(
+                            self.report_unknown_method(obj_ty, field_name, field_span, &source),
+                        );
+                    }
+
+                    (def_id, Vec::new(), false, false)
+                }
+                Type::Slice { .. } | Type::ManyPointer { .. } | Type::Array { .. } => {
+                    match self.select_builtin_shape_method(obj_ty, field_name) {
+                        ShapeMethodSelection::Selected {
+                            owner,
+                            args,
+                            method,
+                        } => {
+                            preselected_method = Some(method);
+                            (owner, args, false, false)
+                        }
+
+                        ShapeMethodSelection::Mismatch => {
+                            return Some(self.report_unknown_shape_field(
+                                obj_ty, field_name, field_span, &source,
+                            ));
+                        }
+
+                        ShapeMethodSelection::None => return None,
+                    }
+                }
                 Type::Pointer { inner, is_const } => {
                     match self.result.interner.get(inner).clone() {
                         Type::Struct {
@@ -5175,6 +5480,46 @@ impl<'res> TypeChecker<'res> {
                             def_id,
                             generic_args,
                         } => (def_id, generic_args, true, is_const),
+                        Type::Builtin(builtin) => {
+                            let def_id = zeen_resolve::builtin_def_id(builtin);
+
+                            if !self
+                                .struct_methods
+                                .get(&def_id)
+                                .is_some_and(|methods| methods.contains_key(&field_name))
+                            {
+                                if let Some(ret) = self.check_builtin_interface_method(
+                                    call_id, builtin, field_name, args, &source,
+                                ) {
+                                    return Some(ret);
+                                }
+                                return Some(self.report_unknown_method(
+                                    obj_ty, field_name, field_span, &source,
+                                ));
+                            }
+
+                            (def_id, Vec::new(), true, is_const)
+                        }
+                        Type::Slice { .. } | Type::ManyPointer { .. } | Type::Array { .. } => {
+                            match self.select_builtin_shape_method(inner, field_name) {
+                                ShapeMethodSelection::Selected {
+                                    owner,
+                                    args,
+                                    method,
+                                } => {
+                                    preselected_method = Some(method);
+                                    (owner, args, true, is_const)
+                                }
+
+                                ShapeMethodSelection::Mismatch => {
+                                    return Some(self.report_unknown_shape_field(
+                                        obj_ty, field_name, field_span, &source,
+                                    ));
+                                }
+
+                                ShapeMethodSelection::None => return None,
+                            }
+                        }
                         _ => return None,
                     }
                 }
@@ -5193,24 +5538,28 @@ impl<'res> TypeChecker<'res> {
         }
 
         let method_def_id = {
-            if !self.struct_methods.contains_key(&struct_def) {
-                return None;
+            if let Some(method) = preselected_method {
+                method
+            } else {
+                if !self.struct_methods.contains_key(&struct_def) {
+                    return None;
+                }
+
+                let Some(method_def_id) =
+                    self.select_method_candidate(struct_def, field_name, &struct_generic_args)
+                else {
+                    let field = self.interner.borrow().resolve(&field_name).into();
+                    self.report(TypeError::UnknownField {
+                        struct_name: self.display_type(obj_ty).into(),
+                        field,
+                        src: source.src(),
+                        span: field_span,
+                    });
+                    return Some(self.result.interner.error());
+                };
+
+                method_def_id
             }
-
-            let Some(method_def_id) =
-                self.select_method_candidate(struct_def, field_name, &struct_generic_args)
-            else {
-                let field = self.interner.borrow().resolve(&field_name).into();
-                self.report(TypeError::UnknownField {
-                    struct_name: self.display_type(obj_ty).into(),
-                    field,
-                    src: source.src(),
-                    span: field_span,
-                });
-                return Some(self.result.interner.error());
-            };
-
-            method_def_id
         };
         let sig = &self.fn_sigs[&method_def_id];
         let self_mode = sig.self_mode;
@@ -5965,6 +6314,67 @@ impl<'res> TypeChecker<'res> {
         }
 
         enum_ty
+    }
+
+    fn builtin_expr_owner(&self, object: &HirExpr) -> Option<(BuiltinType, DefId)> {
+        match &object.kind {
+            HirExprKind::Type(ty) => match ty.kind {
+                HirTypeKind::Builtin(builtin) => {
+                    Some((builtin, zeen_resolve::builtin_def_id(builtin)))
+                }
+                _ => None,
+            },
+            HirExprKind::VarRef { def, .. } => match self.def_kind(*def) {
+                Some(DefKind::Builtin(builtin)) => Some((*builtin, *def)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_builtin_associated_fn_call(
+        &mut self,
+        caller: (HirId, &HirExpr),
+        builtin: BuiltinType,
+        owner: DefId,
+        field: (Spur, SourceSpan),
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        source: &Source,
+        expected: Option<TypeId>,
+    ) -> TypeId {
+        let (field_name, field_span) = field;
+
+        if !self
+            .struct_methods
+            .get(&owner)
+            .is_some_and(|methods| methods.contains_key(&field_name))
+        {
+            let builtin_ty = self.result.interner.builtin(builtin);
+            let object = self.display_type(builtin_ty).into();
+            let name = self.interner.borrow().resolve(&field_name).into();
+
+            self.report(TypeError::UnknownAssociatedFn {
+                object,
+                name,
+                src: source.src(),
+                span: field_span,
+            });
+
+            return self.result.interner.error();
+        }
+
+        self.check_associated_fn_call(
+            caller,
+            owner,
+            field,
+            args,
+            explicit_generic_args,
+            source,
+            expected,
+        )
+        .unwrap_or_else(|| self.result.interner.error())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6935,6 +7345,206 @@ impl<'res> TypeChecker<'res> {
             .cloned()
     }
 
+    fn match_builtin_shape(
+        &self,
+        shape: &BuiltinShape,
+        ty: TypeId,
+        generics: &[DefId],
+        bindings: &mut HashMap<DefId, TypeId>,
+    ) -> bool {
+        match shape {
+            BuiltinShape::Scalar(builtin) => {
+                matches!(self.result.interner.get(ty), Type::Builtin(found) if found == builtin)
+            }
+
+            BuiltinShape::Slice { element, is_const } => match self.result.interner.get(ty) {
+                Type::Slice {
+                    element: found,
+                    is_const: found_const,
+                } => {
+                    found_const == is_const
+                        && self.match_builtin_shape(element, *found, generics, bindings)
+                }
+                _ => false,
+            },
+
+            BuiltinShape::ManyPointer { element, is_const } => match self.result.interner.get(ty) {
+                Type::ManyPointer {
+                    inner: found,
+                    is_const: found_const,
+                } => {
+                    found_const == is_const
+                        && self.match_builtin_shape(element, *found, generics, bindings)
+                }
+                _ => false,
+            },
+
+            BuiltinShape::Array { element, len } => match self.result.interner.get(ty) {
+                Type::Array {
+                    element: found,
+                    len: found_len,
+                } => {
+                    *found_len == Some(*len)
+                        && self.match_builtin_shape(element, *found, generics, bindings)
+                }
+                _ => false,
+            },
+
+            BuiltinShape::Param(index) => {
+                let Some(&generic) = generics.get(*index as usize) else {
+                    return false;
+                };
+
+                match bindings.get(&generic) {
+                    Some(existing) => *existing == ty,
+                    None => {
+                        bindings.insert(generic, ty);
+                        true
+                    }
+                }
+            }
+        }
+    }
+
+    fn report_unknown_shape_field(
+        &mut self,
+        recv_ty: TypeId,
+        field_name: Spur,
+        field_span: SourceSpan,
+        source: &Source,
+    ) -> TypeId {
+        let field = self.interner.borrow().resolve(&field_name).into();
+        let struct_name = self.display_type(recv_ty).into();
+
+        self.report(TypeError::UnknownField {
+            struct_name,
+            field,
+            src: source.src(),
+            span: field_span,
+        });
+
+        self.result.interner.error()
+    }
+
+    fn report_unknown_method(
+        &mut self,
+        recv_ty: TypeId,
+        field_name: Spur,
+        field_span: SourceSpan,
+        source: &Source,
+    ) -> TypeId {
+        let name = self.interner.borrow().resolve(&field_name).into();
+        let object = self.display_type(recv_ty).into();
+
+        self.report(TypeError::UnknownMethod {
+            object,
+            name,
+            src: source.src(),
+            span: field_span,
+        });
+
+        self.result.interner.error()
+    }
+
+    fn select_builtin_shape_method(&mut self, recv_ty: TypeId, name: Spur) -> ShapeMethodSelection {
+        if self.result.builtin_shapes.is_empty() {
+            return ShapeMethodSelection::None;
+        }
+
+        let mut owners: Vec<DefId> = self.result.builtin_shapes.keys().copied().collect();
+        owners.sort();
+
+        let mut named = false;
+        let mut best: Option<(u8, DefId, Vec<TypeId>, DefId)> = None;
+
+        for owner in owners {
+            let Some(&method) = self
+                .struct_methods
+                .get(&owner)
+                .and_then(|methods| methods.get(&name))
+                .and_then(|candidates| candidates.first())
+            else {
+                continue;
+            };
+
+            named = true;
+
+            let shape = self.result.builtin_shapes[&owner].clone();
+            let generics = self.type_member_generics(owner);
+
+            let mut matched: HashMap<DefId, TypeId> = HashMap::default();
+
+            if !self.match_builtin_shape(&shape, recv_ty, &generics, &mut matched) {
+                continue;
+            }
+
+            let args: Vec<TypeId> = generics
+                .iter()
+                .map(|&generic| {
+                    matched
+                        .get(&generic)
+                        .copied()
+                        .unwrap_or_else(|| self.result.interner.error())
+                })
+                .collect();
+
+            let rank = self.builtin_shape_rank(owner, method, &shape, &matched);
+
+            if best
+                .as_ref()
+                .is_none_or(|(best_rank, ..)| rank < *best_rank)
+            {
+                best = Some((rank, owner, args, method));
+            }
+        }
+
+        match best {
+            Some((_, owner, args, method)) => ShapeMethodSelection::Selected {
+                owner,
+                args,
+                method,
+            },
+            None if named => ShapeMethodSelection::Mismatch,
+            None => ShapeMethodSelection::None,
+        }
+    }
+
+    fn builtin_shape_rank(
+        &self,
+        owner: DefId,
+        method: DefId,
+        shape: &BuiltinShape,
+        bindings: &HashMap<DefId, TypeId>,
+    ) -> u8 {
+        if !shape.has_params() {
+            return 0;
+        }
+
+        let Some(entry) = self.method_impl_entry(owner, method) else {
+            return 2;
+        };
+
+        if !entry
+            .generic_bounds
+            .iter()
+            .any(|(_, ifaces)| !ifaces.is_empty())
+        {
+            return 2;
+        }
+
+        let bounds_hold = entry.generic_bounds.iter().all(|(generic, ifaces)| {
+            let Some(&concrete) = bindings.get(generic) else {
+                return true;
+            };
+
+            ifaces
+                .iter()
+                .all(|&iface_def| self.type_satisfies_interface(concrete, iface_def))
+        });
+
+        if bounds_hold { 1 } else { 4 }
+    }
+
     fn select_method_candidate(
         &self,
         object: DefId,
@@ -7056,6 +7666,7 @@ impl<'res> TypeChecker<'res> {
                         if let HirDeclKind::Fn(f) = &method.kind {
                             entries.push(MethodSignatureEntry {
                                 object: decl.def_id,
+                                owner_key: MethodOwnerKey::Def(decl.def_id),
                                 name: f.name.0,
                                 args: Vec::new(),
                                 bounds: Vec::new(),
@@ -7071,6 +7682,7 @@ impl<'res> TypeChecker<'res> {
                         if let HirDeclKind::Fn(f) = &method.kind {
                             entries.push(MethodSignatureEntry {
                                 object: decl.def_id,
+                                owner_key: MethodOwnerKey::Def(decl.def_id),
                                 name: f.name.0,
                                 args: Vec::new(),
                                 bounds: Vec::new(),
@@ -7083,6 +7695,11 @@ impl<'res> TypeChecker<'res> {
 
                 HirDeclKind::Implement(imp) if imp.interface.is_none() => {
                     let Some(object) = imp.object else { continue };
+
+                    let owner_key = match self.def_kind(object) {
+                        Some(DefKind::BuiltinShape(shape)) => MethodOwnerKey::Shape(shape.key()),
+                        _ => MethodOwnerKey::Def(object),
+                    };
 
                     let Some(entry) = self
                         .result
@@ -7106,6 +7723,7 @@ impl<'res> TypeChecker<'res> {
                         if let HirDeclKind::Fn(f) = &method.kind {
                             entries.push(MethodSignatureEntry {
                                 object,
+                                owner_key: owner_key.clone(),
                                 name: f.name.0,
                                 args: args.clone(),
                                 bounds: bounds.clone(),
@@ -7120,10 +7738,11 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
-        let mut seen: HashMap<(DefId, Spur, Vec<String>, Vec<String>), ()> = HashMap::default();
+        let mut seen: HashMap<(MethodOwnerKey, Spur, Vec<String>, Vec<String>), ()> =
+            HashMap::default();
 
         for entry in entries {
-            let key = (entry.object, entry.name, entry.args, entry.bounds);
+            let key = (entry.owner_key, entry.name, entry.args, entry.bounds);
 
             if seen.insert(key, ()).is_some() {
                 let object = self.def_name(entry.object).unwrap_or_default().into();
@@ -8573,6 +9192,19 @@ mod tests {
         target: Option<&str>,
         full: bool,
     ) -> Result<TypeCheckResult, Vec<TypeError>> {
+        let std_root = full.then(|| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")
+        });
+
+        typecheck_fixture_with_std(source, target, full, std_root)
+    }
+
+    fn typecheck_fixture_with_std(
+        source: &str,
+        target: Option<&str>,
+        full: bool,
+        std_root: Option<std::path::PathBuf>,
+    ) -> Result<TypeCheckResult, Vec<TypeError>> {
         let rodeo = Rc::new(RefCell::new(Rodeo::default()));
         let bump = Bump::default();
         let content = Arc::new(source.to_string());
@@ -8594,9 +9226,7 @@ mod tests {
         let mut context = CompilationContext {
             paths: PathsConfig {
                 project_root: std::env::temp_dir(),
-                std_root: full.then(|| {
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std/src")
-                }),
+                std_root,
                 linked: HashSet::default(),
                 packages: Vec::new(),
             },
@@ -8752,6 +9382,614 @@ mod tests {
         assert!(
             result.is_ok(),
             "interface method declared pub must be publicly callable"
+        );
+    }
+
+    #[test]
+    fn builtin_method_call_with_receiver_works() {
+        let result = typecheck(
+            r#"
+            implement builtin i32 {
+                fn is_even(*const self) bool {
+                    return (*self) % 2 == 0;
+                }
+            }
+
+            fn main() {
+                let n: i32 = 4;
+                let even = n.is_even();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "builtin method with a receiver must typecheck"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_method_arguments_are_checked() {
+        let result = typecheck_full(
+            r#"
+            struct Point {
+                x: i32,
+            }
+
+            implement Debug : Point {
+                fn debug[W: StrWriter](*const self, out: *W) void {
+                    out.write_str_single('(');
+                    (*self).x.debug(out);
+                    out.write_str_single(')');
+                }
+            }
+
+            fn main() {
+                let p = Point { .x = 1 };
+                let copy = p;
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "builtin interface method arguments must typecheck"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_method_argument_mismatch_is_error() {
+        let errors = typecheck_full(
+            r#"
+            fn main() {
+                let n: i32 = 4;
+                n.debug(123);
+            }
+            "#,
+        )
+        .expect_err("mismatched writer argument must be an error");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::Mismatch { .. })),
+            "expected Mismatch error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn non_ascii_char_literal_is_error() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let c: char = '€';
+            }
+            "#,
+        )
+        .expect_err("non ascii char literal must be an error");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::NonAsciiChar { .. })),
+            "expected NonAsciiChar error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_unknown_method_reports_unknown_method() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let c: char = 'a';
+                let x = c.nope();
+            }
+            "#,
+        )
+        .expect_err("unknown builtin method must be an error");
+
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::UnknownMethod { name, .. } if name == "nope"
+            )),
+            "expected UnknownMethod error, got: {errors:?}"
+        );
+
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let c: char = 'a';
+                let x = c.nope;
+            }
+            "#,
+        )
+        .expect_err("unknown builtin field must be an error");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownField { .. })),
+            "expected UnknownField error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn primitive_modules_expose_builtin_methods() {
+        let std_root = std::env::temp_dir().join(format!(
+            "zeen-typecheck-primitives-std-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&std_root);
+        std::fs::create_dir_all(std_root.join("primitives")).unwrap();
+        std::fs::write(
+            std_root.join("primitives").join("i8.zn"),
+            "implement builtin i8 {\n    pub fn abs(*const self) i8 {\n        return *self;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let result = typecheck_fixture_with_std(
+            r#"
+            fn main() {
+                let value: i8 = -3;
+                let magnitude = value.abs();
+            }
+            "#,
+            None,
+            false,
+            Some(std_root.clone()),
+        );
+
+        let _ = std::fs::remove_dir_all(&std_root);
+
+        assert!(
+            result.is_ok(),
+            "primitive module methods must be callable without an import"
+        );
+    }
+
+    #[test]
+    fn builtin_method_without_pub_is_callable_in_same_module() {
+        let result = typecheck(
+            r#"
+            implement builtin i32 {
+                fn doubled(const self) i32 {
+                    return self * 2;
+                }
+            }
+
+            fn main() {
+                let n: i32 = 4;
+                let doubled = n.doubled();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "non-pub builtin methods must be visible inside their module"
+        );
+    }
+
+    #[test]
+    fn builtin_static_method_call_works() {
+        let result = typecheck(
+            r#"
+            implement builtin i32 {
+                fn max_value() i32 {
+                    return 2147483647;
+                }
+
+                fn min_value() Self {
+                    return Self.max_value() * -1 - 1;
+                }
+
+                fn pick[T](value: T) T {
+                    return value;
+                }
+            }
+
+            fn main() {
+                let max = i32.max_value();
+                let min = i32.min_value();
+                let picked = i32.pick(7);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "static builtin methods must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_unknown_associated_fn_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn max_value() i32 {
+                    return 2147483647;
+                }
+            }
+
+            fn main() {
+                let value = i32.unknown();
+            }
+            "#,
+        )
+        .expect_err("unknown builtin associated functions must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownAssociatedFn { .. })),
+            "expected UnknownAssociatedFn error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_associated_fn_as_value_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn max_value() i32 {
+                    return 2147483647;
+                }
+            }
+
+            fn main() {
+                let max = i32.max_value;
+            }
+            "#,
+        )
+        .expect_err("builtin associated functions used as values must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AssociatedFnAsValue { .. })),
+            "expected AssociatedFnAsValue error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_type_name_as_value_is_error() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let value = i32;
+            }
+            "#,
+        )
+        .expect_err("builtin type names must not be usable as values");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::TypeNameAsValue { .. })),
+            "expected TypeNameAsValue error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn self_type_as_value_is_error() {
+        let errors = typecheck(
+            r#"
+            struct Foo {}
+
+            implement Foo {
+                pub fn broken() i32 {
+                    let value = Self;
+                    return 0;
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("`Self` must not be usable as a value");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::TypeNameAsValue { .. })),
+            "expected TypeNameAsValue error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_self_type_as_value_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn broken() i32 {
+                    let value = Self;
+                    return 0;
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("`Self` must not be usable as a value inside builtin blocks");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::TypeNameAsValue { .. })),
+            "expected TypeNameAsValue error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_static_method_on_instance_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn max_value() i32 {
+                    return 2147483647;
+                }
+            }
+
+            fn main() {
+                let n: i32 = 4;
+                let max = n.max_value();
+            }
+            "#,
+        )
+        .expect_err("static builtin methods called on instances must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::StaticMethodOnInstance { .. })),
+            "expected StaticMethodOnInstance error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_instance_method_via_type_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn is_even(*const self) bool {
+                    return (*self) % 2 == 0;
+                }
+            }
+
+            fn main() {
+                let even = i32.is_even();
+            }
+            "#,
+        )
+        .expect_err("builtin instance methods called via the type must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AssociatedCallOnInstaneMethod { .. })),
+            "expected AssociatedCallOnInstaneMethod error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_duplicate_method_is_error() {
+        let errors = typecheck(
+            r#"
+            implement builtin i32 {
+                fn doubled(const self) i32 {
+                    return self * 2;
+                }
+            }
+
+            implement builtin i32 {
+                fn doubled(const self) i32 {
+                    return self * 3;
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("duplicate builtin methods must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::DuplicateMethod { .. })),
+            "expected DuplicateMethod error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_slice_shape_method_works() {
+        let result = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn main() {
+                let arr: [3]i32 = [1, 2, 3];
+                let slice = arr[..];
+                let n = slice.count();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "slice shape methods must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_array_shape_method_works() {
+        let result = typecheck_full(
+            r#"
+            implement builtin [4]u8 {
+                fn total(*const self) u32 {
+                    return @as(u32, (*self)[0]);
+                }
+            }
+
+            fn main() {
+                let bytes: [4]u8 = [1, 2, 3, 4];
+                let n = bytes.total();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "array shape methods must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_shape_method_through_pointer_works() {
+        let result = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn main() {
+                let arr: [3]i32 = [1, 2, 3];
+                let slice = arr[..];
+                let ptr: *[]i32 = &slice;
+                let n = ptr.count();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "shape methods must be callable through pointers: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_shape_method_in_generic_fn_works() {
+        let result = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn len_of[T](items: []T) usize {
+                return items.count();
+            }
+
+            fn main() {
+                let arr: [3]i32 = [1, 2, 3];
+                let n = len_of(arr[..]);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "shape methods must work on generic slices: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_shape_concrete_target_wins() {
+        let result = typecheck_full(
+            r#"
+            implement[T] builtin [4]T {
+                fn label(*const self) i32 {
+                    return 1;
+                }
+            }
+
+            implement builtin [4]u8 {
+                fn label(*const self) i32 {
+                    return 2;
+                }
+            }
+
+            fn main() {
+                let bytes: [4]u8 = [1, 2, 3, 4];
+                let n = bytes.label();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "concrete shape targets must overload generic ones: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_shape_receiver_mismatch_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn main() {
+                let arr: [3]i32 = [1, 2, 3];
+                let n = arr.count();
+            }
+            "#,
+        )
+        .expect_err("shape methods must not match other receiver shapes");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownField { .. })),
+            "expected UnknownField error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_shape_duplicate_method_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement[T] builtin []T {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            implement[U] builtin []U {
+                fn count(*const self) usize {
+                    return (*self).len;
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("duplicate shape methods must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::DuplicateMethod { .. })),
+            "expected DuplicateMethod error, got: {errors:?}"
         );
     }
 
@@ -10469,6 +11707,54 @@ mod tests {
             "#,
         )
         .expect("empty-only enums keep ==/!= and Display/Debug");
+    }
+
+    #[test]
+    fn array_display_rejects_non_char_elements() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let ints = [1, 2, 3, 4];
+                @println("{}", ints);
+                @println("{}", ints[..]);
+            }
+            "#,
+        )
+        .expect_err("arrays and slices must reject Display unless the element is char");
+
+        let display_errors = errors
+            .iter()
+            .filter(|err| {
+                matches!(
+                    err,
+                    TypeError::InterfaceNotImplemented { name, .. } if name.as_str() == "Display"
+                )
+            })
+            .count();
+
+        assert_eq!(
+            display_errors, 2,
+            "expected Display InterfaceNotImplemented for array and slice, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn char_array_keeps_display() {
+        typecheck(
+            r#"
+            fn show(text: []char) {
+                @println("{}", text);
+                @println("{:?}", text);
+            }
+            fn main() {
+                let chars: [3]char = ['a', 'b', 'c'];
+                @println("{}", chars);
+                @println("{:?}", chars);
+                show("abc");
+            }
+            "#,
+        )
+        .expect("char arrays and slices keep Display and Debug");
     }
 
     #[test]

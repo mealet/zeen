@@ -1,0 +1,9 @@
+implement[T] builtin []T {
+  pub fn count(*const self) usize {
+    return (*self).len;
+  }
+
+  pub fn first(*const self) T {
+    return (*self)[0];
+  }
+}

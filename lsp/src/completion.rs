@@ -3,10 +3,11 @@ use std::collections::HashSet;
 use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, CompletionItemLabelDetails, InsertTextFormat,
 };
+use zeen_ast::types::BuiltinShape;
 use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
-use crate::analysis::{Analysis, Member, MemberKind, Role};
+use crate::analysis::{Analysis, BuiltinTarget, Member, MemberKind, Role};
 use crate::modules::{ModuleKind, ModuleMember};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -280,7 +281,7 @@ pub fn complete(
     }
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
-        for import in crate::modules::use_imports(text) {
+        for import in crate::modules::imports_for(text, paths.std) {
             for member in
                 crate::modules::members_of_use(dir, root, paths.std, paths.packages(), &import)
             {
@@ -644,15 +645,25 @@ fn forward_ident(text: &str, offset: usize) -> &str {
 }
 
 fn find_type_def(analysis: &Analysis, text: &str, name: &str) -> Option<zeen_resolve::DefId> {
-    analysis.occurrences.iter().find_map(|occurrence| {
-        if occurrence.role == Role::Type
-            && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
-        {
-            occurrence.def
-        } else {
-            None
-        }
-    })
+    analysis
+        .occurrences
+        .iter()
+        .find_map(|occurrence| {
+            if occurrence.role == Role::Type
+                && text.get(occurrence.offset..occurrence.offset + occurrence.len) == Some(name)
+            {
+                occurrence.def
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            analysis
+                .builtin_targets
+                .iter()
+                .find(|target| target.name == name)
+                .map(|target| target.def)
+        })
 }
 
 fn find_variant_def(analysis: &Analysis, text: &str, name: &str) -> Option<zeen_resolve::DefId> {
@@ -752,35 +763,67 @@ pub fn dot_complete(
         start -= 1;
     }
 
-    if start == dot_offset {
-        return Vec::new();
-    }
-
-    let Some(receiver_name) = text.get(start..dot_offset) else {
-        return Vec::new();
-    };
+    let receiver_name = text.get(start..dot_offset).unwrap_or_default();
 
     let filter = forward_ident(text, dot_offset + 1).to_string();
     let mut static_context: Option<bool> = None;
     let mut type_name: Option<String> = None;
+    let mut raw_type: Option<String> = None;
 
-    if let Some(ty) = analysis
-        .access_types
-        .get(&(start, dot_offset - start))
-        .and_then(|ty| normalize_type_name(ty))
-    {
-        static_context = Some(false);
-        type_name = Some(ty);
-    } else if let Some(receiver) = analysis.at(start) {
-        if receiver.role == Role::Type {
-            if let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) {
-                static_context = Some(true);
-                type_name = Some(name.to_string());
-            }
-        } else if let Some(ty) = receiver.ty.as_deref().and_then(normalize_type_name) {
+    if crate::builtin::is_scalar_type_name(receiver_name) {
+        static_context = Some(true);
+        type_name = Some(receiver_name.to_string());
+    } else if let Some(rendered) = analysis.access_types.get(&(start, dot_offset - start)) {
+        raw_type = Some(rendered.clone());
+
+        if let Some(ty) = normalize_type_name(rendered) {
             static_context = Some(false);
             type_name = Some(ty);
         }
+    } else if let Some(rendered) = expr_type_before(analysis, text, dot_offset) {
+        raw_type = Some(rendered.clone());
+
+        if let Some(ty) = normalize_type_name(&rendered) {
+            static_context = Some(false);
+            type_name = Some(ty);
+        }
+    } else if start < dot_offset
+        && let Some(receiver) = analysis.at(start)
+    {
+        if receiver.role == Role::Type {
+            let builtin = receiver.def.and_then(|def| {
+                analysis
+                    .builtin_targets
+                    .iter()
+                    .find(|target| target.def == def)
+            });
+
+            if let Some(target) = builtin {
+                static_context = Some(true);
+                type_name = Some(target.name.clone());
+            } else if let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) {
+                static_context = Some(true);
+                type_name = Some(name.to_string());
+            }
+        } else {
+            raw_type = receiver.ty.clone();
+
+            if let Some(ty) = receiver.ty.as_deref().and_then(normalize_type_name) {
+                static_context = Some(false);
+                type_name = Some(ty);
+            }
+        }
+    } else if analysis
+        .builtin_targets
+        .iter()
+        .any(|target| target.name == receiver_name)
+    {
+        static_context = Some(true);
+        type_name = Some(receiver_name.to_string());
+    }
+
+    if type_name.is_none() && raw_type.is_none() && receiver_name.is_empty() {
+        return Vec::new();
     }
 
     let lookup = type_name.as_deref().unwrap_or(receiver_name).to_string();
@@ -794,19 +837,61 @@ pub fn dot_complete(
         return items;
     }
 
-    push_type_members(
-        analysis,
-        text,
-        &lookup,
-        static_context,
-        dot_offset,
-        &filter,
-        paths,
-        &mut items,
-        &mut seen,
-    );
+    let shape_matched = static_context != Some(true)
+        && raw_type.as_deref().is_some_and(|ty| {
+            push_builtin_target_members(analysis, text, ty, &filter, paths, &mut items, &mut seen)
+        });
+
+    if !shape_matched {
+        push_type_members(
+            analysis,
+            text,
+            &lookup,
+            static_context,
+            dot_offset,
+            &filter,
+            paths,
+            &mut items,
+            &mut seen,
+        );
+    }
 
     items
+}
+
+fn expr_type_before(analysis: &Analysis, text: &str, dot_offset: usize) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut best: Option<(&(usize, usize), &String)> = None;
+
+    for (span, rendered) in &analysis.expr_types {
+        let end = span.0.saturating_add(span.1);
+
+        if end == 0 || end > dot_offset || end > bytes.len() {
+            continue;
+        }
+
+        if !bytes[end..dot_offset]
+            .iter()
+            .all(|byte| *byte == b')' || byte.is_ascii_whitespace())
+        {
+            continue;
+        }
+
+        let better = match best {
+            Some((current, _)) => match end.cmp(&(current.0 + current.1)) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => span.0 < current.0,
+                std::cmp::Ordering::Less => false,
+            },
+            None => true,
+        };
+
+        if better {
+            best = Some((span, rendered));
+        }
+    }
+
+    best.map(|(_, rendered)| rendered.clone())
 }
 
 fn push_variant_payload_members(
@@ -854,7 +939,7 @@ fn push_variant_payload_members(
             root,
             paths.std,
             paths.packages(),
-            &crate::modules::use_imports(text),
+            &crate::modules::imports_for(text, paths.std),
             variant_name,
         );
         payload.sort_by(|a, b| a.name.cmp(&b.name));
@@ -943,7 +1028,7 @@ fn push_type_members(
             root,
             paths.std,
             paths.packages(),
-            &crate::modules::use_imports(text),
+            &crate::modules::imports_for(text, paths.std),
             lookup,
         );
         imported.sort_by(|a, b| a.name.cmp(&b.name));
@@ -969,6 +1054,110 @@ fn push_type_members(
                     ..Default::default()
                 });
             }
+        }
+    }
+}
+
+fn push_builtin_target_members(
+    analysis: &Analysis,
+    text: &str,
+    ty: &str,
+    filter: &str,
+    paths: ResolvePaths<'_>,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) -> bool {
+    let ty = crate::builtin::strip_pointer_wrappers(ty);
+    let mut matched: Vec<(&BuiltinTarget, bool)> = Vec::new();
+
+    for target in &analysis.builtin_targets {
+        if matches!(target.shape, BuiltinShape::Scalar(_)) {
+            continue;
+        }
+
+        if crate::builtin::shape_matches_type(&target.shape, ty) {
+            matched.push((target, target.shape.has_params()));
+        }
+    }
+
+    if matched.is_empty() {
+        return false;
+    }
+
+    matched.sort_by_key(|(target, has_params)| (*has_params, target.def.0));
+
+    for (target, _) in &matched {
+        let Some(members) = analysis.members.get(&target.def) else {
+            continue;
+        };
+
+        for member in members {
+            if !keep_local_member(member, Some(false)) || !member.name.starts_with(filter) {
+                continue;
+            }
+
+            if !seen.insert(member.name.clone()) {
+                continue;
+            }
+
+            let rank = member_rank(false, Some(false));
+
+            items.push(CompletionItem {
+                label: member_label(&member.name, member.arity),
+                kind: Some(member_completion_kind(member)),
+                detail: member.signature.clone(),
+                filter_text: Some(member.name.clone()),
+                insert_text: Some(member.name.clone()),
+                sort_text: Some(format!("{rank}_{}", member.name)),
+                ..Default::default()
+            });
+        }
+    }
+
+    push_imported_builtin_members(text, ty, filter, paths, items, seen);
+
+    true
+}
+
+fn push_imported_builtin_members(
+    text: &str,
+    ty: &str,
+    filter: &str,
+    paths: ResolvePaths<'_>,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let (Some(dir), Some(root)) = (paths.dir, paths.project()) else {
+        return;
+    };
+
+    let mut imported = crate::modules::builtin_shape_members(
+        dir,
+        root,
+        paths.std,
+        paths.packages(),
+        &crate::modules::imports_for(text, paths.std),
+        ty,
+    );
+    imported.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for member in imported {
+        if !member.name.starts_with(filter) || !keep_module_member(&member, Some(false)) {
+            continue;
+        }
+
+        if seen.insert(member.name.clone()) {
+            let rank = member_rank(false, Some(false));
+
+            items.push(CompletionItem {
+                label: member_label(&member.name, member.arity),
+                kind: Some(module_member_completion_kind(&member)),
+                detail: Some(member.module.clone()),
+                filter_text: Some(member.name.clone()),
+                insert_text: Some(member.name.clone()),
+                sort_text: Some(format!("{rank}_{}", member.name)),
+                ..Default::default()
+            });
         }
     }
 }
@@ -1091,28 +1280,35 @@ pub fn call_complete(
     trigger: CallTrigger,
     paths: ResolvePaths<'_>,
 ) -> Vec<CompletionItem> {
-    let Some(ty) = analysis
-        .call_types
-        .get(&trigger.callee)
-        .and_then(|ty| normalize_type_name(ty))
-    else {
+    let Some(rendered) = analysis.call_types.get(&trigger.callee) else {
         return Vec::new();
     };
 
     let filter = forward_ident(text, trigger.dot + 1).to_string();
     let mut items = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    push_type_members(
-        analysis,
-        text,
-        &ty,
-        Some(false),
-        trigger.dot,
-        &filter,
-        paths,
-        &mut items,
-        &mut seen,
+
+    let shape_matched = push_builtin_target_members(
+        analysis, text, rendered, &filter, paths, &mut items, &mut seen,
     );
+
+    if !shape_matched {
+        let Some(ty) = normalize_type_name(rendered) else {
+            return items;
+        };
+
+        push_type_members(
+            analysis,
+            text,
+            &ty,
+            Some(false),
+            trigger.dot,
+            &filter,
+            paths,
+            &mut items,
+            &mut seen,
+        );
+    }
 
     items
 }
@@ -1327,7 +1523,7 @@ pub fn struct_init_complete(
     }
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
-        let imports = crate::modules::use_imports(text);
+        let imports = crate::modules::imports_for(text, paths.std);
         let mut imported = crate::modules::type_members(
             dir,
             root,
@@ -2869,5 +3065,262 @@ mod tests {
 
         assert!(names.contains(&"kind()"));
         assert!(!names.contains(&"x"));
+    }
+
+    const BUILTIN_SAMPLE: &str = "implement builtin i32 {\n    fn is_even(*const self) bool {\n        return (*self) % 2 == 0;\n    }\n\n    fn bump(*self) void {\n        *self += 1;\n    }\n\n    fn max_value() i32 {\n        return 2147483647;\n    }\n}\n\nfn main() {\n    let n: i32 = 4;\n    let p: *i32 = &n;\n    n.bump();\n    @println(\"{} {} {}\", n.is_even(), p.is_even(), i32.max_value());\n}\n";
+
+    #[test]
+    fn builtin_value_dot_completes_methods() {
+        let analysis = sample_analysis(BUILTIN_SAMPLE);
+        let dot = BUILTIN_SAMPLE.find("n.is_even").unwrap() + "n".len();
+        let items = dot_complete(BUILTIN_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["is_even()"]);
+
+        let even = items.iter().find(|item| item.label == "is_even()").unwrap();
+        assert_eq!(even.kind, Some(CompletionItemKind::METHOD));
+    }
+
+    #[test]
+    fn primitive_module_methods_complete_without_import() {
+        let std_root =
+            std::env::temp_dir().join(format!("zeen-lsp-primitive-std-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&std_root);
+        std::fs::create_dir_all(std_root.join("primitives")).unwrap();
+        std::fs::write(
+            std_root.join("primitives").join("i8.zn"),
+            "implement builtin i8 {\n    pub fn abs(*const self) i8 {\n        return *self;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let text = "fn main() {\n    let n: i8 = 3;\n    let x = n;\n}\n";
+        let analysis = sample_analysis(text);
+        let probe = text.replacen("let x = n;", "let x = n.   ();", 1);
+        let dot = probe.find("n.   ()").unwrap() + 1;
+
+        let paths = ResolvePaths {
+            dir: Some(std_root.as_path()),
+            root: Some(std_root.as_path()),
+            std: Some(std_root.as_path()),
+            packages: None,
+        };
+
+        let items = dot_complete(&probe, &analysis, dot, paths);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["abs()"]);
+
+        let _ = std::fs::remove_dir_all(&std_root);
+    }
+
+    #[test]
+    fn builtin_pointer_receiver_dot_completes_methods() {
+        let analysis = sample_analysis(BUILTIN_SAMPLE);
+        let dot = BUILTIN_SAMPLE.find("p.is_even").unwrap() + "p".len();
+        let items = dot_complete(BUILTIN_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["is_even()"]);
+    }
+
+    const EXPR_RECEIVER_SAMPLE: &str = "struct Marker {\n    pub fn count(*const self) i32 {\n        return 0;\n    }\n}\n\nfn make() Marker {\n    return Marker {};\n}\n\nfn main() {\n    let a = (Marker {}).count();\n    let b = make().count();\n}\n";
+
+    #[test]
+    fn grouped_expression_dot_completes_methods() {
+        let analysis = sample_analysis(EXPR_RECEIVER_SAMPLE);
+        let dot = EXPR_RECEIVER_SAMPLE.find(").count").unwrap() + 1;
+        let items = dot_complete(
+            EXPR_RECEIVER_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+
+        assert_eq!(labels(&items), vec!["count()"]);
+    }
+
+    #[test]
+    fn call_expression_dot_completes_methods() {
+        let analysis = sample_analysis(EXPR_RECEIVER_SAMPLE);
+        let dot = EXPR_RECEIVER_SAMPLE.find("make().count").unwrap() + "make()".len();
+        let items = dot_complete(
+            EXPR_RECEIVER_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+
+        assert_eq!(labels(&items), vec!["count()"]);
+    }
+
+    #[test]
+    fn literal_receiver_dot_completes_methods() {
+        let std_root =
+            std::env::temp_dir().join(format!("zeen-lsp-literal-std-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&std_root);
+        std::fs::create_dir_all(std_root.join("primitives")).unwrap();
+        std::fs::write(
+            std_root.join("primitives").join("i32.zn"),
+            "implement builtin i32 {\n    pub fn abs(*const self) i32 {\n        return *self;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let paths = ResolvePaths {
+            dir: Some(std_root.as_path()),
+            root: Some(std_root.as_path()),
+            std: Some(std_root.as_path()),
+            packages: None,
+        };
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-literal-probe.zn".parse().unwrap();
+
+        for text in [
+            "fn main() {\n    let a = 42.abs();\n}\n",
+            "fn main() {\n    let a = (42).abs();\n}\n",
+        ] {
+            let analysis = crate::diagnostics::check(&uri, text, &[]).analysis;
+            let dot = text.find("42").unwrap() + 2;
+            let items = dot_complete(text, &analysis, dot, paths);
+
+            assert_eq!(labels(&items), vec!["abs()"], "text: {text}");
+        }
+
+        let _ = std::fs::remove_dir_all(&std_root);
+    }
+
+    #[test]
+    fn builtin_static_dot_completes_functions() {
+        let analysis = sample_analysis(BUILTIN_SAMPLE);
+        let dot = BUILTIN_SAMPLE.find("i32.max_value").unwrap() + "i32".len();
+        let items = dot_complete(BUILTIN_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["max_value()"]);
+
+        let max = items
+            .iter()
+            .find(|item| item.label == "max_value()")
+            .unwrap();
+        assert_eq!(max.kind, Some(CompletionItemKind::FUNCTION));
+    }
+
+    #[test]
+    fn builtin_static_dot_completes_from_stale_analysis() {
+        const STALE: &str = "implement builtin i32 {\n    pub fn max_value() i32 {\n        return 2147483647;\n    }\n}\n\nfn main() {\n    let n: i32 = 4;\n    let x = n;\n}\n";
+        const CURRENT: &str = "fn main() {\n    let x = i32.;\n}\n";
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-stale-static.zn"
+                .parse()
+                .unwrap();
+        let output = crate::diagnostics::check(&uri, STALE, &[]);
+        let dot = CURRENT.find("i32.").unwrap() + "i32".len();
+        let items = dot_complete(CURRENT, &output.analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["max_value()"]);
+    }
+
+    const BUILTIN_SLICE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n\n    fn first(*const self) Option[T] {\n        return Option.Some((*self)[0]);\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{} {}\", slice.count(), slice.first().unwrap());\n}\n";
+
+    #[test]
+    fn builtin_slice_receiver_dot_completes_shape_methods() {
+        let analysis = sample_analysis(BUILTIN_SLICE_SAMPLE);
+        let dot = BUILTIN_SLICE_SAMPLE.find("slice.count").unwrap() + "slice".len();
+        let items = dot_complete(
+            BUILTIN_SLICE_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["count()"]);
+    }
+
+    #[test]
+    fn imported_builtin_shape_receiver_dot_completes_methods() {
+        let dir = import_project("builtin-shape");
+        std::fs::write(
+            dir.join("sub").join("lib.zn"),
+            "implement[T] builtin []T {\n    pub fn first(*const self) T {\n        return (*self)[0];\n    }\n}\n",
+        )
+        .unwrap();
+
+        let text = "use sub.lib;\n\nfn main() {\n    let nums: [3]i32 = [1, 2, 3];\n    let slice = nums[..];\n    @println(\"{}\", slice.first());\n}\n";
+        let uri: tower_lsp_server::ls_types::Uri =
+            format!("file://{}", dir.join("main.zn").display())
+                .parse()
+                .unwrap();
+        let output = crate::diagnostics::check(&uri, text, &[]);
+        let errors = crate::diagnostics::only_errors(&output.diagnostics);
+        assert!(
+            errors.is_empty(),
+            "shape import sample must check cleanly: {:?}",
+            errors
+        );
+
+        let probe = text.replacen("slice.first()", "slice.     ()", 1);
+        let dot = probe.find("slice.     ()").unwrap() + "slice".len();
+        let paths = ResolvePaths {
+            dir: Some(dir.as_path()),
+            root: Some(dir.as_path()),
+            std: None,
+            packages: None,
+        };
+        let items = dot_complete(&probe, &output.analysis, dot, paths);
+        let names = labels(&items);
+
+        assert!(names.contains(&"first()"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const BUILTIN_ARRAY_SAMPLE: &str = "implement builtin [4]u8 {\n    fn total(*const self) u32 {\n        return @as(u32, (*self)[0]) + @as(u32, (*self)[1]);\n    }\n}\n\nfn main() {\n    let data: [4]u8 = [1, 2, 3, 4];\n    @println(\"{}\", data.total());\n}\n";
+
+    #[test]
+    fn builtin_array_receiver_dot_completes_shape_methods() {
+        let analysis = sample_analysis(BUILTIN_ARRAY_SAMPLE);
+        let dot = BUILTIN_ARRAY_SAMPLE.find("data.total").unwrap() + "data".len();
+        let items = dot_complete(
+            BUILTIN_ARRAY_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["total()"]);
+    }
+
+    const BUILTIN_MANY_POINTER_SAMPLE: &str = "implement builtin [*]i32 {\n    fn head(*const self) i32 {\n        return (*self)[0];\n    }\n}\n\nfn main() {\n    let p: [*]i32 = @uninit();\n    @println(\"{}\", p.head());\n}\n";
+
+    #[test]
+    fn builtin_many_pointer_receiver_dot_completes_shape_methods() {
+        let analysis = sample_analysis(BUILTIN_MANY_POINTER_SAMPLE);
+        let dot = BUILTIN_MANY_POINTER_SAMPLE.find("p.head").unwrap() + "p".len();
+        let items = dot_complete(
+            BUILTIN_MANY_POINTER_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["head()"]);
+    }
+
+    const BUILTIN_SELF_SAMPLE: &str = "implement builtin i32 {\n    fn zero() i32 {\n        return 0;\n    }\n\n    fn forward() i32 {\n        return Self.zero();\n    }\n}\n\nfn main() {\n    @println(\"{}\", i32.forward());\n}\n";
+
+    #[test]
+    fn builtin_self_dot_completes_static_functions() {
+        let analysis = sample_analysis(BUILTIN_SELF_SAMPLE);
+        let dot = BUILTIN_SELF_SAMPLE.find("Self.zero").unwrap() + "Self".len();
+        let items = dot_complete(BUILTIN_SELF_SAMPLE, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["zero()"]);
     }
 }

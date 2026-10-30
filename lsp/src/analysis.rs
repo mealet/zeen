@@ -9,6 +9,7 @@ use miette::SourceSpan;
 
 use zeen_ast::expressions::{Expression, ExpressionKind, Pattern};
 use zeen_ast::statements::{Statement, StatementKind};
+use zeen_ast::types::BuiltinShape;
 use zeen_ast::{Declaration, DeclarationKind};
 use zeen_hir::{
     HirDecl, HirDeclKind, HirEnumVariantPayload, HirExpr, HirExprKind, HirFn, HirGenericParam,
@@ -79,6 +80,12 @@ pub(crate) struct RawAccess {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RawExpr {
+    pub span: (usize, usize),
+    pub id: HirId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldTarget {
     pub field_def: DefId,
     pub ty: String,
@@ -97,6 +104,7 @@ pub struct Analysis {
     pub scopes: Vec<Scope>,
     pub full_spans: HashMap<DefId, (usize, usize)>,
     pub access_types: HashMap<(usize, usize), String>,
+    pub expr_types: HashMap<(usize, usize), String>,
     pub call_types: HashMap<(usize, usize), String>,
     pub call_generics: HashMap<(usize, usize), String>,
     pub method_calls: HashMap<(usize, usize), DefId>,
@@ -113,9 +121,18 @@ pub struct Analysis {
     pub(crate) raw_calls: Vec<RawCall>,
     pub(crate) raw_fields: Vec<RawFieldInit>,
     pub(crate) raw_access: Vec<RawAccess>,
+    pub(crate) raw_exprs: Vec<RawExpr>,
     pub implements: Vec<(DefId, DefId)>,
     pub interfaces: HashMap<String, Vec<Member>>,
     pub generic_bounds: HashMap<DefId, Vec<DefId>>,
+    pub builtin_targets: Vec<BuiltinTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltinTarget {
+    pub def: DefId,
+    pub name: String,
+    pub shape: BuiltinShape,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,6 +235,26 @@ impl Analysis {
             }
         }
 
+        let mut builtin_targets: Vec<BuiltinTarget> = resolution
+            .defs
+            .iter()
+            .filter_map(|(def, info)| {
+                let shape = match &info.kind {
+                    DefKind::Builtin(builtin) => BuiltinShape::Scalar(*builtin),
+                    DefKind::BuiltinShape(shape) => shape.clone(),
+                    _ => return None,
+                };
+
+                Some(BuiltinTarget {
+                    def: *def,
+                    name: interner.resolve(&info.name).to_string(),
+                    shape,
+                })
+            })
+            .collect();
+
+        builtin_targets.sort_by_key(|target| target.def.0);
+
         let mut walker = Walker {
             resolution,
             interner,
@@ -225,7 +262,10 @@ impl Analysis {
             filename,
             canonical,
             methods,
-            analysis: Analysis::default(),
+            analysis: Analysis {
+                builtin_targets,
+                ..Analysis::default()
+            },
             block_ends: Vec::new(),
             local_scopes: HashMap::new(),
         };
@@ -485,6 +525,29 @@ impl Analysis {
 
         self.calls = calls;
 
+        let mut method_fields: HashSet<(usize, usize)> = HashSet::new();
+
+        for raw in &self.raw_calls {
+            let (Some(field), Some(resolved)) = (raw.field, types.call_resolutions.get(&raw.call))
+            else {
+                continue;
+            };
+
+            if self.member_owner.contains_key(&resolved.fn_def)
+                || self.method_self.contains_key(&resolved.fn_def)
+            {
+                method_fields.insert(field);
+            }
+        }
+
+        for occurrence in &mut self.occurrences {
+            if occurrence.role == Role::Property
+                && method_fields.contains(&(occurrence.offset, occurrence.len))
+            {
+                occurrence.role = Role::Method;
+            }
+        }
+
         for raw in &self.raw_calls {
             let Some(id) = types.expr_types.get(&raw.call).copied() else {
                 continue;
@@ -532,6 +595,19 @@ impl Analysis {
 
             self.access_types.insert(
                 raw.field,
+                types
+                    .interner
+                    .display_type(id, interner.clone(), resolution),
+            );
+        }
+
+        for raw in &self.raw_exprs {
+            let Some(id) = types.expr_types.get(&raw.id).copied() else {
+                continue;
+            };
+
+            self.expr_types.insert(
+                raw.span,
                 types
                     .interner
                     .display_type(id, interner.clone(), resolution),
@@ -948,6 +1024,8 @@ impl<'ctx> Walker<'ctx> {
             | DefKind::TypeAlias
             | DefKind::Enum
             | DefKind::GenericParam
+            | DefKind::Builtin(_)
+            | DefKind::BuiltinShape(_)
             | DefKind::InterfaceSelfPlaceholder => Role::Type,
 
             DefKind::EnumVariant => Role::EnumMember,
@@ -1682,6 +1760,11 @@ impl<'ctx> Walker<'ctx> {
     }
 
     fn walk_expr(&mut self, expr: &HirExpr) {
+        self.analysis.raw_exprs.push(RawExpr {
+            span: (expr.source.span.offset(), expr.source.span.len()),
+            id: expr.id,
+        });
+
         match &expr.kind {
             HirExprKind::Literal(_) | HirExprKind::Error => {}
             HirExprKind::VarRef {

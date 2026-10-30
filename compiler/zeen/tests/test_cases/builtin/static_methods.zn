@@ -1,0 +1,54 @@
+implement builtin i32 {
+  fn pack_le(bytes: [4]u8) i32 {
+    return @as(i32, bytes[0]) | (@as(i32, bytes[1]) << 8) | (@as(i32, bytes[2]) << 16) | (@as(i32, bytes[3]) << 24);
+  }
+
+  fn largest() i32 {
+    return 2147483647;
+  }
+
+  fn smallest() Self {
+    return -2147483647 - 1;
+  }
+
+  fn is_extreme(value: i32) bool {
+    return value == Self.largest() || value == Self.smallest();
+  }
+
+  fn pick[T](first: T, second: T) T {
+    return first;
+  }
+}
+
+implement builtin u32 {
+  fn largest() u32 {
+    return 4294967295;
+  }
+}
+
+implement builtin f64 {
+  fn half(value: f64) f64 {
+    return value / 2.0;
+  }
+}
+
+implement builtin bool {
+  fn from_int(value: i32) bool {
+    return value != 0;
+  }
+}
+
+fn main() {
+  @println("{}", i32.pack_le([1, 0, 0, 0]));
+  @println("{}", i32.pack_le([0, 1, 0, 0]));
+  @println("{}", i32.largest());
+  @println("{}", i32.smallest());
+  @println("{}", i32.is_extreme(2147483647));
+  @println("{}", i32.is_extreme(0));
+  @println("{}", u32.largest());
+  @println("{}", i32.pick(42, 7));
+  @println("{}", i32.pick(true, false));
+  @println("{}", f64.half(21.0));
+  @println("{}", bool.from_int(0));
+  @println("{}", bool.from_int(5));
+}

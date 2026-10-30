@@ -1,0 +1,41 @@
+implement builtin f64 {
+  fn halved(*const self) f64 {
+    return (*self) / 2.0;
+  }
+}
+
+implement builtin bool {
+  fn flipped(const self) bool {
+    return !self;
+  }
+}
+
+implement builtin char {
+  fn is_digit(*const self) bool {
+    switch (*self) {
+      '0' ..= '9' => {
+        return true;
+      }
+      _ => {
+        return false;
+      }
+    }
+  }
+}
+
+implement builtin u8 {
+  fn wrapped(*const self) u8 {
+    return (*self) + 1;
+  }
+}
+
+fn main() {
+  let x: f64 = 5.0;
+  @println("{}", x.halved());
+  @println("{}", true.flipped());
+  @println("{}", '7'.is_digit());
+  @println("{}", 'a'.is_digit());
+
+  let b: u8 = 255;
+  @println("{}", b.wrapped());
+}

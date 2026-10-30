@@ -369,9 +369,17 @@ fn find_member(
 
 fn owner_name<'a>(
     text: &'a str,
-    analysis: &Analysis,
+    analysis: &'a Analysis,
     owner: zeen_resolve::DefId,
 ) -> Option<&'a str> {
+    if let Some(target) = analysis
+        .builtin_targets
+        .iter()
+        .find(|target| target.def == owner)
+    {
+        return Some(target.name.as_str());
+    }
+
     analysis.occurrences.iter().find_map(|occurrence| {
         if occurrence.role == Role::Type && occurrence.def == Some(owner) {
             text.get(occurrence.offset..occurrence.offset + occurrence.len)
@@ -535,7 +543,7 @@ fn imported_method_sig(
         root,
         paths.std,
         paths.packages(),
-        &crate::modules::use_imports(text),
+        &crate::modules::imports_for(text, paths.std),
         &ty,
         method,
     )
@@ -580,7 +588,7 @@ fn imported_payload_ty(text: &str, paths: ResolvePaths<'_>, variant: &str) -> Op
         root,
         paths.std,
         paths.packages(),
-        &crate::modules::use_imports(text),
+        &crate::modules::imports_for(text, paths.std),
         variant,
     )
 }
@@ -601,7 +609,7 @@ fn lookup_imported_static(
         root,
         paths.std,
         paths.packages(),
-        &crate::modules::use_imports(text),
+        &crate::modules::imports_for(text, paths.std),
         ty,
     )
     .into_iter()
@@ -1409,5 +1417,46 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const BUILTIN_SAMPLE: &str = "implement builtin i32 {\n    fn is_even(*const self) bool {\n        return (*self) % 2 == 0;\n    }\n\n    fn max_value() i32 {\n        return 2147483647;\n    }\n}\n\nfn main() {\n    let n: i32 = 4;\n    @println(\"{} {}\", n.is_even(), i32.max_value());\n}\n";
+
+    #[test]
+    fn builtin_method_call_shows_owner() {
+        let markdown = hovering(BUILTIN_SAMPLE, "is_even(),");
+
+        assert!(markdown.contains("instance method of `i32`"), "{markdown}");
+        assert!(
+            markdown.contains("fn is_even(*const self) bool"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn builtin_static_call_shows_owner() {
+        let markdown = hovering(BUILTIN_SAMPLE, "max_value());");
+
+        assert!(markdown.contains("static method of `i32`"), "{markdown}");
+        assert!(markdown.contains("fn max_value() i32"), "{markdown}");
+    }
+
+    #[test]
+    fn builtin_method_declaration_shows_owner() {
+        let markdown = hovering(BUILTIN_SAMPLE, "is_even(*const self)");
+
+        assert!(markdown.contains("instance method of `i32`"), "{markdown}");
+    }
+
+    const BUILTIN_SHAPE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
+
+    #[test]
+    fn builtin_shape_method_call_shows_target() {
+        let markdown = hovering(BUILTIN_SHAPE_SAMPLE, "count());");
+
+        assert!(markdown.contains("instance method of `[]T`"), "{markdown}");
+        assert!(
+            markdown.contains("fn count(*const self) usize"),
+            "{markdown}"
+        );
     }
 }

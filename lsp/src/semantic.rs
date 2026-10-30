@@ -280,3 +280,71 @@ fn line_end_offset(text: &str, line_starts: &[usize], line: u32) -> usize {
         text.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower_lsp_server::ls_types::Uri;
+
+    const BUILTIN_SAMPLE: &str = "implement builtin i32 {\n    pub fn is_even(*const self) bool {\n        return (*self) % 2 == 0;\n    }\n}\n\nfn main() {\n    let n: i32 = 4;\n    @println(\"{}\", n.is_even());\n}\n";
+
+    fn decoded(text: &str, tokens: &[SemanticToken]) -> Vec<(u32, u32, u32, u32)> {
+        let starts = line_starts(text);
+        let mut line = 0;
+        let mut start = 0;
+        let mut out = Vec::new();
+
+        for token in tokens {
+            if token.delta_line == 0 {
+                start += token.delta_start;
+            } else {
+                line += token.delta_line;
+                start = token.delta_start;
+            }
+
+            let offset = starts[line as usize] + start as usize;
+
+            assert!(offset < text.len());
+
+            out.push((line, start, token.length, token.token_type));
+        }
+
+        out
+    }
+
+    fn offset_position(text: &str, offset: usize) -> (u32, u32) {
+        let starts = line_starts(text);
+        offset_to_line_col(&starts, offset)
+    }
+
+    #[test]
+    fn builtin_implement_methods_use_method_tokens() {
+        let uri: Uri = "file:///tmp/zeen-lsp-semantic-builtin.zn".parse().unwrap();
+        let output = crate::diagnostics::check(&uri, BUILTIN_SAMPLE, &[]);
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
+
+        let tokens = decoded(
+            BUILTIN_SAMPLE,
+            &tokens_for(BUILTIN_SAMPLE, &output.analysis),
+        );
+        let method_type = TokenType::Method as u32;
+
+        let decl = BUILTIN_SAMPLE.find("is_even").unwrap();
+        let (decl_line, decl_start) = offset_position(BUILTIN_SAMPLE, decl);
+        let decl_token = tokens
+            .iter()
+            .find(|token| token.0 == decl_line && token.1 == decl_start)
+            .unwrap();
+
+        assert_eq!(decl_token.3, method_type);
+
+        let call = BUILTIN_SAMPLE.find("n.is_even").unwrap() + "n.".len();
+        let (call_line, call_start) = offset_position(BUILTIN_SAMPLE, call);
+        let call_token = tokens
+            .iter()
+            .find(|token| token.0 == call_line && token.1 == call_start)
+            .unwrap();
+
+        assert_eq!(call_token.3, method_type);
+    }
+}

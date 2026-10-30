@@ -237,6 +237,7 @@ impl<'res> HirLowering<'res> {
 
             DeclarationKind::ImplementDecl {
                 interface: _,
+                builtin: _,
                 object,
                 methods,
                 generics,
@@ -710,7 +711,11 @@ impl<'res> HirLowering<'res> {
                     },
                     Some(Resolution::GenericParam(id)) => HirExprKind::GenericParamRef(id),
                     Some(Resolution::SelfValue(id)) => HirExprKind::SelfValue(id),
-                    Some(Resolution::SelfType(_)) => HirExprKind::Error,
+                    Some(Resolution::SelfType(id)) => HirExprKind::Type(Rc::new(HirTypeExpr {
+                        id: self.fresh_id(),
+                        kind: HirTypeKind::SelfType(id),
+                        source: (expr.span, self.current_src.clone()).into(),
+                    })),
                     Some(Resolution::Builtin) | Some(Resolution::Error) | None => {
                         HirExprKind::Error
                     }
@@ -835,24 +840,30 @@ impl<'res> HirLowering<'res> {
                 let lowered_object = self.lower_expr(object);
                 // `Self.foo` names the enclosing type, like `Type.foo`.
                 let object = match &lowered_object.kind {
-                    HirExprKind::Error => match self.resolution.resolution_of_expr(object) {
-                        Some(zeen_resolve::Resolution::SelfType(id))
-                            if matches!(
-                                self.resolution.defs.get(&id).map(|i| &i.kind),
-                                Some(zeen_resolve::DefKind::Struct | zeen_resolve::DefKind::Enum)
-                            ) =>
-                        {
-                            Rc::new(HirExpr {
-                                id: self.fresh_id(),
-                                kind: HirExprKind::VarRef {
-                                    def: id,
-                                    generic_args: Vec::new(),
-                                },
-                                source: lowered_object.source.clone(),
-                            })
+                    HirExprKind::Error | HirExprKind::Type(_) => {
+                        match self.resolution.resolution_of_expr(object) {
+                            Some(zeen_resolve::Resolution::SelfType(id))
+                                if matches!(
+                                    self.resolution.defs.get(&id).map(|i| &i.kind),
+                                    Some(
+                                        zeen_resolve::DefKind::Struct
+                                            | zeen_resolve::DefKind::Enum
+                                            | zeen_resolve::DefKind::Builtin(_)
+                                    )
+                                ) =>
+                            {
+                                Rc::new(HirExpr {
+                                    id: self.fresh_id(),
+                                    kind: HirExprKind::VarRef {
+                                        def: id,
+                                        generic_args: Vec::new(),
+                                    },
+                                    source: lowered_object.source.clone(),
+                                })
+                            }
+                            _ => Rc::new(lowered_object),
                         }
-                        _ => Rc::new(lowered_object),
-                    },
+                    }
                     _ => Rc::new(lowered_object),
                 };
 
@@ -1112,8 +1123,6 @@ mod tests {
     use zeen_driver::{CompilationContext, CompilationMode, CompilationOutput, PathsConfig};
     use zeen_parser::Parser;
 
-    const CORE_OPS: &str = include_str!("../../../lib/core/ops.zn");
-
     #[derive(Debug)]
     struct Fixture {
         rodeo: Rc<RefCell<Rodeo>>,
@@ -1161,15 +1170,23 @@ mod tests {
                 .expect("enum not found")
         }
 
-        fn implement_decl(&self) -> Rc<HirImplement> {
+        fn implement_with_method(&self, method: &str) -> Rc<HirImplement> {
             self.module
                 .decls
                 .iter()
-                .find_map(|decl| match &decl.kind {
-                    HirDeclKind::Implement(i) => Some(i.clone()),
+                .find_map(|decl| {
+                    match &decl.kind {
+                    HirDeclKind::Implement(i)
+                        if i.methods.iter().any(|m| {
+                            matches!(&m.kind, HirDeclKind::Fn(f) if self.name(f.name.0) == method)
+                        }) =>
+                    {
+                        Some(i.clone())
+                    }
                     _ => None,
+                }
                 })
-                .expect("no implement decl in module")
+                .expect("no implement decl with method")
         }
 
         fn global_var(&self, name: &str) -> (Spur, Rc<HirTypeExpr>, Rc<HirExpr>, bool, bool) {
@@ -1216,7 +1233,10 @@ mod tests {
                 linked: HashSet::default(),
                 packages: Vec::new(),
             },
-            core_files: vec![("core.ops", CORE_OPS)],
+            core_files: zeen_driver::CORE_FILES
+                .iter()
+                .map(|file| file.to_basic())
+                .collect(),
             mode: CompilationMode::Debug,
             output: CompilationOutput::EmitMIR,
             target: None,
@@ -1456,7 +1476,7 @@ mod tests {
              struct Foo { value: i32 } \
              implement Pretty : Foo { fn pretty(self) i32 { return self.value; } }",
         );
-        let implement = fx.implement_decl();
+        let implement = fx.implement_with_method("pretty");
 
         assert!(implement.interface.is_some());
         assert!(implement.object.is_some());

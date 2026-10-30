@@ -1,0 +1,4 @@
+pub struct Overflowing[T] {
+  pub value: T,
+  pub overflowed: bool,
+}

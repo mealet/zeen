@@ -115,6 +115,68 @@ impl BuiltinType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum BuiltinShape {
+    Scalar(BuiltinType),
+    Slice {
+        element: Box<BuiltinShape>,
+        is_const: bool,
+    },
+    ManyPointer {
+        element: Box<BuiltinShape>,
+        is_const: bool,
+    },
+    Array {
+        element: Box<BuiltinShape>,
+        len: u64,
+    },
+    Param(u32),
+}
+
+impl BuiltinShape {
+    pub fn has_params(&self) -> bool {
+        match self {
+            Self::Scalar(_) => false,
+            Self::Slice { element, .. }
+            | Self::ManyPointer { element, .. }
+            | Self::Array { element, .. } => element.has_params(),
+            Self::Param(_) => true,
+        }
+    }
+
+    pub fn used_params(&self, out: &mut Vec<u32>) {
+        match self {
+            Self::Scalar(_) => {}
+            Self::Slice { element, .. }
+            | Self::ManyPointer { element, .. }
+            | Self::Array { element, .. } => element.used_params(out),
+            Self::Param(index) => {
+                if !out.contains(index) {
+                    out.push(*index);
+                }
+            }
+        }
+    }
+
+    pub fn key(&self) -> String {
+        match self {
+            Self::Scalar(builtin) => builtin.to_string(),
+            Self::Slice { element, is_const } => {
+                format!("[]{}{}", Self::const_prefix(*is_const), element.key())
+            }
+            Self::ManyPointer { element, is_const } => {
+                format!("[*]{}{}", Self::const_prefix(*is_const), element.key())
+            }
+            Self::Array { element, len } => format!("[{len}]{}", element.key()),
+            Self::Param(index) => format!("#{index}"),
+        }
+    }
+
+    fn const_prefix(is_const: bool) -> &'static str {
+        if is_const { "const " } else { "" }
+    }
+}
+
 impl std::fmt::Display for BuiltinType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

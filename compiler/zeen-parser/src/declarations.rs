@@ -5,9 +5,14 @@ use crate::{
 
 use smallvec::SmallVec;
 
+use lasso::Spur;
+use smol_str::SmolStr;
 use zeen_ast::{
     Declaration, DeclarationKind, Expression, ExpressionKind, PreprocessorDirective, Statement,
-    StatementKind, TypeExpr, declarations,
+    StatementKind, TypeExpr, TypeKind, declarations,
+    declarations::GenericType,
+    expressions::Literal,
+    types::{BuiltinShape, BuiltinType},
 };
 use zeen_lexer::{TokenKind, token::CompilerKeyword};
 
@@ -1058,23 +1063,45 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let mut type_parser = TypeParser::new(self.p);
         let generics = type_parser.parse_generics_declarations();
 
-        let first_token = self.p.expect(TokenKind::Ident, "identifier")?;
-        let first_span = first_token.span;
-        let first_slice =
-            self.p.src[first_span.offset()..first_span.offset() + first_span.len()].to_owned();
-
-        let first = (self.p.get_or_intern(first_slice), first_span);
-
-        let (interface, object_name, object_span) = if self.p.eat(TokenKind::Colon) {
-            let object_token = self.p.expect(TokenKind::Ident, "identifier")?;
-            let object_span = object_token.span;
-            let object_slice = self.p.src
-                [object_span.offset()..object_span.offset() + object_span.len()]
-                .to_owned();
-
-            (Some(first), self.p.get_or_intern(object_slice), object_span)
+        let builtin_target = if self.p.at(TokenKind::Keyword(CompilerKeyword::Builtin)) {
+            Some(self.parse_builtin_implement_target(generics)?)
         } else {
-            (None, first.0, first_span)
+            None
+        };
+
+        let (interface, object_name, object_span) = if let Some((_, name, span)) = builtin_target {
+            (None, name, span)
+        } else {
+            let first_token = self.p.expect(TokenKind::Ident, "identifier")?;
+            let first_span = first_token.span;
+            let first_slice =
+                self.p.src[first_span.offset()..first_span.offset() + first_span.len()].to_owned();
+
+            let first = (self.p.get_or_intern(first_slice), first_span);
+
+            if self.p.eat(TokenKind::Colon) {
+                if self.p.at(TokenKind::Keyword(CompilerKeyword::Builtin)) {
+                    self.p.report(ParserError::UnsupportedAction {
+                        label: SmolStr::from(
+                            "interface implementations for builtin types are not supported",
+                        ),
+                        src: self.p.named_src(),
+                        span: self.p.current().span,
+                    });
+
+                    return None;
+                }
+
+                let object_token = self.p.expect(TokenKind::Ident, "identifier")?;
+                let object_span = object_token.span;
+                let object_slice = self.p.src
+                    [object_span.offset()..object_span.offset() + object_span.len()]
+                    .to_owned();
+
+                (Some(first), self.p.get_or_intern(object_slice), object_span)
+            } else {
+                (None, first.0, first_span)
+            }
         };
 
         let mut generic_bindings: Vec<&'ctx TypeExpr<'ctx>> = Vec::new();
@@ -1124,6 +1151,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::ImplementDecl {
                 interface,
+                builtin: builtin_target.map(|(shape, _, _)| shape),
                 object,
                 generics,
                 methods,
@@ -1132,6 +1160,201 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         });
 
         Some(decl)
+    }
+
+    fn parse_builtin_implement_target(
+        &mut self,
+        generics: Option<&'ctx [GenericType<'ctx>]>,
+    ) -> Option<(&'ctx BuiltinShape, Spur, miette::SourceSpan)> {
+        let _ = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Builtin), "builtin")?;
+
+        let ty = {
+            let mut type_parser = TypeParser::new(self.p);
+            type_parser.parse()?
+        };
+
+        if self.p.at(TokenKind::OpenBracket) {
+            self.p.report(ParserError::UnsupportedAction {
+                label: SmolStr::from("builtin implement blocks cannot carry type arguments"),
+                src: self.p.named_src(),
+                span: self.p.current().span,
+            });
+
+            return None;
+        }
+
+        let generic_names: Vec<Spur> = generics
+            .map(|gs| gs.iter().map(|g| g.name.0).collect())
+            .unwrap_or_default();
+
+        let shape = self.builtin_shape_from_type(ty, &generic_names)?;
+
+        let mut used = Vec::new();
+        shape.used_params(&mut used);
+
+        for (index, name) in generic_names.iter().enumerate() {
+            if used.contains(&(index as u32)) {
+                continue;
+            }
+
+            let name = self.p.interner.borrow().resolve(name).to_string();
+
+            self.p.report(ParserError::SyntaxError {
+                label: SmolStr::from(format!(
+                    "generic parameter `{name}` is not used in the builtin implement target"
+                )),
+                help: None,
+                src: self.p.named_src(),
+                span: ty.span,
+            });
+
+            return None;
+        }
+
+        let slice = self.p.src[ty.span.offset()..ty.span.offset() + ty.span.len()].to_owned();
+        let shape = self.p.arena.alloc(shape);
+
+        Some((shape, self.p.get_or_intern(slice), ty.span))
+    }
+
+    fn builtin_shape_from_type(
+        &mut self,
+        ty: &'ctx TypeExpr<'ctx>,
+        generic_names: &[Spur],
+    ) -> Option<BuiltinShape> {
+        match ty.kind {
+            TypeKind::Builtin(builtin) => {
+                if matches!(builtin, BuiltinType::void | BuiltinType::never) {
+                    self.p.report(ParserError::UnsupportedAction {
+                        label: SmolStr::from(
+                            "`void` and `never` cannot have builtin implement blocks",
+                        ),
+                        src: self.p.named_src(),
+                        span: ty.span,
+                    });
+
+                    return None;
+                }
+
+                Some(BuiltinShape::Scalar(builtin))
+            }
+
+            TypeKind::Array { element, len } => {
+                let (element, is_const) = self.builtin_shape_element(element, generic_names)?;
+
+                let Some(len_expr) = len else {
+                    return Some(BuiltinShape::Slice {
+                        element: Box::new(element),
+                        is_const,
+                    });
+                };
+
+                let len = match len_expr.kind {
+                    ExpressionKind::Literal(Literal::Int(value)) => value,
+                    _ => {
+                        self.p.report(ParserError::UnsupportedAction {
+                            label: SmolStr::from(
+                                "builtin array implement targets require an integer literal length",
+                            ),
+                            src: self.p.named_src(),
+                            span: len_expr.span,
+                        });
+
+                        return None;
+                    }
+                };
+
+                if len <= 0 {
+                    self.p.report(ParserError::UnsupportedAction {
+                        label: SmolStr::from(
+                            "builtin array implement targets require a positive length",
+                        ),
+                        src: self.p.named_src(),
+                        span: len_expr.span,
+                    });
+
+                    return None;
+                }
+
+                Some(BuiltinShape::Array {
+                    element: Box::new(element),
+                    len: len as u64,
+                })
+            }
+
+            TypeKind::ManyPointer(element) => {
+                let (element, is_const) = self.builtin_shape_element(element, generic_names)?;
+
+                Some(BuiltinShape::ManyPointer {
+                    element: Box::new(element),
+                    is_const,
+                })
+            }
+
+            TypeKind::Named { name, generic_args } => {
+                if generic_args.is_some() {
+                    self.p.report(ParserError::UnsupportedAction {
+                        label: SmolStr::from(
+                            "builtin implement targets cannot carry type arguments",
+                        ),
+                        src: self.p.named_src(),
+                        span: ty.span,
+                    });
+
+                    return None;
+                }
+
+                match generic_names.iter().position(|generic| *generic == name) {
+                    Some(index) => Some(BuiltinShape::Param(index as u32)),
+                    None => {
+                        self.p.report(ParserError::SyntaxError {
+                            label: SmolStr::from(
+                                "builtin implement targets may only name generic parameters of the block",
+                            ),
+                            help: None,
+                            src: self.p.named_src(),
+                            span: ty.span,
+                        });
+
+                        None
+                    }
+                }
+            }
+
+            TypeKind::SinglePointer(_) => {
+                self.p.report(ParserError::UnsupportedAction {
+                    label: SmolStr::from("pointer types cannot be builtin implement targets"),
+                    src: self.p.named_src(),
+                    span: ty.span,
+                });
+
+                None
+            }
+
+            _ => {
+                self.p.report(ParserError::UnsupportedAction {
+                    label: SmolStr::from("unsupported builtin implement target"),
+                    src: self.p.named_src(),
+                    span: ty.span,
+                });
+
+                None
+            }
+        }
+    }
+
+    fn builtin_shape_element(
+        &mut self,
+        ty: &'ctx TypeExpr<'ctx>,
+        generic_names: &[Spur],
+    ) -> Option<(BuiltinShape, bool)> {
+        if let TypeKind::Const(inner) = ty.kind {
+            Some((self.builtin_shape_from_type(inner, generic_names)?, true))
+        } else {
+            Some((self.builtin_shape_from_type(ty, generic_names)?, false))
+        }
     }
 
     fn parse_global_var(
@@ -2294,6 +2517,7 @@ mod tests {
             Ok([Declaration {
                 kind: DeclarationKind::ImplementDecl {
                     interface: _,
+                    builtin: _,
                     object: _,
                     generics: None,
                     methods: [Declaration {
@@ -2308,6 +2532,177 @@ mod tests {
                 ..
             }])
         );
+    }
+
+    #[test]
+    fn implement_builtin_block_parses() {
+        const SRC: &str = "implement builtin i32 {
+            fn is_even(*const self) bool {
+                return (*self) % 2 == 0;
+            }
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        let program = parser.parse_program().unwrap();
+
+        assert_matches!(
+            program[0].kind,
+            DeclarationKind::ImplementDecl {
+                interface: None,
+                builtin: Some(_),
+                generics: None,
+                methods: [Declaration {
+                    kind: DeclarationKind::FnDecl { .. },
+                    ..
+                }],
+                ..
+            }
+        );
+
+        let DeclarationKind::ImplementDecl { builtin, .. } = &program[0].kind else {
+            panic!("expected an implement declaration");
+        };
+
+        assert_eq!(builtin.unwrap().key(), "i32");
+    }
+
+    #[test]
+    fn implement_builtin_slice_target_parses() {
+        const SRC: &str = "implement[T] builtin []T {
+            fn first(*const self) T {
+                return (*self)[0];
+            }
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        let program = parser.parse_program().unwrap();
+
+        assert_matches!(
+            program[0].kind,
+            DeclarationKind::ImplementDecl {
+                interface: None,
+                builtin: Some(_),
+                generics: Some([_]),
+                methods: [Declaration {
+                    kind: DeclarationKind::FnDecl { .. },
+                    ..
+                }],
+                ..
+            }
+        );
+
+        let DeclarationKind::ImplementDecl { builtin, .. } = &program[0].kind else {
+            panic!("expected an implement declaration");
+        };
+
+        assert_eq!(builtin.unwrap().key(), "[]#0");
+    }
+
+    #[test]
+    fn implement_builtin_array_target_parses() {
+        const SRC: &str = "implement builtin [4]u8 {
+            fn total(*const self) u32 {
+                return @as(u32, (*self)[0]);
+            }
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        let program = parser.parse_program().unwrap();
+
+        assert_matches!(
+            program[0].kind,
+            DeclarationKind::ImplementDecl {
+                interface: None,
+                builtin: Some(_),
+                generics: None,
+                methods: [Declaration {
+                    kind: DeclarationKind::FnDecl { .. },
+                    ..
+                }],
+                ..
+            }
+        );
+
+        let DeclarationKind::ImplementDecl { builtin, .. } = &program[0].kind else {
+            panic!("expected an implement declaration");
+        };
+
+        assert_eq!(builtin.unwrap().key(), "[4]u8");
+    }
+
+    #[test]
+    fn implement_builtin_rejects_void() {
+        const SRC: &str = "implement builtin void {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_unused_generic() {
+        const SRC: &str = "implement[T] builtin i32 {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_unknown_generic() {
+        const SRC: &str = "implement[T] builtin []U {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_pointer_target() {
+        const SRC: &str = "implement[T] builtin *T {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_non_literal_array_len() {
+        const SRC: &str = "implement builtin [1 + 1]u8 {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_type_args() {
+        const SRC: &str = "implement builtin i32[i32] {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_interface_form() {
+        const SRC: &str = "implement Show : builtin i32 {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn implement_builtin_rejects_non_builtin_name() {
+        const SRC: &str = "implement builtin Foo {}";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert!(parser.parse_program().is_err());
     }
 
     #[test]

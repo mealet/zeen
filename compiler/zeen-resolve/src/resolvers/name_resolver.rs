@@ -14,7 +14,7 @@ use zeen_ast::{
     declarations::{Declaration, DeclarationKind, EnumVariantPayload, GenericType},
     expressions::{Expression, ExpressionKind, Literal, Pattern, UnaryOp},
     statements::{Statement, StatementKind},
-    types::{TypeExpr, TypeKind},
+    types::{BuiltinType, TypeExpr, TypeKind},
 };
 
 use crate::{
@@ -49,6 +49,7 @@ pub struct NameResolver {
     global_deps: HashMap<DefId, Vec<DefId>>,
 
     next_def_id: u32,
+    next_builtin_shape_def: u32,
     current_src: NamedSource<Arc<String>>,
 
     graph: ModuleGraph,
@@ -96,6 +97,7 @@ impl<'ctx> NameResolver {
             global_deps: HashMap::default(),
 
             next_def_id: 0,
+            next_builtin_shape_def: crate::resolution::BUILTIN_SHAPE_DEF_BASE,
             current_src: NamedSource::new(filename.as_str(), src.clone()),
 
             graph,
@@ -914,6 +916,7 @@ impl<'ctx> NameResolver {
 
             DeclarationKind::ImplementDecl {
                 interface,
+                builtin,
                 object,
                 methods,
                 generics,
@@ -948,22 +951,32 @@ impl<'ctx> NameResolver {
                 }
 
                 let (object_name, object_span, object_bindings) = object;
-                let object_ambiguous = self.check_ambiguous_type(object_name, object_span);
-                let object_def = if object_ambiguous {
-                    None
-                } else {
-                    self.table.lookup_type(object_name)
+
+                let object_def = match builtin {
+                    Some(shape) => {
+                        Some(self.register_builtin_target_def(shape, object_name, object_span))
+                    }
+                    None => {
+                        let object_ambiguous = self.check_ambiguous_type(object_name, object_span);
+                        let object_def = if object_ambiguous {
+                            None
+                        } else {
+                            self.table.lookup_type(object_name)
+                        };
+
+                        if object_def.is_none() && !object_ambiguous {
+                            let object_name = self.interner_resolve(&object_name);
+
+                            self.report(ResolveError::UnresolvedType {
+                                name: object_name,
+                                src: decl.source.src(),
+                                span: object_span,
+                            });
+                        }
+
+                        object_def
+                    }
                 };
-
-                if object_def.is_none() && !object_ambiguous {
-                    let object_name = self.interner_resolve(&object_name);
-
-                    self.report(ResolveError::UnresolvedType {
-                        name: object_name,
-                        src: decl.source.src(),
-                        span: object_span,
-                    });
-                }
 
                 self.result.implement_names.insert(
                     NodeKey::from_decl(decl),
@@ -1435,6 +1448,55 @@ impl<'ctx> NameResolver {
         self.table.pop();
 
         method_id
+    }
+
+    fn register_builtin_target_def(
+        &mut self,
+        shape: &zeen_ast::types::BuiltinShape,
+        name: Spur,
+        span: SourceSpan,
+    ) -> DefId {
+        let zeen_ast::types::BuiltinShape::Scalar(builtin) = shape else {
+            let def_id = DefId(self.next_builtin_shape_def);
+            self.next_builtin_shape_def += 1;
+
+            let info = DefInfo {
+                name,
+                kind: DefKind::BuiltinShape(shape.clone()),
+                span: (span, self.named_src()).into(),
+                decl: None,
+                is_pub: true,
+            };
+
+            self.result.defs.insert(def_id, info);
+
+            return def_id;
+        };
+
+        self.register_builtin_def(*builtin, name, span)
+    }
+
+    fn register_builtin_def(
+        &mut self,
+        builtin: BuiltinType,
+        name: Spur,
+        span: SourceSpan,
+    ) -> DefId {
+        let def_id = crate::resolution::builtin_def_id(builtin);
+
+        if !self.result.defs.contains_key(&def_id) {
+            let info = DefInfo {
+                name,
+                kind: DefKind::Builtin(builtin),
+                span: (span, self.named_src()).into(),
+                decl: None,
+                is_pub: true,
+            };
+
+            self.result.defs.insert(def_id, info);
+        }
+
+        def_id
     }
 
     fn resolve_interface_method(

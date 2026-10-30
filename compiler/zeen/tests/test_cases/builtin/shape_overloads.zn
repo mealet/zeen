@@ -1,0 +1,42 @@
+implement[T] builtin [4]T {
+  fn label(*const self) i32 {
+    return 1;
+  }
+}
+
+implement builtin [4]u8 {
+  fn label(*const self) i32 {
+    return 2;
+  }
+}
+
+implement[T] builtin []T {
+  fn kind(*const self) i32 {
+    return 1;
+  }
+}
+
+implement[T: Copy] builtin []T {
+  fn kind(*const self) i32 {
+    return 2;
+  }
+}
+
+struct Payload {
+  x: i32,
+}
+
+fn main() {
+  let bytes: [4]u8 = [1, 2, 3, 4];
+  @println("{}", bytes.label());
+
+  let nums: [4]i32 = [7, 8, 9, 10];
+  @println("{}", nums.label());
+
+  let copies = nums[..];
+  @println("{}", copies.kind());
+
+  let owned = [Payload { .x = 5 }];
+  let borrowed = owned[..];
+  @println("{}", borrowed.kind());
+}

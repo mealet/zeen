@@ -1,0 +1,329 @@
+use std.c.math;
+use std.string;
+
+implement builtin f32 {
+  pub fn min_value() f32 {
+    let max = f32.max_value();
+
+    return 0.0 - max;
+  }
+
+  pub fn max_value() f32 {
+    return f32.from_bits(0x7F7FFFFF);
+  }
+
+  pub fn min_positive_value() f32 {
+    return f32.from_bits(1);
+  }
+
+  pub fn epsilon() f32 {
+    return f32.from_bits(0x34000000);
+  }
+
+  pub fn infinity() f32 {
+    return f32.from_bits(0x7F800000);
+  }
+
+  pub fn neg_infinity() f32 {
+    let infinity = f32.infinity();
+
+    return 0.0 - infinity;
+  }
+
+  pub fn nan() f32 {
+    return f32.from_bits(0x7FC00000);
+  }
+
+  pub fn to_bits(self) u32 {
+    let p = @as(*u32, @as(*void, @as(*f32, &self)));
+
+    return *p;
+  }
+
+  pub fn from_bits(bits: u32) f32 {
+    let p = @as(*f32, @as(*void, @as(*u32, &bits)));
+
+    return *p;
+  }
+
+  pub fn is_nan(self) bool {
+    let bits = self.to_bits();
+    let exponent = (bits >> 23) & 0x7F;
+    let mantissa = bits & 0x007FFFFF;
+
+    return exponent == 0x7F && mantissa != 0;
+  }
+
+  pub fn is_infinite(self) bool {
+    let bits = self.to_bits();
+    let exponent = (bits >> 23) & 0x7F;
+    let mantissa = bits & 0x007FFFFF;
+
+    return exponent == 0x7F && mantissa == 0;
+  }
+
+  pub fn is_finite(self) bool {
+    let bits = self.to_bits();
+    let exponent = (bits >> 23) & 0x7F;
+
+    return exponent != 0x7F;
+  }
+
+  pub fn is_sign_positive(self) bool {
+    return (self.to_bits() >> 31) == 0;
+  }
+
+  pub fn is_sign_negative(self) bool {
+    return (self.to_bits() >> 31) != 0;
+  }
+
+  pub fn abs(self) f32 {
+    return fabsf(self);
+  }
+
+  pub fn signum(self) f32 {
+    if (self.is_nan()) { return f32.nan(); };
+
+    return copysignf(1.0, self);
+  }
+
+  pub fn copysign(self, sign: f32) f32 {
+    return copysignf(self, sign);
+  }
+
+  pub fn sqrt(self) f32 {
+    return sqrtf(self);
+  }
+
+  pub fn cbrt(self) f32 {
+    return cbrtf(self);
+  }
+
+  pub fn powf(self, other: f32) f32 {
+    return powf(self, other);
+  }
+
+  pub fn powi(self, n: i32) f32 {
+    if (n < 0) {
+      return 1.0 / self.pow_positive(@as(u32, 0 - n));
+    };
+
+    return self.pow_positive(@as(u32, n));
+  }
+
+  fn pow_positive(self, exp: u32) f32 {
+    let result: f32 = 1.0;
+    let base = self;
+    let e = exp;
+
+    while (e > 0) {
+      if ((e & 1) == 1) { result = result * base; };
+
+      base = base * base;
+      e = e >> 1;
+    };
+
+    return result;
+  }
+
+  pub fn exp(self) f32 {
+    return expf(self);
+  }
+
+  pub fn exp2(self) f32 {
+    return exp2f(self);
+  }
+
+  pub fn exp_m1(self) f32 {
+    return expm1f(self);
+  }
+
+  pub fn ln(self) f32 {
+    return logf(self);
+  }
+
+  pub fn ln_1p(self) f32 {
+    return log1pf(self);
+  }
+
+  pub fn log2(self) f32 {
+    return log2f(self);
+  }
+
+  pub fn log10(self) f32 {
+    return log10f(self);
+  }
+
+  pub fn log(self, base: f32) f32 {
+    return self.ln() / base.ln();
+  }
+
+  pub fn sin(self) f32 {
+    return sinf(self);
+  }
+
+  pub fn cos(self) f32 {
+    return cosf(self);
+  }
+
+  pub fn tan(self) f32 {
+    return tanf(self);
+  }
+
+  pub fn asin(self) f32 {
+    return asinf(self);
+  }
+
+  pub fn acos(self) f32 {
+    return acosf(self);
+  }
+
+  pub fn atan(self) f32 {
+    return atanf(self);
+  }
+
+  pub fn atan2(self, other: f32) f32 {
+    return atan2f(self, other);
+  }
+
+  pub fn sinh(self) f32 {
+    return sinhf(self);
+  }
+
+  pub fn cosh(self) f32 {
+    return coshf(self);
+  }
+
+  pub fn tanh(self) f32 {
+    return tanhf(self);
+  }
+
+  pub fn asinh(self) f32 {
+    return asinhf(self);
+  }
+
+  pub fn acosh(self) f32 {
+    return acoshf(self);
+  }
+
+  pub fn atanh(self) f32 {
+    return atanhf(self);
+  }
+
+  pub fn hypot(self, other: f32) f32 {
+    return hypotf(self, other);
+  }
+
+  pub fn mul_add(self, a: f32, b: f32) f32 {
+    return fmaf(self, a, b);
+  }
+
+  pub fn floor(self) f32 {
+    return floorf(self);
+  }
+
+  pub fn ceil(self) f32 {
+    return ceilf(self);
+  }
+
+  pub fn round(self) f32 {
+    return roundf(self);
+  }
+
+  pub fn trunc(self) f32 {
+    return truncf(self);
+  }
+
+  pub fn fract(self) f32 {
+    return self - truncf(self);
+  }
+
+  pub fn recip(self) f32 {
+    return 1.0 / self;
+  }
+
+  pub fn to_degrees(self) f32 {
+    return self * 57.29577951308232;
+  }
+
+  pub fn to_radians(self) f32 {
+    return self * 0.017453292519943295;
+  }
+
+  pub fn min(self, other: f32) f32 {
+    return switch (true) {
+      _ if (self.is_nan()) => other,
+      _ if (other.is_nan()) => self,
+      _ if (self < other) => self,
+      _ if (other < self) => other,
+      _ if (self.is_sign_positive()) => other,
+      _ => self,
+    };
+  }
+
+  pub fn max(self, other: f32) f32 {
+    return switch (true) {
+      _ if (self.is_nan()) => other,
+      _ if (other.is_nan()) => self,
+      _ if (self > other) => self,
+      _ if (other > self) => other,
+      _ if (self.is_sign_positive()) => self,
+      _ => other,
+    };
+  }
+
+  pub fn minimum(self, other: f32) f32 {
+    return switch (true) {
+      _ if (self.is_nan() || other.is_nan()) => f32.nan(),
+      _ if (self < other) => self,
+      _ if (other < self) => other,
+      _ if (self.is_sign_negative()) => self,
+      _ => other,
+    };
+  }
+
+  pub fn maximum(self, other: f32) f32 {
+    return switch (true) {
+      _ if (self.is_nan() || other.is_nan()) => f32.nan(),
+      _ if (self > other) => self,
+      _ if (other > self) => other,
+      _ if (self.is_sign_negative()) => other,
+      _ => self,
+    };
+  }
+
+  pub fn clamp(self, min: f32, max: f32) f32 {
+    if (min.is_nan() || max.is_nan() || min > max) { @panic("clamp: min > max"); };
+
+    return switch (true) {
+      _ if (self < min) => min,
+      _ if (self > max) => max,
+      _ => self,
+    };
+  }
+
+  pub fn div_euclid(self, rhs: f32) f32 {
+    let quotient = truncf(self / rhs);
+    let remainder = self % rhs;
+
+    return switch (true) {
+      _ if (remainder < 0.0 && rhs > 0.0) => quotient - 1.0,
+      _ if (remainder < 0.0) => quotient + 1.0,
+      _ => quotient,
+    };
+  }
+
+  pub fn rem_euclid(self, rhs: f32) f32 {
+    let remainder = self % rhs;
+
+    if (remainder < 0.0) {
+      return remainder + fabsf(rhs);
+    };
+
+    return remainder;
+  }
+
+  pub fn to_string(self) String {
+    return @format("{}", self);
+  }
+}
