@@ -3278,9 +3278,10 @@ impl<'res> TypeChecker<'res> {
                 self.type_implements_display(inner)
             }
 
-            Type::Array { element, .. } | Type::Slice { element, .. } => {
-                self.type_implements_display(element)
-            }
+            Type::Array { element, .. } | Type::Slice { element, .. } => matches!(
+                self.result.interner.get(element).clone(),
+                Type::Builtin(BuiltinType::char)
+            ),
 
             Type::GenericParam(g) => {
                 let cur = self.ctx.current();
@@ -11618,6 +11619,54 @@ mod tests {
             "#,
         )
         .expect("empty-only enums keep ==/!= and Display/Debug");
+    }
+
+    #[test]
+    fn array_display_rejects_non_char_elements() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+                let ints = [1, 2, 3, 4];
+                @println("{}", ints);
+                @println("{}", ints[..]);
+            }
+            "#,
+        )
+        .expect_err("arrays and slices must reject Display unless the element is char");
+
+        let display_errors = errors
+            .iter()
+            .filter(|err| {
+                matches!(
+                    err,
+                    TypeError::InterfaceNotImplemented { name, .. } if name.as_str() == "Display"
+                )
+            })
+            .count();
+
+        assert_eq!(
+            display_errors, 2,
+            "expected Display InterfaceNotImplemented for array and slice, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn char_array_keeps_display() {
+        typecheck(
+            r#"
+            fn show(text: []char) {
+                @println("{}", text);
+                @println("{:?}", text);
+            }
+            fn main() {
+                let chars: [3]char = ['a', 'b', 'c'];
+                @println("{}", chars);
+                @println("{:?}", chars);
+                show("abc");
+            }
+            "#,
+        )
+        .expect("char arrays and slices keep Display and Debug");
     }
 
     #[test]

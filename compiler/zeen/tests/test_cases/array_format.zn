@@ -1,0 +1,37 @@
+use std.string;
+
+struct Label {
+  pub text: String,
+}
+
+implement Debug : Label {
+  fn debug[W: StrWriter](*const self, out: *W) void {
+    (*out).write_str("Label(");
+    self.text.debug(out);
+    (*out).write_str_single(')');
+  }
+}
+
+fn main() {
+  let ints = [1, 2, 3, 4];
+  @println("{:?}", ints);
+  @println("{:?}", ints[..]);
+
+  let nested = [[1, 2], [3, 4]];
+  @println("{:?}", nested);
+
+  let chars: [5]char = ['h', 'e', 'l', 'l', 'o'];
+  @println("{}", chars);
+  @println("{:?}", chars);
+  @println("{}", chars[..]);
+  @println("{:?}", chars[..]);
+
+  let labels = [
+    Label { .text = String.from("a") },
+    Label { .text = String.from("bb") }
+  ];
+  @println("{:?}", labels);
+
+  let formatted = @format("{:?}", ints[..]);
+  @println("{}", formatted);
+}

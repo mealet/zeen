@@ -7,7 +7,7 @@ use smol_str::SmolStr;
 use zeen_ast::{
     Source,
     expressions::{BinaryOp, Literal, UnaryOp},
-    types::BuiltinShape,
+    types::{BuiltinShape, BuiltinType},
 };
 use zeen_driver::CompilationMode;
 use zeen_hir::{
@@ -35,6 +35,20 @@ use crate::{
     MirProgram, MirStatement, Mutability, Operand, Place, PlaceElem, Rvalue, StructFieldLayout,
     StructLayout, Terminator,
 };
+
+#[derive(Clone)]
+enum FormatSink {
+    Print,
+    String {
+        writer_ty: TypeId,
+        writer_place: Place,
+    },
+}
+
+enum ContainerElements {
+    Array(Place),
+    Slice(Place),
+}
 
 const CLOSURE_SYNTH_BASE: u32 = 1 << 30;
 const CLOSURE_SYNTH_STRIDE: u32 = 1024;
@@ -6362,11 +6376,14 @@ impl<'ctx> MirLowering<'ctx> {
                             let arg = value_exprs.get(value_idx);
                             let ty = arg.map(|a| self.expr_type(fb, a));
                             let err_ty = self.typecheck.interner.error();
-                            let is_struct_display = self
-                                .format_display_target(ty.unwrap_or(err_ty))
+                            let rendered_ty = ty.unwrap_or(err_ty);
+                            let is_container_debug = matches!(spec, FormatSpec::Debug)
+                                && self.container_debug_target(rendered_ty);
+                            let is_struct_display = !is_container_debug
+                                && self.format_display_target(rendered_ty)
                                 && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
 
-                            if is_struct_display {
+                            if is_container_debug || is_struct_display {
                                 if is_panic && !seg_chunks.is_empty() {
                                     block = self.emit_print_segment(
                                         fb,
@@ -6378,22 +6395,32 @@ impl<'ctx> MirLowering<'ctx> {
                                     );
                                 }
 
-                                let iface = match spec {
-                                    FormatSpec::Debug => ("Debug", "debug"),
-                                    _ => ("Display", "display"),
+                                block = if is_container_debug {
+                                    self.lower_container_debug(
+                                        fb,
+                                        arg.expect("format arg"),
+                                        ty.expect("format arg type"),
+                                        &FormatSink::Print,
+                                        block,
+                                        Some(&source),
+                                    )
+                                } else {
+                                    let iface = match spec {
+                                        FormatSpec::Debug => ("Debug", "debug"),
+                                        _ => ("Display", "display"),
+                                    };
+                                    let (block_w, writer_place, writer_ty) =
+                                        self.outstream_writer_operand(fb, block);
+                                    self.lower_struct_display_call(
+                                        fb,
+                                        arg.expect("format arg"),
+                                        ty.expect("format arg type"),
+                                        iface,
+                                        block_w,
+                                        writer_ty,
+                                        writer_place,
+                                    )
                                 };
-                                let (block_w, writer_place, writer_ty) =
-                                    self.outstream_writer_operand(fb, block);
-                                block = block_w;
-                                block = self.lower_struct_display_call(
-                                    fb,
-                                    arg.expect("format arg"),
-                                    ty.expect("format arg type"),
-                                    iface,
-                                    block,
-                                    writer_ty,
-                                    writer_place,
-                                );
 
                                 if is_panic {
                                     seg_chunks.push(FormatChunk::Literal(String::new()));
@@ -6507,10 +6534,14 @@ impl<'ctx> MirLowering<'ctx> {
                         let arg = value_exprs.get(value_idx);
                         let ty = arg.map(|a| self.expr_type(fb, a));
                         let err_ty = self.typecheck.interner.error();
-                        let is_struct_display = self.format_display_target(ty.unwrap_or(err_ty))
+                        let rendered_ty = ty.unwrap_or(err_ty);
+                        let is_container_debug = matches!(spec, FormatSpec::Debug)
+                            && self.container_debug_target(rendered_ty);
+                        let is_struct_display = !is_container_debug
+                            && self.format_display_target(rendered_ty)
                             && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
 
-                        if is_struct_display {
+                        if is_container_debug || is_struct_display {
                             if !seg_chunks.is_empty() {
                                 block = self.emit_print_segment(
                                     fb,
@@ -6522,22 +6553,32 @@ impl<'ctx> MirLowering<'ctx> {
                                 );
                             }
 
-                            let iface = match spec {
-                                FormatSpec::Debug => ("Debug", "debug"),
-                                _ => ("Display", "display"),
+                            block = if is_container_debug {
+                                self.lower_container_debug(
+                                    fb,
+                                    arg.expect("format arg"),
+                                    ty.expect("format arg type"),
+                                    &FormatSink::Print,
+                                    block,
+                                    Some(&source),
+                                )
+                            } else {
+                                let iface = match spec {
+                                    FormatSpec::Debug => ("Debug", "debug"),
+                                    _ => ("Display", "display"),
+                                };
+                                let (block_w, writer_place, writer_ty) =
+                                    self.outstream_writer_operand(fb, block);
+                                self.lower_struct_display_call(
+                                    fb,
+                                    arg.expect("format arg"),
+                                    ty.expect("format arg type"),
+                                    iface,
+                                    block_w,
+                                    writer_ty,
+                                    writer_place,
+                                )
                             };
-                            let (block_w, writer_place, writer_ty) =
-                                self.outstream_writer_operand(fb, block);
-                            block = block_w;
-                            block = self.lower_struct_display_call(
-                                fb,
-                                arg.expect("format arg"),
-                                ty.expect("format arg type"),
-                                iface,
-                                block,
-                                writer_ty,
-                                writer_place,
-                            );
                         } else if let Some(arg) = arg {
                             seg_chunks.push(FormatChunk::Arg(*spec));
                             let (b, op) = self.lower_expr_to_operand(fb, arg, block);
@@ -6693,10 +6734,14 @@ impl<'ctx> MirLowering<'ctx> {
                         let arg = value_exprs.get(value_idx);
                         let ty = arg.map(|a| self.expr_type(fb, a));
                         let err_ty = self.typecheck.interner.error();
-                        let is_struct_display = self.format_display_target(ty.unwrap_or(err_ty))
+                        let rendered_ty = ty.unwrap_or(err_ty);
+                        let is_container_debug = matches!(spec, FormatSpec::Debug)
+                            && self.container_debug_target(rendered_ty);
+                        let is_struct_display = !is_container_debug
+                            && self.format_display_target(rendered_ty)
                             && matches!(spec, FormatSpec::Display | FormatSpec::Debug);
 
-                        if is_struct_display {
+                        if is_container_debug || is_struct_display {
                             if !seg_chunks.is_empty() {
                                 block = self.emit_string_segment(
                                     fb,
@@ -6710,19 +6755,33 @@ impl<'ctx> MirLowering<'ctx> {
                                 );
                             }
 
-                            let iface = match spec {
-                                FormatSpec::Debug => ("Debug", "debug"),
-                                _ => ("Display", "display"),
+                            block = if is_container_debug {
+                                self.lower_container_debug(
+                                    fb,
+                                    arg.expect("format arg"),
+                                    ty.expect("format arg type"),
+                                    &FormatSink::String {
+                                        writer_ty,
+                                        writer_place: writer_place.clone(),
+                                    },
+                                    block,
+                                    Some(&source),
+                                )
+                            } else {
+                                let iface = match spec {
+                                    FormatSpec::Debug => ("Debug", "debug"),
+                                    _ => ("Display", "display"),
+                                };
+                                self.lower_struct_display_call(
+                                    fb,
+                                    arg.expect("format arg"),
+                                    ty.expect("format arg type"),
+                                    iface,
+                                    block,
+                                    writer_ty,
+                                    writer_place.clone(),
+                                )
                             };
-                            block = self.lower_struct_display_call(
-                                fb,
-                                arg.expect("format arg"),
-                                ty.expect("format arg type"),
-                                iface,
-                                block,
-                                writer_ty,
-                                writer_place.clone(),
-                            );
                         } else if let Some(arg) = arg {
                             seg_chunks.push(FormatChunk::Arg(*spec));
                             let (b, op) = self.lower_expr_to_operand(fb, arg, block);
@@ -7233,24 +7292,6 @@ impl<'ctx> MirLowering<'ctx> {
         writer_ty: TypeId,
         writer_place: Place,
     ) -> BlockId {
-        let writer_ptr_ty = self.typecheck.interner.intern(Type::ManyPointer {
-            inner: writer_ty,
-            is_const: false,
-        });
-        let writer_addr_temp = fb.new_temp(writer_ptr_ty);
-        fb.push_stmt(
-            block,
-            MirStatement::Assign {
-                place: Place::from_local(writer_addr_temp),
-                rvalue: Rvalue::Ref {
-                    place: writer_place,
-                    is_const: false,
-                },
-                source: None,
-            },
-        );
-        let writer_operand =
-            self.place_to_operand(Place::from_local(writer_addr_temp), writer_ptr_ty, None);
         let (iface_name, method_name) = iface;
         let inner = match self.typecheck.interner.get(obj_ty).clone() {
             Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
@@ -7278,14 +7319,56 @@ impl<'ctx> MirLowering<'ctx> {
         };
 
         let (block, place) = self.lower_expr_to_place_or_temp(fb, arg, block);
-        let (block, self_operand) = self.lower_place_receiver_operand(
+        self.lower_display_place_call(
             fb,
             place,
             obj_ty,
             method_def,
-            Some(arg.source.clone()),
             block,
+            writer_ty,
+            writer_place,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_display_place_call(
+        &mut self,
+        fb: &mut FnBuilder,
+        place: Place,
+        obj_ty: TypeId,
+        method_def: DefId,
+        block: BlockId,
+        writer_ty: TypeId,
+        writer_place: Place,
+    ) -> BlockId {
+        let writer_ptr_ty = self.typecheck.interner.intern(Type::ManyPointer {
+            inner: writer_ty,
+            is_const: false,
+        });
+        let writer_addr_temp = fb.new_temp(writer_ptr_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(writer_addr_temp),
+                rvalue: Rvalue::Ref {
+                    place: writer_place,
+                    is_const: false,
+                },
+                source: None,
+            },
         );
+        let writer_operand =
+            self.place_to_operand(Place::from_local(writer_addr_temp), writer_ptr_ty, None);
+        let inner = match self.typecheck.interner.get(obj_ty).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+            _ => obj_ty,
+        };
+        let Type::Struct { generic_args, .. } = self.typecheck.interner.get(inner).clone() else {
+            return block;
+        };
+
+        let (block, self_operand) =
+            self.lower_place_receiver_operand(fb, place, obj_ty, method_def, None, block);
 
         let method_has_generics = !self.hir_fns_by_def[&method_def].generics.is_empty();
         let mut mono_args = self.substitute_generic_args(fb, &generic_args);
@@ -7318,6 +7401,310 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         next
+    }
+
+    fn container_debug_target(&self, ty: TypeId) -> bool {
+        let mut ty = ty;
+
+        loop {
+            match self.typecheck.interner.get(ty).clone() {
+                Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => ty = inner,
+                Type::Array { element, .. } | Type::Slice { element, .. } => {
+                    return !matches!(
+                        self.typecheck.interner.get(element).clone(),
+                        Type::Builtin(BuiltinType::char)
+                    );
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    fn lower_container_debug(
+        &mut self,
+        fb: &mut FnBuilder,
+        arg: &HirExpr,
+        ty: TypeId,
+        sink: &FormatSink,
+        block: BlockId,
+        source: Option<&Source>,
+    ) -> BlockId {
+        let (block, place) = self.lower_expr_to_place_or_temp(fb, arg, block);
+        self.lower_container_debug_place(fb, place, ty, sink, block, source)
+    }
+
+    fn lower_container_debug_place(
+        &mut self,
+        fb: &mut FnBuilder,
+        place: Place,
+        ty: TypeId,
+        sink: &FormatSink,
+        block: BlockId,
+        source: Option<&Source>,
+    ) -> BlockId {
+        let mut place = place;
+        let mut ty = ty;
+
+        while let Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } =
+            self.typecheck.interner.get(ty).clone()
+        {
+            place = place.deref();
+            ty = inner;
+        }
+
+        let usize_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(BuiltinType::usize));
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(BuiltinType::bool));
+
+        let (element_ty, elements, len_rvalue) = match self.typecheck.interner.get(ty).clone() {
+            Type::Array { element, len } => {
+                let len = len.expect("format array length must be known");
+
+                (
+                    element,
+                    ContainerElements::Array(place),
+                    Operand::Constant(ConstValue::Int(len as i128), None),
+                )
+            }
+            Type::Slice { element, .. } => {
+                let len_place = place.clone().field(SLICE_LEN_FIELD);
+
+                (
+                    element,
+                    ContainerElements::Slice(place),
+                    Operand::Copy(len_place, None),
+                )
+            }
+            _ => unreachable!("container debug target must be an array or slice"),
+        };
+
+        let len_local = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(len_local),
+                rvalue: Rvalue::Use(len_rvalue),
+                source: source.cloned(),
+            },
+        );
+
+        let counter = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(0), None)),
+                source: None,
+            },
+        );
+
+        let block = self.emit_sink_literal(fb, sink, "[", block, source);
+        let header = fb.new_block();
+        fb.set_terminator(block, Terminator::Goto(header));
+
+        let in_range = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            header,
+            MirStatement::Assign {
+                place: Place::from_local(in_range),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Lt,
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Copy(Place::from_local(len_local), None),
+                },
+                source: None,
+            },
+        );
+
+        let body = fb.new_block();
+        let done = fb.new_block();
+        let separator = fb.new_block();
+
+        fb.set_terminator(
+            header,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(in_range), None),
+                targets: vec![(1, body)],
+                otherwise: done,
+            },
+        );
+
+        let element_place = match elements {
+            ContainerElements::Array(place) => place.index(counter),
+            ContainerElements::Slice(place) => place.field(SLICE_PTR_FIELD).index(counter),
+        };
+
+        let body_end = self.emit_debug_element(fb, sink, element_place, element_ty, body, source);
+
+        let incremented = fb.new_temp(usize_ty);
+        fb.push_stmt(
+            body_end,
+            MirStatement::Assign {
+                place: Place::from_local(incremented),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Add,
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Constant(ConstValue::Int(1), None),
+                },
+                source: None,
+            },
+        );
+        fb.push_stmt(
+            body_end,
+            MirStatement::Assign {
+                place: Place::from_local(counter),
+                rvalue: Rvalue::Use(Operand::Move(Place::from_local(incremented), None)),
+                source: None,
+            },
+        );
+
+        let has_next = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            body_end,
+            MirStatement::Assign {
+                place: Place::from_local(has_next),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Lt,
+                    lhs: Operand::Copy(Place::from_local(counter), None),
+                    rhs: Operand::Copy(Place::from_local(len_local), None),
+                },
+                source: None,
+            },
+        );
+        fb.set_terminator(
+            body_end,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(has_next), None),
+                targets: vec![(1, separator)],
+                otherwise: header,
+            },
+        );
+
+        let separator_end = self.emit_sink_literal(fb, sink, ", ", separator, source);
+        fb.set_terminator(separator_end, Terminator::Goto(header));
+
+        self.emit_sink_literal(fb, sink, "]", done, source)
+    }
+
+    fn emit_debug_element(
+        &mut self,
+        fb: &mut FnBuilder,
+        sink: &FormatSink,
+        place: Place,
+        ty: TypeId,
+        block: BlockId,
+        source: Option<&Source>,
+    ) -> BlockId {
+        if self.container_debug_target(ty) {
+            return self.lower_container_debug_place(fb, place, ty, sink, block, source);
+        }
+
+        if self.format_display_target(ty) {
+            let inner = match self.typecheck.interner.get(ty).clone() {
+                Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+                _ => ty,
+            };
+            let Type::Struct {
+                def_id,
+                generic_args,
+            } = self.typecheck.interner.get(inner).clone()
+            else {
+                return block;
+            };
+
+            let Some(method_def) =
+                self.resolve_interface_method(def_id, "Debug", "debug", &generic_args)
+            else {
+                return block;
+            };
+
+            let (block, writer_place, writer_ty) = match sink {
+                FormatSink::Print => self.outstream_writer_operand(fb, block),
+                FormatSink::String {
+                    writer_ty,
+                    writer_place,
+                } => (block, writer_place.clone(), *writer_ty),
+            };
+
+            return self.lower_display_place_call(
+                fb,
+                place,
+                ty,
+                method_def,
+                block,
+                writer_ty,
+                writer_place,
+            );
+        }
+
+        let operand = self.place_to_operand(place, ty, source.cloned());
+        self.emit_sink_arg(fb, sink, operand, ty, block, source)
+    }
+
+    fn emit_sink_literal(
+        &mut self,
+        fb: &mut FnBuilder,
+        sink: &FormatSink,
+        text: &str,
+        block: BlockId,
+        source: Option<&Source>,
+    ) -> BlockId {
+        let chunks = vec![FormatChunk::Literal(text.to_string())];
+
+        match sink {
+            FormatSink::Print => {
+                self.emit_print_segment(fb, chunks, Vec::new(), Vec::new(), block, source)
+            }
+            FormatSink::String {
+                writer_ty,
+                writer_place,
+            } => self.emit_string_segment(
+                fb,
+                chunks,
+                Vec::new(),
+                Vec::new(),
+                *writer_ty,
+                writer_place.clone(),
+                block,
+                source,
+            ),
+        }
+    }
+
+    fn emit_sink_arg(
+        &mut self,
+        fb: &mut FnBuilder,
+        sink: &FormatSink,
+        operand: Operand,
+        ty: TypeId,
+        block: BlockId,
+        source: Option<&Source>,
+    ) -> BlockId {
+        let chunks = vec![FormatChunk::Arg(FormatSpec::Debug)];
+
+        match sink {
+            FormatSink::Print => {
+                self.emit_print_segment(fb, chunks, vec![operand], vec![ty], block, source)
+            }
+            FormatSink::String {
+                writer_ty,
+                writer_place,
+            } => self.emit_string_segment(
+                fb,
+                chunks,
+                vec![operand],
+                vec![ty],
+                *writer_ty,
+                writer_place.clone(),
+                block,
+                source,
+            ),
+        }
     }
 
     fn resolve_outstream(&mut self) -> Option<(TypeId, DefId)> {
