@@ -20,7 +20,7 @@ Found a bug? Wanna suggest an improvement? You can always open an issue in this 
 1. Fork the repository and branch from `main`, then clone your fork and crate a new branch:
 ```bash
 # Clone
-git clone https://github.com/___/zeen.git
+git clone https://github.com/YOU/zeen.git
 cd zeen
 
 # Switch to main branch
@@ -52,6 +52,14 @@ repo:       - Repository update (README, LICENSE, templates and etc.)
 ```
 git commit --signoff
 ```
+
+## AI Usage
+The use of AI tools and coding agents is allowed and welcome. However, contributors are expected
+to understand, review, and take responsibility for all submitted code, regardless of how it was produced.
+
+AI generated contributions are subject to the same quality standards as any other contribution.
+Do not submit code you cannot explain, verify, or maintain. Contributions must not compromise the
+project's stability, security, or maintainability.
 
 ### Pull Requests
 > [!NOTE]
