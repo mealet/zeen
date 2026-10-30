@@ -53,7 +53,7 @@ repo:       - Repository update (README, LICENSE, templates and etc.)
 git commit --signoff
 ```
 
-## AI Usage
+### AI Usage
 The use of AI tools and coding agents is allowed and welcome. However, contributors are expected
 to understand, review, and take responsibility for all submitted code, regardless of how it was produced.
 
