@@ -1,0 +1,37 @@
+struct Point {
+    x: i32,
+    factor: f64,
+}
+
+implement Debug : Point {
+    fn debug[W: StrWriter](*const self, out: *W) void {
+        out.write_str("Point(");
+        (*self).x.debug(out);
+        out.write_str(", ");
+        (*self).factor.debug(out);
+        out.write_str(")");
+    }
+}
+
+struct Wrap[T] {
+    value: T,
+}
+
+implement[T: Debug] Debug : Wrap[T] {
+    fn debug[W: StrWriter](*const self, out: *W) void {
+        out.write_str("Wrap(");
+        self.value.debug(out);
+        out.write_str(")");
+    }
+}
+
+fn main() {
+    let point = Point { .x = 5, .factor = 1.5 };
+    @println("{:?}", point);
+    @println("{}", @format("{:?}", point));
+
+    let ints = Wrap { .value = 41 };
+    let floats = Wrap { .value = 2.5 };
+    @println("{:?}", ints);
+    @println("{}", @format("{:?}", floats));
+}

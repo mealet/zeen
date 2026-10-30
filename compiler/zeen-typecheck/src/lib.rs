@@ -5354,28 +5354,50 @@ impl<'res> TypeChecker<'res> {
                                 if mname != field_str {
                                     continue;
                                 }
-                                let (sig_params_len, sig_ret) = {
+                                let (sig_params, sig_ret, sig_generics) = {
                                     let Some(sig) = self.fn_sigs.get(&method_def) else {
                                         panic!("interface method sig missing for {}", mname);
                                     };
-                                    (sig.params.len(), sig.ret)
+                                    (sig.params.clone(), sig.ret, sig.generics.clone())
                                 };
-                                if args.len() != sig_params_len - 1 {
+                                let expected = sig_params.len() - 1;
+                                if args.len() != expected {
                                     self.report(TypeError::ArgCountMismatch {
-                                        expected: sig_params_len - 1,
+                                        expected,
                                         found: args.len(),
                                         src: source.src(),
                                         span: source.span,
                                     });
                                 }
+                                let recv_ty = self.result.interner.builtin(builtin_ty);
+                                let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+                                for (param_ty, arg) in sig_params.iter().skip(1).zip(args.iter()) {
+                                    let param_ty = self.substitute_self(*param_ty, recv_ty);
+                                    self.infer_or_check_arg(
+                                        param_ty,
+                                        arg,
+                                        &mut bindings,
+                                        source.clone(),
+                                    );
+                                }
+                                let resolved_generic_args: Vec<TypeId> = sig_generics
+                                    .iter()
+                                    .map(|g| {
+                                        bindings
+                                            .get(g)
+                                            .copied()
+                                            .unwrap_or_else(|| self.result.interner.error())
+                                    })
+                                    .collect();
                                 self.result.call_resolutions.insert(
                                     call_id,
                                     crate::result::CallResolution {
                                         fn_def: method_def,
-                                        generic_args: Vec::new(),
+                                        generic_args: resolved_generic_args,
                                     },
                                 );
-                                return Some(sig_ret);
+                                let ret = self.substitute_generics(sig_ret, &bindings);
+                                return Some(self.substitute_self(ret, recv_ty));
                             }
                         }
                     }
@@ -9366,6 +9388,55 @@ mod tests {
         assert!(
             result.is_ok(),
             "builtin method with a receiver must typecheck"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_method_arguments_are_checked() {
+        let result = typecheck_full(
+            r#"
+            struct Point {
+                x: i32,
+            }
+
+            implement Debug : Point {
+                fn debug[W: StrWriter](*const self, out: *W) void {
+                    out.write_str_single('(');
+                    (*self).x.debug(out);
+                    out.write_str_single(')');
+                }
+            }
+
+            fn main() {
+                let p = Point { .x = 1 };
+                let copy = p;
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "builtin interface method arguments must typecheck"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_method_argument_mismatch_is_error() {
+        let errors = typecheck_full(
+            r#"
+            fn main() {
+                let n: i32 = 4;
+                n.debug(123);
+            }
+            "#,
+        )
+        .expect_err("mismatched writer argument must be an error");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::Mismatch { .. })),
+            "expected Mismatch error, got: {errors:?}"
         );
     }
 
