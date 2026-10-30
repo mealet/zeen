@@ -34,8 +34,19 @@ See examples, installation and documentation at: [zeen-lang.tech](https://zeen-l
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
-contribution guide.
+Contributions are welcome! Before contributing, please read our
+[Contributing Guide](CONTRIBUTING.md) and
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+By participating in the Zeen project, you agree to follow our community
+guidelines.
+
+## Security
+
+If you discover a security vulnerability, please report it privately.
+
+See our [Security Policy](SECURITY.md) for instructions on reporting
+vulnerabilities.
 
 ## License
 
