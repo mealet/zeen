@@ -770,7 +770,10 @@ pub fn dot_complete(
     let mut type_name: Option<String> = None;
     let mut raw_type: Option<String> = None;
 
-    if let Some(rendered) = analysis.access_types.get(&(start, dot_offset - start)) {
+    if crate::builtin::is_scalar_type_name(receiver_name) {
+        static_context = Some(true);
+        type_name = Some(receiver_name.to_string());
+    } else if let Some(rendered) = analysis.access_types.get(&(start, dot_offset - start)) {
         raw_type = Some(rendered.clone());
 
         if let Some(ty) = normalize_type_name(rendered) {
@@ -3201,6 +3204,23 @@ mod tests {
             .find(|item| item.label == "max_value()")
             .unwrap();
         assert_eq!(max.kind, Some(CompletionItemKind::FUNCTION));
+    }
+
+    #[test]
+    fn builtin_static_dot_completes_from_stale_analysis() {
+        const STALE: &str = "implement builtin i32 {\n    pub fn max_value() i32 {\n        return 2147483647;\n    }\n}\n\nfn main() {\n    let n: i32 = 4;\n    let x = n;\n}\n";
+        const CURRENT: &str = "fn main() {\n    let x = i32.;\n}\n";
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-stale-static.zn"
+                .parse()
+                .unwrap();
+        let output = crate::diagnostics::check(&uri, STALE, &[]);
+        let dot = CURRENT.find("i32.").unwrap() + "i32".len();
+        let items = dot_complete(CURRENT, &output.analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["max_value()"]);
     }
 
     const BUILTIN_SLICE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n\n    fn first(*const self) Option[T] {\n        return Option.Some((*self)[0]);\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{} {}\", slice.count(), slice.first().unwrap());\n}\n";

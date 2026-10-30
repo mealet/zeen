@@ -1,5 +1,24 @@
 use zeen_ast::types::BuiltinShape;
 
+pub(crate) fn is_scalar_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "usize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+    )
+}
+
 pub(crate) fn strip_pointer_wrappers(ty: &str) -> &str {
     let mut name = ty.trim();
 
