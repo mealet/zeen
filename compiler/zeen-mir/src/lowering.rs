@@ -6369,6 +6369,15 @@ impl<'ctx> MirLowering<'ctx> {
             return self.lower_format_macro(fb, format_chunks, value_exprs, hir_id, block, source);
         }
 
+        if matches!(kind, HirMacroKind::Dbg)
+            && let Some(arg) = value_exprs.first()
+        {
+            let ty = self.expr_type(fb, arg);
+            if self.container_debug_target(ty) {
+                return self.lower_container_dbg_macro(fb, arg, ty, block, source);
+            }
+        }
+
         let mut block = block;
         let mut operands = Vec::with_capacity(value_exprs.len());
         let mut arg_types = Vec::with_capacity(value_exprs.len());
@@ -6538,6 +6547,53 @@ impl<'ctx> MirLowering<'ctx> {
                 self.place_to_operand(Place::from_local(dest), result_ty, None),
             )
         }
+    }
+
+    fn lower_container_dbg_macro(
+        &mut self,
+        fb: &mut FnBuilder,
+        arg: &HirExpr,
+        ty: TypeId,
+        block: BlockId,
+        source: Source,
+    ) -> (BlockId, Operand) {
+        let prefix = Self::dbg_prefix_text(&source);
+        let mut block =
+            self.emit_sink_literal(fb, &FormatSink::Print, &prefix, block, Some(&source));
+
+        let (block_value, operand) = self.lower_expr_to_operand(fb, arg, block);
+
+        if let Operand::Copy(place, _) | Operand::Move(place, _) = &operand {
+            block = self.lower_container_debug_place(
+                fb,
+                place.clone(),
+                ty,
+                &FormatSink::Print,
+                block_value,
+                Some(&source),
+            );
+        } else {
+            block = block_value;
+        }
+
+        block = self.emit_sink_literal(fb, &FormatSink::Print, "\n", block, Some(&source));
+
+        (block, operand)
+    }
+
+    fn dbg_prefix_text(source: &Source) -> String {
+        let call = source.text();
+        let inner = call
+            .strip_prefix("@dbg(")
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(call);
+
+        format!(
+            "[{}:{}]> `{}` = ",
+            source.src.name(),
+            source.line_number(),
+            inner
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

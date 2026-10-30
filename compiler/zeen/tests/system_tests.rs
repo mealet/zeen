@@ -222,6 +222,45 @@ fn run_test_case_in_mode(
 }
 
 #[test]
+fn dbg_macro_prints_containers() -> anyhow::Result<()> {
+    let binary_path =
+        std::env::temp_dir().join(format!("zeen-test-dbg-container-{}", std::process::id()));
+    let binary_path_str = binary_path.to_str().unwrap();
+
+    Command::cargo_bin(env!("CARGO_PKG_NAME"))?
+        .arg("tests/test_cases/dbg_container.zn")
+        .arg(binary_path_str)
+        .args(["-m", "Debug", "--std"])
+        .arg(std_dir())
+        .assert()
+        .success();
+
+    let debug_output = run_binary(binary_path_str);
+    let _ = fs::remove_file(&binary_path);
+    assert_eq!(
+        String::from_utf8_lossy(&debug_output.stdout),
+        "[dbg_container.zn:6]> `a` = [1, 2, 3, 4]\n\
+         [dbg_container.zn:7]> `s` = [1, 2, 3, 4]\n\
+         [dbg_container.zn:8]> `p` = [1, 2, 3, 4]\n\
+         [dbg_container.zn:9]> `3` = 3\n"
+    );
+
+    Command::cargo_bin(env!("CARGO_PKG_NAME"))?
+        .arg("tests/test_cases/dbg_container.zn")
+        .arg(binary_path_str)
+        .args(["-m", "Release", "--std"])
+        .arg(std_dir())
+        .assert()
+        .success();
+
+    let release_output = run_binary(binary_path_str);
+    let _ = fs::remove_file(&binary_path);
+    assert_eq!(String::from_utf8_lossy(&release_output.stdout), "");
+
+    Ok(())
+}
+
+#[test]
 fn golden_system_tests() -> anyhow::Result<()> {
     let test_cases = discover_test_cases();
     let tests_count = test_cases.len();

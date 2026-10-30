@@ -1,0 +1,10 @@
+fn main() {
+  let a: [4]i32 = [1, 2, 3, 4];
+  let s: []i32 = a[..];
+  let p: *[4]i32 = &a;
+
+  let _ = @dbg(a);
+  let _ = @dbg(s);
+  let _ = @dbg(p);
+  let _ = @dbg(3);
+}
