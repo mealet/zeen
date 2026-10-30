@@ -1,14 +1,14 @@
 Hello! Thank you for your interest in the project's life.
 Here's the contribution guide for you:
 
-### Repository Issues
+## Repository Issues
 Found a bug? Wanna suggest an improvement? You can always open an issue in this repository:
 1. Open repo's [issues](https://github.com/mealet/zeen/issues)
 2. Please ensure that your problem/improvement wasn't already reported (use search)
 3. Push the button `New issue`
 4. Use one of suggested templates and follow their instructions
 
-### Submitting Changes
+## Submitting Changes
 
 > [!NOTE]
 > Project uses `justfile` for faster development recipes, so its highly recommended to install [just](https://github.com/casey/just)
@@ -48,12 +48,15 @@ lib/std     |
 repo:       - Repository update (README, LICENSE, templates and etc.)
 ```
 
-3. Commit your changes with `--signoff` flag:
+3. Commit and push your changes:
+```bash
+git push -u origin NEW_BRANCH
 ```
-git commit --signoff
-```
+4. Open pull request at https://github.com/mealet/zeen/pulls
 
-### AI Usage
+_Contributions are accepted under the project's license (see [LICENSE](LICENSE))_
+
+## AI Usage
 The use of AI tools and coding agents is allowed and welcome. However, contributors are expected
 to understand, review, and take responsibility for all submitted code, regardless of how it was produced.
 
@@ -61,7 +64,7 @@ AI generated contributions are subject to the same quality standards as any othe
 Do not submit code you cannot explain, verify, or maintain. Contributions must not compromise the
 project's stability, security, or maintainability.
 
-### Pull Requests
+## Pull Requests
 > [!NOTE]
 > ### Ensure that
 > - your code matches the project's code style
@@ -76,7 +79,7 @@ project's stability, security, or maintainability.
 > - Provide related unit tests for the changes
 > - Provide short description of your work in pull request
 
-### Tests
+## Tests
 All tests are run from the `compiler/` directory with `just test` (uses cargo-nextest if installed, otherwise falls back to `cargo test`). <br/>
 It is used to ensure that your changes don't break other program pieces.
 
@@ -84,7 +87,7 @@ Tests are the most important part of contribution, so always be sure that you've
 - Rust Tests Guide: [Cargo Tests Guide](https://doc.rust-lang.org/cargo/guide/tests.html)
 - Golden system tests live in `compiler/zeen/tests/test_cases/`: each case is a pair of `.zn` + `.expected` files. Expected file is the expected stdout (with optional first line `@! <exit-code> free-output`), compiled and run in both Debug and Release by `compiler/zeen/tests/system_tests.rs`
 
-### Building
+## Building
 1. Install the [Rust Programming Language](https://www.rust-lang.org/) and [LLVM 22](https://www.llvm.org/docs/GettingStarted.html)
 2. Clone the repository:
 ```sh
