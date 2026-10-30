@@ -2854,15 +2854,24 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
             return false;
         };
 
-        let is_debug = {
+        let owner_name = {
             let source_def = self.program.functions[&fn_id].source_def;
             self.typecheck
                 .interface_method_owners
                 .get(&source_def)
                 .and_then(|iface| self.resolution.defs.get(iface))
-                .map(|info| self.resolve_spur(info.name) == "Debug")
-                .unwrap_or(false)
+                .map(|info| self.resolve_spur(info.name))
         };
+
+        let Some(owner_name) = owner_name else {
+            return false;
+        };
+
+        if owner_name != "Display" && owner_name != "Debug" {
+            return false;
+        }
+
+        let is_debug = owner_name == "Debug";
 
         let recv_ty = match self.operand_type(recv, func) {
             Some(ty) => ty,

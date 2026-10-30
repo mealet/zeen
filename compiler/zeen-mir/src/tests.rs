@@ -1884,6 +1884,35 @@ fn printed_mir_renders_builtin_shape_method_calls() {
 }
 
 #[test]
+fn printed_mir_renders_builtin_interface_ops() {
+    let printed = print_mir_ok(
+        "fn main() { \
+             let a: i32 = 3; \
+             let b: i32 = 4; \
+             @println(\"{}\", a.eq(&b)); \
+             @println(\"{:?}\", a.cmp(&b)); \
+             @println(\"{}\", a.add(b)); \
+             @println(\"{}\", a.neg()); \
+             @println(\"{}\", a.bit_not()); \
+             @println(\"{}\", true.not()); \
+         }",
+    );
+
+    assert!(printed.contains("= Eq("), "{printed}");
+    assert!(printed.contains("= Lt("), "{printed}");
+    assert!(printed.contains("= Add("), "{printed}");
+    assert!(printed.contains("= Neg("), "{printed}");
+    assert!(printed.contains("= BitNot("), "{printed}");
+    assert!(printed.contains("= Not("), "{printed}");
+    assert!(!printed.contains("= eq("), "{printed}");
+    assert!(!printed.contains("= cmp("), "{printed}");
+    assert!(!printed.contains("= add("), "{printed}");
+    assert!(!printed.contains("= neg("), "{printed}");
+    assert!(!printed.contains("= bit_not("), "{printed}");
+    assert!(!printed.contains("= not("), "{printed}");
+}
+
+#[test]
 fn printed_mir_renders_enum_constructs() {
     let printed = print_mir_ok(
         "enum Shape { dot, rect: i32 } \

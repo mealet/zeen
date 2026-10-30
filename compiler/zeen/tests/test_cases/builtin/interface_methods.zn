@@ -1,0 +1,75 @@
+struct Point {
+  pub x: i32,
+  pub y: i32,
+}
+
+fn rank(left: i32, right: i32) i32 {
+  return switch (left.cmp(&right)) {
+    .Less => 0,
+    .Equal => 1,
+    .Greater => 2,
+  };
+}
+
+fn same[T: Eq](a: *const T, b: *const T) bool {
+  return (*a).eq(b);
+}
+
+fn sum[T: Display + Add + Sub + Mul](a: T, b: T) T {
+  @println("generic: {} {} {}", a.add(b), a.sub(b), a.mul(b));
+  return a.add(b).mul(b);
+}
+
+fn main() {
+  let a: i32 = 12;
+  let b: i32 = 5;
+
+  @println("eq: {}", a.eq(&b));
+  @println("eq self: {}", a.eq(&a));
+  @println("cmp: {} {} {}", rank(a, b), rank(a, a), rank(b, a));
+
+  @println("add: {}", a.add(b));
+  @println("sub: {}", a.sub(b));
+  @println("mul: {}", a.mul(b));
+  @println("div: {}", a.div(b));
+  @println("mod: {}", a.mod(b));
+  @println("and: {}", a.bit_and(b));
+  @println("or: {}", a.bit_or(b));
+  @println("xor: {}", a.bit_xor(b));
+  @println("shl: {}", a.bit_shl(b));
+  @println("shr: {}", a.bit_shr(b));
+  @println("neg: {}", a.neg());
+  @println("bitnot: {}", a.bit_not());
+  @println("not: {}", true.not());
+
+  let x: f64 = 2.5;
+  let y: f64 = 1.5;
+  @println("float eq: {}", x.eq(&y));
+  @println("float cmp: {}", switch (x.cmp(&y)) {
+    .Less => 0,
+    .Equal => 1,
+    .Greater => 2,
+  });
+  @println("float add: {}", x.add(y));
+  @println("float div: {}", x.div(y));
+  @println("float neg: {}", x.neg());
+
+  let p = Point { .x = 3, .y = 9 };
+  @println("field eq: {}", p.x.eq(&p.y));
+  @println("field rank: {}", rank(p.x, p.y));
+
+  @println("same: {}", same(&a, &a));
+  @println("generic: {}", sum(a, b));
+
+  let formatted = @format("format: {}", b.sub(a));
+  @println("{}", formatted);
+
+  let bytes: u8 = 200;
+  let step: u8 = 100;
+  @println("wrapped: {}", bytes.add(step));
+
+  @println("literal eq: {}", 4.eq(&5));
+  @println("literal add: {}", 4.add(5));
+  @println("literal float: {}", 1.5.add(2.5));
+  @println("literal neg: {}", 4.neg());
+}

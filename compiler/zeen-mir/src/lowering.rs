@@ -4075,6 +4075,18 @@ impl<'ctx> MirLowering<'ctx> {
                     ) {
                         return chain;
                     }
+                    if let Some(chain) = self.try_lower_builtin_interface_op(
+                        fb,
+                        block,
+                        &object,
+                        recv_ty,
+                        fn_def,
+                        args,
+                        expr,
+                        Some(expr.source.clone()),
+                    ) {
+                        return chain;
+                    }
                     let (b, self_operand) = self.lower_receiver_operand(fb, &object, fn_def, block);
                     block = b;
                     arg_operands.push(self_operand);
@@ -6136,15 +6148,39 @@ impl<'ctx> MirLowering<'ctx> {
 
         let result_ty = self.expr_type(fb, expr);
         let rhs_ty = self.expr_type(fb, rhs);
+
+        self.lower_binary_operands(
+            fb,
+            block,
+            lhs_op,
+            rhs_op,
+            op,
+            result_ty,
+            rhs_ty,
+            Some(expr.source.clone()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_binary_operands(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        lhs_op: Operand,
+        rhs_op: Operand,
+        op: BinaryOp,
+        result_ty: TypeId,
+        rhs_ty: TypeId,
+        source: Option<Source>,
+    ) -> (BlockId, Operand) {
         let is_float_div = self.is_float_ty(rhs_ty);
 
         let (block, rhs_op) = if matches!(op, BinaryOp::Div | BinaryOp::Mod) && !is_float_div {
             let rhs_local = self.operand_to_local(fb, rhs_op, rhs_ty, block);
-            let block =
-                self.lower_div_zero_check(fb, block, rhs_local, rhs_ty, Some(expr.source.clone()));
+            let block = self.lower_div_zero_check(fb, block, rhs_local, rhs_ty, source.clone());
             (
                 block,
-                Operand::Copy(Place::from_local(rhs_local), Some(expr.source.clone())),
+                Operand::Copy(Place::from_local(rhs_local), source.clone()),
             )
         } else {
             (block, rhs_op)
@@ -6161,14 +6197,11 @@ impl<'ctx> MirLowering<'ctx> {
                     lhs: lhs_op,
                     rhs: rhs_op,
                 },
-                source: Some(expr.source.clone()),
+                source: source.clone(),
             },
         );
 
-        (
-            block,
-            Operand::Move(Place::from_local(temp), Some(expr.source.clone())),
-        )
+        (block, Operand::Move(Place::from_local(temp), source))
     }
 
     fn lower_short_circuit(
@@ -7231,6 +7264,270 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         Some((block, Operand::Move(Place::from_local(dest), source)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn try_lower_builtin_interface_op(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        object: &Rc<HirExpr>,
+        recv_ty: TypeId,
+        fn_def: DefId,
+        args: &[Rc<HirExpr>],
+        expr: &HirExpr,
+        source: Option<Source>,
+    ) -> Option<(BlockId, Operand)> {
+        if self.is_user_builtin_method(fn_def) {
+            return None;
+        }
+
+        let iface_def = self
+            .typecheck
+            .interface_method_owners
+            .get(&fn_def)
+            .copied()?;
+
+        let (iface_name, method_name) = {
+            let rodeo = self.rodeo.borrow();
+            let iface = rodeo
+                .resolve(&self.resolution.defs.get(&iface_def)?.name)
+                .to_string();
+            let method = rodeo
+                .resolve(&self.resolution.defs.get(&fn_def)?.name)
+                .to_string();
+            (iface, method)
+        };
+
+        let unary = match (iface_name.as_str(), method_name.as_str()) {
+            ("Neg", "neg") => Some(UnaryOp::Neg),
+            ("Not", "not") => Some(UnaryOp::Not),
+            ("BitNot", "bit_not") => Some(UnaryOp::BitNot),
+            _ => None,
+        };
+
+        let binary = match (iface_name.as_str(), method_name.as_str()) {
+            ("Eq", "eq") => Some(BinaryOp::Eq),
+            ("Add", "add") => Some(BinaryOp::Add),
+            ("Sub", "sub") => Some(BinaryOp::Sub),
+            ("Mul", "mul") => Some(BinaryOp::Mul),
+            ("Div", "div") => Some(BinaryOp::Div),
+            ("Mod", "mod") => Some(BinaryOp::Mod),
+            ("BitAnd", "bit_and") => Some(BinaryOp::BitAnd),
+            ("BitOr", "bit_or") => Some(BinaryOp::BitOr),
+            ("BitXor", "bit_xor") => Some(BinaryOp::BitXor),
+            ("BitShl", "bit_shl") => Some(BinaryOp::Shl),
+            ("BitShr", "bit_shr") => Some(BinaryOp::Shr),
+            _ => None,
+        };
+
+        let ordering = iface_name == "Ord" && method_name == "cmp";
+
+        if unary.is_none() && binary.is_none() && !ordering {
+            return None;
+        }
+
+        let recv_sub = self.substitute_fn_type(fb, recv_ty);
+        let recv_is_pointer = matches!(
+            self.typecheck.interner.get(recv_sub),
+            Type::Pointer { .. } | Type::ManyPointer { .. }
+        );
+        let raw_value_ty = match self.typecheck.interner.get(recv_sub).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+            _ => recv_sub,
+        };
+        let value_ty = match self.typecheck.interner.get(raw_value_ty).clone() {
+            Type::Builtin(_) => raw_value_ty,
+            Type::IntLiteral => self
+                .typecheck
+                .interner
+                .intern(Type::Builtin(zeen_ast::types::BuiltinType::i32)),
+            Type::FloatLiteral => self
+                .typecheck
+                .interner
+                .intern(Type::Builtin(zeen_ast::types::BuiltinType::f64)),
+            _ => return None,
+        };
+
+        let (block, place) = self.lower_expr_to_place_or_temp(fb, object, block);
+        let value_place = if recv_is_pointer {
+            place.deref()
+        } else {
+            place
+        };
+
+        if let Some(op) = unary {
+            let operand = self.place_to_operand(value_place, value_ty, source.clone());
+            let temp = fb.new_temp(value_ty);
+            fb.push_stmt(
+                block,
+                MirStatement::Assign {
+                    place: Place::from_local(temp),
+                    rvalue: Rvalue::UnaryOp { op, operand },
+                    source: source.clone(),
+                },
+            );
+            return Some((block, Operand::Move(Place::from_local(temp), source)));
+        }
+
+        let arg = args.first()?;
+        let raw_arg_ty = self.expr_type(fb, arg);
+        let arg_ty = self.substitute_fn_type(fb, raw_arg_ty);
+        let (block, arg_place) = self.lower_expr_to_place_or_temp(fb, arg, block);
+        let (arg_place, arg_value_ty) = match self.typecheck.interner.get(arg_ty).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
+                (arg_place.deref(), inner)
+            }
+            _ => (arg_place, arg_ty),
+        };
+        let rhs_ty = match self.typecheck.interner.get(arg_value_ty).clone() {
+            Type::IntLiteral => self
+                .typecheck
+                .interner
+                .intern(Type::Builtin(zeen_ast::types::BuiltinType::i32)),
+            Type::FloatLiteral => self
+                .typecheck
+                .interner
+                .intern(Type::Builtin(zeen_ast::types::BuiltinType::f64)),
+            _ => arg_value_ty,
+        };
+        let rhs_op = self.place_to_operand(arg_place, rhs_ty, source.clone());
+
+        let lhs_op = self.place_to_operand(value_place, value_ty, source.clone());
+
+        if ordering {
+            return self.lower_builtin_ordering(fb, block, lhs_op, rhs_op, value_ty, expr, source);
+        }
+
+        let op = binary?;
+        let raw_result_ty = self.expr_type(fb, expr);
+        let raised_ty = self.substitute_fn_type(fb, raw_result_ty);
+        let result_ty = match self.typecheck.interner.get(raised_ty) {
+            Type::Builtin(_) => raised_ty,
+            _ => value_ty,
+        };
+
+        Some(self.lower_binary_operands(fb, block, lhs_op, rhs_op, op, result_ty, rhs_ty, source))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_builtin_ordering(
+        &mut self,
+        fb: &mut FnBuilder,
+        block: BlockId,
+        lhs: Operand,
+        rhs: Operand,
+        value_ty: TypeId,
+        expr: &HirExpr,
+        source: Option<Source>,
+    ) -> Option<(BlockId, Operand)> {
+        let raw_result_ty = self.expr_type(fb, expr);
+        let result_ty = self.substitute_fn_type(fb, raw_result_ty);
+        let Type::Enum {
+            def_id: ordering_def,
+            ..
+        } = self.typecheck.interner.get(result_ty).clone()
+        else {
+            return None;
+        };
+
+        let variants = self.typecheck.enum_info.get(&ordering_def)?.clone();
+        let variant_tag = |name: &str| {
+            let rodeo = self.rodeo.borrow();
+            variants
+                .variants
+                .iter()
+                .find(|v| rodeo.resolve(&v.name) == name)
+                .map(|v| v.def_id)
+        };
+        let less_variant = variant_tag("Less")?;
+        let equal_variant = variant_tag("Equal")?;
+        let greater_variant = variant_tag("Greater")?;
+
+        let less_tag = self.enum_variant_tag(ordering_def, less_variant) as i128;
+        let equal_tag = self.enum_variant_tag(ordering_def, equal_variant) as i128;
+        let greater_tag = self.enum_variant_tag(ordering_def, greater_variant) as i128;
+
+        let bool_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::bool));
+
+        let lhs_local = self.operand_to_local(fb, lhs, value_ty, block);
+        let rhs_local = self.operand_to_local(fb, rhs, value_ty, block);
+        let lhs_copy = || Operand::Copy(Place::from_local(lhs_local), None);
+        let rhs_copy = || Operand::Copy(Place::from_local(rhs_local), None);
+
+        let less_local = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(less_local),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Lt,
+                    lhs: lhs_copy(),
+                    rhs: rhs_copy(),
+                },
+                source: source.clone(),
+            },
+        );
+
+        let equal_local = fb.new_temp(bool_ty);
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(equal_local),
+                rvalue: Rvalue::BinaryOp {
+                    op: BinaryOp::Eq,
+                    lhs: lhs_copy(),
+                    rhs: rhs_copy(),
+                },
+                source: source.clone(),
+            },
+        );
+
+        let less_bb = fb.new_block();
+        let check_equal_bb = fb.new_block();
+        let equal_bb = fb.new_block();
+        let greater_bb = fb.new_block();
+        let join = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(less_local), None),
+                targets: vec![(1, less_bb)],
+                otherwise: check_equal_bb,
+            },
+        );
+
+        fb.set_terminator(
+            check_equal_bb,
+            Terminator::SwitchInt {
+                discriminant: Operand::Move(Place::from_local(equal_local), None),
+                targets: vec![(1, equal_bb)],
+                otherwise: greater_bb,
+            },
+        );
+
+        let result = fb.new_temp(result_ty);
+        for (target, tag) in [
+            (less_bb, less_tag),
+            (equal_bb, equal_tag),
+            (greater_bb, greater_tag),
+        ] {
+            fb.push_stmt(
+                target,
+                MirStatement::Assign {
+                    place: Place::from_local(result),
+                    rvalue: Rvalue::Use(Operand::Constant(ConstValue::Int(tag), source.clone())),
+                    source: source.clone(),
+                },
+            );
+            fb.set_terminator(target, Terminator::Goto(join));
+        }
+
+        Some((join, Operand::Move(Place::from_local(result), source)))
     }
 
     fn resolve_string_struct(&mut self) -> Option<(TypeId, DefId)> {
