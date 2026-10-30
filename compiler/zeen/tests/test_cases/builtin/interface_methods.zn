@@ -96,4 +96,22 @@ fn main() {
   });
   @println("ptr float add: {}", px.add(*py));
   @println("ptr float neg: {}", px.neg());
+
+  let nan: f64 = 0.0 / 0.0;
+  let one: f64 = 1.0;
+  @println("nan rank: {}", switch (nan.cmp(&one)) {
+    .Less => 0,
+    .Equal => 1,
+    .Greater => 2,
+  });
+  @println("nan reverse: {}", switch (one.cmp(&nan)) {
+    .Less => 0,
+    .Equal => 1,
+    .Greater => 2,
+  });
+  @println("nan self: {}", switch (nan.cmp(&nan)) {
+    .Less => 0,
+    .Equal => 1,
+    .Greater => 2,
+  });
 }

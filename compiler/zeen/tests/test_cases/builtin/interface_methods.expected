@@ -40,3 +40,6 @@ ptr float eq: false
 ptr float rank: 2
 ptr float add: 4.000000
 ptr float neg: -2.500000
+nan rank: 1
+nan reverse: 1
+nan self: 1

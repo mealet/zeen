@@ -7542,13 +7542,13 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        let equal_local = fb.new_temp(bool_ty);
+        let greater_local = fb.new_temp(bool_ty);
         fb.push_stmt(
             block,
             MirStatement::Assign {
-                place: Place::from_local(equal_local),
+                place: Place::from_local(greater_local),
                 rvalue: Rvalue::BinaryOp {
-                    op: BinaryOp::Eq,
+                    op: BinaryOp::Gt,
                     lhs: lhs_copy(),
                     rhs: rhs_copy(),
                 },
@@ -7557,7 +7557,7 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         let less_bb = fb.new_block();
-        let check_equal_bb = fb.new_block();
+        let check_greater_bb = fb.new_block();
         let equal_bb = fb.new_block();
         let greater_bb = fb.new_block();
         let join = fb.new_block();
@@ -7567,16 +7567,16 @@ impl<'ctx> MirLowering<'ctx> {
             Terminator::SwitchInt {
                 discriminant: Operand::Move(Place::from_local(less_local), None),
                 targets: vec![(1, less_bb)],
-                otherwise: check_equal_bb,
+                otherwise: check_greater_bb,
             },
         );
 
         fb.set_terminator(
-            check_equal_bb,
+            check_greater_bb,
             Terminator::SwitchInt {
-                discriminant: Operand::Move(Place::from_local(equal_local), None),
-                targets: vec![(1, equal_bb)],
-                otherwise: greater_bb,
+                discriminant: Operand::Move(Place::from_local(greater_local), None),
+                targets: vec![(1, greater_bb)],
+                otherwise: equal_bb,
             },
         );
 
