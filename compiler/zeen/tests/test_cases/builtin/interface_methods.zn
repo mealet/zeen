@@ -72,4 +72,28 @@ fn main() {
   @println("literal add: {}", 4.add(5));
   @println("literal float: {}", 1.5.add(2.5));
   @println("literal neg: {}", 4.neg());
+
+  let pa: *const i32 = &a;
+  let pb: *const i32 = &b;
+  @println("ptr eq: {}", pa.eq(pb));
+  @println("ptr rank: {}", switch (pa.cmp(pb)) {
+    .Less => 0,
+    .Equal => 1,
+    .Greater => 2,
+  });
+  @println("ptr add: {}", pa.add(b));
+  @println("ptr hash: {}", pa.hash() == a.hash());
+  @println("ptr neg: {}", pa.neg());
+  @println("ptr bitnot: {}", pa.bit_not());
+
+  let px: *const f64 = &x;
+  let py: *const f64 = &y;
+  @println("ptr float eq: {}", px.eq(py));
+  @println("ptr float rank: {}", switch (px.cmp(py)) {
+    .Less => 0,
+    .Equal => 1,
+    .Greater => 2,
+  });
+  @println("ptr float add: {}", px.add(*py));
+  @println("ptr float neg: {}", px.neg());
 }

@@ -7157,7 +7157,15 @@ impl<'ctx> MirLowering<'ctx> {
             return None;
         }
 
-        let recv_sub = self.substitute_fn_type(fb, recv_ty);
+        let mut recv_sub = self.substitute_fn_type(fb, recv_ty);
+        let mut recv_is_pointer = false;
+        while let Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } =
+            self.typecheck.interner.get(recv_sub).clone()
+        {
+            recv_sub = inner;
+            recv_is_pointer = true;
+        }
+
         let builtin = match self.typecheck.interner.get(recv_sub).clone() {
             Type::Builtin(b) => b,
             Type::IntLiteral => zeen_ast::types::BuiltinType::i32,
@@ -7170,7 +7178,13 @@ impl<'ctx> MirLowering<'ctx> {
             .interner
             .intern(Type::Builtin(zeen_ast::types::BuiltinType::u64));
 
-        let (block, value_op) = self.lower_expr_to_operand(fb, object, block);
+        let (block, value_place) = self.lower_expr_to_place_or_temp(fb, object, block);
+        let value_place = if recv_is_pointer {
+            value_place.deref()
+        } else {
+            value_place
+        };
+        let value_op = self.place_to_operand(value_place, recv_sub, source.clone());
 
         let val_local = fb.new_temp(recv_sub);
         fb.push_stmt(

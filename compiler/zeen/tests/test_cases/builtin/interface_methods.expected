@@ -30,3 +30,13 @@ literal eq: false
 literal add: 9
 literal float: 4.000000
 literal neg: -4
+ptr eq: false
+ptr rank: 2
+ptr add: 17
+ptr hash: true
+ptr neg: -12
+ptr bitnot: -13
+ptr float eq: false
+ptr float rank: 2
+ptr float add: 4.000000
+ptr float neg: -2.500000

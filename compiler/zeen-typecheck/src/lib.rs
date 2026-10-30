@@ -5233,6 +5233,71 @@ impl<'res> TypeChecker<'res> {
         Some(self.substitute_self(ret, recv_ty))
     }
 
+    fn check_builtin_interface_method(
+        &mut self,
+        call_id: HirId,
+        builtin_ty: zeen_ast::types::BuiltinType,
+        field_name: Spur,
+        args: &[Rc<HirExpr>],
+        source: &Source,
+    ) -> Option<TypeId> {
+        let field_str = self.interner.borrow().resolve(&field_name).to_string();
+        for iface_name in Self::builtin_interface_names(builtin_ty) {
+            let Some(iface_def) = self.interface_registry.get(iface_name) else {
+                continue;
+            };
+            if let Some(methods) = self.interface_methods.get(&iface_def) {
+                for &method_def in methods {
+                    let mname = self.def_name(method_def).unwrap_or_default();
+                    if mname != field_str {
+                        continue;
+                    }
+                    let (sig_params, sig_ret, sig_generics) = {
+                        let Some(sig) = self.fn_sigs.get(&method_def) else {
+                            panic!("interface method sig missing for {}", mname);
+                        };
+                        (sig.params.clone(), sig.ret, sig.generics.clone())
+                    };
+                    let expected = sig_params.len() - 1;
+                    if args.len() != expected {
+                        self.report(TypeError::ArgCountMismatch {
+                            expected,
+                            found: args.len(),
+                            src: source.src(),
+                            span: source.span,
+                        });
+                    }
+                    let recv_ty = self.result.interner.builtin(builtin_ty);
+                    let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+                    for (param_ty, arg) in sig_params.iter().skip(1).zip(args.iter()) {
+                        let param_ty = self.substitute_self(*param_ty, recv_ty);
+                        self.infer_or_check_arg(param_ty, arg, &mut bindings, source.clone());
+                    }
+                    let resolved_generic_args: Vec<TypeId> = sig_generics
+                        .iter()
+                        .map(|g| {
+                            bindings
+                                .get(g)
+                                .copied()
+                                .unwrap_or_else(|| self.result.interner.error())
+                        })
+                        .collect();
+                    self.result.call_resolutions.insert(
+                        call_id,
+                        crate::result::CallResolution {
+                            fn_def: method_def,
+                            generic_args: resolved_generic_args,
+                        },
+                    );
+                    let ret = self.substitute_generics(sig_ret, &bindings);
+                    return Some(self.substitute_self(ret, recv_ty));
+                }
+            }
+        }
+
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn try_check_method_call(
         &mut self,
@@ -5342,65 +5407,12 @@ impl<'res> TypeChecker<'res> {
                     .get(&builtin_owner)
                     .is_some_and(|methods| methods.contains_key(&field_name));
 
-                if !has_inherent {
-                    let field_str = self.interner.borrow().resolve(&field_name).to_string();
-                    for iface_name in Self::builtin_interface_names(builtin_ty) {
-                        let Some(iface_def) = self.interface_registry.get(iface_name) else {
-                            continue;
-                        };
-                        if let Some(methods) = self.interface_methods.get(&iface_def) {
-                            for &method_def in methods {
-                                let mname = self.def_name(method_def).unwrap_or_default();
-                                if mname != field_str {
-                                    continue;
-                                }
-                                let (sig_params, sig_ret, sig_generics) = {
-                                    let Some(sig) = self.fn_sigs.get(&method_def) else {
-                                        panic!("interface method sig missing for {}", mname);
-                                    };
-                                    (sig.params.clone(), sig.ret, sig.generics.clone())
-                                };
-                                let expected = sig_params.len() - 1;
-                                if args.len() != expected {
-                                    self.report(TypeError::ArgCountMismatch {
-                                        expected,
-                                        found: args.len(),
-                                        src: source.src(),
-                                        span: source.span,
-                                    });
-                                }
-                                let recv_ty = self.result.interner.builtin(builtin_ty);
-                                let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
-                                for (param_ty, arg) in sig_params.iter().skip(1).zip(args.iter()) {
-                                    let param_ty = self.substitute_self(*param_ty, recv_ty);
-                                    self.infer_or_check_arg(
-                                        param_ty,
-                                        arg,
-                                        &mut bindings,
-                                        source.clone(),
-                                    );
-                                }
-                                let resolved_generic_args: Vec<TypeId> = sig_generics
-                                    .iter()
-                                    .map(|g| {
-                                        bindings
-                                            .get(g)
-                                            .copied()
-                                            .unwrap_or_else(|| self.result.interner.error())
-                                    })
-                                    .collect();
-                                self.result.call_resolutions.insert(
-                                    call_id,
-                                    crate::result::CallResolution {
-                                        fn_def: method_def,
-                                        generic_args: resolved_generic_args,
-                                    },
-                                );
-                                let ret = self.substitute_generics(sig_ret, &bindings);
-                                return Some(self.substitute_self(ret, recv_ty));
-                            }
-                        }
-                    }
+                if !has_inherent
+                    && let Some(ret) = self.check_builtin_interface_method(
+                        call_id, builtin_ty, field_name, args, &source,
+                    )
+                {
+                    return Some(ret);
                 }
 
                 if !matches!(self.result.interner.get(obj_ty), Type::Builtin(_)) {
@@ -5476,6 +5488,11 @@ impl<'res> TypeChecker<'res> {
                                 .get(&def_id)
                                 .is_some_and(|methods| methods.contains_key(&field_name))
                             {
+                                if let Some(ret) = self.check_builtin_interface_method(
+                                    call_id, builtin, field_name, args, &source,
+                                ) {
+                                    return Some(ret);
+                                }
                                 return Some(self.report_unknown_method(
                                     obj_ty, field_name, field_span, &source,
                                 ));
