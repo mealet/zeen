@@ -1,0 +1,92 @@
+interface Show {
+  fn show(*const self) []const char;
+}
+
+interface Scale {
+  fn scale(*const self, by: i32) i32;
+}
+
+interface Double {
+  fn double(*const self) Self;
+}
+
+interface Tag {
+  fn tag() u8;
+}
+
+interface Shout {
+  fn shout(*self) []const char;
+}
+
+implement Show : builtin i32 {
+  fn show(*const self) []const char {
+    return "i32";
+  }
+}
+
+implement Show : builtin f64 {
+  fn show(*const self) []const char {
+    return "f64";
+  }
+}
+
+implement Scale : builtin i32 {
+  fn scale(*const self, by: i32) i32 {
+    return (*self) * by;
+  }
+}
+
+implement Double : builtin i32 {
+  fn double(*const self) Self {
+    return (*self) * 2;
+  }
+}
+
+implement Tag : builtin i32 {
+  fn tag() u8 {
+    return 7;
+  }
+}
+
+implement Shout : builtin i32 {
+  fn shout(*self) []const char {
+    *self += 1;
+    return "i32";
+  }
+}
+
+struct Wrapped {
+  pub value: i32,
+}
+
+fn show_value[T: Show](value: *const T) []const char {
+  return value.show();
+}
+
+fn scale_value[T: Scale](value: *const T, by: i32) i32 {
+  return value.scale(by);
+}
+
+fn double_value[T: Double](value: *const T) T {
+  return value.double();
+}
+
+fn main() {
+  let n: i32 = 5;
+  let f: f64 = 1.5;
+  let wrapped = Wrapped { .value = n };
+
+  @println("{} {} {}", n.show(), f.show(), 3.show());
+  @println("{} {}", show_value(&n), show_value(&f));
+  @println("{} {}", n.scale(3), scale_value(&n, 4));
+  @println("{} {}", n.double(), double_value(&n));
+  @println("{}", wrapped.value.show());
+  @println("{}", i32.tag());
+
+  let p: *const i32 = &n;
+  @println("{}", p.show());
+
+  let mutable: i32 = 9;
+  let q: *i32 = &mutable;
+  @println("{} {}", q.shout(), mutable);
+}

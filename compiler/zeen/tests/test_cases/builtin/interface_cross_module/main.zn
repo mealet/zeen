@@ -1,0 +1,11 @@
+use helpers;
+
+fn main() {
+  let n: i32 = 3;
+  let nums: [3]i32 = [1, 2, 3];
+
+  @println("{}", n.show());
+  @println("{}", nums[..].show());
+  @println("{}", describe(&n));
+  @println("{}", describe(&nums[..]));
+}

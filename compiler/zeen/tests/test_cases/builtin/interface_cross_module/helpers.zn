@@ -1,0 +1,19 @@
+pub interface Show {
+  pub fn show(*const self) []const char;
+}
+
+implement Show : builtin i32 {
+  pub fn show(*const self) []const char {
+    return "helpers i32";
+  }
+}
+
+implement[T] Show : builtin []T {
+  pub fn show(*const self) []const char {
+    return "helpers slice";
+  }
+}
+
+pub fn describe[T: Show](value: *const T) []const char {
+  return value.show();
+}
