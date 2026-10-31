@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use lasso::Spur;
 
-use zeen_ast::types::BuiltinType;
+use zeen_ast::types::{BuiltinShape, BuiltinType};
 use zeen_hir::HirTypeKind;
 use zeen_resolve::DefId;
 
@@ -441,6 +441,67 @@ pub fn unary_op_interface(
         BitNot => Some(("BitNot", "bit_not")),
         Deref => Some(("Deref", "deref")),
         AddrOf => None,
+    }
+}
+
+pub fn match_builtin_shape(
+    interner: &TypeInterner,
+    shape: &BuiltinShape,
+    ty: TypeId,
+    generics: &[DefId],
+    bindings: &mut HashMap<DefId, TypeId>,
+) -> bool {
+    match shape {
+        BuiltinShape::Scalar(builtin) => {
+            matches!(interner.get(ty), Type::Builtin(found) if found == builtin)
+        }
+
+        BuiltinShape::Slice { element, is_const } => match interner.get(ty) {
+            Type::Slice {
+                element: found,
+                is_const: found_const,
+            } => {
+                found_const == is_const
+                    && match_builtin_shape(interner, element, *found, generics, bindings)
+            }
+            _ => false,
+        },
+
+        BuiltinShape::ManyPointer { element, is_const } => match interner.get(ty) {
+            Type::ManyPointer {
+                inner: found,
+                is_const: found_const,
+            } => {
+                found_const == is_const
+                    && match_builtin_shape(interner, element, *found, generics, bindings)
+            }
+            _ => false,
+        },
+
+        BuiltinShape::Array { element, len } => match interner.get(ty) {
+            Type::Array {
+                element: found,
+                len: found_len,
+            } => {
+                *found_len == Some(*len)
+                    && match_builtin_shape(interner, element, *found, generics, bindings)
+            }
+            _ => false,
+        },
+
+        BuiltinShape::Param(index) => {
+            let Some(&generic) = generics.get(*index as usize) else {
+                return false;
+            };
+
+            match bindings.get(&generic) {
+                Some(existing) => *existing == ty,
+                None => {
+                    bindings.insert(generic, ty);
+                    true
+                }
+            }
+        }
     }
 }
 
