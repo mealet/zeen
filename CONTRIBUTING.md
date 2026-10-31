@@ -37,6 +37,7 @@ feat: ...   - New Feature
 fix: ...    - Bug Fix
 test: ...   - Add or update test(s)
 ref: ...    - Code refactor
+style: ...  - Code styling (formatting for example)
 perf: ...   - Performance improvement(s)
 chore: ...  - Dependencies, packages, configs update
 
