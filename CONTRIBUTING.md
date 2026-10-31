@@ -39,13 +39,14 @@ test: ...   - Add or update test(s)
 ref: ...    - Code refactor
 perf: ...   - Performance improvement(s)
 chore: ...  - Dependencies, packages, configs update
-ci: ...     - CI/CD changes
 
 lib         |- Libraries changes
 lib/core    |
 lib/std     |
 
 repo:       - Repository update (README, LICENSE, templates and etc.)
+docs:       - Code documentation update
+ci: ...     - CI/CD changes
 ```
 
 3. Commit and push your changes:
