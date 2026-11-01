@@ -1,0 +1,62 @@
+use std.string;
+
+fn main() {
+  let smile = Rune.from_u32(0x1F600).unwrap();
+  let letter = Rune.from_u32(0x41).unwrap();
+  let space = Rune.from_u32(0x20).unwrap();
+
+  let text = String.from_rune(smile);
+  text.push_rune(letter);
+  text.push_runes([space, smile][..]);
+
+  @println("text {} bytes={} runes={}", text, text.len(), text.rune_count());
+  @println("from_runes {}", String.from_runes([letter, smile][..]));
+
+  let iter = text.runes();
+
+  while (true) {
+    let item = iter.next();
+
+    if (item.is_none()) {
+      break;
+    };
+
+    @println("iter u+{hex}", item.unwrap().to_u32());
+  };
+
+  @println("nth {} {:?}", text.nth_rune(1).unwrap(), text.nth_rune(9).is_none());
+  @println("at {} {:?}", text.rune_at(4).unwrap(), text.rune_at(1).is_none());
+
+  let typed = String.from("Привет, мир");
+  @println("contains {} {}", typed.contains_rune(Rune.from_u32(0x438).unwrap()), typed.contains_rune(letter));
+  @println("find {}", typed.find_rune(Rune.from_u32(0x43C).unwrap()).unwrap());
+  @println("find {}", typed.find_rune(letter).is_none());
+  @println("count {}", typed.rune_count());
+
+  let parts = typed.split_rune(Rune.from_u32(0x2C).unwrap());
+  @println("split {}", parts.len());
+
+  let left: *String = parts[0];
+  let right: *String = parts[1];
+  @println("split [{}] [{}]", (*left), (*right));
+
+  let reverse_text = String.from("a日😀z");
+  reverse_text.reverse();
+  @println("reverse {}", reverse_text);
+  @println("reverse runes {}", reverse_text.rune_count());
+
+  let list = reverse_text.to_rune_list();
+  @println("list {}", list.len());
+
+  let i: usize = 0;
+  while (i < list.len()) {
+    let item: Rune = list[i];
+    @println("list[{}] u+{hex}", i, item.to_u32());
+
+    i += 1;
+  };
+
+  let popped = text.pop_rune();
+  @println("pop {} {}", popped.unwrap().to_u32() == 0x1F600, text.rune_count());
+  @println("pop {:?}", String.new().pop_rune().is_none());
+}

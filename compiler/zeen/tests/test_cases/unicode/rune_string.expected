@@ -1,0 +1,23 @@
+text 😀A 😀 bytes=10 runes=4
+from_runes A😀
+iter u+1f600
+iter u+41
+iter u+20
+iter u+1f600
+nth A true
+at A true
+contains true false
+find 14
+find true
+count 11
+split 2
+split [Привет] [ мир]
+reverse z😀日a
+reverse runes 4
+list 4
+list[0] u+7a
+list[1] u+1f600
+list[2] u+65e5
+list[3] u+61
+pop true 3
+pop true

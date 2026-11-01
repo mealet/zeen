@@ -75,6 +75,27 @@ implement String {
     }
   }
 
+  /// Allocate new String from a single rune.
+  pub fn from_rune(rune: Rune) Self {
+    let out = Self.new();
+    out.push_rune(rune);
+
+    out
+  }
+
+  /// Allocate new String from a rune slice.
+  pub fn from_runes(value: []const Rune) Self {
+    let out = Self.new();
+
+    let i: usize = 0;
+    while (i < value.len) {
+      out.push_rune(value[i]);
+      i += 1;
+    };
+
+    out
+  }
+
   /// UNSAFE: Construct string from raw parts.
   /// UNSAFE: Assume that provided pointer is heap allocated, it will be freed.
   pub fn from_raw_parts(ptr: *void, len: usize, capacity: usize) Self {
@@ -167,6 +188,88 @@ implement String {
 
     let _ = memcpy(@as(*void, &self.ptr[start]), @as([*]const void, value.ptr), value._len);
     self.ptr[self._len] = '\0';
+  }
+
+  /// Push a single rune encoded as UTF-8
+  pub fn push_rune(*self, rune: Rune) {
+    self.initialize_if_new();
+
+    let buffer: [4]u8 = [0; 4];
+    let len = rune.encode_utf8(&buffer);
+    let start = self._len;
+    self._len += len;
+
+    self.__capacity_extend();
+
+    let i: usize = 0;
+    while (i < len) {
+      self.ptr[start + i] = @as(char, buffer[i]);
+      i += 1;
+    };
+
+    self.ptr[self._len] = '\0';
+  }
+
+  /// Push a rune slice encoded as UTF-8
+  pub fn push_runes(*self, value: []const Rune) {
+    let i: usize = 0;
+    while (i < value.len) {
+      self.push_rune(value[i]);
+      i += 1;
+    };
+  }
+
+  /// Remove last rune and return it
+  pub fn pop_rune(*self) Option[Rune] {
+    if (self._capacity < 1 || self._len < 1) {
+      return Option.None;
+    };
+
+    let start = Rune.prev_start(self.ptr, self._len);
+    let index = start;
+    let decoded = Rune.decode_ptr(self.ptr, self._len, &index);
+
+    self._len = start;
+    self.ptr[self._len] = '\0';
+
+    if (decoded.is_none()) {
+      return Option.Some(Rune.replacement());
+    };
+
+    decoded
+  }
+
+  /// Iterate over the runes of the string
+  pub fn runes(*const self) RuneIter {
+    RuneIter.new(self.ptr[0..self._len])
+  }
+
+  /// Count runes in the string
+  pub fn rune_count(*const self) usize {
+    Rune.count(self.ptr[0..self._len])
+  }
+
+  /// Decode the rune at the byte offset
+  pub fn rune_at(*const self, byte_index: usize) Option[Rune] {
+    let index = byte_index;
+
+    Rune.decode(self.ptr[0..self._len], &index)
+  }
+
+  /// Decode the rune by its position in code points
+  pub fn nth_rune(*const self, position: usize) Option[Rune] {
+    let iter = self.runes();
+    let i: usize = 0;
+
+    while (i < position) {
+      if (iter.next().is_none()) {
+        return Option.None;
+      };
+
+      i += 1;
+    };
+
+    iter.next()
   }
 
   /// Remove last character and return it
@@ -340,6 +443,34 @@ implement String {
     Option.Some(@as(usize, entrance - self.ptr))   
   }
 
+  /// Finds rune in string:
+  /// * `Some(usize)` - if found, returns byte offset
+  /// * `None` - if not found
+  pub fn find_rune(*const self, rune: Rune) Option[usize] {
+    let index: usize = 0;
+
+    while (index < self._len) {
+      let start = index;
+      let current = Rune.decode_ptr(self.ptr, self._len, &index);
+
+      if (current.is_none()) {
+        index = start + 1;
+        continue;
+      };
+
+      if (current.unwrap() == rune) {
+        return Option.Some(start);
+      };
+    };
+
+    Option.None
+  }
+
+  /// Checks that the string contains the rune
+  pub fn contains_rune(*const self, rune: Rune) bool {
+    self.find_rune(rune).is_some()
+  }
+
   /// Converts whole string to uppercase
   pub fn to_uppercase(*self) {
     let cursor = @as(*char, self.ptr);
@@ -416,24 +547,38 @@ implement String {
     self._capacity = new_capacity;
   }
 
-  /// Reverse characters order in string
+  /// Reverse runes order in string
   pub fn reverse(*self) {
-    if (self._capacity < 1 || self._len < 1) {
+    if (self._capacity < 1 || self._len < 2) {
       return;
     };
 
     let len = self._len;
-    let start: usize = 0;
-    let end: usize = len - 1;
+    let buffer = @as([*]char, Allocator.alloc(len));
+    let out: usize = 0;
+    let end = len;
 
-    while (start < end) {
-      let temp: char = self.ptr[start];
-      self.ptr[start] = self.ptr[end];
-      self.ptr[end] = temp;
+    while (end > 0) {
+      let start = Rune.prev_start(self.ptr, end);
+      let i = start;
 
-      start += 1;
-      end -= 1;
-    }
+      while (i < end) {
+        buffer[out] = self.ptr[i];
+
+        out += 1;
+        i += 1;
+      };
+
+      end = start;
+    };
+
+    let i: usize = 0;
+    while (i < len) {
+      self.ptr[i] = buffer[i];
+      i += 1;
+    };
+
+    Allocator.dealloc(@as(*void, buffer));
   }
 
   /// Clear string (capacity saves)
@@ -453,6 +598,24 @@ implement String {
   /// Convert string to character list.
   pub fn to_list(*const self) List[char] {
     List.from(self.ptr[0..self._len])
+  }
+
+  /// Convert string to rune list.
+  pub fn to_rune_list(*const self) List[Rune] {
+    let out = List#[Rune].new();
+    let iter = self.runes();
+
+    while (true) {
+      let item = iter.next();
+
+      if (item.is_none()) {
+        break;
+      };
+
+      out.push(item.unwrap());
+    };
+
+    out
   }
 
   /// View without leading and trailing whitespace.
@@ -507,6 +670,32 @@ implement String {
       };
 
       i += 1;
+    };
+
+    out.push(String.from(self.ptr[start..self._len]));
+
+    out
+  }
+
+  /// Split by rune delimiter, keeping empty parts.
+  pub fn split_rune(*const self, delim: Rune) List[String] {
+    let out = List#[String].new();
+    let start: usize = 0;
+    let index: usize = 0;
+
+    while (index < self._len) {
+      let current = index;
+      let decoded = Rune.decode_ptr(self.ptr, self._len, &index);
+
+      if (decoded.is_none()) {
+        index = current + 1;
+        continue;
+      };
+
+      if (decoded.unwrap() == delim) {
+        out.push(String.from(self.ptr[start..current]));
+        start = index;
+      };
     };
 
     out.push(String.from(self.ptr[start..self._len]));
