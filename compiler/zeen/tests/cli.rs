@@ -105,11 +105,13 @@ fn explicit_host_target_compiles_and_runs() {
         .assert()
         .success();
 
-    let output = ProcessCommand::new(&binary).output().unwrap();
+    let output = ProcessCommand::new(zeen_linker::ObjectLinker::output_path_for(&triple, &binary))
+        .output()
+        .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).replace('\r', "");
     assert_eq!(stdout, "Hello, World!\n");
 
-    let _ = fs::remove_file(&binary);
+    let _ = fs::remove_file(zeen_linker::ObjectLinker::output_path_for(&triple, &binary));
 }
 
 #[test]

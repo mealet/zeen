@@ -1421,6 +1421,10 @@ mod tests {
         dir
     }
 
+    fn canonical(path: PathBuf) -> PathBuf {
+        std::fs::canonicalize(&path).unwrap_or(path)
+    }
+
     fn context_paths(root: &Path) -> (PathBuf, Option<PathBuf>, Vec<(String, PathBuf)>) {
         (
             root.to_path_buf(),
@@ -1446,7 +1450,7 @@ mod tests {
             span,
         )
         .unwrap();
-        assert_eq!(target, root.join("httplib").join("index.zn"));
+        assert_eq!(target, canonical(root.join("httplib").join("index.zn")));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1467,7 +1471,10 @@ mod tests {
             span,
         )
         .unwrap();
-        assert_eq!(target, root.join("httplib").join("folder").join("lib.zn"));
+        assert_eq!(
+            target,
+            canonical(root.join("httplib").join("folder").join("lib.zn"))
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1520,7 +1527,7 @@ mod tests {
             span,
         )
         .unwrap();
-        assert_eq!(mapped, root.join("httplib").join("index.zn"));
+        assert_eq!(mapped, canonical(root.join("httplib").join("index.zn")));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1541,7 +1548,7 @@ mod tests {
             span,
         )
         .unwrap();
-        assert_eq!(target, root.join("httplib").join("nope.zn"));
+        assert_eq!(target, canonical(root.join("httplib").join("nope.zn")));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1552,7 +1559,7 @@ mod tests {
         let project = PathBuf::from("/elsewhere");
         assert_eq!(
             display_for_path(
-                &root.join("httplib").join("index.zn"),
+                &canonical(root.join("httplib").join("index.zn")),
                 &project,
                 None,
                 &packages
@@ -1561,7 +1568,7 @@ mod tests {
         );
         assert_eq!(
             display_for_path(
-                &root.join("httplib").join("folder").join("lib.zn"),
+                &canonical(root.join("httplib").join("folder").join("lib.zn")),
                 &project,
                 None,
                 &packages
