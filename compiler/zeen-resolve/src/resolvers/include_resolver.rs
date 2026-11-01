@@ -1548,7 +1548,7 @@ mod tests {
             span,
         )
         .unwrap();
-        assert_eq!(target, canonical(root.join("httplib").join("nope.zn")));
+        assert_eq!(target, canonical(root.join("httplib")).join("nope.zn"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
