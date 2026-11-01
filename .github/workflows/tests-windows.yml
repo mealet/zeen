@@ -1,0 +1,58 @@
+name: Tests Windows
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests-windows:
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        working-directory: ./compiler
+
+    runs-on: windows-2025
+
+    steps:
+
+    # Checkout
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+    # Install Rust
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      with:
+          toolchain: stable
+
+    # Install LLVM
+    - name: Install LLVM and Clang
+      uses: ZhongRuoyu/setup-llvm@7c7b10581c91652ab125ad911df7765c112f94bc
+      with:
+          llvm-version: 22
+
+    # LLVM on Windows links xml2 through the import library
+    - name: Provide xml2s.lib
+      shell: bash
+      run: cp xml2s.lib "$(llvm-config --libdir)/xml2s.lib"
+
+    # Install Nextest
+    - name: Install Nextest
+      uses: taiki-e/install-action@6d7ea3ee4000cadd654f6bd50c17380bfa413696
+
+    # Setup Zeen Standard Library
+    - name: Set ZEEN_STD
+      shell: bash
+      run: echo "ZEEN_STD=$GITHUB_WORKSPACE/lib/std" >> "$GITHUB_ENV"
+
+    # Run tests
+    - name: Packages Tests
+      run: cargo nextest run
