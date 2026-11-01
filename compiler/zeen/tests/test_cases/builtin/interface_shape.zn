@@ -38,8 +38,24 @@ implement[T: Show] Show : builtin [*]T {
   }
 }
 
+interface Countable {
+  fn count(*const self) usize;
+}
+
+implement[T] builtin []T {
+  fn count(*const self) usize {
+    return (*self).len;
+  }
+}
+
+implement[T] Countable : builtin []T {}
+
 fn describe[T: Show](value: *const T) []const char {
   return value.show();
+}
+
+fn count_of[T: Countable](value: *const T) usize {
+  return value.count();
 }
 
 fn main() {
@@ -60,4 +76,8 @@ fn main() {
   @println("{}", describe(&nums[..]));
   @println("{}", describe(&reals[..]));
   @println("{}", describe(&p));
+
+  @println("{}", nums[..].count());
+  @println("{}", count_of(&nums[..]));
+  @println("{}", count_of(&reals[..]));
 }
