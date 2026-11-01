@@ -5,8 +5,9 @@ use std.collections.map;
 comptime MaxJsonDepth = 128;
 
 comptime SurrogateMin = 55296;
+comptime SurrogateHighMax = 56319;
+comptime SurrogateLowMin = 56320;
 comptime SurrogateMax = 57343;
-comptime Latin1Max = 255;
 
 /// JSON parse error.
 pub struct JsonError {
@@ -507,7 +508,7 @@ implement JsonParser {
         if (esc.is_err()) {
           return Result.Err(esc.unwrap_err());
         };
-        out.push(esc.unwrap());
+        out.push_rune(esc.unwrap());
         continue;
       };
 
@@ -522,7 +523,7 @@ implement JsonParser {
     return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedEnd, .pos = self.pos });
   }
 
-  fn parse_escape(*self) Result[char, JsonError] {
+  fn parse_escape(*self) Result[Rune, JsonError] {
     let head = self.peek();
     if (head.is_none()) {
       return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedEnd, .pos = self.pos });
@@ -532,28 +533,28 @@ implement JsonParser {
     self.bump();
 
     if (ch == '"') {
-      return Result.Ok('"');
+      return Result.Ok(Rune.from_u32_unchecked(@as(u32, ch)));
     };
     if (ch == @as(char, 92)) {
-      return Result.Ok(@as(char, 92));
+      return Result.Ok(Rune.from_u32_unchecked(@as(u32, ch)));
     };
     if (ch == '/') {
-      return Result.Ok('/');
+      return Result.Ok(Rune.from_u32_unchecked(@as(u32, ch)));
     };
     if (ch == 'b') {
-      return Result.Ok(@as(char, 8));
+      return Result.Ok(Rune.from_u32_unchecked(8));
     };
     if (ch == 'f') {
-      return Result.Ok(@as(char, 12));
+      return Result.Ok(Rune.from_u32_unchecked(12));
     };
     if (ch == 'n') {
-      return Result.Ok(@as(char, 10));
+      return Result.Ok(Rune.from_u32_unchecked(10));
     };
     if (ch == 'r') {
-      return Result.Ok(@as(char, 13));
+      return Result.Ok(Rune.from_u32_unchecked(13));
     };
     if (ch == 't') {
-      return Result.Ok(@as(char, 9));
+      return Result.Ok(Rune.from_u32_unchecked(9));
     };
     if (ch == 'u') {
       return self.parse_unicode();
@@ -561,21 +562,45 @@ implement JsonParser {
     return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
   }
 
-  fn parse_unicode(*self) Result[char, JsonError] {
+  fn parse_unicode(*self) Result[Rune, JsonError] {
     let hi = self.parse_hex4();
     if (hi.is_err()) {
       return Result.Err(hi.unwrap_err());
     };
     let high = hi.unwrap();
 
-    if (high >= SurrogateMin && high <= SurrogateMax) {
-      return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
+    if (high < SurrogateMin || high > SurrogateMax) {
+      return Result.Ok(Rune.from_u32_unchecked(high));
     };
-    if (high > Latin1Max) {
+    if (high > SurrogateHighMax) {
       return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
     };
 
-    return Result.Ok(@as(char, high));
+    let slash = self.peek();
+    if (slash.is_none() || slash.unwrap() != @as(char, 92)) {
+      return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
+    };
+    self.bump();
+
+    let marker = self.peek();
+    if (marker.is_none() || marker.unwrap() != 'u') {
+      return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
+    };
+    self.bump();
+
+    let lo = self.parse_hex4();
+    if (lo.is_err()) {
+      return Result.Err(lo.unwrap_err());
+    };
+    let low = lo.unwrap();
+
+    if (low < SurrogateLowMin || low > SurrogateMax) {
+      return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
+    };
+
+    let value = 0x10000 + ((high - SurrogateMin) << 10) + (low - SurrogateLowMin);
+
+    return Result.Ok(Rune.from_u32_unchecked(value));
   }
 
   fn parse_hex4(*self) Result[u32, JsonError] {

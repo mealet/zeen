@@ -1,0 +1,26 @@
+[😀 Привет]
+bytes=17 runes=8
+iter u+1f600
+iter u+20
+iter u+41f
+iter u+440
+iter u+438
+iter u+432
+iter u+435
+iter u+442
+[a/b\c"d]
+control u+8
+control u+c
+control u+a
+control u+d
+control u+9
+[Az] 2
+lone_high true
+lone_low true
+pair_broken true
+pair_cut true
+bad_escape true
+short_hex true
+big_code true
+["😀日A"]
+round 3

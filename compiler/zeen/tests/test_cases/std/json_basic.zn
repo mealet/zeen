@@ -40,10 +40,10 @@ fn main() i32 {
     return 1;
   };
   let s = u.unwrap().as_str().unwrap();
-  @println("uni={} {}", s.len() == 2, @as(u32, s[1]) == 233);
+  @println("uni={} {}", s.len() == 3, @as(u32, s[2]) == 169);
 
   let big = JsonValue.parse("\"\\u4e2d\"");
-  @println("big-rejected={}", big.is_err());
+  @println("big={} {}", big.is_ok(), big.unwrap().as_str().unwrap().len() == 3);
 
   let doc = JsonValue.parse("{\"n\": -42, \"f\": 2.5, \"b\": false, \"z\": null, \"a\": [10, 20]}");
   if (doc.is_err()) {

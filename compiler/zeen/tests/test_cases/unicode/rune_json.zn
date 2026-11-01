@@ -1,0 +1,57 @@
+use std.json;
+use std.string;
+
+fn main() {
+  let text = JsonValue.parse("\"\\uD83D\\uDE00 \\u041F\\u0440\\u0438\\u0432\\u0435\\u0442\"").unwrap();
+  let value = text.as_str().unwrap();
+
+  @println("[{}]", value);
+  @println("bytes={} runes={}", value.len(), value.rune_count());
+
+  let iter = value.runes();
+
+  while (true) {
+    let item = iter.next();
+
+    if (item.is_none()) {
+      break;
+    };
+
+    @println("iter u+{hex}", item.unwrap().to_u32());
+  };
+
+  let escaped = JsonValue.parse("\"a\\/b\\\\c\\\"d\"").unwrap();
+  @println("[{}]", escaped.as_str().unwrap());
+
+  let controls = JsonValue.parse("\"\\b\\f\\n\\r\\t\"").unwrap();
+  let control_text = controls.as_str().unwrap();
+  let control_iter = control_text.runes();
+
+  while (true) {
+    let item = control_iter.next();
+
+    if (item.is_none()) {
+      break;
+    };
+
+    @println("control u+{hex}", item.unwrap().to_u32());
+  };
+
+  let ascii = JsonValue.parse("\"\\u0041\\u007A\"").unwrap();
+  @println("[{}] {}", ascii.as_str().unwrap(), ascii.as_str().unwrap().rune_count());
+
+  @println("lone_high {}", JsonValue.parse("\"\\uD83D\"").is_err());
+  @println("lone_low {}", JsonValue.parse("\"\\uDE00\"").is_err());
+  @println("pair_broken {}", JsonValue.parse("\"\\uD83D\\u0041\"").is_err());
+  @println("pair_cut {}", JsonValue.parse("\"\\uD83D\\u\"").is_err());
+  @println("bad_escape {}", JsonValue.parse("\"\\q\"").is_err());
+  @println("short_hex {}", JsonValue.parse("\"\\u12\"").is_err());
+  @println("big_code {}", JsonValue.parse("\"\\uFFFF\"").is_ok());
+
+  let source = String.from("😀日A");
+  let quoted = JsonValue.Str(source).stringify();
+  @println("[{}]", quoted);
+
+  let round = JsonValue.parse(quoted.slice(..)).unwrap();
+  @println("round {}", round.as_str().unwrap().rune_count());
+}
