@@ -743,6 +743,29 @@ impl<'res> TypeChecker<'res> {
             _ => None,
         };
 
+        let builtin_owner = matches!(
+            self.def_kind(object_def),
+            Some(DefKind::Builtin(_)) | Some(DefKind::BuiltinShape(_))
+        );
+
+        if builtin_owner
+            && let Some(iface_def) = imp.interface
+            && self.interface_is_core(iface_def)
+        {
+            let iface_name = self.def_name(iface_def).map(Into::into).unwrap_or_default();
+            let object = self
+                .def_name(object_def)
+                .map(Into::into)
+                .unwrap_or_default();
+
+            self.report(TypeError::CoreInterfaceImplForBuiltin {
+                iface_name,
+                object,
+                src: source.src(),
+                span: imp.object_bindings_span,
+            });
+        }
+
         let member_generics = self.type_member_generics(object_def);
         let struct_generics = &member_generics;
 
@@ -7919,6 +7942,20 @@ impl<'res> TypeChecker<'res> {
             .map(|info| self.interner.borrow().resolve(&info.name).to_string())
     }
 
+    fn interface_is_core(&self, iface_def: DefId) -> bool {
+        self.resolution
+            .def_modules
+            .get(&iface_def)
+            .map(|module| module == "core" || module.starts_with("core."))
+            .or_else(|| {
+                self.resolution
+                    .defs
+                    .get(&iface_def)
+                    .map(|info| info.span.src().name().starts_with("core."))
+            })
+            .unwrap_or(false)
+    }
+
     fn check_method_signature_matches(
         &mut self,
         iface_def: DefId,
@@ -10190,6 +10227,106 @@ mod tests {
                 .iter()
                 .any(|err| matches!(err, TypeError::GenericBoundNotSatisfied { .. })),
             "expected GenericBoundNotSatisfied error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_core_interface_impl_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement Add : builtin i32 {
+                fn add(self, other: i32) i32 {
+                    return 99;
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("core interfaces cannot be implemented for builtin types");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CoreInterfaceImplForBuiltin { .. })),
+            "expected CoreInterfaceImplForBuiltin error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_core_display_impl_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement Display : builtin f64 {
+                fn display[W: StrWriter](*const self, out: *W) void {
+                    out.write_str("f64");
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("Display is native for builtin types and cannot be overridden");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CoreInterfaceImplForBuiltin { .. })),
+            "expected CoreInterfaceImplForBuiltin error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_shape_core_interface_impl_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement[T] Add : builtin []T {
+                fn add(self, other: []T) []T {
+                    return self;
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("core interfaces cannot be implemented for builtin shapes");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CoreInterfaceImplForBuiltin { .. })),
+            "expected CoreInterfaceImplForBuiltin error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_user_interface_impl_is_allowed() {
+        let result = typecheck(
+            r#"
+            interface Sum {
+                fn total(*const self) i32;
+            }
+
+            implement Sum : builtin i32 {
+                fn total(*const self) i32 {
+                    return (*self);
+                }
+            }
+
+            fn main() {
+                let n: i32 = 4;
+                let total = n.total();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "user interfaces must stay implementable for builtin types: {:?}",
+            result.err()
         );
     }
 
