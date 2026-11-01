@@ -17,6 +17,7 @@ interface Double {
 
 interface Tag {
   fn tag() u8;
+  fn tag_of(value: Self) u8;
 }
 
 interface Pair {
@@ -65,6 +66,10 @@ implement Double : builtin i32 {
 implement Tag : builtin i32 {
   fn tag() u8 {
     return 7;
+  }
+
+  fn tag_of(value: i32) u8 {
+    return @as(u8, value);
   }
 }
 
@@ -119,6 +124,10 @@ fn double_value[T: Double](value: *const T) T {
   return value.double();
 }
 
+fn tag_of[T: Tag](value: T) u8 {
+  return T.tag_of(value);
+}
+
 fn combined[T: Pair](a: i32, b: i32) i32 {
   return T.combine(a, b);
 }
@@ -138,6 +147,7 @@ fn main() {
   @println("{} {}, {} {}", n.grow(5), n.peek(), grow_value(n, 2), peek_value(n));
   @println("{} {}", n.double(), double_value(&n));
   @println("{}, {}, {}", i32.tag(), i32.combine(2, 3), i32.empty_value());
+  @println("{} {}", i32.tag_of(n), tag_of(n));
   @println("{}, {}", f64.combine(6, 7), f64.empty_value());
   @println("{}, {}", combined#[i32](4, 5), empty#[i32]());
 

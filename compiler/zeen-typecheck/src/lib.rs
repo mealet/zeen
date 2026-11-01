@@ -612,7 +612,11 @@ impl<'res> TypeChecker<'res> {
                 .or_insert_with(|| bounds.clone());
         }
 
-        let self_mode = hir_fn.params.first().and_then(|p| self_mode_of(&p.ty.kind));
+        let self_mode = hir_fn
+            .params
+            .first()
+            .filter(|param| param.name.is_none())
+            .and_then(|p| self_mode_of(&p.ty.kind));
         let params_len = hir_fn.params.len();
 
         let mut is_variadic = false;
@@ -643,7 +647,7 @@ impl<'res> TypeChecker<'res> {
                 let (ty, is_const) = self.lower_hir_type_with_const(&param.ty);
 
                 let effective_const = if idx == 0 {
-                    match self_mode_of(&param.ty.kind) {
+                    match self_mode {
                         Some(SelfMode::ValueConst) | Some(SelfMode::RefConst) => true,
                         _ => is_const,
                     }

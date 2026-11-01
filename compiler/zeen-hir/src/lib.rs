@@ -469,7 +469,9 @@ impl<'res> HirLowering<'res> {
         let self_param = if self_def.is_some() {
             hir_params
                 .iter()
-                .find(|param| matches!(param.ty.kind, HirTypeKind::SelfType(_)))
+                .find(|param| {
+                    param.name.is_none() && matches!(param.ty.kind, HirTypeKind::SelfType(_))
+                })
                 .and_then(|param| param.def_id)
         } else {
             None

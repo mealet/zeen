@@ -914,7 +914,7 @@ fn hir_fn_takes_self(func: &HirFn) -> bool {
         return true;
     }
 
-    let Some(first) = func.params.first() else {
+    let Some(first) = func.params.first().filter(|param| param.name.is_none()) else {
         return false;
     };
 
@@ -936,8 +936,8 @@ fn hir_fn_arity(func: &HirFn) -> usize {
         return func.params.len();
     }
 
-    let Some(first) = func.params.first() else {
-        return 0;
+    let Some(first) = func.params.first().filter(|param| param.name.is_none()) else {
+        return func.params.len();
     };
 
     let mut current = &first.ty.kind;
