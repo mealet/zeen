@@ -3992,6 +3992,7 @@ impl<'ctx> MirLowering<'ctx> {
                                             &method_name,
                                             &recv_args,
                                         )
+                                        .map(|method| (method, recv_args.clone()))
                                     })
                                 } else {
                                     iface_def.and_then(|iface_def| {
@@ -4004,7 +4005,10 @@ impl<'ctx> MirLowering<'ctx> {
                                 };
 
                                 match concrete {
-                                    Some(concrete) => (concrete, generic_args.clone()),
+                                    Some((concrete, mut owner_args)) => {
+                                        owner_args.extend(generic_args.iter().copied());
+                                        (concrete, owner_args)
+                                    }
                                     None => (fn_def, generic_args),
                                 }
                             }
@@ -8124,11 +8128,11 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn resolve_builtin_interface_method(
-        &self,
+        &mut self,
         recv_ty: TypeId,
         iface_def: DefId,
         method_name: &str,
-    ) -> Option<DefId> {
+    ) -> Option<(DefId, Vec<TypeId>)> {
         match self.typecheck.interner.get(recv_ty).clone() {
             Type::Pointer { inner, .. } => {
                 self.resolve_builtin_interface_method(inner, iface_def, method_name)
@@ -8176,7 +8180,16 @@ impl<'ctx> MirLowering<'ctx> {
                         .iter()
                         .find_map(|entry| self.find_impl_method(entry, method_name))
                     {
-                        return Some(method);
+                        let owner_args: Vec<TypeId> = generics
+                            .iter()
+                            .map(|generic| {
+                                bindings.get(generic).copied().unwrap_or_else(|| {
+                                    self.typecheck.interner.intern(Type::GenericParam(*generic))
+                                })
+                            })
+                            .collect();
+
+                        return Some((method, owner_args));
                     }
                 }
 
@@ -8188,16 +8201,27 @@ impl<'ctx> MirLowering<'ctx> {
     }
 
     fn resolve_impl_method(
-        &self,
+        &mut self,
         owner: DefId,
         iface_def: DefId,
         method_name: &str,
-    ) -> Option<DefId> {
+    ) -> Option<(DefId, Vec<TypeId>)> {
         let entries = self.typecheck.impl_registry.get(&(owner, iface_def))?;
+        let generics = self
+            .typecheck
+            .builtin_shape_generics
+            .get(&owner)
+            .cloned()
+            .unwrap_or_default();
+        let owner_args: Vec<TypeId> = generics
+            .iter()
+            .map(|generic| self.typecheck.interner.intern(Type::GenericParam(*generic)))
+            .collect();
 
         entries
             .iter()
             .find_map(|entry| self.find_impl_method(entry, method_name))
+            .map(|method| (method, owner_args))
     }
 
     fn find_impl_method(
