@@ -107,10 +107,10 @@ fn main() {
   @println("{}", c.eq_ignore_ascii_case('Z'));
   @println("{}", c.to_digit(36).unwrap());
   @println("{}", char.from_digit(10, 16).unwrap());
-  @println("{}", char.from_u32(0x1F600).is_some());
-  @println("{}", char.from_u32(0xD800).is_none());
-  @println("{}", c.len_utf8());
-  @println("{}", c.len_utf16());
+  @println("{}", Rune.from_u32(0x1F600).is_some());
+  @println("{}", Rune.from_u32(0xD800).is_none());
+  @println("{}", Rune.from_u32(0x1F600).unwrap().utf8_len());
+  @println("{}", Rune.from_u32(0x1F600).unwrap().utf16_len());
 
   @println("{}", true.to_string());
   @println("{}", (-42).to_string());
