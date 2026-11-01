@@ -1,0 +1,47 @@
+interface Describe {
+  fn describe(*const self) []const char;
+}
+
+interface Fingerprint {
+  fn fingerprint(*const self) u64;
+}
+
+implement Describe : builtin i32 {}
+
+implement Fingerprint : builtin i32 {}
+
+implement builtin i32 {
+  fn describe(*const self) []const char {
+    return "inherent i32";
+  }
+
+  fn fingerprint(*const self) u64 {
+    return 7;
+  }
+}
+
+implement builtin []char {
+  fn describe(*const self) []const char {
+    return "inherent chars";
+  }
+}
+
+implement Describe : builtin []char {}
+
+fn describe_value[T: Describe](value: *const T) []const char {
+  return value.describe();
+}
+
+fn fingerprint_value[T: Fingerprint](value: *const T) u64 {
+  return value.fingerprint();
+}
+
+fn main() {
+  let n: i32 = 4;
+  let chars: [3]char = ['a', 'b', 'c'];
+
+  @println("{} {}", n.describe(), describe_value(&n));
+  @println("{}", n.fingerprint() + fingerprint_value(&n));
+  @println("{} {}", chars[..].describe(), describe_value(&chars[..]));
+  @println("{}", 3.describe());
+}

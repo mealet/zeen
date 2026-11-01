@@ -1,0 +1,13 @@
+use mid;
+
+fn main() {
+  let n: i32 = 3;
+  let nums: [3]i32 = [1, 2, 3];
+
+  @println("{}", n.show());
+  @println("{}", nums[..].show());
+  @println("{}", describe(&n));
+  @println("{}", describe_mid(&n));
+  @println("{}", describe(&nums[..]));
+  @println("{}", hidden_text(&n));
+}

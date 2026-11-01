@@ -20,6 +20,22 @@ fn sum[T: Display + Add + Sub + Mul](a: T, b: T) T {
   return a.add(b).mul(b);
 }
 
+fn less[T: Ord](a: *const T, b: *const T) bool {
+  return (*a) < (*b);
+}
+
+fn at_least[T: Ord](a: *const T, b: *const T) bool {
+  return (*a) >= (*b);
+}
+
+fn minimum[T: Ord](a: T, b: T) T {
+  if (a < b) {
+    return a;
+  }
+
+  return b;
+}
+
 fn main() {
   let a: i32 = 12;
   let b: i32 = 5;
@@ -60,6 +76,13 @@ fn main() {
 
   @println("same: {}", same(&a, &a));
   @println("generic: {}", sum(a, b));
+
+  @println("ord i32: {} {} {}", less(&a, &b), at_least(&a, &b), minimum(a, b));
+  @println("ord f64: {} {} {}", less(&x, &y), at_least(&x, &y), minimum(x, y));
+
+  let c1: char = 'a';
+  let c2: char = 'z';
+  @println("ord char: {} {} {}", less(&c1, &c2), at_least(&c1, &c2), minimum(c1, c2));
 
   let formatted = @format("format: {}", b.sub(a));
   @println("{}", formatted);

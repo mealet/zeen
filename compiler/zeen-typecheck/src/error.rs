@@ -238,6 +238,22 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("`{iface_name}` cannot be implemented for builtin type `{object}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::core_interface_impl),
+        help("the compiler provides this interface for builtin types natively")
+    )]
+    CoreInterfaceImplForBuiltin {
+        iface_name: SmolStr,
+        object: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("`{method}` is a static method and cannot be called on an instance")]
     #[diagnostic(
         severity(Error),

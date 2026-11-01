@@ -24,6 +24,9 @@ field rank: 0
 same: true
 generic: 17 7 60
 generic: 85
+ord i32: false true 5
+ord f64: false true 1.500000
+ord char: true false a
 format: -7
 wrapped: 44
 literal eq: false

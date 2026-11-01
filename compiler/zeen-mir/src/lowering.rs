@@ -3940,39 +3940,36 @@ impl<'ctx> MirLowering<'ctx> {
                 let raw_args = resolution.generic_args.clone();
                 let generic_args = self.substitute_generic_args(fb, &raw_args);
 
-                let (fn_def, generic_args) = if self
-                    .typecheck
-                    .interface_method_owners
-                    .contains_key(&fn_def)
-                {
-                    match &callee.kind {
-                        HirExprKind::FieldAccess { object, .. } => {
-                            let recv_ty = self.expr_type(fb, object);
-                            let recv_target = match self.typecheck.interner.get(recv_ty).clone() {
-                                Type::Struct {
-                                    def_id: struct_def,
-                                    generic_args: recv_args,
-                                }
-                                | Type::Enum {
-                                    def_id: struct_def,
-                                    generic_args: recv_args,
-                                } => Some((struct_def, recv_args)),
-                                Type::Pointer { inner, .. } => {
-                                    match self.typecheck.interner.get(inner).clone() {
-                                        Type::Struct {
-                                            def_id: struct_def,
-                                            generic_args: recv_args,
-                                        }
-                                        | Type::Enum {
-                                            def_id: struct_def,
-                                            generic_args: recv_args,
-                                        } => Some((struct_def, recv_args)),
-                                        _ => None,
+                let (fn_def, generic_args) =
+                    if self.typecheck.interface_method_owners.contains_key(&fn_def) {
+                        match &callee.kind {
+                            HirExprKind::FieldAccess { object, .. } => {
+                                let recv_ty = self.expr_type(fb, object);
+                                let recv_target = match self.typecheck.interner.get(recv_ty).clone()
+                                {
+                                    Type::Struct {
+                                        def_id: struct_def,
+                                        generic_args: recv_args,
                                     }
-                                }
-                                _ => None,
-                            };
-                            if let Some((struct_def, recv_args)) = recv_target {
+                                    | Type::Enum {
+                                        def_id: struct_def,
+                                        generic_args: recv_args,
+                                    } => Some((struct_def, recv_args)),
+                                    Type::Pointer { inner, .. } => {
+                                        match self.typecheck.interner.get(inner).clone() {
+                                            Type::Struct {
+                                                def_id: struct_def,
+                                                generic_args: recv_args,
+                                            }
+                                            | Type::Enum {
+                                                def_id: struct_def,
+                                                generic_args: recv_args,
+                                            } => Some((struct_def, recv_args)),
+                                            _ => None,
+                                        }
+                                    }
+                                    _ => None,
+                                };
                                 let iface_def =
                                     self.typecheck.interface_method_owners.get(&fn_def).copied();
                                 let method_name = self
@@ -3981,35 +3978,45 @@ impl<'ctx> MirLowering<'ctx> {
                                     .resolve(&self.resolution.defs[&fn_def].name)
                                     .to_string();
 
-                                if let Some(iface_def) = iface_def {
-                                    let iface_name = self
-                                        .rodeo
-                                        .borrow()
-                                        .resolve(&self.resolution.defs[&iface_def].name)
-                                        .to_string();
+                                let concrete = if let Some((struct_def, recv_args)) = recv_target {
+                                    iface_def.and_then(|iface_def| {
+                                        let iface_name = self
+                                            .rodeo
+                                            .borrow()
+                                            .resolve(&self.resolution.defs[&iface_def].name)
+                                            .to_string();
 
-                                    if let Some(concrete) = self.resolve_interface_method(
-                                        struct_def,
-                                        &iface_name,
-                                        &method_name,
-                                        &recv_args,
-                                    ) {
-                                        (concrete, generic_args.clone())
-                                    } else {
-                                        (fn_def, generic_args)
-                                    }
+                                        self.resolve_interface_method(
+                                            struct_def,
+                                            &iface_name,
+                                            &method_name,
+                                            &recv_args,
+                                        )
+                                        .map(|method| (method, recv_args.clone()))
+                                    })
                                 } else {
-                                    (fn_def, generic_args)
+                                    iface_def.and_then(|iface_def| {
+                                        self.resolve_builtin_interface_method(
+                                            recv_ty,
+                                            iface_def,
+                                            &method_name,
+                                        )
+                                    })
+                                };
+
+                                match concrete {
+                                    Some((concrete, mut owner_args)) => {
+                                        owner_args.extend(generic_args.iter().copied());
+                                        (concrete, owner_args)
+                                    }
+                                    None => (fn_def, generic_args),
                                 }
-                            } else {
-                                (fn_def, generic_args)
                             }
+                            _ => (fn_def, generic_args),
                         }
-                        _ => (fn_def, generic_args),
-                    }
-                } else {
-                    (fn_def, generic_args)
-                };
+                    } else {
+                        (fn_def, generic_args)
+                    };
 
                 let Some(hir_fn) = self.hir_fns_by_def.get(&fn_def).cloned() else {
                     unreachable!("must been recorded this table");
@@ -8118,6 +8125,117 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         (block, Place::from_local(temp), ty)
+    }
+
+    fn resolve_builtin_interface_method(
+        &mut self,
+        recv_ty: TypeId,
+        iface_def: DefId,
+        method_name: &str,
+    ) -> Option<(DefId, Vec<TypeId>)> {
+        match self.typecheck.interner.get(recv_ty).clone() {
+            Type::Pointer { inner, .. } => {
+                self.resolve_builtin_interface_method(inner, iface_def, method_name)
+            }
+
+            Type::Builtin(builtin) => self.resolve_impl_method(
+                zeen_resolve::builtin_def_id(builtin),
+                iface_def,
+                method_name,
+            ),
+
+            Type::Array { .. } | Type::Slice { .. } | Type::ManyPointer { .. } => {
+                let mut owners: Vec<DefId> =
+                    self.typecheck.builtin_shapes.keys().copied().collect();
+                owners.sort();
+
+                for owner in owners {
+                    let Some(entries) = self.typecheck.impl_registry.get(&(owner, iface_def))
+                    else {
+                        continue;
+                    };
+
+                    let Some(shape) = self.typecheck.builtin_shapes.get(&owner) else {
+                        continue;
+                    };
+                    let generics = self
+                        .typecheck
+                        .builtin_shape_generics
+                        .get(&owner)
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+
+                    if !zeen_types::match_builtin_shape(
+                        &self.typecheck.interner,
+                        shape,
+                        recv_ty,
+                        &generics,
+                        &mut bindings,
+                    ) {
+                        continue;
+                    }
+
+                    if let Some(method) = entries
+                        .iter()
+                        .find_map(|entry| self.find_impl_method(entry, method_name))
+                    {
+                        let owner_args: Vec<TypeId> = generics
+                            .iter()
+                            .map(|generic| {
+                                bindings.get(generic).copied().unwrap_or_else(|| {
+                                    self.typecheck.interner.intern(Type::GenericParam(*generic))
+                                })
+                            })
+                            .collect();
+
+                        return Some((method, owner_args));
+                    }
+                }
+
+                None
+            }
+
+            _ => None,
+        }
+    }
+
+    fn resolve_impl_method(
+        &mut self,
+        owner: DefId,
+        iface_def: DefId,
+        method_name: &str,
+    ) -> Option<(DefId, Vec<TypeId>)> {
+        let entries = self.typecheck.impl_registry.get(&(owner, iface_def))?;
+        let generics = self
+            .typecheck
+            .builtin_shape_generics
+            .get(&owner)
+            .cloned()
+            .unwrap_or_default();
+        let owner_args: Vec<TypeId> = generics
+            .iter()
+            .map(|generic| self.typecheck.interner.intern(Type::GenericParam(*generic)))
+            .collect();
+
+        entries
+            .iter()
+            .find_map(|entry| self.find_impl_method(entry, method_name))
+            .map(|method| (method, owner_args))
+    }
+
+    fn find_impl_method(
+        &self,
+        entry: &zeen_typecheck::result::ImplEntry,
+        method_name: &str,
+    ) -> Option<DefId> {
+        entry.methods.iter().copied().find(|&def| {
+            self.resolution
+                .defs
+                .get(&def)
+                .map(|info| self.rodeo.borrow().resolve(&info.name) == method_name)
+                .unwrap_or(false)
+        })
     }
 
     fn resolve_interface_method(

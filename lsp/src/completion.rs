@@ -3323,4 +3323,91 @@ mod tests {
 
         assert_eq!(names, vec!["zero()"]);
     }
+
+    const BUILTIN_INTERFACE_SAMPLE: &str = "interface Show {\n    fn show(*const self) []const char;\n\n    fn tag() u8;\n}\n\nimplement Show : builtin i32 {\n    fn show(*const self) []const char {\n        return \"i32\";\n    }\n\n    fn tag() u8 {\n        return 7;\n    }\n}\n\nfn main() {\n    let n: i32 = 5;\n    @println(\"{} {}\", n.show(), i32.tag());\n}\n";
+
+    #[test]
+    fn builtin_interface_receiver_dot_completes_methods() {
+        let analysis = sample_analysis(BUILTIN_INTERFACE_SAMPLE);
+        let dot = BUILTIN_INTERFACE_SAMPLE.find("n.show").unwrap() + "n".len();
+        let items = dot_complete(
+            BUILTIN_INTERFACE_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["show()"]);
+    }
+
+    #[test]
+    fn builtin_interface_static_dot_completes_methods() {
+        let analysis = sample_analysis(BUILTIN_INTERFACE_SAMPLE);
+        let dot = BUILTIN_INTERFACE_SAMPLE.find("i32.tag").unwrap() + "i32".len();
+        let items = dot_complete(
+            BUILTIN_INTERFACE_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["tag()"]);
+    }
+
+    const BUILTIN_INTERFACE_SHAPE_SAMPLE: &str = "interface Countable {\n    fn count(*const self) usize;\n}\n\nimplement[T] Countable : builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
+
+    #[test]
+    fn builtin_interface_shape_receiver_dot_completes_methods() {
+        let analysis = sample_analysis(BUILTIN_INTERFACE_SHAPE_SAMPLE);
+        let dot = BUILTIN_INTERFACE_SHAPE_SAMPLE.find("slice.count").unwrap() + "slice".len();
+        let items = dot_complete(
+            BUILTIN_INTERFACE_SHAPE_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["count()"]);
+    }
+
+    #[test]
+    fn imported_builtin_interface_shape_receiver_dot_completes_methods() {
+        let dir = import_project("builtin-interface-shape");
+        std::fs::write(
+            dir.join("sub").join("lib.zn"),
+            "pub interface Countable {\n    pub fn count(*const self) usize;\n}\n\nimplement[T] Countable : builtin []T {\n    pub fn count(*const self) usize {\n        return (*self).len;\n    }\n}\n",
+        )
+        .unwrap();
+
+        let text = "use sub.lib;\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
+        let uri: tower_lsp_server::ls_types::Uri =
+            format!("file://{}", dir.join("main.zn").display())
+                .parse()
+                .unwrap();
+        let output = crate::diagnostics::check(&uri, text, &[]);
+        let errors = crate::diagnostics::only_errors(&output.diagnostics);
+        assert!(
+            errors.is_empty(),
+            "interface shape import sample must check cleanly: {:?}",
+            errors
+        );
+
+        let probe = text.replacen("slice.count()", "slice.     ()", 1);
+        let dot = probe.find("slice.     ()").unwrap() + "slice".len();
+        let paths = ResolvePaths {
+            dir: Some(dir.as_path()),
+            root: Some(dir.as_path()),
+            std: None,
+            packages: None,
+        };
+        let items = dot_complete(&probe, &output.analysis, dot, paths);
+        let names = labels(&items);
+
+        assert!(names.contains(&"count()"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

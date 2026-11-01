@@ -1884,6 +1884,37 @@ fn printed_mir_renders_builtin_shape_method_calls() {
 }
 
 #[test]
+fn printed_mir_renders_builtin_interface_impl_calls() {
+    let printed = print_mir_ok(
+        "interface Show { \
+             fn show(*const self) []const char; \
+         } \
+         implement Show : builtin i32 { \
+             fn show(*const self) []const char { return \"i32\"; } \
+         } \
+         implement[T] Show : builtin []T { \
+             fn show(*const self) []const char { return \"slice\"; } \
+         } \
+         fn describe[T: Show](value: *const T) []const char { \
+             return value.show(); \
+         } \
+         fn main() { \
+             let n: i32 = 4; \
+             let arr: [3]i32 = [1, 2, 3]; \
+             @println(\"{}\", n.show()); \
+             @println(\"{}\", arr[..].show()); \
+             @println(\"{}\", describe(&n)); \
+             @println(\"{}\", describe(&arr[..])); \
+         }",
+    );
+
+    assert!(printed.contains("fn i32.show("), "{printed}");
+    assert!(printed.contains("fn []i32.show("), "{printed}");
+    assert!(printed.contains("i32.show("), "{printed}");
+    assert!(printed.contains("[]i32.show("), "{printed}");
+}
+
+#[test]
 fn printed_mir_renders_builtin_interface_ops() {
     let printed = print_mir_ok(
         "fn main() { \

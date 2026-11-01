@@ -1,0 +1,5 @@
+pub use leaf;
+
+pub fn describe_mid[T: Show](value: *const T) []const char {
+  return value.show();
+}

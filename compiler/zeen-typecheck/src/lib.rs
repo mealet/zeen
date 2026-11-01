@@ -612,7 +612,11 @@ impl<'res> TypeChecker<'res> {
                 .or_insert_with(|| bounds.clone());
         }
 
-        let self_mode = hir_fn.params.first().and_then(|p| self_mode_of(&p.ty.kind));
+        let self_mode = hir_fn
+            .params
+            .first()
+            .filter(|param| param.name.is_none())
+            .and_then(|p| self_mode_of(&p.ty.kind));
         let params_len = hir_fn.params.len();
 
         let mut is_variadic = false;
@@ -643,7 +647,7 @@ impl<'res> TypeChecker<'res> {
                 let (ty, is_const) = self.lower_hir_type_with_const(&param.ty);
 
                 let effective_const = if idx == 0 {
-                    match self_mode_of(&param.ty.kind) {
+                    match self_mode {
                         Some(SelfMode::ValueConst) | Some(SelfMode::RefConst) => true,
                         _ => is_const,
                     }
@@ -738,35 +742,44 @@ impl<'res> TypeChecker<'res> {
             return;
         }
 
-        if let Some(DefKind::BuiltinShape(shape)) = self.def_kind(object_def).cloned() {
-            let entry = ImplEntry {
-                methods: imp.methods.iter().map(|m| m.def_id).collect(),
-                object_args: Vec::new(),
-                is_specialized: !shape.has_params(),
-                generic_bounds: imp
-                    .generics
-                    .iter()
-                    .map(|g| (g.def_id, g.bounds.clone()))
-                    .collect(),
-                generic_bindings: Vec::new(),
-                generics: imp.generics.iter().map(|g| g.def_id).collect(),
-            };
+        let shape = match self.def_kind(object_def).cloned() {
+            Some(DefKind::BuiltinShape(shape)) => Some(shape),
+            _ => None,
+        };
 
-            self.result
-                .inherent_impls
-                .entry(object_def)
-                .or_default()
-                .push(entry);
+        let builtin_owner = matches!(
+            self.def_kind(object_def),
+            Some(DefKind::Builtin(_)) | Some(DefKind::BuiltinShape(_))
+        );
 
-            return;
+        if builtin_owner
+            && let Some(iface_def) = imp.interface
+            && self.interface_is_core(iface_def)
+        {
+            let iface_name = self.def_name(iface_def).map(Into::into).unwrap_or_default();
+            let object = self
+                .def_name(object_def)
+                .map(Into::into)
+                .unwrap_or_default();
+
+            self.report(TypeError::CoreInterfaceImplForBuiltin {
+                iface_name,
+                object,
+                src: source.src(),
+                span: imp.object_bindings_span,
+            });
         }
 
         let member_generics = self.type_member_generics(object_def);
         let struct_generics = &member_generics;
 
         let (object_args, is_specialized) = self.impl_object_args(imp, true);
+        let is_specialized = shape
+            .as_ref()
+            .map(|shape| !shape.has_params())
+            .unwrap_or(is_specialized);
 
-        if imp.object_generic_types.len() != struct_generics.len() {
+        if shape.is_none() && imp.object_generic_types.len() != struct_generics.len() {
             let name_id = self
                 .resolution
                 .defs
@@ -6991,24 +7004,52 @@ impl<'res> TypeChecker<'res> {
         match self.result.interner.get(ty).clone() {
             Type::Error => true,
 
-            Type::Builtin(b) => match self.def_name(iface_def) {
-                Some(name) => Self::builtin_interface_names(b).contains(&name.as_str()),
-                None => false,
-            },
+            Type::Builtin(b) => {
+                let name_matches = match self.def_name(iface_def) {
+                    Some(name) => Self::builtin_interface_names(b).contains(&name.as_str()),
+                    None => false,
+                };
 
-            Type::IntLiteral => match self.def_name(iface_def) {
-                Some(name) => {
-                    Self::builtin_interface_names(DEFAULT_INT_LITERAL).contains(&name.as_str())
-                }
-                None => false,
-            },
+                name_matches
+                    || self
+                        .applicable_impl(zeen_resolve::builtin_def_id(b), iface_def, &[])
+                        .is_some()
+            }
 
-            Type::FloatLiteral => match self.def_name(iface_def) {
-                Some(name) => {
-                    Self::builtin_interface_names(DEFAULT_FLOAT_LITERAL).contains(&name.as_str())
-                }
-                None => false,
-            },
+            Type::IntLiteral => {
+                let name_matches = match self.def_name(iface_def) {
+                    Some(name) => {
+                        Self::builtin_interface_names(DEFAULT_INT_LITERAL).contains(&name.as_str())
+                    }
+                    None => false,
+                };
+
+                name_matches
+                    || self
+                        .applicable_impl(
+                            zeen_resolve::builtin_def_id(DEFAULT_INT_LITERAL),
+                            iface_def,
+                            &[],
+                        )
+                        .is_some()
+            }
+
+            Type::FloatLiteral => {
+                let name_matches = match self.def_name(iface_def) {
+                    Some(name) => Self::builtin_interface_names(DEFAULT_FLOAT_LITERAL)
+                        .contains(&name.as_str()),
+                    None => false,
+                };
+
+                name_matches
+                    || self
+                        .applicable_impl(
+                            zeen_resolve::builtin_def_id(DEFAULT_FLOAT_LITERAL),
+                            iface_def,
+                            &[],
+                        )
+                        .is_some()
+            }
 
             Type::Enum {
                 def_id,
@@ -7023,16 +7064,15 @@ impl<'res> TypeChecker<'res> {
             },
 
             Type::Array { element, .. } | Type::Slice { element, .. } => {
-                let Some(name) = self.def_name(iface_def) else {
-                    return false;
+                let char_display = match self.def_name(iface_def) {
+                    Some(name) if matches!(name.as_str(), "Display" | "Debug") => matches!(
+                        self.result.interner.get(element).clone(),
+                        Type::Builtin(BuiltinType::char)
+                    ),
+                    _ => false,
                 };
-                if !matches!(name.as_str(), "Display" | "Debug") {
-                    return false;
-                }
-                matches!(
-                    self.result.interner.get(element).clone(),
-                    Type::Builtin(BuiltinType::char)
-                )
+
+                char_display || self.builtin_shape_implements_interface(ty, iface_def)
             }
 
             Type::Struct {
@@ -7052,12 +7092,42 @@ impl<'res> TypeChecker<'res> {
                 bounds.contains(&iface_def)
             }
 
-            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => {
-                self.type_satisfies_interface(inner, iface_def)
+            Type::ManyPointer { inner, .. } => {
+                self.builtin_shape_implements_interface(ty, iface_def)
+                    || self.type_satisfies_interface(inner, iface_def)
             }
+
+            Type::Pointer { inner, .. } => self.type_satisfies_interface(inner, iface_def),
 
             _ => false,
         }
+    }
+
+    fn builtin_shape_implements_interface(&self, ty: TypeId, iface_def: DefId) -> bool {
+        self.result.builtin_shapes.iter().any(|(&owner, shape)| {
+            let Some(entries) = self.result.impl_registry.get(&(owner, iface_def)) else {
+                return false;
+            };
+
+            let generics = self.type_member_generics(owner);
+            let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+
+            if !self.match_builtin_shape(shape, ty, &generics, &mut bindings) {
+                return false;
+            }
+
+            entries.iter().any(|entry| {
+                entry.generic_bounds.iter().all(|(generic, ifaces)| {
+                    let Some(&concrete) = bindings.get(generic) else {
+                        return true;
+                    };
+
+                    ifaces
+                        .iter()
+                        .all(|&iface| self.type_satisfies_interface(concrete, iface))
+                })
+            })
+        })
     }
 
     fn substitute_generics(&mut self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> TypeId {
@@ -7352,58 +7422,7 @@ impl<'res> TypeChecker<'res> {
         generics: &[DefId],
         bindings: &mut HashMap<DefId, TypeId>,
     ) -> bool {
-        match shape {
-            BuiltinShape::Scalar(builtin) => {
-                matches!(self.result.interner.get(ty), Type::Builtin(found) if found == builtin)
-            }
-
-            BuiltinShape::Slice { element, is_const } => match self.result.interner.get(ty) {
-                Type::Slice {
-                    element: found,
-                    is_const: found_const,
-                } => {
-                    found_const == is_const
-                        && self.match_builtin_shape(element, *found, generics, bindings)
-                }
-                _ => false,
-            },
-
-            BuiltinShape::ManyPointer { element, is_const } => match self.result.interner.get(ty) {
-                Type::ManyPointer {
-                    inner: found,
-                    is_const: found_const,
-                } => {
-                    found_const == is_const
-                        && self.match_builtin_shape(element, *found, generics, bindings)
-                }
-                _ => false,
-            },
-
-            BuiltinShape::Array { element, len } => match self.result.interner.get(ty) {
-                Type::Array {
-                    element: found,
-                    len: found_len,
-                } => {
-                    *found_len == Some(*len)
-                        && self.match_builtin_shape(element, *found, generics, bindings)
-                }
-                _ => false,
-            },
-
-            BuiltinShape::Param(index) => {
-                let Some(&generic) = generics.get(*index as usize) else {
-                    return false;
-                };
-
-                match bindings.get(&generic) {
-                    Some(existing) => *existing == ty,
-                    None => {
-                        bindings.insert(generic, ty);
-                        true
-                    }
-                }
-            }
-        }
+        zeen_types::match_builtin_shape(&self.result.interner, shape, ty, generics, bindings)
     }
 
     fn report_unknown_shape_field(
@@ -7927,12 +7946,69 @@ impl<'res> TypeChecker<'res> {
             .map(|info| self.interner.borrow().resolve(&info.name).to_string())
     }
 
+    fn interface_is_core(&self, iface_def: DefId) -> bool {
+        self.resolution
+            .def_modules
+            .get(&iface_def)
+            .map(|module| module == "core" || module.starts_with("core."))
+            .or_else(|| {
+                self.resolution
+                    .defs
+                    .get(&iface_def)
+                    .map(|info| info.span.src().name().starts_with("core."))
+            })
+            .unwrap_or(false)
+    }
+
+    fn shape_owner_bounds_hold(&mut self, owner: DefId, sig_ctx: &ImplSigCtx) -> bool {
+        let generics = self.type_member_generics(owner);
+
+        let targets: Vec<TypeId> = if sig_ctx.is_specialized {
+            sig_ctx.object_args.to_vec()
+        } else {
+            sig_ctx
+                .imp_generics
+                .iter()
+                .map(|&generic| self.result.interner.intern(Type::GenericParam(generic)))
+                .collect()
+        };
+
+        for (index, generic) in generics.iter().enumerate() {
+            let Some(&target) = targets.get(index) else {
+                return false;
+            };
+            let required = self
+                .all_generic_bounds
+                .get(generic)
+                .cloned()
+                .unwrap_or_default();
+
+            for bound in required {
+                let holds = match self.result.interner.get(target) {
+                    Type::GenericParam(generic) => self
+                        .all_generic_bounds
+                        .get(generic)
+                        .is_some_and(|bounds| bounds.contains(&bound)),
+                    _ => self.type_satisfies_interface(target, bound),
+                };
+
+                if !holds {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn check_method_signature_matches(
         &mut self,
         iface_def: DefId,
         iface_method_def: DefId,
         impl_method_def: DefId,
         self_struct_ty: TypeId,
+        object_def: DefId,
         sig_ctx: &ImplSigCtx,
         source: &Source,
     ) {
@@ -7974,6 +8050,26 @@ impl<'res> TypeChecker<'res> {
         } else {
             for (imp_g, struct_arg) in sig_ctx.imp_generics.iter().zip(struct_args.iter()) {
                 impl_subst.insert(*imp_g, *struct_arg);
+            }
+        }
+
+        if let Some(owner) = self.result.method_owner.get(&impl_method_def).copied()
+            && owner != object_def
+            && matches!(self.def_kind(owner), Some(DefKind::BuiltinShape(_)))
+        {
+            let owner_generics = self.type_member_generics(owner);
+            let target_args: Vec<TypeId> = if sig_ctx.is_specialized {
+                sig_ctx.object_args.to_vec()
+            } else {
+                sig_ctx
+                    .imp_generics
+                    .iter()
+                    .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
+                    .collect()
+            };
+
+            for (owner_g, target) in owner_generics.iter().zip(target_args.iter()) {
+                impl_subst.insert(*owner_g, *target);
             }
         }
 
@@ -8180,7 +8276,18 @@ impl<'res> TypeChecker<'res> {
                     .collect()
             };
 
-        let self_ty = if is_enum {
+        let builtin_self = match self.def_kind(object_def).cloned() {
+            Some(DefKind::Builtin(builtin)) => Some(self.result.interner.builtin(builtin)),
+            Some(DefKind::BuiltinShape(shape)) => {
+                let generics = self.type_member_generics(object_def);
+                Some(self.builtin_shape_type(&shape, &generics))
+            }
+            _ => None,
+        };
+
+        let self_ty = if let Some(builtin_self) = builtin_self {
+            builtin_self
+        } else if is_enum {
             self.result.interner.intern(Type::Enum {
                 def_id: object_def,
                 generic_args: self_generic_args,
@@ -8199,6 +8306,23 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
+        let mut shape_owners: Vec<DefId> = Vec::new();
+        if let Some(DefKind::BuiltinShape(shape)) = self.def_kind(object_def).cloned() {
+            let candidates: Vec<DefId> = self
+                .result
+                .builtin_shapes
+                .iter()
+                .filter(|(def, other)| **def != object_def && *other == &shape)
+                .map(|(def, _)| *def)
+                .collect();
+
+            for candidate in candidates {
+                if self.shape_owner_bounds_hold(candidate, sig_ctx) {
+                    shape_owners.push(candidate);
+                }
+            }
+        }
+
         let mut matched_names: HashSet<String> = HashSet::default();
 
         for &iface_method_def in &interface_methods {
@@ -8207,21 +8331,23 @@ impl<'res> TypeChecker<'res> {
             };
             matched_names.insert(method_name.clone());
 
-            let inherent_method = self
-                .resolution
-                .defs
-                .get(&iface_method_def)
-                .map(|def| def.name)
-                .and_then(|key| {
-                    self.struct_methods
-                        .get(&object_def)
-                        .and_then(|methods| methods.get(&key))
-                })
-                .and_then(|candidates| {
-                    candidates
-                        .iter()
-                        .copied()
-                        .find(|candidate| !self.method_owning_interface.contains_key(candidate))
+            let inherent_method = std::iter::once(object_def)
+                .chain(shape_owners.iter().copied())
+                .find_map(|owner| {
+                    self.resolution
+                        .defs
+                        .get(&iface_method_def)
+                        .map(|def| def.name)
+                        .and_then(|key| {
+                            self.struct_methods
+                                .get(&owner)
+                                .and_then(|methods| methods.get(&key))
+                        })
+                        .and_then(|candidates| {
+                            candidates.iter().copied().find(|candidate| {
+                                !self.method_owning_interface.contains_key(candidate)
+                            })
+                        })
                 });
 
             let explicit_method = impl_method_names.get(&method_name).copied();
@@ -8250,6 +8376,7 @@ impl<'res> TypeChecker<'res> {
                         iface_method_def,
                         impl_method_def,
                         self_ty,
+                        object_def,
                         sig_ctx,
                         source,
                     );
@@ -9990,6 +10117,303 @@ mod tests {
                 .iter()
                 .any(|err| matches!(err, TypeError::DuplicateMethod { .. })),
             "expected DuplicateMethod error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_impl_call_works() {
+        let result = typecheck(
+            r#"
+            interface Show {
+                fn show(*const self) []const char;
+            }
+
+            implement Show : builtin i32 {
+                fn show(*const self) []const char {
+                    return "i32";
+                }
+            }
+
+            fn describe[T: Show](value: *const T) []const char {
+                return value.show();
+            }
+
+            fn main() {
+                let n: i32 = 4;
+                let direct = n.show();
+                let through = describe(&n);
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "builtin interface impls must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_interface_shape_impl_call_works() {
+        let result = typecheck_full(
+            r#"
+            interface Show {
+                fn show(*const self) []const char;
+            }
+
+            implement Show : builtin []i32 {
+                fn show(*const self) []const char {
+                    return "i32";
+                }
+            }
+
+            implement[T] Show : builtin []T {
+                fn show(*const self) []const char {
+                    return "slice";
+                }
+            }
+
+            fn main() {
+                let arr: [3]i32 = [1, 2, 3];
+                let concrete = arr[..].show();
+
+                let reals: [3]f64 = [1.5, 2.5, 3.5];
+                let generic = reals[..].show();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "builtin shape interface impls must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn builtin_interface_method_without_impl_is_error() {
+        let errors = typecheck(
+            r#"
+            interface Show {
+                fn show(*const self) []const char;
+            }
+
+            implement Show : builtin i32 {
+                fn show(*const self) []const char {
+                    return "i32";
+                }
+            }
+
+            fn main() {
+                let f: f64 = 1.5;
+                let x = f.show();
+            }
+            "#,
+        )
+        .expect_err("an interface impl on one builtin type must not cover another");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::UnknownMethod { .. })),
+            "expected UnknownMethod error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_duplicate_impl_is_error() {
+        let errors = typecheck(
+            r#"
+            interface Show {
+                fn show(*const self) []const char;
+            }
+
+            implement Show : builtin i32 {
+                fn show(*const self) []const char {
+                    return "i32";
+                }
+            }
+
+            implement Show : builtin i32 {
+                fn show(*const self) []const char {
+                    return "i32 again";
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("duplicate builtin interface impls must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::DuplicateImpl { .. })),
+            "expected DuplicateImpl error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_missing_method_is_error() {
+        let errors = typecheck(
+            r#"
+            interface Show {
+                fn show(*const self) []const char;
+                fn tag() u8;
+            }
+
+            implement Show : builtin i32 {
+                fn show(*const self) []const char {
+                    return "i32";
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("an interface impl must declare every interface method");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::InterfaceMethodMissing { .. })),
+            "expected InterfaceMethodMissing error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_bound_not_satisfied_is_error() {
+        let errors = typecheck(
+            r#"
+            interface Show {
+                fn show(*const self) []const char;
+            }
+
+            implement Show : builtin i32 {
+                fn show(*const self) []const char {
+                    return "i32";
+                }
+            }
+
+            fn describe[T: Show](value: *const T) []const char {
+                return value.show();
+            }
+
+            fn main() {
+                let f: f64 = 1.5;
+                let x = describe(&f);
+            }
+            "#,
+        )
+        .expect_err("a builtin without an impl must not satisfy the bound");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::GenericBoundNotSatisfied { .. })),
+            "expected GenericBoundNotSatisfied error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_core_interface_impl_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement Add : builtin i32 {
+                fn add(self, other: i32) i32 {
+                    return 99;
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("core interfaces cannot be implemented for builtin types");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CoreInterfaceImplForBuiltin { .. })),
+            "expected CoreInterfaceImplForBuiltin error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_core_display_impl_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement Display : builtin f64 {
+                fn display[W: StrWriter](*const self, out: *W) void {
+                    out.write_str("f64");
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("Display is native for builtin types and cannot be overridden");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CoreInterfaceImplForBuiltin { .. })),
+            "expected CoreInterfaceImplForBuiltin error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_shape_core_interface_impl_is_error() {
+        let errors = typecheck_full(
+            r#"
+            implement[T] Add : builtin []T {
+                fn add(self, other: []T) []T {
+                    return self;
+                }
+            }
+
+            fn main() {
+            }
+            "#,
+        )
+        .expect_err("core interfaces cannot be implemented for builtin shapes");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::CoreInterfaceImplForBuiltin { .. })),
+            "expected CoreInterfaceImplForBuiltin error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_user_interface_impl_is_allowed() {
+        let result = typecheck(
+            r#"
+            interface Sum {
+                fn total(*const self) i32;
+            }
+
+            implement Sum : builtin i32 {
+                fn total(*const self) i32 {
+                    return (*self);
+                }
+            }
+
+            fn main() {
+                let n: i32 = 4;
+                let total = n.total();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "user interfaces must stay implementable for builtin types: {:?}",
+            result.err()
         );
     }
 

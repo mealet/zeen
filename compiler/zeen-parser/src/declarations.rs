@@ -1069,40 +1069,41 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             None
         };
 
-        let (interface, object_name, object_span) = if let Some((_, name, span)) = builtin_target {
-            (None, name, span)
-        } else {
-            let first_token = self.p.expect(TokenKind::Ident, "identifier")?;
-            let first_span = first_token.span;
-            let first_slice =
-                self.p.src[first_span.offset()..first_span.offset() + first_span.len()].to_owned();
-
-            let first = (self.p.get_or_intern(first_slice), first_span);
-
-            if self.p.eat(TokenKind::Colon) {
-                if self.p.at(TokenKind::Keyword(CompilerKeyword::Builtin)) {
-                    self.p.report(ParserError::UnsupportedAction {
-                        label: SmolStr::from(
-                            "interface implementations for builtin types are not supported",
-                        ),
-                        src: self.p.named_src(),
-                        span: self.p.current().span,
-                    });
-
-                    return None;
-                }
-
-                let object_token = self.p.expect(TokenKind::Ident, "identifier")?;
-                let object_span = object_token.span;
-                let object_slice = self.p.src
-                    [object_span.offset()..object_span.offset() + object_span.len()]
+        let (interface, builtin_target, object_name, object_span) =
+            if let Some((shape, name, span)) = builtin_target {
+                (None, Some((shape, name, span)), name, span)
+            } else {
+                let first_token = self.p.expect(TokenKind::Ident, "identifier")?;
+                let first_span = first_token.span;
+                let first_slice = self.p.src
+                    [first_span.offset()..first_span.offset() + first_span.len()]
                     .to_owned();
 
-                (Some(first), self.p.get_or_intern(object_slice), object_span)
-            } else {
-                (None, first.0, first_span)
-            }
-        };
+                let first = (self.p.get_or_intern(first_slice), first_span);
+
+                if self.p.eat(TokenKind::Colon) {
+                    if self.p.at(TokenKind::Keyword(CompilerKeyword::Builtin)) {
+                        let (shape, name, span) = self.parse_builtin_implement_target(generics)?;
+
+                        (Some(first), Some((shape, name, span)), name, span)
+                    } else {
+                        let object_token = self.p.expect(TokenKind::Ident, "identifier")?;
+                        let object_span = object_token.span;
+                        let object_slice = self.p.src
+                            [object_span.offset()..object_span.offset() + object_span.len()]
+                            .to_owned();
+
+                        (
+                            Some(first),
+                            None,
+                            self.p.get_or_intern(object_slice),
+                            object_span,
+                        )
+                    }
+                } else {
+                    (None, None, first.0, first_span)
+                }
+            };
 
         let mut generic_bindings: Vec<&'ctx TypeExpr<'ctx>> = Vec::new();
 
@@ -2688,12 +2689,65 @@ mod tests {
     }
 
     #[test]
-    fn implement_builtin_rejects_interface_form() {
-        const SRC: &str = "implement Show : builtin i32 {}";
+    fn implement_builtin_interface_form_parses() {
+        const SRC: &str = "implement Show : builtin i32 {
+            fn show(*const self) []const char {
+                return \"i32\";
+            }
+        }";
 
         make_parser!(SRC, tokens, bump, rodeo, parser);
 
-        assert!(parser.parse_program().is_err());
+        let program = parser.parse_program().unwrap();
+
+        assert_matches!(
+            program[0].kind,
+            DeclarationKind::ImplementDecl {
+                interface: Some(_),
+                builtin: Some(_),
+                generics: None,
+                methods: [Declaration {
+                    kind: DeclarationKind::FnDecl { .. },
+                    ..
+                }],
+                ..
+            }
+        );
+
+        let DeclarationKind::ImplementDecl { builtin, .. } = &program[0].kind else {
+            panic!("expected an implement declaration");
+        };
+
+        assert_eq!(builtin.unwrap().key(), "i32");
+    }
+
+    #[test]
+    fn implement_builtin_interface_shaped_target_parses() {
+        const SRC: &str = "implement[T] Show : builtin []T {
+            fn show(*const self) []const char {
+                return \"slice\";
+            }
+        }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        let program = parser.parse_program().unwrap();
+
+        assert_matches!(
+            program[0].kind,
+            DeclarationKind::ImplementDecl {
+                interface: Some(_),
+                builtin: Some(_),
+                generics: Some(_),
+                ..
+            }
+        );
+
+        let DeclarationKind::ImplementDecl { builtin, .. } = &program[0].kind else {
+            panic!("expected an implement declaration");
+        };
+
+        assert_eq!(builtin.unwrap().key(), "[]#0");
     }
 
     #[test]

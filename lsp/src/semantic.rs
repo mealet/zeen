@@ -347,4 +347,44 @@ mod tests {
 
         assert_eq!(call_token.3, method_type);
     }
+
+    const BUILTIN_INTERFACE_SAMPLE: &str = "interface Show {\n    fn show(*const self) []const char;\n}\n\nimplement Show : builtin i32 {\n    fn show(*const self) []const char {\n        return \"i32\";\n    }\n}\n\nfn main() {\n    let n: i32 = 5;\n    @println(\"{}\", n.show());\n}\n";
+
+    #[test]
+    fn builtin_interface_impl_methods_use_method_tokens() {
+        let uri: Uri = "file:///tmp/zeen-lsp-semantic-builtin-interface.zn"
+            .parse()
+            .unwrap();
+        let output = crate::diagnostics::check(&uri, BUILTIN_INTERFACE_SAMPLE, &[]);
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
+
+        let tokens = decoded(
+            BUILTIN_INTERFACE_SAMPLE,
+            &tokens_for(BUILTIN_INTERFACE_SAMPLE, &output.analysis),
+        );
+        let method_type = TokenType::Method as u32;
+
+        let decl = BUILTIN_INTERFACE_SAMPLE
+            .match_indices("fn show")
+            .nth(1)
+            .unwrap()
+            .0
+            + "fn ".len();
+        let (decl_line, decl_start) = offset_position(BUILTIN_INTERFACE_SAMPLE, decl);
+        let decl_token = tokens
+            .iter()
+            .find(|token| token.0 == decl_line && token.1 == decl_start)
+            .unwrap();
+
+        assert_eq!(decl_token.3, method_type);
+
+        let call = BUILTIN_INTERFACE_SAMPLE.find("n.show").unwrap() + "n.".len();
+        let (call_line, call_start) = offset_position(BUILTIN_INTERFACE_SAMPLE, call);
+        let call_token = tokens
+            .iter()
+            .find(|token| token.0 == call_line && token.1 == call_start)
+            .unwrap();
+
+        assert_eq!(call_token.3, method_type);
+    }
 }

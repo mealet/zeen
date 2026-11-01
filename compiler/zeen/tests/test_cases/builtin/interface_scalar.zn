@@ -1,0 +1,160 @@
+interface Show {
+  fn show(*const self) []const char;
+}
+
+interface Scale {
+  fn scale(*const self, by: i32) i32;
+}
+
+interface Grow {
+  fn grow(self, by: i32) i32;
+  fn peek(const self) i32;
+}
+
+interface Double {
+  fn double(*const self) Self;
+}
+
+interface Tag {
+  fn tag() u8;
+  fn tag_of(value: Self) u8;
+}
+
+interface Pair {
+  fn combine(a: i32, b: i32) i32;
+  fn empty_value() Self;
+}
+
+interface Shout {
+  fn shout(*self) []const char;
+}
+
+implement Show : builtin i32 {
+  fn show(*const self) []const char {
+    return "i32";
+  }
+}
+
+implement Show : builtin f64 {
+  fn show(*const self) []const char {
+    return "f64";
+  }
+}
+
+implement Scale : builtin i32 {
+  fn scale(*const self, by: i32) i32 {
+    return (*self) * by;
+  }
+}
+
+implement Grow : builtin i32 {
+  fn grow(self, by: i32) i32 {
+    return self + by;
+  }
+
+  fn peek(const self) i32 {
+    return self;
+  }
+}
+
+implement Double : builtin i32 {
+  fn double(*const self) Self {
+    return (*self) * 2;
+  }
+}
+
+implement Tag : builtin i32 {
+  fn tag() u8 {
+    return 7;
+  }
+
+  fn tag_of(value: i32) u8 {
+    return @as(u8, value);
+  }
+}
+
+implement Pair : builtin i32 {
+  fn combine(a: i32, b: i32) i32 {
+    return a * 10 + b;
+  }
+
+  fn empty_value() Self {
+    return -1;
+  }
+}
+
+implement Pair : builtin f64 {
+  fn combine(a: i32, b: i32) i32 {
+    return a + b;
+  }
+
+  fn empty_value() Self {
+    return 0.5;
+  }
+}
+
+implement Shout : builtin i32 {
+  fn shout(*self) []const char {
+    *self += 1;
+    return "i32";
+  }
+}
+
+struct Wrapped {
+  pub value: i32,
+}
+
+fn show_value[T: Show](value: *const T) []const char {
+  return value.show();
+}
+
+fn scale_value[T: Scale](value: *const T, by: i32) i32 {
+  return value.scale(by);
+}
+
+fn grow_value[T: Grow](value: T, by: i32) i32 {
+  return value.grow(by);
+}
+
+fn peek_value[T: Grow](value: T) i32 {
+  return value.peek();
+}
+
+fn double_value[T: Double](value: *const T) T {
+  return value.double();
+}
+
+fn tag_of[T: Tag](value: T) u8 {
+  return T.tag_of(value);
+}
+
+fn combined[T: Pair](a: i32, b: i32) i32 {
+  return T.combine(a, b);
+}
+
+fn empty[T: Pair]() T {
+  return T.empty_value();
+}
+
+fn main() {
+  let n: i32 = 5;
+  let f: f64 = 1.5;
+  let wrapped = Wrapped { .value = n };
+
+  @println("{} {} {}{}", n.show(), f.show(), 3.show(), wrapped.value.show());
+  @println("{} {}", show_value(&n), show_value(&f));
+  @println("{} {}", n.scale(3), scale_value(&n, 4));
+  @println("{} {}, {} {}", n.grow(5), n.peek(), grow_value(n, 2), peek_value(n));
+  @println("{} {}", n.double(), double_value(&n));
+  @println("{}, {}, {}", i32.tag(), i32.combine(2, 3), i32.empty_value());
+  @println("{} {}", i32.tag_of(n), tag_of(n));
+  @println("{}, {}", f64.combine(6, 7), f64.empty_value());
+  @println("{}, {}", combined#[i32](4, 5), empty#[i32]());
+
+  let p: *const i32 = &n;
+  @println("{} {}", p.show(), (*p).peek());
+
+  let mutable: i32 = 9;
+  let q: *i32 = &mutable;
+  @println("{} {}", q.shout(), mutable);
+}

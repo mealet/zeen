@@ -1,0 +1,33 @@
+pub interface Show {
+  pub fn show(*const self) []const char;
+}
+
+interface Hidden {
+  fn hidden(*const self) []const char;
+}
+
+implement Show : builtin i32 {
+  pub fn show(*const self) []const char {
+    return "leaf i32";
+  }
+}
+
+implement[T] Show : builtin []T {
+  pub fn show(*const self) []const char {
+    return "leaf slice";
+  }
+}
+
+implement Hidden : builtin i32 {
+  fn hidden(*const self) []const char {
+    return "hidden";
+  }
+}
+
+pub fn describe[T: Show](value: *const T) []const char {
+  return value.show();
+}
+
+pub fn hidden_text(value: *const i32) []const char {
+  return value.hidden();
+}

@@ -1459,4 +1459,25 @@ mod tests {
             "{markdown}"
         );
     }
+
+    const BUILTIN_INTERFACE_SAMPLE: &str = "interface Show {\n    fn show(*const self) []const char;\n\n    fn tag() u8;\n}\n\nimplement Show : builtin i32 {\n    fn show(*const self) []const char {\n        return \"i32\";\n    }\n\n    fn tag() u8 {\n        return 7;\n    }\n}\n\nfn main() {\n    let n: i32 = 5;\n    @println(\"{} {}\", n.show(), i32.tag());\n}\n";
+
+    #[test]
+    fn builtin_interface_method_call_shows_owner() {
+        let markdown = hovering(BUILTIN_INTERFACE_SAMPLE, "show(),");
+
+        assert!(markdown.contains("instance method of `i32`"), "{markdown}");
+        assert!(
+            markdown.contains("fn show(*const self) []const char"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_static_call_shows_owner() {
+        let markdown = hovering(BUILTIN_INTERFACE_SAMPLE, "tag());");
+
+        assert!(markdown.contains("static method of `i32`"), "{markdown}");
+        assert!(markdown.contains("fn tag() u8"), "{markdown}");
+    }
 }
