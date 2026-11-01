@@ -50,4 +50,4 @@ vulnerabilities.
 
 ## License
 
-Project is licensed under the Apache 2.0 license. See LICENSE file for more information.
+Project is licensed under the Apache 2.0 license. See [LICENSE](LICENSE) file for more information.
