@@ -1,5 +1,13 @@
 use assert_cmd::Command;
-use std::{fs, path::PathBuf, process::Output};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Output,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 struct FailedTest {
     pub test_case: String,
@@ -7,6 +15,7 @@ struct FailedTest {
     pub error: String,
 }
 
+#[derive(Clone, Copy)]
 enum ModeName {
     Debug,
     Release,
@@ -45,6 +54,18 @@ fn count_digits(mut number: usize) -> usize {
     }
 
     count
+}
+
+fn test_jobs() -> usize {
+    std::env::var("ZEEN_TEST_JOBS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|jobs| *jobs > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|jobs| jobs.get())
+                .unwrap_or(1)
+        })
 }
 
 fn discover_test_cases() -> Vec<(String, String)> {
@@ -151,12 +172,26 @@ fn run_binary(binary_path: &str) -> Output {
 
 /// The repository's std library root, passed as `--std` so golden tests can
 /// reach `use std.*` modules from the filesystem (std is never embedded).
-fn std_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lib/std")
-        .canonicalize()
-        .expect("repo `lib/std` must exist next to the compiler workspace")
+fn std_dir() -> &'static Path {
+    static STD_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+    STD_DIR.get_or_init(|| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../lib/std")
+            .canonicalize()
+            .expect("repo `lib/std` must exist next to the compiler workspace")
+    })
 }
+
+struct Case {
+    name: String,
+    path: String,
+    skipped: bool,
+    numeration: String,
+}
+
+type CaseFailures = Vec<(ModeName, Vec<String>)>;
+type CaseOutcome = anyhow::Result<CaseFailures>;
 
 /// Compiles and runs a single test case in the given mode, returning a list
 /// of errors (empty if the test passed for this mode).
@@ -225,6 +260,25 @@ fn run_test_case_in_mode(
     Ok(errors)
 }
 
+fn run_case(case: &Case) -> CaseOutcome {
+    let input_file = format!("tests/test_cases/{}.zn", case.path);
+    let expected_file = format!("tests/test_cases/{}.expected", case.path);
+
+    let debug_errors = run_test_case_in_mode(&input_file, &expected_file, ModeName::Debug)?;
+    let release_errors = run_test_case_in_mode(&input_file, &expected_file, ModeName::Release)?;
+
+    let mut failures = Vec::new();
+
+    if !debug_errors.is_empty() {
+        failures.push((ModeName::Debug, debug_errors));
+    }
+    if !release_errors.is_empty() {
+        failures.push((ModeName::Release, release_errors));
+    }
+
+    Ok(failures)
+}
+
 #[test]
 fn dbg_macro_prints_containers() -> anyhow::Result<()> {
     let binary_path =
@@ -269,78 +323,109 @@ fn dbg_macro_prints_containers() -> anyhow::Result<()> {
 
 #[test]
 fn golden_system_tests() -> anyhow::Result<()> {
-    let test_cases = discover_test_cases();
-    let tests_count = test_cases.len();
+    let discovered = discover_test_cases();
+    let tests_count = discovered.len();
     let tests_count_digits = count_digits(tests_count);
+    let is_windows = std::env::consts::OS == "windows";
+
+    let mut cases = Vec::with_capacity(tests_count);
+    for (index, (test_name, test_path)) in discovered.into_iter().enumerate() {
+        let current_number_digits = count_digits(index + 1).wrapping_sub(1);
+        let expected_content =
+            fs::read_to_string(format!("tests/test_cases/{test_path}.expected"))?;
+        let expected = parse_expected(&expected_content);
+
+        cases.push(Case {
+            name: test_name,
+            path: test_path,
+            skipped: if is_windows {
+                expected.skip_windows
+            } else {
+                expected.skip_unix
+            },
+            numeration: format!(
+                "{}{}|",
+                index + 1,
+                " ".repeat(tests_count_digits - current_number_digits)
+            ),
+        });
+    }
+
+    let runnable = cases.iter().filter(|case| !case.skipped).count();
+    let jobs = test_jobs().min(runnable.max(1));
+    let next = AtomicUsize::new(0);
+    let outcomes: Vec<Mutex<Option<CaseOutcome>>> =
+        cases.iter().map(|_| Mutex::new(None)).collect();
+
+    std::thread::scope(|scope| {
+        for _ in 0..jobs {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+
+                    let Some(case) = cases.get(index) else {
+                        break;
+                    };
+
+                    if case.skipped {
+                        continue;
+                    }
+
+                    println!("{} Running test: `{}`", case.numeration, case.name);
+
+                    let result = run_case(case);
+                    let mut outcome = outcomes[index]
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *outcome = Some(result);
+                }
+            });
+        }
+    });
 
     let mut passed_tests: Vec<String> = Vec::new();
     let mut failed_tests: Vec<FailedTest> = Vec::new();
     let mut skipped_tests: Vec<String> = Vec::new();
 
-    for (index, (test_name, test_path)) in test_cases.into_iter().enumerate() {
-        let current_number_digits = count_digits(index + 1).wrapping_sub(1);
-        let numeration = format!(
-            "{}{}|",
-            index + 1,
-            " ".repeat(tests_count_digits - current_number_digits)
-        );
-
-        let expected_content =
-            fs::read_to_string(format!("tests/test_cases/{test_path}.expected"))?;
-        let expected = parse_expected(&expected_content);
-
-        let is_windows = std::env::consts::OS == "windows";
-        let should_skip = if is_windows {
-            expected.skip_windows
-        } else {
-            expected.skip_unix
-        };
-
-        if should_skip {
-            println!("{numeration} Running test: `{test_name}` [skipped on this platform]");
-            skipped_tests.push(test_name);
+    for (index, case) in cases.iter().enumerate() {
+        if case.skipped {
+            println!(
+                "{} Running test: `{}` [skipped on this platform]",
+                case.numeration, case.name
+            );
+            skipped_tests.push(case.name.clone());
             continue;
         }
 
-        println!("{numeration} Running test: `{test_name}`");
-
-        let input_file = format!("tests/test_cases/{test_path}.zn");
-        let expected_file = format!("tests/test_cases/{test_path}.expected");
-
-        let debug_errors = run_test_case_in_mode(&input_file, &expected_file, ModeName::Debug)?;
-        let release_errors = run_test_case_in_mode(&input_file, &expected_file, ModeName::Release)?;
-
-        let mut failures = Vec::new();
-
-        if !debug_errors.is_empty() {
-            failures.push((ModeName::Debug, debug_errors));
-        }
-        if !release_errors.is_empty() {
-            failures.push((ModeName::Release, release_errors));
-        }
+        let failures = outcomes[index]
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .expect("every runnable case produces a result")?;
 
         if failures.is_empty() {
-            passed_tests.push(test_name);
-        } else {
-            let modes = if failures.len() == 2 {
-                "debug and release".to_string()
-            } else {
-                failures[0].0.as_str().to_string()
-            };
-
-            let mut error = String::new();
-            for (mode, mode_errors) in &failures {
-                error.push_str(&format!("[{}]\n", mode.as_str()));
-                error.push_str(&mode_errors.join("\n"));
-                error.push('\n');
-            }
-
-            failed_tests.push(FailedTest {
-                test_case: test_name,
-                modes,
-                error,
-            });
+            passed_tests.push(case.name.clone());
+            continue;
         }
+
+        let modes = if failures.len() == 2 {
+            "debug and release".to_string()
+        } else {
+            failures[0].0.as_str().to_string()
+        };
+
+        let mut error = String::new();
+        for (mode, mode_errors) in &failures {
+            error.push_str(&format!("[{}]\n", mode.as_str()));
+            error.push_str(&mode_errors.join("\n"));
+            error.push('\n');
+        }
+
+        failed_tests.push(FailedTest {
+            test_case: case.name.clone(),
+            modes,
+            error,
+        });
     }
 
     println!();
