@@ -5348,29 +5348,7 @@ impl<'ctx> MirLowering<'ctx> {
 
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let result_ty = self.expr_type(fb, expr);
-                    let is_pointer = self
-                        .typecheck
-                        .def_types
-                        .get(&op_res.method_def)
-                        .is_some_and(|ty| {
-                            matches!(
-                                self.typecheck.interner.get(*ty),
-                                Type::Fn { ret, .. }
-                                    if matches!(
-                                        self.typecheck.interner.get(*ret),
-                                        Type::Pointer { .. } | Type::ManyPointer { .. }
-                                    )
-                            )
-                        });
-
-                    let call_ty = if is_pointer {
-                        self.typecheck.interner.intern(Type::Pointer {
-                            inner: result_ty,
-                            is_const: false,
-                        })
-                    } else {
-                        result_ty
-                    };
+                    let (call_ty, unwrap) = self.operator_place_target(fb, &op_res, result_ty);
 
                     let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
                     let index_ty = self.expr_type(fb, index);
@@ -5384,12 +5362,12 @@ impl<'ctx> MirLowering<'ctx> {
                         call_ty,
                     );
 
-                    if is_pointer {
-                        let ptr_local = self.operand_to_local(fb, operand, call_ty, block);
-                        return (block, Place::from_local(ptr_local).deref());
+                    let temp = self.operand_to_local(fb, operand, call_ty, block);
+
+                    if unwrap {
+                        return (block, Place::from_local(temp).deref());
                     }
 
-                    let temp = self.operand_to_local(fb, operand, call_ty, block);
                     return (block, Place::from_local(temp));
                 }
 
@@ -5448,39 +5426,17 @@ impl<'ctx> MirLowering<'ctx> {
             } => {
                 if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
                     let result_ty = self.expr_type(fb, expr);
-                    let is_pointer = self
-                        .typecheck
-                        .def_types
-                        .get(&op_res.method_def)
-                        .is_some_and(|ty| {
-                            matches!(
-                                self.typecheck.interner.get(*ty),
-                                Type::Fn { ret, .. }
-                                    if matches!(
-                                        self.typecheck.interner.get(*ret),
-                                        Type::Pointer { .. } | Type::ManyPointer { .. }
-                                    )
-                            )
-                        });
-
-                    let call_ty = if is_pointer {
-                        self.typecheck.interner.intern(Type::Pointer {
-                            inner: result_ty,
-                            is_const: false,
-                        })
-                    } else {
-                        result_ty
-                    };
+                    let (call_ty, unwrap) = self.operator_place_target(fb, &op_res, result_ty);
 
                     let (block, operand) =
                         self.lower_operator_method_call(fb, inner, &op_res, block, call_ty);
 
-                    if is_pointer {
-                        let ptr_local = self.operand_to_local(fb, operand, call_ty, block);
-                        return (block, Place::from_local(ptr_local).deref());
+                    let temp = self.operand_to_local(fb, operand, call_ty, block);
+
+                    if unwrap {
+                        return (block, Place::from_local(temp).deref());
                     }
 
-                    let temp = self.operand_to_local(fb, operand, call_ty, block);
                     return (block, Place::from_local(temp));
                 }
 
@@ -8367,6 +8323,83 @@ impl<'ctx> MirLowering<'ctx> {
         (next, Operand::Constant(ConstValue::Void, None))
     }
 
+    fn impl_block_bindings(
+        &self,
+        def_id: DefId,
+        owner_generics: &[DefId],
+        owner_args: &[TypeId],
+    ) -> HashMap<DefId, TypeId> {
+        let mut bindings: HashMap<DefId, TypeId> = owner_generics
+            .iter()
+            .copied()
+            .zip(owner_args.iter().copied())
+            .collect();
+
+        for entries in self
+            .typecheck
+            .impl_registry
+            .values()
+            .chain(self.typecheck.inherent_impls.values())
+        {
+            for entry in entries {
+                if !entry.methods.contains(&def_id) {
+                    continue;
+                }
+
+                for (arg, &owner_g) in entry.object_args.iter().zip(owner_generics.iter()) {
+                    if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
+                        && let Some(&concrete) = bindings.get(&owner_g)
+                    {
+                        bindings.insert(*imp_g, concrete);
+                    }
+                }
+            }
+        }
+
+        bindings
+    }
+
+    fn operator_place_target(
+        &mut self,
+        fb: &FnBuilder,
+        op_res: &OperatorResolution,
+        result_ty: TypeId,
+    ) -> (TypeId, bool) {
+        let Some(fn_ty) = self.typecheck.def_types.get(&op_res.method_def).copied() else {
+            return (result_ty, false);
+        };
+
+        let Type::Fn { ret, .. } = self.typecheck.interner.get(fn_ty).clone() else {
+            return (result_ty, false);
+        };
+
+        let args = self.substitute_generic_args(fb, &op_res.generic_args);
+
+        let bindings: HashMap<DefId, TypeId> = self
+            .typecheck
+            .method_owner
+            .get(&op_res.method_def)
+            .copied()
+            .map(|owner| {
+                let owner_generics = self.owner_generics(owner);
+                self.impl_block_bindings(op_res.method_def, &owner_generics, &args)
+            })
+            .unwrap_or_default();
+
+        let ret_ty = zeen_types::substitute_generics(&mut self.typecheck.interner, ret, &bindings);
+
+        let is_pointer = matches!(
+            self.typecheck.interner.get(ret_ty),
+            Type::Pointer { .. } | Type::ManyPointer { .. }
+        );
+
+        if is_pointer && ret_ty != result_ty {
+            (ret_ty, true)
+        } else {
+            (result_ty, false)
+        }
+    }
+
     fn lower_operator_method_call(
         &mut self,
         fb: &mut FnBuilder,
@@ -9539,34 +9572,8 @@ impl<'ctx> MirLowering<'ctx> {
                     let method_args: Vec<TypeId> =
                         generic_args.iter().skip(owner_count).copied().collect();
 
-                    let mut bindings: HashMap<DefId, TypeId> = owner_generics
-                        .iter()
-                        .copied()
-                        .zip(struct_args.iter().copied())
-                        .collect();
-
-                    for entries in self
-                        .typecheck
-                        .impl_registry
-                        .values()
-                        .chain(self.typecheck.inherent_impls.values())
-                    {
-                        for entry in entries {
-                            if !entry.methods.contains(&def_id) {
-                                continue;
-                            }
-
-                            for (arg, &struct_g) in
-                                entry.object_args.iter().zip(owner_generics.iter())
-                            {
-                                if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
-                                    && let Some(&concrete) = bindings.get(&struct_g)
-                                {
-                                    bindings.insert(*imp_g, concrete);
-                                }
-                            }
-                        }
-                    }
+                    let mut bindings =
+                        self.impl_block_bindings(def_id, &owner_generics, &struct_args);
 
                     bindings.extend(
                         generic_defs
@@ -9585,35 +9592,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
             _ if let Some(owner) = owner_struct => {
                 let owner_generics = self.owner_generics(owner);
-                let mut bindings: HashMap<DefId, TypeId> = owner_generics
-                    .iter()
-                    .copied()
-                    .zip(generic_args.iter().copied())
-                    .collect();
-
-                for entries in self
-                    .typecheck
-                    .impl_registry
-                    .values()
-                    .chain(self.typecheck.inherent_impls.values())
-                {
-                    for entry in entries {
-                        if !entry.methods.contains(&def_id) {
-                            continue;
-                        }
-
-                        for (arg, &struct_g) in entry.object_args.iter().zip(owner_generics.iter())
-                        {
-                            if let Type::GenericParam(imp_g) = self.typecheck.interner.get(*arg)
-                                && let Some(&concrete) = bindings.get(&struct_g)
-                            {
-                                bindings.insert(*imp_g, concrete);
-                            }
-                        }
-                    }
-                }
-
-                bindings
+                self.impl_block_bindings(def_id, &owner_generics, generic_args)
             }
             _ => HashMap::default(),
         };
