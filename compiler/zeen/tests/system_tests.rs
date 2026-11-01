@@ -29,6 +29,10 @@ struct Expected {
     pub skip_unix: bool,
 }
 
+fn normalize_output(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 fn count_digits(mut number: usize) -> usize {
     if number == 0 {
         return 1;
@@ -125,9 +129,9 @@ fn parse_expected(content: &str) -> Expected {
             }
         }
 
-        content[header_end..].to_string()
+        normalize_output(&content[header_end..])
     } else {
-        content.to_string()
+        normalize_output(content)
     };
 
     Expected {
@@ -193,7 +197,7 @@ fn run_test_case_in_mode(
 
     let output = run_binary(binary_path_str);
     let actual_exit_code = output.status.code().unwrap_or(-1);
-    let actual_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let actual_stdout = normalize_output(&String::from_utf8_lossy(&output.stdout));
 
     let _ = fs::remove_file(&binary_path);
 
@@ -238,7 +242,7 @@ fn dbg_macro_prints_containers() -> anyhow::Result<()> {
     let debug_output = run_binary(binary_path_str);
     let _ = fs::remove_file(&binary_path);
     assert_eq!(
-        String::from_utf8_lossy(&debug_output.stdout),
+        normalize_output(&String::from_utf8_lossy(&debug_output.stdout)),
         "[dbg_container.zn:6]> `a` = [1, 2, 3, 4]\n\
          [dbg_container.zn:7]> `s` = [1, 2, 3, 4]\n\
          [dbg_container.zn:8]> `p` = [1, 2, 3, 4]\n\
@@ -255,7 +259,10 @@ fn dbg_macro_prints_containers() -> anyhow::Result<()> {
 
     let release_output = run_binary(binary_path_str);
     let _ = fs::remove_file(&binary_path);
-    assert_eq!(String::from_utf8_lossy(&release_output.stdout), "");
+    assert_eq!(
+        normalize_output(&String::from_utf8_lossy(&release_output.stdout)),
+        ""
+    );
 
     Ok(())
 }
