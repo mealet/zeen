@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use tower_lsp_server::ls_types::{Range, TextEdit, Uri};
 
-use crate::analysis::{Analysis, MemberKind};
+use crate::analysis::{Analysis, MemberKind, TypeKind};
 use crate::position;
 
 pub struct RenameDoc<'a> {
@@ -76,7 +76,7 @@ fn field_owner(analysis: &Analysis, def: zeen_resolve::DefId) -> Option<zeen_res
 fn collect_spans(
     docs: &[RenameDoc<'_>],
     old: &str,
-    def: zeen_resolve::DefId,
+    defs: &[zeen_resolve::DefId],
 ) -> Vec<(usize, (usize, usize))> {
     let mut spans = Vec::new();
     let mut seen: HashSet<(usize, usize, usize)> = HashSet::new();
@@ -92,82 +92,146 @@ fn collect_spans(
             }
         };
 
-    let anchor = decl_span(docs, def).map(|(doc, span)| (docs[doc].uri.clone(), span));
+    for &def in defs {
+        let anchor = decl_span(docs, def).map(|(doc, span)| (docs[doc].uri.clone(), span));
 
-    if let Some((doc, span)) = decl_span(docs, def) {
-        push(doc, span, &mut spans);
-    }
-
-    for (index, doc) in docs.iter().enumerate() {
-        for occurrence in &doc.analysis.occurrences {
-            if occurrence.def != Some(def) {
-                continue;
-            }
-
-            let Some(target_offset) = occurrence.target_offset else {
-                continue;
-            };
-
-            let Some(target_len) = occurrence.target_len else {
-                continue;
-            };
-
-            let matches_decl = anchor.as_ref().is_some_and(|(uri, span)| {
-                target_uri(&doc.uri, occurrence.target_file.as_deref()) == Some(uri.clone())
-                    && target_offset == span.0
-                    && target_len == span.1
-            });
-
-            if matches_decl {
-                push(index, (occurrence.offset, occurrence.len), &mut spans);
-            }
+        if let Some((doc, span)) = decl_span(docs, def) {
+            push(doc, span, &mut spans);
         }
 
-        for (span, target) in &doc.analysis.method_calls {
-            if *target != def {
-                continue;
-            }
-
-            let field = doc
-                .analysis
-                .raw_calls
-                .iter()
-                .find_map(|raw| (raw.callee == *span).then_some(raw.field).flatten());
-
-            match field {
-                Some(field) => push(index, field, &mut spans),
-                None => push(index, *span, &mut spans),
-            }
-        }
-
-        for (span, target) in &doc.analysis.field_targets {
-            if target.field_def != def {
-                continue;
-            }
-
-            push(index, *span, &mut spans);
-        }
-
-        if let Some(owner) = field_owner(doc.analysis, def) {
-            for init in &doc.analysis.raw_fields {
-                if init.struct_def != owner {
+        for (index, doc) in docs.iter().enumerate() {
+            for occurrence in &doc.analysis.occurrences {
+                if occurrence.def != Some(def) {
                     continue;
                 }
 
-                let Some(body) = docs[index].text.get(init.offset..init.offset + init.len) else {
+                let Some(target_offset) = occurrence.target_offset else {
                     continue;
                 };
 
-                let Some(dot) = body.find('.') else {
+                let Some(target_len) = occurrence.target_len else {
                     continue;
                 };
 
-                push(index, (init.offset + dot + 1, old.len()), &mut spans);
+                let matches_decl = anchor.as_ref().is_some_and(|(uri, span)| {
+                    target_uri(&doc.uri, occurrence.target_file.as_deref()) == Some(uri.clone())
+                        && target_offset == span.0
+                        && target_len == span.1
+                });
+
+                if matches_decl {
+                    push(index, (occurrence.offset, occurrence.len), &mut spans);
+                }
+            }
+
+            for (span, target) in &doc.analysis.method_calls {
+                if *target != def {
+                    continue;
+                }
+
+                let field = doc
+                    .analysis
+                    .raw_calls
+                    .iter()
+                    .find_map(|raw| (raw.callee == *span).then_some(raw.field).flatten());
+
+                match field {
+                    Some(field) => push(index, field, &mut spans),
+                    None => push(index, *span, &mut spans),
+                }
+            }
+
+            for (span, target) in &doc.analysis.field_targets {
+                if target.field_def != def {
+                    continue;
+                }
+
+                push(index, *span, &mut spans);
+            }
+
+            if let Some(owner) = field_owner(doc.analysis, def) {
+                for init in &doc.analysis.raw_fields {
+                    if init.struct_def != owner {
+                        continue;
+                    }
+
+                    let Some(body) = docs[index].text.get(init.offset..init.offset + init.len)
+                    else {
+                        continue;
+                    };
+
+                    let Some(dot) = body.find('.') else {
+                        continue;
+                    };
+
+                    push(index, (init.offset + dot + 1, old.len()), &mut spans);
+                }
             }
         }
     }
 
     spans
+}
+
+fn method_partners(
+    analysis: &Analysis,
+    def: zeen_resolve::DefId,
+    name: &str,
+) -> Vec<zeen_resolve::DefId> {
+    let Some(owner) = analysis.member_owner.get(&def).copied() else {
+        return Vec::new();
+    };
+
+    let member = |owner: zeen_resolve::DefId| {
+        analysis.members.get(&owner).and_then(|members| {
+            members
+                .iter()
+                .find(|member| member.kind == MemberKind::Method && member.name == name)
+                .map(|member| member.def)
+        })
+    };
+
+    let mut out = Vec::new();
+
+    if analysis.type_kinds.get(&owner) == Some(&TypeKind::Interface) {
+        for (iface, object) in &analysis.implements {
+            if *iface != owner {
+                continue;
+            }
+
+            if let Some(method) = member(*object) {
+                out.push(method);
+            }
+        }
+    } else {
+        for (iface, object) in &analysis.implements {
+            if *object != owner {
+                continue;
+            }
+
+            if let Some(method) = member(*iface) {
+                out.push(method);
+            }
+        }
+    }
+
+    out
+}
+
+fn related_defs(
+    docs: &[RenameDoc<'_>],
+    def: zeen_resolve::DefId,
+    name: &str,
+) -> Vec<zeen_resolve::DefId> {
+    let mut defs = vec![def];
+
+    for doc in docs {
+        defs.extend(method_partners(doc.analysis, def, name));
+    }
+
+    defs.sort();
+    defs.dedup();
+    defs
 }
 
 pub fn rename_edits(
@@ -194,7 +258,7 @@ pub fn rename_edits(
         return out;
     }
 
-    for (index, span) in collect_spans(docs, old, def) {
+    for (index, span) in collect_spans(docs, old, &related_defs(docs, def, old)) {
         out.entry(docs[index].uri.clone())
             .or_default()
             .push(TextEdit {
@@ -251,7 +315,7 @@ pub fn reference_spans(docs: &[RenameDoc<'_>], uri: &Uri, offset: usize) -> Vec<
 
     let decl = decl_span(docs, def);
 
-    collect_spans(docs, old, def)
+    collect_spans(docs, old, &related_defs(docs, def, old))
         .into_iter()
         .filter(|(index, span)| {
             decl.is_some_and(|(decl_doc, decl_span)| decl_doc != *index || *span != decl_span)
@@ -300,7 +364,7 @@ pub fn highlight_spans(docs: &[RenameDoc<'_>], uri: &Uri, offset: usize) -> Vec<
 
     let write = decl_span(docs, def);
 
-    collect_spans(docs, old, def)
+    collect_spans(docs, old, &related_defs(docs, def, old))
         .into_iter()
         .filter(|(index, _)| *index == home)
         .map(|(index, span)| {
@@ -521,13 +585,31 @@ mod tests {
         );
         assert!(result.contains("n.print()"), "{result}");
         assert!(
-            result.contains("pub fn show(*const self) []const char;"),
+            result.contains("pub fn print(*const self) []const char;"),
+            "{result}"
+        );
+        assert!(!result.contains("show"), "{result}");
+    }
+
+    #[test]
+    fn renames_builtin_interface_method_from_interface_declaration() {
+        let fixture = Fixture::check(&[("main", BUILTIN_INTERFACE_SAMPLE)]);
+        let docs = fixture.docs();
+        let offset = fixture.offset(0, "pub fn show") + "pub fn ".len();
+        let edits = rename_edits(&docs, &fixture.uris[0], offset, "print");
+
+        let result = applied(&fixture.texts[0], &edits[&fixture.uris[0]]);
+
+        assert!(
+            result.contains("pub fn print(*const self) []const char;"),
             "{result}"
         );
         assert!(
-            !result.contains("fn show(*const self) []const char {"),
+            result.contains("pub fn print(*const self) []const char {"),
             "{result}"
         );
+        assert!(result.contains("n.print()"), "{result}");
+        assert!(!result.contains("show"), "{result}");
     }
 
     #[test]
