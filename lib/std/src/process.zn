@@ -1196,76 +1196,16 @@ fn merged_env(cmd: *const Command) List[String] {
 
 @os[windows] {
   fn utf16_push(out: *List[u16], text: []const char) {
-    let i: usize = 0;
+    let index: usize = 0;
 
-    while (i < text.len) {
-      let b = @as(u32, text[i]);
+    while (index < text.len) {
+      let rune = Rune.decode_lossy(text, &index);
+      let units: [2]u16 = [0, 0];
+      let len = rune.encode_utf16(&units);
+      let i: usize = 0;
 
-      if (b < 128) {
-        (*out).push(@as(u16, b));
-
-        i += 1;
-      } else if (b >= 194 && b < 224) {
-        if (i + 1 >= text.len) {
-          (*out).push(@as(u16, 65533));
-          break;
-        };
-
-        let c = @as(u32, text[i + 1]);
-
-        if (c < 128 || c >= 192) {
-          (*out).push(@as(u16, 65533));
-
-          i += 1;
-        } else {
-          (*out).push(@as(u16, (b - 192) * 64 + (c - 128)));
-
-          i += 2;
-        };
-      } else if (b >= 224 && b < 240) {
-        if (i + 2 >= text.len) {
-          (*out).push(@as(u16, 65533));
-          break;
-        };
-
-        let c1 = @as(u32, text[i + 1]);
-        let c2 = @as(u32, text[i + 2]);
-        let cp = (b - 224) * 4096 + (c1 - 128) * 64 + (c2 - 128);
-
-        if (c1 < 128 || c1 >= 192 || c2 < 128 || c2 >= 192 || cp < 2048 || (cp >= 55296 && cp <= 57343)) {
-          (*out).push(@as(u16, 65533));
-
-          i += 1;
-        } else {
-          (*out).push(@as(u16, cp));
-
-          i += 3;
-        };
-      } else if (b >= 240 && b < 245) {
-        if (i + 3 >= text.len) {
-          (*out).push(@as(u16, 65533));
-          break;
-        };
-
-        let c1 = @as(u32, text[i + 1]);
-        let c2 = @as(u32, text[i + 2]);
-        let c3 = @as(u32, text[i + 3]);
-        let cp = (b - 240) * 262144 + (c1 - 128) * 4096 + (c2 - 128) * 64 + (c3 - 128);
-
-        if (c1 < 128 || c1 >= 192 || c2 < 128 || c2 >= 192 || c3 < 128 || c3 >= 192 || cp < 65536 || cp > 1114111) {
-          (*out).push(@as(u16, 65533));
-
-          i += 1;
-        } else {
-          let v = cp - 65536;
-
-          (*out).push(@as(u16, 55296 + (v >> 10)));
-          (*out).push(@as(u16, 56320 + (v & 1023)));
-
-          i += 4;
-        };
-      } else {
-        (*out).push(@as(u16, 65533));
+      while (i < len) {
+        (*out).push(units[i]);
 
         i += 1;
       };
