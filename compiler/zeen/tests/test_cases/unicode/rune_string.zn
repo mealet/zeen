@@ -36,9 +36,7 @@ fn main() {
   let parts = typed.split_rune(Rune.from_u32(0x2C).unwrap());
   @println("split {}", parts.len());
 
-  let left: *String = parts[0];
-  let right: *String = parts[1];
-  @println("split [{}] [{}]", (*left), (*right));
+  @println("split [{}] [{}]", (*parts[0]), (*parts[1]));
 
   let reverse_text = String.from("a日😀z");
   reverse_text.reverse();

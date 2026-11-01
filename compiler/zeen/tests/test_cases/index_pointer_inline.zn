@@ -1,0 +1,51 @@
+use std.string;
+use std.collections.list;
+
+struct Holder[T] {
+  value: T,
+}
+
+implement[T] Holder[T] {
+  pub fn new(value: T) Self {
+    Self { .value = value }
+  }
+}
+
+implement[T] Index : Holder[T] {
+  fn index(*const self, index: usize) *T {
+    &self.value
+  }
+}
+
+implement[T] IndexPtr : Holder[T] {
+  fn index_ptr(*self, index: usize) *T {
+    &self.value
+  }
+}
+
+fn main() {
+  let list = List#[String].new();
+  list.push(String.from("abc"));
+  list.push(String.from("de"));
+
+  let bound: *String = list[0];
+  @println("bound {}", (*bound));
+
+  @println("inline {} {}", (*list[0]), list[1].len());
+  @println("method {}", list[1].contains('d'));
+
+  list[1] = String.from("xyz");
+  @println("assigned {} {}", (*list[1]), list[1].len());
+
+  let holder: Holder[String] = Holder#[String].new(String.from("hi"));
+  @println("holder {} {}", (*holder[0]), holder[0].len());
+
+  holder[0] = String.from("bye");
+  @println("holder assigned {}", (*holder[0]));
+
+  let items: [2]String = [String.from("one"), String.from("two")];
+  @println("array {} {}", items[1], items[0].len());
+
+  let slice: []String = items[..];
+  @println("slice {} {}", slice[1], slice[0].len());
+}
