@@ -1,0 +1,116 @@
+use std.collections.set;
+use std.string;
+
+fn describe(label: []const char, code: u32) {
+  let value = Rune.from_u32(code);
+
+  if (value.is_none()) {
+    @println("{} none", label);
+
+    return;
+  };
+
+  let rune = value.unwrap();
+
+  @println(
+    "{} ok u+{hex} bytes={} units={}",
+    label,
+    rune.to_u32(),
+    rune.utf8_len(),
+    rune.utf16_len(),
+  );
+}
+
+fn main() {
+  describe("0", 0x0);
+  describe("7f", 0x7F);
+  describe("80", 0x80);
+  describe("7ff", 0x7FF);
+  describe("800", 0x800);
+  describe("d7ff", 0xD7FF);
+  describe("d800", 0xD800);
+  describe("dfff", 0xDFFF);
+  describe("e000", 0xE000);
+  describe("ffff", 0xFFFF);
+  describe("10000", 0x10000);
+  describe("10ffff", 0x10FFFF);
+  describe("110000", 0x110000);
+
+  @println("max u+{hex}", Rune.max().to_u32());
+  @println("replacement u+{hex}", Rune.replacement().to_u32());
+  @println("scalar {}", Rune.is_scalar(0x41));
+
+  let buffer: [4]u8 = [0; 4];
+
+  let ascii = Rune.from_u32(0x41).unwrap();
+  @println("ascii {} {}", ascii.encode_utf8(&buffer), @as(u32, buffer[0]));
+
+  let latin = Rune.from_u32(0xE9).unwrap();
+  @println(
+    "latin {} {} {}",
+    latin.encode_utf8(&buffer),
+    @as(u32, buffer[0]),
+    @as(u32, buffer[1]),
+  );
+
+  let euro = Rune.from_u32(0x20AC).unwrap();
+  @println(
+    "euro {} {} {} {}",
+    euro.encode_utf8(&buffer),
+    @as(u32, buffer[0]),
+    @as(u32, buffer[1]),
+    @as(u32, buffer[2]),
+  );
+
+  let emoji = Rune.from_u32(0x1F600).unwrap();
+  @println(
+    "emoji {} {} {} {} {}",
+    emoji.encode_utf8(&buffer),
+    @as(u32, buffer[0]),
+    @as(u32, buffer[1]),
+    @as(u32, buffer[2]),
+    @as(u32, buffer[3]),
+  );
+
+  let units: [2]u16 = [0, 0];
+  @println("units {} {} {}", emoji.encode_utf16(&units), units[0], units[1]);
+  @println("units {} {}", euro.encode_utf16(&units), units[0]);
+
+  @println("from_ascii {}", Rune.from_ascii('Z').unwrap().to_u32());
+  @println("from_ascii {}", Rune.from_ascii(@as(char, 0x80)).is_none());
+  @println("to_ascii {}", ascii.to_ascii().unwrap());
+  @println("to_ascii {}", emoji.to_ascii().is_none());
+
+  @println(
+    "predicates {} {} {} {} {} {}",
+    ascii.is_ascii(),
+    Rune.from_u32(48).unwrap().is_ascii_digit(),
+    Rune.from_u32(122).unwrap().is_ascii_alphabetic(),
+    Rune.from_u32(70).unwrap().is_ascii_alphanumeric(),
+    Rune.from_u32(32).unwrap().is_ascii_whitespace(),
+    Rune.from_u32(7).unwrap().is_ascii_control(),
+  );
+
+  @println(
+    "case {} {}",
+    Rune.from_u32(113).unwrap().to_ascii_uppercase().to_u32(),
+    Rune.from_u32(81).unwrap().to_ascii_lowercase().to_u32(),
+  );
+
+  let one = Rune.from_u32(0x1).unwrap();
+  let two = Rune.from_u32(0x2).unwrap();
+
+  @println("eq {} {} {}", one == one, one == two, one != two);
+  @println("ord {} {} {}", one < two, two > one, one <= one);
+
+  @println("display {}", ascii);
+  @println("debug {:?} {:?} {:?}", ascii, Rune.from_u32(0x0A).unwrap(), one);
+  @println("debug {:?}", emoji);
+
+  let encoded = @format("{}", emoji);
+  @println("format bytes={}", encoded.len());
+
+  let set = HashSet#[Rune].new();
+  @println("hash {} {}", set.insert(ascii), set.insert(ascii));
+  @println("hash {} {}", set.contains(&ascii), set.len());
+}

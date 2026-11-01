@@ -1,0 +1,502 @@
+// @zeen-core
+
+/// Unicode scalar value stored as a 32 bit code point
+pub struct Rune {
+  inner: u32,
+}
+
+/// Iterator over the code points of an UTF-8 byte sequence
+pub struct RuneIter {
+  ptr: [*]const char,
+  len: usize,
+  index: usize,
+}
+
+implement Copy : Rune {}
+
+implement RuneIter {
+  /// Creates iterator over the bytes of a slice
+  pub fn new(bytes: []const char) RuneIter {
+    return RuneIter.from_parts(bytes.ptr, bytes.len);
+  }
+
+  /// Creates iterator from raw bytes
+  pub fn from_parts(ptr: [*]const char, len: usize) RuneIter {
+    return RuneIter {
+      .ptr = ptr,
+      .len = len,
+      .index = 0,
+    };
+  }
+}
+
+implement Iterator : RuneIter {
+  /// Returns the next code point of the sequence
+  pub fn next(*self) Option[Rune] {
+    if (self.index >= self.len) {
+      return Option.None;
+    };
+
+    return Option.Some(Rune.decode_ptr_lossy(self.ptr, self.len, &self.index));
+  }
+}
+
+implement Rune {
+  /// Returns the replacement character `U+FFFD`
+  pub fn replacement() Rune {
+    return Rune { .inner = 0xFFFD };
+  }
+
+  /// Returns the highest scalar value `U+10FFFF`
+  pub fn max() Rune {
+    return Rune { .inner = 0x10FFFF };
+  }
+
+  /// Checks that the value is a valid Unicode scalar value
+  pub fn is_scalar(value: u32) bool {
+    return value <= 0x10FFFF && (value < 0xD800 || value > 0xDFFF);
+  }
+
+  /// Creates a rune from a checked code point
+  pub fn from_u32(value: u32) Option[Rune] {
+    if (!Rune.is_scalar(value)) {
+      return Option.None;
+    };
+
+    return Option.Some(Rune { .inner = value });
+  }
+
+  /// Creates a rune without validation
+  pub fn from_u32_unchecked(value: u32) Rune {
+    return Rune { .inner = value };
+  }
+
+  /// Creates a rune from an ASCII byte
+  pub fn from_ascii(byte: char) Option[Rune] {
+    let code = @as(u32, byte);
+
+    if (code > 0x7F) {
+      return Option.None;
+    };
+
+    return Option.Some(Rune { .inner = code });
+  }
+
+  /// Decodes a single rune from the whole slice
+  pub fn from_utf8(bytes: []const char) Option[Rune] {
+    let index: usize = 0;
+    let decoded = Rune.decode(bytes, &index);
+
+    if (decoded.is_none()) {
+      return Option.None;
+    };
+
+    if (index != bytes.len) {
+      return Option.None;
+    };
+
+    return decoded;
+  }
+
+  /// Decodes a rune at the position and advances the index
+  pub fn decode(bytes: []const char, index: *usize) Option[Rune] {
+    return Rune.decode_ptr(bytes.ptr, bytes.len, index);
+  }
+
+  /// Decodes a rune from raw bytes and advances the index
+  pub fn decode_ptr(ptr: [*]const char, len: usize, index: *usize) Option[Rune] {
+    let offset = *index;
+
+    if (offset >= len) {
+      return Option.None;
+    };
+
+    let first = @as(u32, ptr[offset]);
+
+    if (first < 0x80) {
+      *index = offset + 1;
+
+      return Option.Some(Rune.from_u32_unchecked(first));
+    };
+
+    let width = Rune.sequence_len(first);
+
+    if (width == 0 || offset + width > len) {
+      return Option.None;
+    };
+
+    let second = @as(u32, ptr[offset + 1]);
+
+    if (second < 0x80 || second > 0xBF) {
+      return Option.None;
+    };
+
+    if (width == 2) {
+      let value = ((first & 0x1F) << 6) | (second & 0x3F);
+      *index = offset + 2;
+
+      return Option.Some(Rune.from_u32_unchecked(value));
+    };
+
+    let third = @as(u32, ptr[offset + 2]);
+
+    if (third < 0x80 || third > 0xBF) {
+      return Option.None;
+    };
+
+    if (width == 3) {
+      if (first == 0xE0 && second < 0xA0) {
+        return Option.None;
+      };
+
+      if (first == 0xED && second > 0x9F) {
+        return Option.None;
+      };
+
+      let value = ((first & 0x0F) << 12) | ((second & 0x3F) << 6) | (third & 0x3F);
+      *index = offset + 3;
+
+      return Option.Some(Rune.from_u32_unchecked(value));
+    };
+
+    let fourth = @as(u32, ptr[offset + 3]);
+
+    if (fourth < 0x80 || fourth > 0xBF) {
+      return Option.None;
+    };
+
+    if (first == 0xF0 && second < 0x90) {
+      return Option.None;
+    };
+
+    if (first == 0xF4 && second > 0x8F) {
+      return Option.None;
+    };
+
+    let value = ((first & 0x07) << 18) | ((second & 0x3F) << 12)
+      | ((third & 0x3F) << 6) | (fourth & 0x3F);
+    *index = offset + 4;
+
+    return Option.Some(Rune.from_u32_unchecked(value));
+  }
+
+  /// Decodes a rune and replaces invalid bytes with `U+FFFD`
+  pub fn decode_lossy(bytes: []const char, index: *usize) Rune {
+    return Rune.decode_ptr_lossy(bytes.ptr, bytes.len, index);
+  }
+
+  /// Decodes a rune from raw bytes and replaces invalid ones with `U+FFFD`
+  pub fn decode_ptr_lossy(ptr: [*]const char, len: usize, index: *usize) Rune {
+    let decoded = Rune.decode_ptr(ptr, len, index);
+
+    if (decoded.is_some()) {
+      return decoded.unwrap();
+    };
+
+    *index = *index + 1;
+
+    return Rune.replacement();
+  }
+
+  /// Counts code points in the byte sequence
+  pub fn count(bytes: []const char) usize {
+    return Rune.count_ptr(bytes.ptr, bytes.len);
+  }
+
+  /// Counts code points in raw bytes
+  pub fn count_ptr(ptr: [*]const char, len: usize) usize {
+    let index: usize = 0;
+    let total: usize = 0;
+
+    while (index < len) {
+      let _ = Rune.decode_ptr_lossy(ptr, len, &index);
+      total += 1;
+    };
+
+    return total;
+  }
+
+  /// Returns the start offset of the code point that ends at the offset
+  pub fn prev_start(ptr: [*]const char, end: usize) usize {
+    if (end < 1) {
+      return 0;
+    };
+
+    let start = end - 1;
+    let steps: i32 = 0;
+
+    while (steps < 3 && start > 0) {
+      let byte = @as(u32, ptr[start]);
+
+      if (byte < 0x80 || byte > 0xBF) {
+        break;
+      };
+
+      start -= 1;
+      steps += 1;
+    };
+
+    return start;
+  }
+
+  /// Returns the code point value
+  pub fn to_u32(self) u32 {
+    return self.inner;
+  }
+
+  /// Returns the ASCII byte of the rune
+  pub fn to_ascii(self) Option[char] {
+    if (!self.is_ascii()) {
+      return Option.None;
+    };
+
+    return Option.Some(@as(char, self.inner));
+  }
+
+  /// Returns the length of the UTF-8 encoding
+  pub fn utf8_len(self) usize {
+    let code = self.valid();
+
+    if (code < 0x80) {
+      return 1;
+    };
+
+    if (code < 0x800) {
+      return 2;
+    };
+
+    if (code < 0x10000) {
+      return 3;
+    };
+
+    return 4;
+  }
+
+  /// Encodes the rune as UTF-8 into the buffer
+  pub fn encode_utf8(self, out: *[4]u8) usize {
+    let code = self.valid();
+
+    if (code < 0x80) {
+      (*out)[0] = @as(u8, code);
+
+      return 1;
+    };
+
+    if (code < 0x800) {
+      (*out)[0] = @as(u8, 0xC0 | (code >> 6));
+      (*out)[1] = @as(u8, 0x80 | (code & 0x3F));
+
+      return 2;
+    };
+
+    if (code < 0x10000) {
+      (*out)[0] = @as(u8, 0xE0 | (code >> 12));
+      (*out)[1] = @as(u8, 0x80 | ((code >> 6) & 0x3F));
+      (*out)[2] = @as(u8, 0x80 | (code & 0x3F));
+
+      return 3;
+    };
+
+    (*out)[0] = @as(u8, 0xF0 | (code >> 18));
+    (*out)[1] = @as(u8, 0x80 | ((code >> 12) & 0x3F));
+    (*out)[2] = @as(u8, 0x80 | ((code >> 6) & 0x3F));
+    (*out)[3] = @as(u8, 0x80 | (code & 0x3F));
+
+    return 4;
+  }
+
+  /// Returns the length of the UTF-16 encoding
+  pub fn utf16_len(self) usize {
+    if (self.valid() < 0x10000) {
+      return 1;
+    };
+
+    return 2;
+  }
+
+  /// Encodes the rune as UTF-16 into the buffer
+  pub fn encode_utf16(self, out: *[2]u16) usize {
+    let code = self.valid();
+
+    if (code < 0x10000) {
+      (*out)[0] = @as(u16, code);
+
+      return 1;
+    };
+
+    let value = code - 0x10000;
+
+    (*out)[0] = @as(u16, 0xD800 + (value >> 10));
+    (*out)[1] = @as(u16, 0xDC00 + (value & 0x3FF));
+
+    return 2;
+  }
+
+  /// Checks that the rune is ASCII
+  pub fn is_ascii(self) bool {
+    return self.inner < 0x80;
+  }
+
+  /// Checks that the rune is an ASCII digit
+  pub fn is_ascii_digit(self) bool {
+    return self.inner >= 48 && self.inner <= 57;
+  }
+
+  /// Checks that the rune is an ASCII letter
+  pub fn is_ascii_alphabetic(self) bool {
+    return (self.inner >= 65 && self.inner <= 90) || (self.inner >= 97 && self.inner <= 122);
+  }
+
+  /// Checks that the rune is an ASCII digit or letter
+  pub fn is_ascii_alphanumeric(self) bool {
+    return self.is_ascii_digit() || self.is_ascii_alphabetic();
+  }
+
+  /// Checks that the rune is an ASCII whitespace
+  pub fn is_ascii_whitespace(self) bool {
+    return self.inner == 32 || (self.inner >= 9 && self.inner <= 13);
+  }
+
+  /// Checks that the rune is an ASCII control character
+  pub fn is_ascii_control(self) bool {
+    return self.inner < 32 || self.inner == 127;
+  }
+
+  /// Returns the rune as an ASCII uppercase letter
+  pub fn to_ascii_uppercase(self) Rune {
+    if (self.inner >= 97 && self.inner <= 122) {
+      return Rune { .inner = self.inner - 32 };
+    };
+
+    return self;
+  }
+
+  /// Returns the rune as an ASCII lowercase letter
+  pub fn to_ascii_lowercase(self) Rune {
+    if (self.inner >= 65 && self.inner <= 90) {
+      return Rune { .inner = self.inner + 32 };
+    };
+
+    return self;
+  }
+
+  fn valid(self) u32 {
+    if (!Rune.is_scalar(self.inner)) {
+      return 0xFFFD;
+    };
+
+    return self.inner;
+  }
+
+  fn sequence_len(first: u32) usize {
+    if (first >= 0xC2 && first <= 0xDF) {
+      return 2;
+    };
+
+    if (first >= 0xE0 && first <= 0xEF) {
+      return 3;
+    };
+
+    if (first >= 0xF0 && first <= 0xF4) {
+      return 4;
+    };
+
+    return 0;
+  }
+}
+
+implement Eq : Rune {
+  /// Compares code points
+  pub fn eq(*const self, other: *const Self) bool {
+    return self.inner == other.inner;
+  }
+}
+
+implement Ord : Rune {
+  /// Compares code points by value
+  pub fn cmp(*const self, other: *const Self) Ordering {
+    if (self.inner < other.inner) {
+      return Ordering.Less;
+    };
+
+    if (self.inner > other.inner) {
+      return Ordering.Greater;
+    };
+
+    return Ordering.Equal;
+  }
+}
+
+implement Hash : Rune {
+  /// Hashes the code point value
+  pub fn hash(*const self) u64 {
+    return self.inner.hash();
+  }
+}
+
+implement Display : Rune {
+  /// Writes the rune as UTF-8
+  pub fn display[W: StrWriter](*const self, out: *W) void {
+    let buffer: [4]u8 = [0; 4];
+    let len = (*self).encode_utf8(&buffer);
+
+    (*out).write_str_raw(@as([*]const char, &buffer[0]), len);
+  }
+}
+
+implement Debug : Rune {
+  /// Writes the rune as a quoted literal
+  pub fn debug[W: StrWriter](*const self, out: *W) void {
+    (*out).write_str_single('\'');
+
+    let code = (*self).to_u32();
+
+    if (code == 0x0A) {
+      (*out).write_str_raw("\\n", 2);
+    } else if (code == 0x0D) {
+      (*out).write_str_raw("\\r", 2);
+    } else if (code == 0x09) {
+      (*out).write_str_raw("\\t", 2);
+    } else if (code == 0x5C) {
+      (*out).write_str_raw("\\\\", 2);
+    } else if (code == 0x27) {
+      (*out).write_str_raw("\\'", 2);
+    } else if (code < 0x20 || code == 0x7F) {
+      write_escape(out, code);
+    } else if (code < 0x80) {
+      (*out).write_str_single(@as(char, code));
+    } else {
+      let buffer: [4]u8 = [0; 4];
+      let len = (*self).encode_utf8(&buffer);
+
+      (*out).write_str_raw(@as([*]const char, &buffer[0]), len);
+    };
+
+    (*out).write_str_single('\'');
+  }
+}
+
+fn write_escape[W: StrWriter](out: *W, code: u32) void {
+  (*out).write_str_raw("\\u{", 3);
+
+  let shift: i32 = 28;
+  let started = false;
+
+  while (shift >= 0) {
+    let digit = (code >> @as(u32, shift)) & 0xF;
+
+    if (digit > 0 || started || shift == 0) {
+      started = true;
+
+      if (digit < 10) {
+        (*out).write_str_single(@as(char, digit + 48));
+      } else {
+        (*out).write_str_single(@as(char, digit + 55));
+      };
+    };
+
+    shift -= 4;
+  };
+
+  (*out).write_str_single('}');
+}

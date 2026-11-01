@@ -14,6 +14,7 @@ const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
 const CORE_RESULT: &str = include_str!("../../../lib/core/result.zn");
 const CORE_IO: &str = include_str!("../../../lib/core/io.zn");
 const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
+const CORE_UNICODE: &str = include_str!("../../../lib/core/unicode.zn");
 
 fn flow_errors(src: &str) -> Vec<FlowError> {
     flow_diagnostics(src)
@@ -50,6 +51,7 @@ fn flow_diagnostics(src: &str) -> Vec<FlowError> {
             ("core.result", CORE_RESULT),
             ("core.io", CORE_IO),
             ("core.slice", CORE_SLICE),
+            ("core.unicode", CORE_UNICODE),
         ],
         mode: CompilationMode::Debug,
         output: CompilationOutput::EmitMIR,

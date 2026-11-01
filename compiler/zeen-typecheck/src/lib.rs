@@ -9291,6 +9291,7 @@ mod tests {
     const CORE_OPTION: &str = include_str!("../../../lib/core/option.zn");
     const CORE_RESULT: &str = include_str!("../../../lib/core/result.zn");
     const CORE_SLICE: &str = include_str!("../../../lib/core/slice.zn");
+    const CORE_UNICODE: &str = include_str!("../../../lib/core/unicode.zn");
 
     fn typecheck(source: &str) -> Result<TypeCheckResult, Vec<TypeError>> {
         typecheck_with_target(source, None)
@@ -9345,6 +9346,7 @@ mod tests {
                 ("core.option", CORE_OPTION),
                 ("core.result", CORE_RESULT),
                 ("core.slice", CORE_SLICE),
+                ("core.unicode", CORE_UNICODE),
             ]
         } else {
             Vec::new()

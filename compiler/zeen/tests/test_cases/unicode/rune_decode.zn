@@ -1,0 +1,102 @@
+fn try_decode(label: []const char, bytes: []const char) {
+  let index: usize = 0;
+  let decoded = Rune.decode(bytes, &index);
+
+  if (decoded.is_none()) {
+    @println("{} none {}", label, index);
+
+    return;
+  };
+
+  @println("{} u+{hex} {}", label, decoded.unwrap().to_u32(), index);
+}
+
+fn lossy(label: []const char, bytes: []const char) {
+  let index: usize = 0;
+  let rune = Rune.decode_lossy(bytes, &index);
+
+  @println("{} u+{hex} {}", label, rune.to_u32(), index);
+}
+
+fn main() {
+  try_decode("ascii", "A");
+  try_decode("two", "é");
+  try_decode("three", "日");
+  try_decode("four", "😀");
+
+  let text: []const char = "日本語";
+
+  let index: usize = 0;
+  let first = Rune.decode(text, &index).unwrap();
+  @println("walk {} {}", first.to_u32(), index);
+
+  let second = Rune.decode(text, &index).unwrap();
+  @println("walk {} {}", second.to_u32(), index);
+
+  let third = Rune.decode(text, &index).unwrap();
+  @println("walk {} {}", third.to_u32(), index);
+
+  @println("walk {}", Rune.decode(text, &index).is_none());
+  @println("from_utf8 {}", Rune.from_utf8("日").unwrap().to_u32());
+  @println("from_utf8 {}", Rune.from_utf8("日本").is_none());
+  @println("from_utf8 {}", Rune.from_utf8("").is_none());
+
+  let cut2: [1]char = [@as(char, 0xC3)];
+  let cut3: [2]char = [@as(char, 0xE6), @as(char, 0x97)];
+  let cut4: [3]char = [@as(char, 0xF0), @as(char, 0x9F), @as(char, 0x98)];
+
+  try_decode("cut2", cut2[..]);
+  try_decode("cut3", cut3[..]);
+  try_decode("cut4", cut4[..]);
+
+  let overlong2: [2]char = [@as(char, 0xC0), @as(char, 0x80)];
+  let overlong3: [3]char = [@as(char, 0xE0), @as(char, 0x80), @as(char, 0x80)];
+  let overlong4: [4]char = [
+    @as(char, 0xF0),
+    @as(char, 0x80),
+    @as(char, 0x80),
+    @as(char, 0x80)
+  ];
+
+  try_decode("overlong2", overlong2[..]);
+  try_decode("overlong3", overlong3[..]);
+  try_decode("overlong4", overlong4[..]);
+
+  let surrogate: [3]char = [@as(char, 0xED), @as(char, 0xA0), @as(char, 0x80)];
+  let too_big: [4]char = [@as(char, 0xF4), @as(char, 0x90), @as(char, 0x80), @as(char, 0x80)];
+  let too_big2: [1]char = [@as(char, 0xF5)];
+
+  try_decode("surrogate", surrogate[..]);
+  try_decode("too_big", too_big[..]);
+  try_decode("too_big2", too_big2[..]);
+
+  let stray: [1]char = [@as(char, 0x80)];
+  let lead_c1: [2]char = [@as(char, 0xC1), @as(char, 0xBF)];
+  let bad_second: [2]char = [@as(char, 0xC3), @as(char, 0x28)];
+  let bad_third: [3]char = [@as(char, 0xE6), @as(char, 0x97), @as(char, 0x28)];
+
+  try_decode("stray", stray[..]);
+  try_decode("lead_c1", lead_c1[..]);
+  try_decode("bad_second", bad_second[..]);
+  try_decode("bad_third", bad_third[..]);
+
+  lossy("lossy_stray", stray[..]);
+  lossy("lossy_cut", cut3[..]);
+  lossy("lossy_surrogate", surrogate[..]);
+  lossy("lossy_ok", "日");
+
+  let mixed: [4]char = [@as(char, 0x41), @as(char, 0x80), @as(char, 0x42), @as(char, 0x43)];
+  @println("count {} {}", Rune.count(mixed[..]), Rune.count("😀日A"));
+
+  let iter = RuneIter.new(mixed[..]);
+
+  while (true) {
+    let item = iter.next();
+
+    if (item.is_none()) {
+      break;
+    };
+
+    @println("iter u+{hex}", item.unwrap().to_u32());
+  };
+}

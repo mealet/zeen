@@ -1,0 +1,33 @@
+ascii u+41 1
+two u+e9 2
+three u+65e5 3
+four u+1f600 4
+walk 26085 3
+walk 26412 6
+walk 35486 9
+walk true
+from_utf8 26085
+from_utf8 true
+from_utf8 true
+cut2 none 0
+cut3 none 0
+cut4 none 0
+overlong2 none 0
+overlong3 none 0
+overlong4 none 0
+surrogate none 0
+too_big none 0
+too_big2 none 0
+stray none 0
+lead_c1 none 0
+bad_second none 0
+bad_third none 0
+lossy_stray u+fffd 1
+lossy_cut u+fffd 1
+lossy_surrogate u+fffd 1
+lossy_ok u+65e5 3
+count 4 3
+iter u+41
+iter u+fffd
+iter u+42
+iter u+43
