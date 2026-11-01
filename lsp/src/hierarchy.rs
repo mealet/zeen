@@ -423,4 +423,32 @@ mod tests {
         assert_eq!(item.name, "is_even");
         assert!(outgoing(&docs, &item).is_empty());
     }
+
+    const BUILTIN_INTERFACE_SAMPLE: &str = "interface Show {\n    pub fn show(*const self) []const char;\n}\n\nimplement Show : builtin i32 {\n    pub fn show(*const self) []const char {\n        return \"i32\";\n    }\n}\n\nfn main() {\n    let n: i32 = 5;\n    @println(\"{}\", n.show());\n}\n";
+
+    #[test]
+    fn builtin_interface_method_call_hierarchy() {
+        let uri: Uri = "file:///tmp/zeen-lsp-hierarchy-builtin-interface.zn"
+            .parse()
+            .unwrap();
+        let analysis = analyze(&uri, BUILTIN_INTERFACE_SAMPLE);
+        let store = [(BUILTIN_INTERFACE_SAMPLE, uri.clone(), analysis)];
+        let docs = docs(&store);
+
+        let call_at = BUILTIN_INTERFACE_SAMPLE.find("n.show").unwrap() + "n.".len();
+        let item = prepare(&docs, &uri, call_at).unwrap();
+
+        assert_eq!(item.name, "show");
+        assert_eq!(item.kind, SymbolKind::METHOD);
+
+        let callers = incoming(&docs, &item);
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].from.name, "main");
+
+        let decl_at = BUILTIN_INTERFACE_SAMPLE.find("fn show").unwrap() + "fn ".len();
+        let item = prepare(&docs, &uri, decl_at).unwrap();
+
+        assert_eq!(item.name, "show");
+        assert!(outgoing(&docs, &item).is_empty());
+    }
 }

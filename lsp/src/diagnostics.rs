@@ -1347,4 +1347,74 @@ mod tests {
             output.covered
         );
     }
+
+    fn has_code(diagnostics: &[Diagnostic], code: &str) -> bool {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code.as_ref().is_some_and(
+                |value| matches!(value, NumberOrString::String(value) if value == code),
+            )
+        })
+    }
+
+    #[test]
+    fn builtin_interface_missing_method_reported() {
+        let text = "interface Show {\n    fn show(*const self) []const char;\n}\n\nimplement Show : builtin i32 {}\n\nfn main() {\n    let n: i32 = 4;\n    @println(\"{}\", n.show());\n}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-builtin-interface-missing.zn").unwrap();
+        let output = check(&uri, text, &[]);
+
+        assert!(
+            has_code(
+                &output.diagnostics,
+                "zeen::typechecker::interface_method_missing"
+            ),
+            "{:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
+    fn builtin_core_interface_impl_reported() {
+        let text = "implement Add : builtin i32 {\n    fn add(self, other: i32) i32 {\n        return 99;\n    }\n}\n\nfn main() {\n}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-builtin-core-interface.zn").unwrap();
+        let output = check(&uri, text, &[]);
+
+        assert!(
+            has_code(
+                &output.diagnostics,
+                "zeen::typechecker::core_interface_impl"
+            ),
+            "{:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
+    fn builtin_interface_private_method_reported_across_modules() {
+        let dir = test_dir("builtin-interface-private");
+        let module = dir.join("helpers.zn");
+        std::fs::write(
+            &module,
+            "interface Hidden {\n    fn peek(*const self) i32;\n}\n\nimplement Hidden : builtin i32 {\n    fn peek(*const self) i32 {\n        return (*self);\n    }\n}\n",
+        )
+        .unwrap();
+        let main = dir.join("main.zn");
+        std::fs::write(
+            &main,
+            "use helpers;\n\nfn main() {\n    let n: i32 = 4;\n    @println(\"{}\", n.peek());\n}\n",
+        )
+        .unwrap();
+
+        let uri = Uri::from_str(&format!("file://{}", main.display())).unwrap();
+        let text = std::fs::read_to_string(&main).unwrap();
+
+        let output = check(&uri, &text, &[]);
+
+        assert!(
+            has_code(&output.diagnostics, "zeen::typecheck::private_item"),
+            "{:?}",
+            output.diagnostics
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -708,4 +708,28 @@ mod tests {
             method.detail
         );
     }
+
+    const BUILTIN_INTERFACE_SAMPLE: &str = "interface Show {\n    pub fn show(*const self) []const char;\n}\n\nimplement Show : builtin i32 {\n    pub fn show(*const self) []const char {\n        return \"i32\";\n    }\n}\n\nfn main() {\n    let n: i32 = 5;\n    @println(\"{}\", n.show());\n}\n";
+
+    #[test]
+    fn builtin_interface_impl_methods_are_document_symbols() {
+        let analysis = sample_analysis(BUILTIN_INTERFACE_SAMPLE);
+        let symbols = document_symbols(BUILTIN_INTERFACE_SAMPLE, &analysis);
+        let top = names(&symbols);
+
+        assert!(top.contains(&"show"), "{top:?}");
+        assert!(top.contains(&"main"));
+
+        let method = symbols.iter().find(|symbol| symbol.name == "show").unwrap();
+        assert_eq!(method.kind, SymbolKind::METHOD);
+        assert!(
+            method
+                .detail
+                .as_deref()
+                .unwrap_or("")
+                .contains("[]const char"),
+            "{:?}",
+            method.detail
+        );
+    }
 }

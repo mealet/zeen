@@ -503,4 +503,45 @@ mod tests {
         assert_eq!(uri, fixture.uris[0]);
         assert!(line[range.start.character as usize..].starts_with("is_even"));
     }
+
+    const BUILTIN_INTERFACE_SAMPLE: &str = "interface Show {\n    pub fn show(*const self) []const char;\n}\n\nimplement Show : builtin i32 {\n    pub fn show(*const self) []const char {\n        return \"i32\";\n    }\n}\n\nfn main() {\n    let n: i32 = 5;\n    @println(\"{}\", n.show());\n}\n";
+
+    #[test]
+    fn renames_builtin_interface_impl_method() {
+        let fixture = Fixture::check(&[("main", BUILTIN_INTERFACE_SAMPLE)]);
+        let docs = fixture.docs();
+        let offset = fixture.offset(0, "n.show()") + "n.".len();
+        let edits = rename_edits(&docs, &fixture.uris[0], offset, "print");
+
+        let result = applied(&fixture.texts[0], &edits[&fixture.uris[0]]);
+
+        assert!(
+            result.contains("fn print(*const self) []const char"),
+            "{result}"
+        );
+        assert!(result.contains("n.print()"), "{result}");
+        assert!(
+            result.contains("pub fn show(*const self) []const char;"),
+            "{result}"
+        );
+        assert!(
+            !result.contains("fn show(*const self) []const char {"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn builtin_interface_method_call_declares_at_implement_block() {
+        let fixture = Fixture::check(&[("main", BUILTIN_INTERFACE_SAMPLE)]);
+        let docs = fixture.docs();
+        let offset = fixture.offset(0, "n.show()") + "n.".len();
+        let (uri, range) = decl_position(&docs, &fixture.uris[0], offset).unwrap();
+        let line = BUILTIN_INTERFACE_SAMPLE
+            .lines()
+            .nth(range.start.line as usize)
+            .unwrap();
+
+        assert_eq!(uri, fixture.uris[0]);
+        assert!(line[range.start.character as usize..].starts_with("show"));
+    }
 }
