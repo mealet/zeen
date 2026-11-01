@@ -20,11 +20,13 @@ implement builtin i32 {
   }
 }
 
-implement Describe : builtin []char {
+implement builtin []char {
   fn describe(*const self) []const char {
-    return "slice chars";
+    return "inherent chars";
   }
 }
+
+implement Describe : builtin []char {}
 
 fn describe_value[T: Describe](value: *const T) []const char {
   return value.describe();

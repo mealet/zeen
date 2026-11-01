@@ -7960,12 +7960,55 @@ impl<'res> TypeChecker<'res> {
             .unwrap_or(false)
     }
 
+    fn shape_owner_bounds_hold(&mut self, owner: DefId, sig_ctx: &ImplSigCtx) -> bool {
+        let generics = self.type_member_generics(owner);
+
+        let targets: Vec<TypeId> = if sig_ctx.is_specialized {
+            sig_ctx.object_args.to_vec()
+        } else {
+            sig_ctx
+                .imp_generics
+                .iter()
+                .map(|&generic| self.result.interner.intern(Type::GenericParam(generic)))
+                .collect()
+        };
+
+        for (index, generic) in generics.iter().enumerate() {
+            let Some(&target) = targets.get(index) else {
+                return false;
+            };
+            let required = self
+                .all_generic_bounds
+                .get(generic)
+                .cloned()
+                .unwrap_or_default();
+
+            for bound in required {
+                let holds = match self.result.interner.get(target) {
+                    Type::GenericParam(generic) => self
+                        .all_generic_bounds
+                        .get(generic)
+                        .is_some_and(|bounds| bounds.contains(&bound)),
+                    _ => self.type_satisfies_interface(target, bound),
+                };
+
+                if !holds {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn check_method_signature_matches(
         &mut self,
         iface_def: DefId,
         iface_method_def: DefId,
         impl_method_def: DefId,
         self_struct_ty: TypeId,
+        object_def: DefId,
         sig_ctx: &ImplSigCtx,
         source: &Source,
     ) {
@@ -8007,6 +8050,26 @@ impl<'res> TypeChecker<'res> {
         } else {
             for (imp_g, struct_arg) in sig_ctx.imp_generics.iter().zip(struct_args.iter()) {
                 impl_subst.insert(*imp_g, *struct_arg);
+            }
+        }
+
+        if let Some(owner) = self.result.method_owner.get(&impl_method_def).copied()
+            && owner != object_def
+            && matches!(self.def_kind(owner), Some(DefKind::BuiltinShape(_)))
+        {
+            let owner_generics = self.type_member_generics(owner);
+            let target_args: Vec<TypeId> = if sig_ctx.is_specialized {
+                sig_ctx.object_args.to_vec()
+            } else {
+                sig_ctx
+                    .imp_generics
+                    .iter()
+                    .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
+                    .collect()
+            };
+
+            for (owner_g, target) in owner_generics.iter().zip(target_args.iter()) {
+                impl_subst.insert(*owner_g, *target);
             }
         }
 
@@ -8243,6 +8306,23 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
+        let mut shape_owners: Vec<DefId> = Vec::new();
+        if let Some(DefKind::BuiltinShape(shape)) = self.def_kind(object_def).cloned() {
+            let candidates: Vec<DefId> = self
+                .result
+                .builtin_shapes
+                .iter()
+                .filter(|(def, other)| **def != object_def && *other == &shape)
+                .map(|(def, _)| *def)
+                .collect();
+
+            for candidate in candidates {
+                if self.shape_owner_bounds_hold(candidate, sig_ctx) {
+                    shape_owners.push(candidate);
+                }
+            }
+        }
+
         let mut matched_names: HashSet<String> = HashSet::default();
 
         for &iface_method_def in &interface_methods {
@@ -8251,21 +8331,23 @@ impl<'res> TypeChecker<'res> {
             };
             matched_names.insert(method_name.clone());
 
-            let inherent_method = self
-                .resolution
-                .defs
-                .get(&iface_method_def)
-                .map(|def| def.name)
-                .and_then(|key| {
-                    self.struct_methods
-                        .get(&object_def)
-                        .and_then(|methods| methods.get(&key))
-                })
-                .and_then(|candidates| {
-                    candidates
-                        .iter()
-                        .copied()
-                        .find(|candidate| !self.method_owning_interface.contains_key(candidate))
+            let inherent_method = std::iter::once(object_def)
+                .chain(shape_owners.iter().copied())
+                .find_map(|owner| {
+                    self.resolution
+                        .defs
+                        .get(&iface_method_def)
+                        .map(|def| def.name)
+                        .and_then(|key| {
+                            self.struct_methods
+                                .get(&owner)
+                                .and_then(|methods| methods.get(&key))
+                        })
+                        .and_then(|candidates| {
+                            candidates.iter().copied().find(|candidate| {
+                                !self.method_owning_interface.contains_key(candidate)
+                            })
+                        })
                 });
 
             let explicit_method = impl_method_names.get(&method_name).copied();
@@ -8294,6 +8376,7 @@ impl<'res> TypeChecker<'res> {
                         iface_method_def,
                         impl_method_def,
                         self_ty,
+                        object_def,
                         sig_ctx,
                         source,
                     );
