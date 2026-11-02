@@ -1,0 +1,29 @@
+struct Label {
+  pub value: String,
+}
+
+implement Label {
+  pub fn new(value: String) Label {
+    return Label { .value = value };
+  }
+}
+
+implement Eq : Label {
+  fn eq(*const self, other: *const Self) bool {
+    return (*self).value == (*other).value;
+  }
+}
+
+fn main() i32 {
+  let first = Label.new(String.from("zeen"));
+  let second = Label.new(String.from("zeen"));
+  let third = Label.new(String.from("other"));
+
+  @println("{}", first == second);
+  @println("{}", first != third);
+  @println("{}", second == third);
+  @println("{}", first != second);
+  @println("{}", first == second);
+
+  return 0;
+}

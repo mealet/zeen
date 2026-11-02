@@ -8596,17 +8596,28 @@ impl<'ctx> MirLowering<'ctx> {
                         inner: arg_ty,
                         is_const,
                     });
-                    let local = self.operand_to_local(fb, operand, arg_ty, block);
+
+                    let existing = match &operand {
+                        Operand::Copy(place, _) | Operand::Move(place, _) if is_const => {
+                            (self.place_type(fb, place) == arg_ty).then(|| place.clone())
+                        }
+                        _ => None,
+                    };
+
+                    let place = match existing {
+                        Some(place) => place,
+                        None => {
+                            Place::from_local(self.operand_to_local(fb, operand, arg_ty, block))
+                        }
+                    };
+
                     let temp = fb.new_temp(ptr_ty);
 
                     fb.push_stmt(
                         block,
                         MirStatement::Assign {
                             place: Place::from_local(temp),
-                            rvalue: Rvalue::Ref {
-                                place: Place::from_local(local),
-                                is_const,
-                            },
+                            rvalue: Rvalue::Ref { place, is_const },
                             source: None,
                         },
                     );
