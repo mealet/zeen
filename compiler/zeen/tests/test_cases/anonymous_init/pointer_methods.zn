@@ -1,0 +1,27 @@
+struct Inner {
+  pub value: i32,
+}
+
+struct Holder {
+  pub inner: Inner,
+  pub scale: i32,
+}
+
+implement Holder {
+  pub fn scaled(*const self, factor: i32) i32 {
+    return self.inner.value * factor;
+  }
+}
+
+fn total(inner: *const Inner) i32 {
+  return inner.value;
+}
+
+fn main() {
+  let holder: Holder = .{ .inner = .{ .value = 5 }, .scale = 3 };
+  let inner: Inner = .{ .value = 6 };
+  let scaled = holder.scaled(4);
+  let value = total(&inner);
+
+  @println("{} {} {}", scaled, value, holder.inner.value);
+}

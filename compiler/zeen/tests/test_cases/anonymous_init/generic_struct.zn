@@ -1,0 +1,20 @@
+struct Pair[T] {
+  pub first: T,
+  pub second: T,
+}
+
+struct Nested {
+  pub pair: Pair[i32],
+}
+
+fn swap[T](pair: Pair[T]) Pair[T] {
+  return .{ .first = pair.second, .second = pair.first };
+}
+
+fn main() {
+  let pair: Pair[i32] = .{ .first = 1, .second = 2 };
+  let swapped = swap(pair);
+  let nested: Nested = .{ .pair = .{ .first = 3, .second = 4 } };
+
+  @println("{} {} {}", swapped.first, swapped.second, nested.pair.first);
+}

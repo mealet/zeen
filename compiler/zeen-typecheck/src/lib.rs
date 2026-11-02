@@ -12731,6 +12731,166 @@ mod tests {
     }
 
     #[test]
+    fn anonymous_init_requires_expected_struct() {
+        let errors = typecheck(
+            r#"
+            struct Point {
+              pub x: i32,
+              pub y: i32,
+            }
+
+            fn main() {
+              let point = .{ .x = 1, .y = 2 };
+            }
+            "#,
+        )
+        .expect_err("anonymous init without context must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AnonymousInitNeedsContext { .. })),
+            "expected AnonymousInitNeedsContext, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn anonymous_init_rejects_non_struct_expected() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+              let value: i32 = .{ .x = 1 };
+            }
+            "#,
+        )
+        .expect_err("anonymous init with a non-struct expected type must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AnonymousInitNeedsContext { .. })),
+            "expected AnonymousInitNeedsContext, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn anonymous_init_checks_fields() {
+        let errors = typecheck(
+            r#"
+            struct Point {
+              pub x: i32,
+              pub y: i32,
+            }
+
+            fn main() {
+              let dup: Point = .{ .x = 1, .x = 2, .y = 3 };
+              let missing: Point = .{ .x = 1 };
+              let unknown: Point = .{ .x = 1, .y = 2, .z = 3 };
+            }
+            "#,
+        )
+        .expect_err("malformed anonymous init must be checked");
+
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::DuplicateField { field, .. } if field == "x"
+            )),
+            "expected DuplicateField, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::MissingFields { fields, .. } if fields.as_str() == "`y`"
+            )),
+            "expected MissingFields, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::UnknownField { field, .. } if field == "z"
+            )),
+            "expected UnknownField, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn anonymous_init_generic_param_needs_context() {
+        let errors = typecheck(
+            r#"
+            struct Box[T] {
+              pub inner: T,
+            }
+
+            fn build[T]() Box[T] {
+              return .{ .inner = .{} };
+            }
+            "#,
+        )
+        .expect_err("anonymous init against an unbound generic param must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AnonymousInitNeedsContext { .. })),
+            "expected AnonymousInitNeedsContext, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn anonymous_init_empty_accepts_struct_and_void() {
+        let result = typecheck(
+            r#"
+            struct Empty {
+            }
+
+            fn take(value: Empty) {}
+
+            fn nothing() void {
+              return .{};
+            }
+
+            fn main() {
+              let empty: Empty = .{};
+              take(.{});
+              nothing();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "empty anonymous init should accept struct and void targets: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn anonymous_init_void_enum_payload() {
+        let result = typecheck_full(
+            r#"
+            enum Failure {
+              bad,
+            }
+
+            fn finish() Result[void, Failure] {
+              return Result.Ok(.{});
+            }
+
+            fn main() {
+              let value = finish();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "void payload should accept empty anonymous init: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
     fn enum_extraction_reads_copy_payload() {
         let result = typecheck(
             r#"

@@ -1,0 +1,24 @@
+enum Failure {
+  bad,
+}
+
+fn finish(flag: bool) Result[void, Failure] {
+  if (flag) {
+    return Result.Err(Failure.bad);
+  }
+
+  return Result.Ok(.{});
+}
+
+fn noop() void {
+  return .{};
+}
+
+fn main() {
+  let value = finish(false);
+  let failed = finish(true);
+
+  noop();
+
+  @println("{} {}", value.is_ok(), failed.is_err());
+}

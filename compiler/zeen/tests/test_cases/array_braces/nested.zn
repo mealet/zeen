@@ -1,0 +1,6 @@
+fn main() {
+  let grid = {{1, 2}, {3, 4}};
+  let repeat = {{0; 2}; 3};
+
+  @println("{} {}", grid[1][0], repeat[2][1]);
+}

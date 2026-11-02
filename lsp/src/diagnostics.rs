@@ -930,6 +930,63 @@ mod tests {
     }
 
     #[test]
+    fn reports_void_macro_removal() {
+        let text = "fn main() {\n    let value: void = @void();\n}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-void-macro.zn").unwrap();
+        let output = check(&uri, text, &[]);
+
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(
+                    |diagnostic| diagnostic.code.as_ref().is_some_and(|code| matches!(
+                        code,
+                        NumberOrString::String(code) if code == "zeen::typechecker::void_macro_removed"
+                    ))
+                ),
+            "{:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
+    fn reports_anonymous_init_without_context() {
+        let text =
+            "struct Point {\n    pub x: i32,\n}\n\nfn main() {\n    let point = .{ .x = 1 };\n}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-anonymous-init.zn").unwrap();
+        let output = check(&uri, text, &[]);
+
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(
+                    |diagnostic| diagnostic.code.as_ref().is_some_and(|code| matches!(
+                        code,
+                        NumberOrString::String(code)
+                            if code == "zeen::typechecker::anonymous_init_needs_context"
+                    ))
+                ),
+            "{:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
+    fn anonymous_init_checks_cleanly() {
+        let text = "struct Point {\n    pub x: i32,\n    pub y: i32,\n}\n\nfn main() {\n    let point: Point = .{ .x = 1, .y = 2 };\n    @println(\"{} {}\", point.x, point.y);\n}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-anonymous-init-ok.zn").unwrap();
+        let output = check(&uri, text, &[]);
+
+        assert!(
+            only_errors(&output.diagnostics).is_empty(),
+            "{:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
     fn module_marker_silences_warnings() {
         let unsuppressed =
             "fn helper() i32 {\n    return 1;\n}\n\nfn main() i32 {\n    return 0;\n}\n";
