@@ -32,7 +32,7 @@ comptime fn shifted(x: comptime_int) Point {
 }
 
 comptime Total = Row {
-  .cells = [shifted(0), shifted(1), shifted(2)],
+  .cells = {shifted(0), shifted(1), shifted(2)},
 }.total();
 
 fn main() {

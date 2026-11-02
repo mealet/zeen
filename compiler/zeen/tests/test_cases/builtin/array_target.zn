@@ -4,7 +4,7 @@ implement builtin [4]u8 {
   }
 
   fn reversed(*const self) [4]u8 {
-    return [(*self)[3], (*self)[2], (*self)[1], (*self)[0]];
+    return {(*self)[3], (*self)[2], (*self)[1], (*self)[0]};
   }
 }
 
@@ -21,12 +21,12 @@ implement[T] builtin [*]T {
 }
 
 fn main() {
-  let bytes: [4]u8 = [1, 2, 3, 4];
+  let bytes: [4]u8 = {1, 2, 3, 4};
   @println("{}", bytes.total());
   @println("{}", bytes.reversed()[0]);
   @println("{}", bytes.size());
 
-  let nums: [4]i32 = [7, 8, 9, 10];
+  let nums: [4]i32 = {7, 8, 9, 10};
   @println("{}", nums.size());
 
   let ptr: [*]i32 = @as([*]i32, &nums[0]);

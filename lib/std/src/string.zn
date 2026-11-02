@@ -194,7 +194,7 @@ implement String {
   pub fn push_rune(*self, rune: Rune) {
     self.initialize_if_new();
 
-    let buffer: [4]u8 = [0; 4];
+    let buffer: [4]u8 = {0; 4};
     let len = rune.encode_utf8(&buffer);
     let start = self._len;
     self._len += len;

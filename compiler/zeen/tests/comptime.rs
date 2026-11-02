@@ -695,7 +695,7 @@ comptime fn total(xs: [3]comptime_int) comptime_int {
 fn main() {
   comptime {
     let start: comptime_int = takes(1, 2.5, true, 'a', "text", @zeen_type(i32));
-    let xs: [3]comptime_int = [1, 2, 3];
+    let xs: [3]comptime_int = {1, 2, 3};
     @println("{} {}", start, total(xs));
     returns_nothing();
   };
@@ -861,7 +861,7 @@ fn main() {
     point.offset(4);
     @println("{} {}", point.x, point.sum());
 
-    let row = Row { .cells = [make(1), make(2), make(3)] };
+    let row = Row { .cells = {make(1), make(2), make(3)} };
     @println("{} {}", row.total(), row.cells[2].y);
 
     let copy = point;
@@ -1170,7 +1170,7 @@ fn substitutes_type_splices() {
 comptime Array = sized(3);
 
 fn main() {
-  let values: Array = [1, 2, 3];
+  let values: Array = {1, 2, 3};
   @println("{}", values[2]);
 }
 "#;
@@ -1185,7 +1185,7 @@ fn main() {
 fn requires_splice_for_type_values() {
     let result = compile(
         "quote_type_missing_splice",
-        "comptime fn sized(n: comptime_int) zeen_type {\n  return @zeen_type([n]i32);\n}\n\ncomptime Array = sized(3);\n\nfn main() {\n  let values: Array = [1, 2, 3];\n}\n",
+        "comptime fn sized(n: comptime_int) zeen_type {\n  return @zeen_type([n]i32);\n}\n\ncomptime Array = sized(3);\n\nfn main() {\n  let values: Array = {1, 2, 3};\n}\n",
     );
 
     assert!(!result.success);
@@ -1897,7 +1897,7 @@ comptime {
 
 fn main() {
   let value = 7;
-  let holder = Holder { .ptr = &value, .pair = [1, 2] };
+  let holder = Holder { .ptr = &value, .pair = {1, 2} };
   @println("{}", holder.pair[1]);
 }
 "#;

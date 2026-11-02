@@ -9944,7 +9944,7 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let slice = arr[..];
                 let n = slice.count();
             }
@@ -9969,7 +9969,7 @@ mod tests {
             }
 
             fn main() {
-                let bytes: [4]u8 = [1, 2, 3, 4];
+                let bytes: [4]u8 = {1, 2, 3, 4};
                 let n = bytes.total();
             }
             "#,
@@ -9993,7 +9993,7 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let slice = arr[..];
                 let ptr: *[]i32 = &slice;
                 let n = ptr.count();
@@ -10023,7 +10023,7 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let n = len_of(arr[..]);
             }
             "#,
@@ -10053,7 +10053,7 @@ mod tests {
             }
 
             fn main() {
-                let bytes: [4]u8 = [1, 2, 3, 4];
+                let bytes: [4]u8 = {1, 2, 3, 4};
                 let n = bytes.label();
             }
             "#,
@@ -10077,7 +10077,7 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let n = arr.count();
             }
             "#,
@@ -10176,10 +10176,10 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let concrete = arr[..].show();
 
-                let reals: [3]f64 = [1.5, 2.5, 3.5];
+                let reals: [3]f64 = {1.5, 2.5, 3.5};
                 let generic = reals[..].show();
             }
             "#,
@@ -10615,7 +10615,7 @@ mod tests {
             }
 
             fn main() {
-              let arr = [1, 2, 3];
+              let arr = {1, 2, 3};
               let first: i32 = first(arr[..]);
             }
             "#,
@@ -10637,7 +10637,7 @@ mod tests {
             }
 
             fn main() {
-              let arr = [1, 2, 3, 4];
+              let arr = {1, 2, 3, 4};
               let max: i32 = max(arr);
             }
             "#,
@@ -10659,7 +10659,7 @@ mod tests {
             }
 
             fn main() {
-              let arr = [1, 2, 3];
+              let arr = {1, 2, 3};
               let slice = arr[..];
               let total: i32 = total(slice.ptr);
             }
@@ -11009,8 +11009,8 @@ mod tests {
             }
 
             fn main() {
-              let o = S { .list = ["aa", "bb"] };
-              let m: [2][2][]const char = [["m00", "m01"], ["m10", "m11"]];
+              let o = S { .list = {"aa", "bb"} };
+              let m: [2][2][]const char = {{"m00", "m01"}, {"m10", "m11"}};
               @println("{}", o.list[0]);
               @println("{}", m[1][0]);
             }
@@ -11033,7 +11033,7 @@ mod tests {
             }
 
             fn main() {
-              @println("{}", take([1, 2, 3]));
+              @println("{}", take({1, 2, 3}));
             }
             "#,
         )
@@ -11087,7 +11087,7 @@ mod tests {
 
             fn main() {
               let a = Foo {};
-              a.write([1, 2, 3]);
+              a.write({1, 2, 3});
             }
             "#,
         )
@@ -11117,7 +11117,7 @@ mod tests {
 
             fn main() {
               let a = Foo {};
-              a.write([1, 2, 3][..]);
+              a.write({1, 2, 3}[..]);
             }
             "#,
         );
@@ -11287,8 +11287,8 @@ mod tests {
         let result = typecheck(
             r#"
             fn main() {
-                let a = [0; 1024];
-                let b = [7; 5];
+                let a = {0; 1024};
+                let b = {7; 5};
                 @println("{}", a[0] + b[1]);
             }
             "#,
@@ -11310,7 +11310,7 @@ mod tests {
             }
 
             fn main() {
-                f([0; 1024]);
+                f({0; 1024});
             }
             "#,
         );
@@ -11329,7 +11329,7 @@ mod tests {
             struct Item {}
 
             fn main() {
-                let a = [Item{}; 3];
+                let a = {Item{}; 3};
             }
             "#,
         )
@@ -11345,7 +11345,7 @@ mod tests {
 
     #[test]
     fn array_repeat_init_zero_length_is_error() {
-        let errors = typecheck("fn main() { let a = [0; 0]; }")
+        let errors = typecheck("fn main() { let a = {0; 0}; }")
             .expect_err("zero-length repeat array init must be reported");
 
         assert!(
@@ -12140,7 +12140,7 @@ mod tests {
         let errors = typecheck(
             r#"
             fn main() {
-                let ints = [1, 2, 3, 4];
+                let ints = {1, 2, 3, 4};
                 @println("{}", ints);
                 @println("{}", ints[..]);
             }
@@ -12173,7 +12173,7 @@ mod tests {
                 @println("{:?}", text);
             }
             fn main() {
-                let chars: [3]char = ['a', 'b', 'c'];
+                let chars: [3]char = {'a', 'b', 'c'};
                 @println("{}", chars);
                 @println("{:?}", chars);
                 show("abc");

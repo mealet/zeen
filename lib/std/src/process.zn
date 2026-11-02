@@ -1200,7 +1200,7 @@ fn merged_env(cmd: *const Command) List[String] {
 
     while (index < text.len) {
       let rune = Rune.decode_lossy(text, &index);
-      let units: [2]u16 = [0, 0];
+      let units: [2]u16 = {0, 0};
       let len = rune.encode_utf16(&units);
       let i: usize = 0;
 

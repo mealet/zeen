@@ -176,13 +176,13 @@ fn address_of_non_lvalue_expression_materializes_temp() {
 
 #[test]
 fn slice_of_array_literal() {
-    compile_mir_ok("fn main() { let s: []i32 = [1, 2, 3][..]; }");
+    compile_mir_ok("fn main() { let s: []i32 = {1, 2, 3}[..]; }");
 }
 
 #[test]
 fn slice_index_write_projects_through_slice_ptr() {
     let mir = compile_mir_ok(
-        "fn main() { let arr = [1, 2, 3]; let s = arr[..]; s[1] = 5; let _ = s[1]; }",
+        "fn main() { let arr = {1, 2, 3}; let s = arr[..]; s[1] = 5; let _ = s[1]; }",
     );
 
     let writes_through_ptr = mir.program.functions.values().any(|func| {
@@ -282,20 +282,20 @@ fn deref_of_call_result_is_lvalue() {
 #[test]
 fn slice_index_on_call_result_materializes_slice() {
     compile_mir_ok(
-        "fn get_slice() []i32 { let arr = [1, 2, 3]; return arr[..]; } \
+        "fn get_slice() []i32 { let arr = {1, 2, 3}; return arr[..]; } \
          fn main() { let v: i32 = get_slice()[1]; }",
     );
 }
 
 #[test]
 fn for_loop_over_array_literal_materializes_iterator() {
-    compile_mir_ok("fn main() { for (element : [123, 321, 333]) { @println(\"{}\", element); } }");
+    compile_mir_ok("fn main() { for (element : {123, 321, 333}) { @println(\"{}\", element); } }");
 }
 
 #[test]
 fn for_loop_over_rvalue_slice_materializes_iterator() {
     compile_mir_ok(
-        "fn get_slice() []i32 { let arr = [1, 2, 3]; return arr[..]; } \
+        "fn get_slice() []i32 { let arr = {1, 2, 3}; return arr[..]; } \
          fn main() { for (element : get_slice()) { @println(\"{}\", element); } }",
     );
 }
@@ -1872,9 +1872,9 @@ fn printed_mir_renders_builtin_shape_method_calls() {
              fn first(*const self) u8 { return (*self)[0]; } \
          } \
          fn main() { \
-             let arr: [3]i32 = [1, 2, 3]; \
+             let arr: [3]i32 = {1, 2, 3}; \
              let slice = arr[..]; \
-             let bytes: [4]u8 = [1, 2, 3, 4]; \
+             let bytes: [4]u8 = {1, 2, 3, 4}; \
              @println(\"{}\", slice.count()); \
              @println(\"{}\", bytes.first()); \
          }",
@@ -1903,7 +1903,7 @@ fn printed_mir_renders_builtin_interface_impl_calls() {
          } \
          fn main() { \
              let n: i32 = 4; \
-             let arr: [3]i32 = [1, 2, 3]; \
+             let arr: [3]i32 = {1, 2, 3}; \
              @println(\"{}\", n.show()); \
              @println(\"{}\", arr[..].show()); \
              @println(\"{}\", describe(&n)); \

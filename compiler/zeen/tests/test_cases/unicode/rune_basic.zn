@@ -40,7 +40,7 @@ fn main() {
   @println("replacement u+{hex}", Rune.replacement().to_u32());
   @println("scalar {}", Rune.is_scalar(0x41));
 
-  let buffer: [4]u8 = [0; 4];
+  let buffer: [4]u8 = {0; 4};
 
   let ascii = Rune.from_u32(0x41).unwrap();
   @println("ascii {} {}", ascii.encode_utf8(&buffer), @as(u32, buffer[0]));
@@ -72,7 +72,7 @@ fn main() {
     @as(u32, buffer[3]),
   );
 
-  let units: [2]u16 = [0, 0];
+  let units: [2]u16 = {0, 0};
   @println("units {} {} {}", emoji.encode_utf16(&units), units[0], units[1]);
   @println("units {} {}", euro.encode_utf16(&units), units[0]);
 

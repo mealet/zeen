@@ -437,7 +437,7 @@ implement Hash : Rune {
 implement Display : Rune {
   /// Writes the rune as UTF-8
   pub fn display[W: StrWriter](*const self, out: *W) void {
-    let buffer: [4]u8 = [0; 4];
+    let buffer: [4]u8 = {0; 4};
     let len = (*self).encode_utf8(&buffer);
 
     (*out).write_str_raw(@as([*]const char, &buffer[0]), len);
@@ -466,7 +466,7 @@ implement Debug : Rune {
     } else if (code < 0x80) {
       (*out).write_str_single(@as(char, code));
     } else {
-      let buffer: [4]u8 = [0; 4];
+      let buffer: [4]u8 = {0; 4};
       let len = (*self).encode_utf8(&buffer);
 
       (*out).write_str_raw(@as([*]const char, &buffer[0]), len);

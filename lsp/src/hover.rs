@@ -1447,7 +1447,7 @@ mod tests {
         assert!(markdown.contains("instance method of `i32`"), "{markdown}");
     }
 
-    const BUILTIN_SHAPE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
+    const BUILTIN_SHAPE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = {1, 2, 3, 4};\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
 
     #[test]
     fn builtin_shape_method_call_shows_target() {

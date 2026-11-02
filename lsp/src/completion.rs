@@ -3223,7 +3223,7 @@ mod tests {
         assert_eq!(names, vec!["max_value()"]);
     }
 
-    const BUILTIN_SLICE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n\n    fn first(*const self) Option[T] {\n        return Option.Some((*self)[0]);\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{} {}\", slice.count(), slice.first().unwrap());\n}\n";
+    const BUILTIN_SLICE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n\n    fn first(*const self) Option[T] {\n        return Option.Some((*self)[0]);\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = {1, 2, 3, 4};\n    let slice = nums[..];\n    @println(\"{} {}\", slice.count(), slice.first().unwrap());\n}\n";
 
     #[test]
     fn builtin_slice_receiver_dot_completes_shape_methods() {
@@ -3249,7 +3249,7 @@ mod tests {
         )
         .unwrap();
 
-        let text = "use sub.lib;\n\nfn main() {\n    let nums: [3]i32 = [1, 2, 3];\n    let slice = nums[..];\n    @println(\"{}\", slice.first());\n}\n";
+        let text = "use sub.lib;\n\nfn main() {\n    let nums: [3]i32 = {1, 2, 3};\n    let slice = nums[..];\n    @println(\"{}\", slice.first());\n}\n";
         let uri: tower_lsp_server::ls_types::Uri =
             format!("file://{}", dir.join("main.zn").display())
                 .parse()
@@ -3278,7 +3278,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    const BUILTIN_ARRAY_SAMPLE: &str = "implement builtin [4]u8 {\n    fn total(*const self) u32 {\n        return @as(u32, (*self)[0]) + @as(u32, (*self)[1]);\n    }\n}\n\nfn main() {\n    let data: [4]u8 = [1, 2, 3, 4];\n    @println(\"{}\", data.total());\n}\n";
+    const BUILTIN_ARRAY_SAMPLE: &str = "implement builtin [4]u8 {\n    fn total(*const self) u32 {\n        return @as(u32, (*self)[0]) + @as(u32, (*self)[1]);\n    }\n}\n\nfn main() {\n    let data: [4]u8 = {1, 2, 3, 4};\n    @println(\"{}\", data.total());\n}\n";
 
     #[test]
     fn builtin_array_receiver_dot_completes_shape_methods() {
@@ -3356,7 +3356,7 @@ mod tests {
         assert_eq!(names, vec!["tag()"]);
     }
 
-    const BUILTIN_INTERFACE_SHAPE_SAMPLE: &str = "interface Countable {\n    fn count(*const self) usize;\n}\n\nimplement[T] Countable : builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
+    const BUILTIN_INTERFACE_SHAPE_SAMPLE: &str = "interface Countable {\n    fn count(*const self) usize;\n}\n\nimplement[T] Countable : builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = {1, 2, 3, 4};\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
 
     #[test]
     fn builtin_interface_shape_receiver_dot_completes_methods() {
@@ -3382,7 +3382,7 @@ mod tests {
         )
         .unwrap();
 
-        let text = "use sub.lib;\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
+        let text = "use sub.lib;\n\nfn main() {\n    let nums: [4]i32 = {1, 2, 3, 4};\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
         let uri: tower_lsp_server::ls_types::Uri =
             format!("file://{}", dir.join("main.zn").display())
                 .parse()

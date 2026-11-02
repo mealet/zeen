@@ -681,7 +681,7 @@ fn last_element[T](slice: []T) T {
 }
 
 fn main() {
-    let arr = [1, 2, 3, 4];
+    let arr = {1, 2, 3, 4};
     let slice = arr[..];
     let _elem = last_element(slice);
 }
@@ -728,7 +728,7 @@ fn array_of_copy_elements_is_copyable() {
     flow_ok(
         r#"
 fn main() {
-    let a = [1, 2, 3];
+    let a = {1, 2, 3};
     let b = a;
     let c = a;
 }
@@ -757,7 +757,7 @@ fn max(a: [3]i32) i32 {
     return a[0];
 }
 fn main() {
-    let arr = [1, 2, 3];
+    let arr = {1, 2, 3};
     max(arr);
     max(arr);
 }
@@ -770,7 +770,7 @@ fn array_element_reads_do_not_move_the_array() {
     flow_ok(
         r#"
 fn main() {
-    let a = [1, 2, 3];
+    let a = {1, 2, 3};
     let x = a[0];
     let y = a[1];
 }
@@ -784,7 +784,7 @@ fn array_of_move_only_elements_is_still_move_only() {
         r#"
 struct Buffer { pub x: i32 }
 fn main() {
-    let a = [Buffer { .x = 1 }, Buffer { .x = 2 }];
+    let a = {Buffer { .x = 1 }, Buffer { .x = 2 }};
     let b = a;
     let c = a;
 }
@@ -802,7 +802,7 @@ implement Drop : Buffer {
     fn drop(self) void {}
 }
 fn main() {
-    let a = [Buffer { .x = 1 }, Buffer { .x = 2 }];
+    let a = {Buffer { .x = 1 }, Buffer { .x = 2 }};
     let b = a;
     let c = a;
 }
@@ -816,7 +816,7 @@ fn slice_is_copy_and_usable_multiple_times() {
     flow_ok(
         r#"
 fn main() {
-    let arr: [3]i32 = [1, 2, 3];
+    let arr: [3]i32 = {1, 2, 3};
     let s: []i32 = arr[..];
     let t = s;
     let u = s;
@@ -833,7 +833,7 @@ fn sum(s: []i32) i32 {
     return s[0];
 }
 fn main() {
-    let arr: [3]i32 = [1, 2, 3];
+    let arr: [3]i32 = {1, 2, 3};
     let s: []i32 = arr[..];
     sum(s);
     sum(s);
@@ -847,7 +847,7 @@ fn slice_element_reads_do_not_copy_the_slice() {
     flow_ok(
         r#"
 fn main() {
-    let arr: [3]i32 = [1, 2, 3];
+    let arr: [3]i32 = {1, 2, 3};
     let s: []i32 = arr[..];
     let a = s[0];
     let b = s[1];
@@ -861,7 +861,7 @@ fn full_range_slice_yields_a_slice() {
     flow_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let b: []i32 = a[..];
     let _ = b[2];
 }
@@ -875,7 +875,7 @@ fn addr_of_array_yields_pointer_to_array() {
     flow_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let b: *[4]i32 = &a;
 }
 "#,
@@ -884,7 +884,7 @@ fn main() {
         compile(
             r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let b: []i32 = &a;
 }
 "#,
@@ -1552,12 +1552,15 @@ implement Drop : Buffer {
 }
 fn main() {
     let _a = Buffer { .x = 1 };
+    let go = 1;
 
-    let _b = {
+    let _b = if (go == 1) {
         let temporary = Buffer { .x = 2 };
         let ownered = temporary;
 
         ownered
+    } else {
+        Buffer { .x = 3 }
     };
 }
 "#,
@@ -1569,10 +1572,15 @@ fn block_trailing_value_copy_passes() {
     flow_ok(
         r#"
 fn main() {
-    let _b = {
+    let go = 1;
+
+    let _b = if (go == 1) {
         let temporary = 1;
         let ownered = temporary;
+
         ownered
+    } else {
+        0
     };
 }
 "#,
@@ -1610,12 +1618,16 @@ implement Drop : Buffer {
     fn drop(self) void {}
 }
 fn main() {
-    let _ignore = {
+    let go = 1;
+
+    let _ignore = if (go == 1) {
         let temporary = Buffer { .x = 1 };
-        if (1 == 1) {
+        if (go == 1) {
             let inner = Buffer { .x = 2 };
         };
         temporary
+    } else {
+        Buffer { .x = 3 }
     };
 }
 "#,

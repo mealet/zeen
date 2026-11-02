@@ -604,7 +604,7 @@ implement builtin i32 {
 
   pub fn to_be_bytes(self) [4]u8 {
     let v = @as(u32, self);
-    let bytes: [4]u8 = [0; 4];
+    let bytes: [4]u8 = {0; 4};
     let i: u32 = 0;
 
     while (i < 4) {
@@ -617,7 +617,7 @@ implement builtin i32 {
 
   pub fn to_le_bytes(self) [4]u8 {
     let v = @as(u32, self);
-    let bytes: [4]u8 = [0; 4];
+    let bytes: [4]u8 = {0; 4};
     let i: u32 = 0;
 
     while (i < 4) {

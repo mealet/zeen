@@ -39,8 +39,8 @@ implement builtin bool {
 }
 
 fn main() {
-  @println("{}", i32.pack_le([1, 0, 0, 0]));
-  @println("{}", i32.pack_le([0, 1, 0, 0]));
+  @println("{}", i32.pack_le({1, 0, 0, 0}));
+  @println("{}", i32.pack_le({0, 1, 0, 0}));
   @println("{}", i32.largest());
   @println("{}", i32.smallest());
   @println("{}", i32.is_extreme(2147483647));

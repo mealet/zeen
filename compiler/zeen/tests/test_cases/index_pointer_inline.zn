@@ -43,7 +43,7 @@ fn main() {
   holder[0] = String.from("bye");
   @println("holder assigned {}", (*holder[0]));
 
-  let items: [2]String = [String.from("one"), String.from("two")];
+  let items: [2]String = {String.from("one"), String.from("two")};
   @println("array {} {}", items[1], items[0].len());
 
   let slice: []String = items[..];
