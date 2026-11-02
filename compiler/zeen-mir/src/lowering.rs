@@ -61,6 +61,21 @@ pub struct MirLoweringResult {
     pub warnings: Vec<MirWarning>,
 }
 
+fn is_generic_fn(hir_fn: &HirFn, owner: Option<DefId>, typecheck: &TypeCheckResult) -> bool {
+    if !hir_fn.generics.is_empty() {
+        return true;
+    }
+
+    let Some(owner) = owner else {
+        return false;
+    };
+
+    let has_params = |params: Option<&Vec<DefId>>| params.is_some_and(|params| !params.is_empty());
+
+    has_params(typecheck.struct_generics.get(&owner))
+        || has_params(typecheck.enum_generics.get(&owner))
+}
+
 pub fn lower_program<'ctx>(
     rodeo: Rc<RefCell<Rodeo>>,
     typecheck: &'ctx mut TypeCheckResult,
@@ -103,14 +118,14 @@ pub fn lower_program<'ctx>(
 
         main_fn = Some(main_fn_monomorphized);
     } else {
-        fns_with_owners.iter().for_each(|(def_id, _, owner)| {
+        fns_with_owners.iter().for_each(|(def_id, hir_fn, owner)| {
             let is_core = resolution
                 .defs
                 .get(def_id)
                 .map(|info| info.span.src().name().starts_with("core."))
                 .unwrap_or(false);
 
-            if !is_core {
+            if !is_core && !is_generic_fn(hir_fn, *owner, &*lowering.typecheck) {
                 lowering.monomorphize_fn(*def_id, Vec::new(), *owner, &[]);
             }
         });

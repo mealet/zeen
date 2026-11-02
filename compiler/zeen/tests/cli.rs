@@ -167,6 +167,28 @@ fn check_accepts_valid_program_without_output() {
 }
 
 #[test]
+fn check_accepts_library_without_main() {
+    let dir = std::env::temp_dir().join(format!("zeen_lib_check_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src_path = dir.join("lib.zn");
+
+    std::fs::write(
+        &src_path,
+        "fn shift[T: Ord](items: [*]T, index: usize, low: usize) {\n  let value = items[index];\n  let cursor = index;\n\n  while (cursor > low && items[cursor - 1] > value) {\n    items[cursor] = items[cursor - 1];\n    cursor -= 1;\n  };\n\n  items[cursor] = value;\n}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .arg(&src_path)
+        .args(["--check", "--emit", "OBJ"])
+        .assert()
+        .success();
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn check_rejects_invalid_program() {
     let dir = std::env::temp_dir().join(format!("zeen_check_bad_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
