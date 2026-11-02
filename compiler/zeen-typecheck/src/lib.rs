@@ -8722,7 +8722,20 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            Eq | Ne => self.result.interner.builtin(BuiltinType::bool),
+            Eq | Ne => {
+                if matches!(self.result.interner.get(operand_ty), Type::Void) {
+                    self.report(TypeError::BinaryNotSupported {
+                        op,
+                        lhs_type: self.display_type(lhs).into(),
+                        rhs_type: self.display_type(rhs).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
+                self.result.interner.builtin(BuiltinType::bool)
+            }
 
             _ => unreachable!("others must be handled before this fn"),
         }
