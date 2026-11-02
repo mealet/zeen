@@ -504,6 +504,19 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("`@void()` has been removed, use `.{{ }}` instead")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::void_macro_removed),
+        help("write `.{{ }}` for a void value or an empty struct initialization")
+    )]
+    VoidMacroRemoved {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("`@{name}` macro is not implemented yet")]
     #[diagnostic(
         severity(Error),

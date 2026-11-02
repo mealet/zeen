@@ -379,13 +379,13 @@ implement Child {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     } else {
       if (kill(@as(c_pid_t, self.pid), SIGTERM) != 0) {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     }
   }
 }
@@ -909,7 +909,7 @@ fn merged_env(cmd: *const Command) List[String] {
       off += @as(usize, n);
     };
 
-    return Result.Ok(@void());
+    return Result.Ok(.{});
   }
 
   fn drain_fd_to_string(fd: c_int) Result[String, IoError] {
@@ -1377,7 +1377,7 @@ fn merged_env(cmd: *const Command) List[String] {
       off += @as(usize, written);
     };
 
-    return Result.Ok(@void());
+    return Result.Ok(.{});
   }
 
   fn drain_handle_to_string(handle: *void) Result[String, IoError] {

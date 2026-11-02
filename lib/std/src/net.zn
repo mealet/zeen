@@ -190,7 +190,7 @@ fn write_u32[W: StrWriter](out: *W, value: u32) void {
 
   fn ensure_wsa() Result[void, IoError] {
     if (wsa_ready) {
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     };
 
     let scratch: [512]u8 = @uninit();
@@ -202,7 +202,7 @@ fn write_u32[W: StrWriter](out: *W, value: u32) void {
 
     wsa_ready = true;
 
-    return Result.Ok(@void());
+    return Result.Ok(.{});
   }
 
   fn new_socket(kind: c_int) Result[usize, IoError] {
@@ -616,13 +616,13 @@ implement TcpStream {
         return Result.Err(win_error(@as(WinDWORD, WSAGetLastError())));
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     } else {
       if (shutdown(@as(c_int, self.sock), SHUT_RDWR) != 0) {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     }
   }
 

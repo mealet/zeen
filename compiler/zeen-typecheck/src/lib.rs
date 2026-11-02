@@ -3026,21 +3026,6 @@ impl<'res> TypeChecker<'res> {
                 self.result.interner.never()
             }
 
-            HirMacroKind::Void => {
-                if !args.is_empty() {
-                    self.report(TypeError::ArgCountMismatch {
-                        expected: 0,
-                        found: args.len(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-
-                    return self.result.interner.error();
-                }
-
-                self.result.interner.void()
-            }
-
             HirMacroKind::SizeOf | HirMacroKind::AlignOf => {
                 if args.len() != 1 {
                     self.report(TypeError::ArgCountMismatch {
@@ -3276,10 +3261,23 @@ impl<'res> TypeChecker<'res> {
                     self.synth_expr(arg);
                 }
 
-                self.report(TypeError::UnknownMacro {
-                    src: source.src(),
-                    span: kind.1,
-                });
+                let name_span = kind.1;
+                let start = name_span.offset();
+                let end = start + name_span.len();
+                let text = source.src.inner();
+
+                if text.get(start..end) == Some("@void") {
+                    self.report(TypeError::VoidMacroRemoved {
+                        src: source.src(),
+                        span: name_span,
+                    });
+                } else {
+                    self.report(TypeError::UnknownMacro {
+                        src: source.src(),
+                        span: name_span,
+                    });
+                }
+
                 self.result.interner.error()
             }
         }

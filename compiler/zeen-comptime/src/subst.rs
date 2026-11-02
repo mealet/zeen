@@ -937,7 +937,7 @@ impl<'arena> Interp<'arena> {
         if self.is_comptime_value_expr(module, expr) {
             if self.is_void_comptime_call(module, expr) {
                 return match self.eval_fresh_expr(module, expr) {
-                    Ok(_) => Ok(Some(self.void_macro_expr(expr.span))),
+                    Ok(_) => Ok(Some(self.void_value_expr(expr.span))),
                     Err(_) => Err(self.errors.clone()),
                 };
             }
@@ -1471,7 +1471,7 @@ impl<'arena> Interp<'arena> {
                 match self.eval_fresh_expr(module, expr) {
                     Ok(value) => {
                         if trailing.is_none() {
-                            return Ok(Some(self.void_macro_expr(expr.span)));
+                            return Ok(Some(self.void_value_expr(expr.span)));
                         }
 
                         self.value_to_expr(module, value, expr.span)
@@ -1819,13 +1819,12 @@ impl<'arena> Interp<'arena> {
         result
     }
 
-    fn void_macro_expr(&self, span: miette::SourceSpan) -> &'arena Expression<'arena> {
-        let spur = self.interner.borrow_mut().get_or_intern("void");
+    fn void_value_expr(&self, span: miette::SourceSpan) -> &'arena Expression<'arena> {
+        let fields: &[FieldInit<'arena>] = &[];
 
         self.arena.alloc(Expression {
-            kind: ExpressionKind::MacroCall {
-                name: (spur, span),
-                args: self.arena.alloc_slice_copy(&[]),
+            kind: ExpressionKind::AnonymousStructInit {
+                fields: self.arena.alloc_slice_copy(fields),
             },
             span,
         })

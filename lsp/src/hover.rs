@@ -185,7 +185,6 @@ fn macro_docs(name: &str) -> Option<(&'static str, &'static str)> {
             "@uninit() any",
             "compiler macro: uninitialized value, reading it is UB",
         )),
-        "void" => Some(("@void()", "compiler macro: builds the void value")),
         "zeen_type" => Some((
             "@zeen_type(T)",
             "comptime macro: captures a type as zeen_type, `$()` splices are evaluated",

@@ -2127,10 +2127,18 @@ impl<'arena> Interp<'arena> {
                     "typeInfo" => self.eval_macro_type_info(name.1, args),
                     "hasField" => self.eval_macro_has_field(name.1, args),
                     "fieldType" => self.eval_macro_field_type(name.1, args),
-                    "uninit" | "void" => {
+                    "uninit" => {
                         self.errors.push(Error::RuntimeOnly {
                             message: format!("`@{macro_name_owned}` is not available in comptime")
                                 .into(),
+                            src: self.current_src(),
+                            span: expr.span,
+                        });
+                        Err(Unwind::Break)
+                    }
+                    "void" => {
+                        self.errors.push(Error::Unsupported {
+                            message: "`@void()` has been removed, use `.{ }` instead".into(),
                             src: self.current_src(),
                             span: expr.span,
                         });
