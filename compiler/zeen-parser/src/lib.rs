@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use lasso::Rodeo;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
 use error::ParserError;
 use zeen_lexer::{Token, TokenKind};
@@ -25,7 +25,7 @@ pub struct Parser<'tok, 'ctx> {
     interner: Rc<RefCell<Rodeo>>,
 
     current: Token,
-    peeked: Option<Token>,
+    lookahead: VecDeque<Token>,
 
     pub errors: Vec<ParserError>,
     panic_mode: bool,
@@ -54,7 +54,7 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
             interner,
 
             current,
-            peeked: None,
+            lookahead: VecDeque::new(),
 
             errors: Vec::new(),
             panic_mode: false,
@@ -221,13 +221,31 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
         Token::new(TokenKind::Eof, span)
     }
 
-    fn next_significant(&mut self) -> Option<Token> {
+    fn pull_significant(&mut self) -> Option<Token> {
         loop {
-            let token = self.peeked.take().or_else(|| self.tokens.next())?;
+            let token = self.tokens.next()?;
+
             if token.kind != TokenKind::Comment {
                 return Some(token);
             }
         }
+    }
+
+    fn fill_lookahead(&mut self, count: usize) {
+        while self.lookahead.len() < count {
+            match self.pull_significant() {
+                Some(token) => self.lookahead.push_back(token),
+                None => break,
+            }
+        }
+    }
+
+    fn next_significant(&mut self) -> Option<Token> {
+        if let Some(token) = self.lookahead.pop_front() {
+            return Some(token);
+        }
+
+        self.pull_significant()
     }
 
     pub fn advance(&mut self) -> Option<Token> {
@@ -259,10 +277,54 @@ impl<'tok, 'ctx> Parser<'tok, 'ctx> {
     }
 
     pub fn peek(&mut self) -> Option<&Token> {
-        if self.peeked.is_none() {
-            self.peeked = self.next_significant();
+        self.fill_lookahead(1);
+        self.lookahead.front()
+    }
+
+    pub fn peek_ahead_kind(&mut self, index: usize) -> Option<TokenKind> {
+        self.fill_lookahead(index + 1);
+        self.lookahead.get(index).map(|token| token.kind)
+    }
+
+    pub fn brace_has_top_level_comma(&mut self) -> bool {
+        if !self.at(TokenKind::OpenBrace) {
+            return false;
         }
-        self.peeked.as_ref()
+
+        let mut depth: usize = 0;
+        let mut index: usize = 0;
+
+        loop {
+            let Some(kind) = self.peek_ahead_kind(index) else {
+                return false;
+            };
+
+            match kind {
+                TokenKind::OpenBrace | TokenKind::OpenParen | TokenKind::OpenBracket => {
+                    depth += 1;
+                }
+
+                TokenKind::CloseBrace => {
+                    if depth == 0 {
+                        return false;
+                    }
+
+                    depth -= 1;
+                }
+
+                TokenKind::CloseParen | TokenKind::CloseBracket => {
+                    depth = depth.saturating_sub(1);
+                }
+
+                TokenKind::Comma if depth == 0 => return true,
+
+                TokenKind::Eof => return false,
+
+                _ => {}
+            }
+
+            index += 1;
+        }
     }
 
     pub fn eat(&mut self, kind: TokenKind) -> bool {

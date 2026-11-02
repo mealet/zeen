@@ -59,9 +59,9 @@ fn count_of[T: Countable](value: *const T) usize {
 }
 
 fn main() {
-  let nums: [4]i32 = [1, 2, 3, 4];
-  let reals: [3]f64 = [1.5, 2.5, 3.5];
-  let bytes: [4]u8 = [1, 2, 3, 4];
+  let nums: [4]i32 = {1, 2, 3, 4};
+  let reals: [3]f64 = {1.5, 2.5, 3.5};
+  let bytes: [4]u8 = {1, 2, 3, 4};
 
   @println("{}", nums[..].show());
   @println("{}", reals[..].show());

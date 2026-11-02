@@ -119,12 +119,40 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("field `{field}` is initialized more than once")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::duplicate_field),
+        help("keep only one `.field = value` entry")
+    )]
+    DuplicateField {
+        field: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("missing fields in '{struct_name}': {fields}")]
     #[diagnostic(severity(Error), code(zeen::typechecker::missing_fields))]
     MissingFields {
         struct_name: SmolStr,
         fields: SmolStr,
 
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("cannot infer the type of `.{{ ... }}`, expected a struct or `void`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::anonymous_init_needs_context),
+        help("annotate the type, for example `let x: Point = .{{ .a = 1 }};`")
+    )]
+    AnonymousInitNeedsContext {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label]
@@ -485,6 +513,19 @@ pub enum TypeError {
     #[error("unknown macro found")]
     #[diagnostic(severity(Error), code(zeen::typechecker::unknown_macro))]
     UnknownMacro {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("`@void()` has been removed, use `.{{ }}` instead")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::void_macro_removed),
+        help("write `.{{ }}` for a void value or an empty struct initialization")
+    )]
+    VoidMacroRemoved {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label]

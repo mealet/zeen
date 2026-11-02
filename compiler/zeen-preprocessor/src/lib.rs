@@ -670,6 +670,10 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 fields,
             },
 
+            ExpressionKind::AnonymousStructInit { fields } => {
+                ExpressionKind::AnonymousStructInit { fields }
+            }
+
             ExpressionKind::ArrayInit { elements } => ExpressionKind::ArrayInit {
                 elements: self.resolve_expr_slice(elements),
             },

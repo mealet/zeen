@@ -32,7 +32,7 @@ fn main() i32 {
   let swapped: Pair[f64, i32] = swap(p);
   @println("{}", swapped.first);
 
-  let arr = [7, 8, 9];
+  let arr = {7, 8, 9};
   @println("{}", max(arr));
   @println("{}", first(arr[..]));
   return 0;

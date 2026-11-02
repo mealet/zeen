@@ -1,0 +1,10 @@
+struct Point {
+  pub x: i32,
+  pub y: i32,
+}
+
+fn main() {
+  let point = @as(Point, .{ .x = 12, .y = 34 });
+
+  @println("{} {}", point.x, point.y);
+}

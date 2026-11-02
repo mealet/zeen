@@ -59,6 +59,7 @@ enum ValueKey {
     Type(usize),
     Expr(usize),
     Decl(usize),
+    Void,
 }
 
 fn value_key(value: &Value<'_>) -> ValueKey {
@@ -81,6 +82,7 @@ fn value_key(value: &Value<'_>) -> ValueKey {
         Value::Type(ty) => ValueKey::Type(*ty as *const TypeExpr<'_> as usize),
         Value::Expr(expr) => ValueKey::Expr(*expr as *const Expression<'_> as usize),
         Value::Decl(decl) => ValueKey::Decl(*decl as *const Declaration<'_> as usize),
+        Value::Void => ValueKey::Void,
     }
 }
 
@@ -1973,6 +1975,19 @@ impl<'arena> Interp<'arena> {
                 self.eval_struct_init(ty, *fields, expr.span)
             }
 
+            ExpressionKind::AnonymousStructInit { fields } => {
+                if fields.is_empty() {
+                    Ok(Value::Void)
+                } else {
+                    self.errors.push(Error::Unsupported {
+                        message: "anonymous struct initialization needs a type, use `Type { ... }` in comptime".into(),
+                        src: self.current_src(),
+                        span: expr.span,
+                    });
+                    Err(Unwind::Break)
+                }
+            }
+
             ExpressionKind::Type(ty) => Ok(Value::Type(ty)),
 
             ExpressionKind::FieldAccess { object, field } => {
@@ -2112,10 +2127,18 @@ impl<'arena> Interp<'arena> {
                     "typeInfo" => self.eval_macro_type_info(name.1, args),
                     "hasField" => self.eval_macro_has_field(name.1, args),
                     "fieldType" => self.eval_macro_field_type(name.1, args),
-                    "uninit" | "void" => {
+                    "uninit" => {
                         self.errors.push(Error::RuntimeOnly {
                             message: format!("`@{macro_name_owned}` is not available in comptime")
                                 .into(),
+                            src: self.current_src(),
+                            span: expr.span,
+                        });
+                        Err(Unwind::Break)
+                    }
+                    "void" => {
+                        self.errors.push(Error::Unsupported {
+                            message: "`@void()` has been removed, use `.{ }` instead".into(),
                             src: self.current_src(),
                             span: expr.span,
                         });

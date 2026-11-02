@@ -27,16 +27,16 @@ struct Payload {
 }
 
 fn main() {
-  let bytes: [4]u8 = [1, 2, 3, 4];
+  let bytes: [4]u8 = {1, 2, 3, 4};
   @println("{}", bytes.label());
 
-  let nums: [4]i32 = [7, 8, 9, 10];
+  let nums: [4]i32 = {7, 8, 9, 10};
   @println("{}", nums.label());
 
   let copies = nums[..];
   @println("{}", copies.kind());
 
-  let owned = [Payload { .x = 5 }];
+  let owned = {Payload { .x = 5 }};
   let borrowed = owned[..];
   @println("{}", borrowed.kind());
 }

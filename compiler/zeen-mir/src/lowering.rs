@@ -61,6 +61,21 @@ pub struct MirLoweringResult {
     pub warnings: Vec<MirWarning>,
 }
 
+fn is_generic_fn(hir_fn: &HirFn, owner: Option<DefId>, typecheck: &TypeCheckResult) -> bool {
+    if !hir_fn.generics.is_empty() {
+        return true;
+    }
+
+    let Some(owner) = owner else {
+        return false;
+    };
+
+    let has_params = |params: Option<&Vec<DefId>>| params.is_some_and(|params| !params.is_empty());
+
+    has_params(typecheck.struct_generics.get(&owner))
+        || has_params(typecheck.enum_generics.get(&owner))
+}
+
 pub fn lower_program<'ctx>(
     rodeo: Rc<RefCell<Rodeo>>,
     typecheck: &'ctx mut TypeCheckResult,
@@ -103,14 +118,14 @@ pub fn lower_program<'ctx>(
 
         main_fn = Some(main_fn_monomorphized);
     } else {
-        fns_with_owners.iter().for_each(|(def_id, _, owner)| {
+        fns_with_owners.iter().for_each(|(def_id, hir_fn, owner)| {
             let is_core = resolution
                 .defs
                 .get(def_id)
                 .map(|info| info.span.src().name().starts_with("core."))
                 .unwrap_or(false);
 
-            if !is_core {
+            if !is_core && !is_generic_fn(hir_fn, *owner, &*lowering.typecheck) {
                 lowering.monomorphize_fn(*def_id, Vec::new(), *owner, &[]);
             }
         });
@@ -668,6 +683,11 @@ impl<'ctx> MirLowering<'ctx> {
                 }
             }
             HirExprKind::StructInit { fields, .. } => {
+                for field in fields {
+                    self.collect_global_expr_deps(&field.value, out);
+                }
+            }
+            HirExprKind::AnonymousStructInit { fields } => {
                 for field in fields {
                     self.collect_global_expr_deps(&field.value, out);
                 }
@@ -3783,6 +3803,66 @@ impl<'ctx> MirLowering<'ctx> {
                 )
             }
 
+            HirExprKind::AnonymousStructInit { fields } => {
+                let ty = self.expr_type(fb, expr);
+                match self.typecheck.interner.get(ty).clone() {
+                    Type::Void if fields.is_empty() => (
+                        block,
+                        Operand::Constant(ConstValue::Void, Some(expr.source.clone())),
+                    ),
+                    Type::Struct { def_id, .. } => {
+                        self.register_struct_layout(ty, def_id);
+
+                        let info = self
+                            .struct_info(def_id)
+                            .expect("struct info is missing")
+                            .clone();
+
+                        let mut block = block;
+                        let mut ordered_operands = Vec::with_capacity(info.fields.len());
+
+                        for field_info in &info.fields {
+                            let matching = fields
+                                .iter()
+                                .find(|f| f.name == field_info.name)
+                                .expect("typechecker should have caught missing field");
+
+                            let (bl, operand) =
+                                self.lower_expr_to_operand(fb, &matching.value, block);
+                            block = bl;
+                            ordered_operands.push(operand);
+                        }
+
+                        let temp = fb.new_temp(ty);
+
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::Aggregate {
+                                    kind: AggregateKind::Struct(def_id),
+                                    operands: ordered_operands,
+                                },
+                                source: Some(expr.source.clone()),
+                            },
+                        );
+
+                        (
+                            block,
+                            self.place_to_operand(
+                                Place::from_local(temp),
+                                ty,
+                                Some(expr.source.clone()),
+                            ),
+                        )
+                    }
+                    wildcard => panic!(
+                        "non-struct type in AnonymousStructInit lowering: {:?}",
+                        wildcard
+                    ),
+                }
+            }
+
             HirExprKind::ArrayInit { elements } => {
                 let ty = self.expr_type(fb, expr);
                 let mut block = block;
@@ -4377,9 +4457,7 @@ impl<'ctx> MirLowering<'ctx> {
                     self.lower_diverging_macro(fb, kind.0, block, &expr.source)
                 }
 
-                HirMacroKind::Uninit | HirMacroKind::Void => {
-                    (block, Operand::Constant(ConstValue::Void, None))
-                }
+                HirMacroKind::Uninit => (block, Operand::Constant(ConstValue::Void, None)),
 
                 HirMacroKind::Unknown => panic!("unknown macro reached MIR lowering"),
             },
@@ -8518,17 +8596,28 @@ impl<'ctx> MirLowering<'ctx> {
                         inner: arg_ty,
                         is_const,
                     });
-                    let local = self.operand_to_local(fb, operand, arg_ty, block);
+
+                    let existing = match &operand {
+                        Operand::Copy(place, _) | Operand::Move(place, _) if is_const => {
+                            (self.place_type(fb, place) == arg_ty).then(|| place.clone())
+                        }
+                        _ => None,
+                    };
+
+                    let place = match existing {
+                        Some(place) => place,
+                        None => {
+                            Place::from_local(self.operand_to_local(fb, operand, arg_ty, block))
+                        }
+                    };
+
                     let temp = fb.new_temp(ptr_ty);
 
                     fb.push_stmt(
                         block,
                         MirStatement::Assign {
                             place: Place::from_local(temp),
-                            rvalue: Rvalue::Ref {
-                                place: Place::from_local(local),
-                                is_const,
-                            },
+                            rvalue: Rvalue::Ref { place, is_const },
                             source: None,
                         },
                     );

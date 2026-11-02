@@ -177,6 +177,12 @@ fn collect_from_expr(expr: &zeen_hir::expr::HirExpr, map: &mut HashMap<DefId, Rc
             }
         }
 
+        HirExprKind::AnonymousStructInit { fields } => {
+            for field in fields {
+                collect_from_expr(&field.value, map);
+            }
+        }
+
         HirExprKind::ArrayInit { elements } => {
             for element in elements {
                 collect_from_expr(element, map);

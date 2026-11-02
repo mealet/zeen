@@ -1,0 +1,22 @@
+struct Slot {
+  pub value: i32,
+  pub weight: i32,
+}
+
+fn build(kind: i32) Slot {
+  switch (kind) {
+    0 => { return .{ .value = 1, .weight = 10 }; },
+    _ => { return .{ .value = 2, .weight = 20 }; },
+  }
+}
+
+fn main() {
+  let kind = 1;
+  let chosen: Slot = switch (kind) {
+    0 => .{ .value = 3, .weight = 30 },
+    _ => .{ .value = 4, .weight = 40 },
+  };
+  let built = build(0);
+
+  @println("{} {} {} {}", chosen.value, chosen.weight, built.value, built.weight);
+}

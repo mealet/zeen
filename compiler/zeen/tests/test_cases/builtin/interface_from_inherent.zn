@@ -38,7 +38,7 @@ fn fingerprint_value[T: Fingerprint](value: *const T) u64 {
 
 fn main() {
   let n: i32 = 4;
-  let chars: [3]char = ['a', 'b', 'c'];
+  let chars: [3]char = {'a', 'b', 'c'};
 
   @println("{} {}", n.describe(), describe_value(&n));
   @println("{}", n.fingerprint() + fingerprint_value(&n));

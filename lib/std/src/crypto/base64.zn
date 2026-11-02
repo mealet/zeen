@@ -45,7 +45,7 @@ pub struct Base64 {
 
     while (group < groups) {
       let last = group + 1 == groups;
-      let sextets: [4]u32 = [0; 4];
+      let sextets: [4]u32 = {0; 4};
       let pad: usize = 0;
 
       let pos: usize = 0;

@@ -773,6 +773,24 @@ pub fn dot_complete(
     if crate::builtin::is_scalar_type_name(receiver_name) {
         static_context = Some(true);
         type_name = Some(receiver_name.to_string());
+    } else if start < dot_offset
+        && let Some(receiver) = analysis.at(start)
+        && receiver.role == Role::Type
+    {
+        let builtin = receiver.def.and_then(|def| {
+            analysis
+                .builtin_targets
+                .iter()
+                .find(|target| target.def == def)
+        });
+
+        if let Some(target) = builtin {
+            static_context = Some(true);
+            type_name = Some(target.name.clone());
+        } else if let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) {
+            static_context = Some(true);
+            type_name = Some(name.to_string());
+        }
     } else if let Some(rendered) = analysis.access_types.get(&(start, dot_offset - start)) {
         raw_type = Some(rendered.clone());
 
@@ -790,28 +808,11 @@ pub fn dot_complete(
     } else if start < dot_offset
         && let Some(receiver) = analysis.at(start)
     {
-        if receiver.role == Role::Type {
-            let builtin = receiver.def.and_then(|def| {
-                analysis
-                    .builtin_targets
-                    .iter()
-                    .find(|target| target.def == def)
-            });
+        raw_type = receiver.ty.clone();
 
-            if let Some(target) = builtin {
-                static_context = Some(true);
-                type_name = Some(target.name.clone());
-            } else if let Some(name) = text.get(receiver.offset..receiver.offset + receiver.len) {
-                static_context = Some(true);
-                type_name = Some(name.to_string());
-            }
-        } else {
-            raw_type = receiver.ty.clone();
-
-            if let Some(ty) = receiver.ty.as_deref().and_then(normalize_type_name) {
-                static_context = Some(false);
-                type_name = Some(ty);
-            }
+        if let Some(ty) = receiver.ty.as_deref().and_then(normalize_type_name) {
+            static_context = Some(false);
+            type_name = Some(ty);
         }
     } else if analysis
         .builtin_targets
@@ -1313,13 +1314,13 @@ pub fn call_complete(
     items
 }
 
-pub fn struct_init_context(text: &str, offset: usize) -> Option<(String, usize)> {
+fn struct_init_open(text: &str, offset: usize) -> Option<usize> {
     let offset = offset.min(text.len());
     let bytes = text.as_bytes();
     let mut depth: usize = 0;
     let mut index = offset;
 
-    let open = loop {
+    loop {
         if index == 0 {
             return None;
         }
@@ -1330,15 +1331,18 @@ pub fn struct_init_context(text: &str, offset: usize) -> Option<(String, usize)>
             b'}' => depth += 1,
             b'{' => {
                 if depth == 0 {
-                    break index;
+                    return Some(index);
                 }
 
                 depth -= 1;
             }
             _ => {}
         }
-    };
+    }
+}
 
+fn struct_init_type_name(text: &str, open: usize) -> Option<String> {
+    let bytes = text.as_bytes();
     let mut cursor = open;
 
     while cursor > 0 && bytes[cursor - 1].is_ascii_whitespace() {
@@ -1391,7 +1395,55 @@ pub fn struct_init_context(text: &str, offset: usize) -> Option<(String, usize)>
 
     text.get(start..cursor)
         .filter(|name| !name.is_empty())
-        .map(|name| (name.to_string(), open))
+        .map(str::to_string)
+}
+
+pub fn struct_init_context(text: &str, offset: usize) -> Option<(String, usize)> {
+    let open = struct_init_open(text, offset)?;
+    let name = struct_init_type_name(text, open)?;
+
+    Some((name, open))
+}
+
+fn short_init_open(text: &str, open: usize) -> bool {
+    open > 0 && text.as_bytes()[open - 1] == b'.'
+}
+
+fn short_init_type_name(text: &str, analysis: &Analysis, open: usize) -> Option<String> {
+    if !short_init_open(text, open) {
+        return None;
+    }
+
+    let dot = open - 1;
+
+    let from_expr = analysis
+        .expr_types
+        .iter()
+        .find_map(|((start, _), rendered)| {
+            if *start == dot {
+                normalize_type_name(rendered)
+            } else {
+                None
+            }
+        });
+
+    from_expr.or_else(|| call_argument_type(analysis, open))
+}
+
+fn call_argument_type(analysis: &Analysis, open: usize) -> Option<String> {
+    for call in &analysis.calls {
+        for (index, (start, len)) in call.args.iter().enumerate() {
+            if open < *start || open > start + len {
+                continue;
+            }
+
+            if let Some(Some(rendered)) = call.param_types.get(index) {
+                return normalize_type_name(rendered);
+            }
+        }
+    }
+
+    None
 }
 
 fn struct_init_used_fields(text: &str, open: usize) -> std::collections::HashSet<String> {
@@ -1462,7 +1514,13 @@ pub fn struct_init_complete(
     offset: usize,
     paths: ResolvePaths<'_>,
 ) -> Vec<CompletionItem> {
-    let Some((type_name, open)) = struct_init_context(text, offset) else {
+    let Some(open) = struct_init_open(text, offset) else {
+        return Vec::new();
+    };
+
+    let Some(type_name) =
+        struct_init_type_name(text, open).or_else(|| short_init_type_name(text, analysis, open))
+    else {
         return Vec::new();
     };
 
@@ -1799,7 +1857,11 @@ pub fn receiver_dot_before(text: &str, offset: usize) -> Option<usize> {
 }
 
 pub fn struct_init_field_position(text: &str, offset: usize) -> bool {
-    if struct_init_context(text, offset).is_none() {
+    let Some(open) = struct_init_open(text, offset) else {
+        return false;
+    };
+
+    if struct_init_type_name(text, open).is_none() && !short_init_open(text, open) {
         return false;
     }
 
@@ -3223,7 +3285,7 @@ mod tests {
         assert_eq!(names, vec!["max_value()"]);
     }
 
-    const BUILTIN_SLICE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n\n    fn first(*const self) Option[T] {\n        return Option.Some((*self)[0]);\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{} {}\", slice.count(), slice.first().unwrap());\n}\n";
+    const BUILTIN_SLICE_SAMPLE: &str = "implement[T] builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n\n    fn first(*const self) Option[T] {\n        return Option.Some((*self)[0]);\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = {1, 2, 3, 4};\n    let slice = nums[..];\n    @println(\"{} {}\", slice.count(), slice.first().unwrap());\n}\n";
 
     #[test]
     fn builtin_slice_receiver_dot_completes_shape_methods() {
@@ -3249,7 +3311,7 @@ mod tests {
         )
         .unwrap();
 
-        let text = "use sub.lib;\n\nfn main() {\n    let nums: [3]i32 = [1, 2, 3];\n    let slice = nums[..];\n    @println(\"{}\", slice.first());\n}\n";
+        let text = "use sub.lib;\n\nfn main() {\n    let nums: [3]i32 = {1, 2, 3};\n    let slice = nums[..];\n    @println(\"{}\", slice.first());\n}\n";
         let uri: tower_lsp_server::ls_types::Uri =
             format!("file://{}", dir.join("main.zn").display())
                 .parse()
@@ -3278,7 +3340,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    const BUILTIN_ARRAY_SAMPLE: &str = "implement builtin [4]u8 {\n    fn total(*const self) u32 {\n        return @as(u32, (*self)[0]) + @as(u32, (*self)[1]);\n    }\n}\n\nfn main() {\n    let data: [4]u8 = [1, 2, 3, 4];\n    @println(\"{}\", data.total());\n}\n";
+    const BUILTIN_ARRAY_SAMPLE: &str = "implement builtin [4]u8 {\n    fn total(*const self) u32 {\n        return @as(u32, (*self)[0]) + @as(u32, (*self)[1]);\n    }\n}\n\nfn main() {\n    let data: [4]u8 = {1, 2, 3, 4};\n    @println(\"{}\", data.total());\n}\n";
 
     #[test]
     fn builtin_array_receiver_dot_completes_shape_methods() {
@@ -3356,7 +3418,7 @@ mod tests {
         assert_eq!(names, vec!["tag()"]);
     }
 
-    const BUILTIN_INTERFACE_SHAPE_SAMPLE: &str = "interface Countable {\n    fn count(*const self) usize;\n}\n\nimplement[T] Countable : builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
+    const BUILTIN_INTERFACE_SHAPE_SAMPLE: &str = "interface Countable {\n    fn count(*const self) usize;\n}\n\nimplement[T] Countable : builtin []T {\n    fn count(*const self) usize {\n        return (*self).len;\n    }\n}\n\nfn main() {\n    let nums: [4]i32 = {1, 2, 3, 4};\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
 
     #[test]
     fn builtin_interface_shape_receiver_dot_completes_methods() {
@@ -3382,7 +3444,7 @@ mod tests {
         )
         .unwrap();
 
-        let text = "use sub.lib;\n\nfn main() {\n    let nums: [4]i32 = [1, 2, 3, 4];\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
+        let text = "use sub.lib;\n\nfn main() {\n    let nums: [4]i32 = {1, 2, 3, 4};\n    let slice = nums[..];\n    @println(\"{}\", slice.count());\n}\n";
         let uri: tower_lsp_server::ls_types::Uri =
             format!("file://{}", dir.join("main.zn").display())
                 .parse()
@@ -3409,5 +3471,100 @@ mod tests {
         assert!(names.contains(&"count()"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn static_dot_in_statement_position_completes() {
+        let text = "struct Allocator {\n}\n\nimplement Allocator {\n    pub fn foo() i32 {\n        return 1;\n    }\n}\n\nfn main() {\n  Allocator.\n}\n";
+        let offset = text.find("Allocator.").unwrap() + "Allocator.".len();
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-static-statement.zn".parse().unwrap();
+        let repaired = repair_for_completion(text, offset).unwrap();
+        let output = crate::diagnostics::check_completion(&uri, &repaired, &[]);
+        let items = dot_complete(text, &output.analysis, offset - 1, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"foo()"));
+
+        for hidden in ["bit_or", "add", "deref"] {
+            assert!(!names.contains(&hidden), "static must hide {hidden}");
+        }
+    }
+
+    #[test]
+    fn short_init_completes_fields_in_call_argument() {
+        let text = "struct AllocatorInstance {\n    pub alloc: i32,\n    pub free: i32,\n}\n\nstruct Allocator {\n    pub fn set_allocator(instance: AllocatorInstance) {\n        let _ = instance;\n    }\n}\n\nfn main() {\n    Allocator.set_allocator(.{\n        .\n    });\n}\n";
+        let offset = text.find("        .\n    });").unwrap() + "        .".len();
+
+        assert!(struct_init_field_position(text, offset));
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-short-init.zn".parse().unwrap();
+        let repaired = repair_for_completion(text, offset).unwrap();
+        let output = crate::diagnostics::check_completion(&uri, &repaired, &[]);
+        let items = struct_init_complete(text, &output.analysis, offset, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"alloc"));
+        assert!(names.contains(&"free"));
+    }
+
+    #[test]
+    fn short_init_skips_used_fields() {
+        let text = "struct Point {\n    pub x: i32,\n    pub y: i32,\n}\n\nfn take(p: Point) {\n    let _ = p;\n}\n\nfn main() {\n    take(.{ .x = 1, . });\n}\n";
+        let offset = text.find(".{ .x = 1, .").unwrap() + ".{ .x = 1, .".len();
+
+        assert!(struct_init_field_position(text, offset));
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-short-init-used.zn".parse().unwrap();
+        let repaired = repair_for_completion(text, offset).unwrap();
+        let output = crate::diagnostics::check_completion(&uri, &repaired, &[]);
+        let items = struct_init_complete(text, &output.analysis, offset, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"y"));
+        assert!(!names.contains(&"x"));
+    }
+
+    #[test]
+    fn std_allocator_static_and_short_init_complete() {
+        let Some(std_root) = crate::diagnostics::resolve_std_root() else {
+            return;
+        };
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-std-probe.zn".parse().unwrap();
+        let paths = ResolvePaths {
+            dir: Some(std::path::Path::new("/tmp")),
+            root: Some(std::path::Path::new("/tmp")),
+            std: Some(std_root.as_path()),
+            packages: None,
+        };
+
+        let text = "use std.alloc;\n\nfn main() {\n  Allocator.\n}\n";
+        let offset = text.find("Allocator.").unwrap() + "Allocator.".len();
+        let repaired = repair_for_completion(text, offset).unwrap();
+        let output = crate::diagnostics::check_completion(&uri, &repaired, &[]);
+        let items = dot_complete(text, &output.analysis, offset - 1, paths);
+        let names = labels(&items);
+
+        assert!(names.contains(&"alloc(...)"));
+        assert!(names.contains(&"set_allocator(...)"));
+        assert!(!names.contains(&"free"));
+
+        let text = "use std.alloc;\n\nfn main() {\n  Allocator.set_allocator(.{\n    .\n  });\n}\n";
+        let offset = text.find("    .\n  });").unwrap() + "    .".len();
+
+        assert!(struct_init_field_position(text, offset));
+
+        let repaired = repair_for_completion(text, offset).unwrap();
+        let output = crate::diagnostics::check_completion(&uri, &repaired, &[]);
+        let items = struct_init_complete(text, &output.analysis, offset, paths);
+        let names = labels(&items);
+
+        assert!(names.contains(&"alloc"));
+        assert!(names.contains(&"free"));
+        assert!(names.contains(&"realloc"));
     }
 }

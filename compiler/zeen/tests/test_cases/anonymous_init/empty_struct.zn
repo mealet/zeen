@@ -1,0 +1,19 @@
+struct Marker {
+}
+
+fn take(marker: Marker) i32 {
+  return 7;
+}
+
+fn make() Marker {
+  return .{};
+}
+
+fn main() {
+  let marker: Marker = .{};
+  let taken = take(.{});
+  let made = make();
+
+  @println("{} {} {}", take(marker), taken, take(made));
+  @println("{}", @typename(Marker));
+}

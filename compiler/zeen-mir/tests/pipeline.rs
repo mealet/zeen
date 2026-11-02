@@ -307,7 +307,7 @@ fn slice_layout_is_printed_and_full_range_slice_yields_slice() {
     let mir = compile_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let b: []i32 = a[..];
     let _ = b[2];
 }
@@ -332,7 +332,7 @@ fn slice_ptr_and_len_fields_are_accessible() {
     let mir = compile_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let b: []i32 = a[..];
 
     let slice_ptr: [*]i32 = b.ptr;
@@ -355,7 +355,7 @@ fn array_len_is_a_compile_time_constant() {
     let mir = compile_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let n: usize = a.len;
 }
 "#,
@@ -371,7 +371,7 @@ fn dbg_macro_is_kept_in_debug_mode() {
     let mir = compile_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let i: usize = 1;
     let x = @dbg(a[i]);
 }
@@ -388,7 +388,7 @@ fn dbg_macro_is_elided_in_release_mode() {
     let mir = compile_mode_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let i: usize = 1;
     let x = @dbg(a[i]);
 }
@@ -410,7 +410,7 @@ fn array_index_is_bounds_checked_in_debug_mode() {
     let mir = compile_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let i: usize = 1;
     let x = a[i];
 }
@@ -431,7 +431,7 @@ fn array_index_is_not_bounds_checked_in_release_mode() {
     let mir = compile_mode_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let i: usize = 1;
     let x = a[i];
 }
@@ -453,7 +453,7 @@ fn slice_index_is_bounds_checked_against_runtime_len_in_debug_mode() {
     let mir = compile_ok(
         r#"
 fn main() {
-    let a: [4]i32 = [1, 2, 3, 4];
+    let a: [4]i32 = {1, 2, 3, 4};
     let b: []i32 = a[..];
     let i: usize = 1;
     let x = b[i];

@@ -27,7 +27,7 @@ fn measure[T: Sizing](value: *const T) usize {
 fn main() {
   let a: Wrap[i32] = Wrap { .value = 1 };
   let b: Wrap[f64] = Wrap { .value = 1.0 };
-  let nums: [4]i32 = [1, 2, 3, 4];
+  let nums: [4]i32 = {1, 2, 3, 4};
 
   @println("{} {} {} {}", a.size(), measure(&a), b.size(), measure(&b));
   @println("{} {}", nums[..].size(), measure(&nums[..]));

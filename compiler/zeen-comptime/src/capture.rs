@@ -223,6 +223,37 @@ impl<'arena> Interp<'arena> {
                 }))
             }
 
+            ExpressionKind::AnonymousStructInit { fields } => {
+                let mut rebuilt: Vec<FieldInit<'arena>> = Vec::with_capacity(fields.len());
+                let mut changed = false;
+
+                for field in fields.iter() {
+                    let value = self.capture_expr(module, field.value)?;
+
+                    if unchanged(field.value, value) {
+                        rebuilt.push(*field);
+                    } else {
+                        changed = true;
+                        rebuilt.push(FieldInit {
+                            name: field.name,
+                            value,
+                            span: field.span,
+                        });
+                    }
+                }
+
+                if !changed {
+                    return Ok(expr);
+                }
+
+                Ok(self.arena.alloc(Expression {
+                    kind: ExpressionKind::AnonymousStructInit {
+                        fields: self.arena.alloc_slice_copy(&rebuilt),
+                    },
+                    span: expr.span,
+                }))
+            }
+
             ExpressionKind::ArrayInit { elements } => {
                 let (new_elements, elements_changed) = self.capture_expr_list(module, elements)?;
 

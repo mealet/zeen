@@ -382,8 +382,15 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
     }
 
     pub fn parse_block(&mut self) -> Option<&'ctx Statement<'ctx>> {
+        let starts_array = self.p.brace_has_top_level_comma();
+
         let mut expr_parser = ExprParser::new(self.p);
-        let expr = expr_parser.parse()?;
+
+        let expr = if starts_array {
+            expr_parser.parse()?
+        } else {
+            expr_parser.parse_block()?
+        };
 
         self.finish_expr_stmt(expr)
     }
@@ -576,6 +583,96 @@ mod tests {
         );
 
         assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn brace_block_statement() {
+        const SRC: &str = "{ let a = 123; }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn brace_block_with_call_commas_is_block() {
+        const SRC: &str = "{ foo(1, 2); }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn brace_array_statement() {
+        const SRC: &str = "{1, 2};";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::ArrayInit { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn brace_single_element_is_block() {
+        const SRC: &str = "{1}";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::Block { .. },
+                    ..
+                }),
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn brace_single_element_with_trailing_comma_is_array() {
+        const SRC: &str = "{1,}";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::Expr(Expression {
+                    kind: ExpressionKind::ArrayInit { .. },
+                    ..
+                }),
+                ..
+            }
+        );
     }
 
     #[test]

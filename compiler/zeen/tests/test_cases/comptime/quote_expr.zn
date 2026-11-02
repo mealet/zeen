@@ -16,7 +16,7 @@ fn main() {
   let four = $(twice(2));
   @println("{}", four);
 
-  let values: Array = [1, 2, 3];
+  let values: Array = {1, 2, 3};
   @println("{}", values[2]);
 
   @println($(@zeen_expr("x = $(1 + 2)")));

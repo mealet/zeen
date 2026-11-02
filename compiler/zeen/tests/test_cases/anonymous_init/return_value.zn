@@ -1,0 +1,24 @@
+struct Pair {
+  pub left: i32,
+  pub right: i32,
+}
+
+fn make(left: i32, right: i32) Pair {
+  return .{ .left = left, .right = right };
+}
+
+fn pick(flag: bool) Pair {
+  if (flag) {
+    return .{ .left = 1, .right = 2 };
+  }
+
+  return .{ .left = 3, .right = 4 };
+}
+
+fn main() {
+  let built = make(10, 20);
+  let first = pick(true);
+  let second = pick(false);
+
+  @println("{} {} {}", built.left, first.right, second.left);
+}

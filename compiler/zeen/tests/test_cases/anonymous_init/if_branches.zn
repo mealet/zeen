@@ -1,0 +1,16 @@
+struct Item {
+  pub id: i32,
+  pub count: i32,
+}
+
+fn total(item: Item) i32 {
+  return item.id + item.count;
+}
+
+fn main() {
+  let flag = true;
+  let chosen: Item = if (flag) .{ .id = 1, .count = 2 } else .{ .id = 3, .count = 4 };
+  let direct = total(if (flag) .{ .id = 5, .count = 6 } else .{ .id = 7, .count = 8 });
+
+  @println("{} {} {}", chosen.id, chosen.count, direct);
+}

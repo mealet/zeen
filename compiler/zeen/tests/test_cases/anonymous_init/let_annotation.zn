@@ -1,0 +1,17 @@
+struct Inner {
+  pub value: i32,
+  pub flag: bool,
+}
+
+struct Outer {
+  pub name: i32,
+  pub inner: Inner,
+}
+
+fn main() {
+  let outer: Outer = .{ .name = 7, .inner = .{ .value = 42, .flag = true } };
+  const fixed: Inner = .{ .value = 3, .flag = false };
+
+  @println("{} {} {}", outer.name, outer.inner.value, outer.inner.flag);
+  @println("{} {}", fixed.value, fixed.flag);
+}

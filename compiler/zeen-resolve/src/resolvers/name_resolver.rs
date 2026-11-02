@@ -1138,6 +1138,12 @@ impl<'ctx> NameResolver {
                 }
             }
 
+            ExpressionKind::AnonymousStructInit { fields } => {
+                for field in fields {
+                    self.collect_global_deps(field.value, out);
+                }
+            }
+
             ExpressionKind::ArrayInit { elements } => {
                 for elem in elements {
                     self.collect_global_deps(elem, out);
@@ -1988,6 +1994,12 @@ impl<'ctx> NameResolver {
                     for field in fields {
                         self.resolve_expr(field.value);
                     }
+                }
+            }
+
+            ExpressionKind::AnonymousStructInit { fields } => {
+                for field in fields {
+                    self.resolve_expr(field.value);
                 }
             }
 

@@ -1,0 +1,9 @@
+fn main() {
+  let ints = {10, 20, 30};
+  let floats = {1.5, 2.5};
+  let chars = {'a', 'b'};
+  let bools = {true, false};
+
+  @println("{} {} {}", ints[2], floats[1], chars[0]);
+  @println("{} {}", bools[0], bools[1]);
+}

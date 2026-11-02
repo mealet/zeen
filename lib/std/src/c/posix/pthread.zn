@@ -278,13 +278,13 @@ use std.c.time;
 }
 
 @os[linux] {
-  pub const PTHREAD_MUTEX_INITIALIZER: c_pthread_mutex_t = c_pthread_mutex_t { .__private = [0; 6] };
-  pub const PTHREAD_COND_INITIALIZER: c_pthread_cond_t = c_pthread_cond_t { .__private = [0; 6] };
-  pub const PTHREAD_RWLOCK_INITIALIZER: c_pthread_rwlock_t = c_pthread_rwlock_t { .__private = [0; 7] };
+  pub const PTHREAD_MUTEX_INITIALIZER: c_pthread_mutex_t = c_pthread_mutex_t { .__private = {0; 6} };
+  pub const PTHREAD_COND_INITIALIZER: c_pthread_cond_t = c_pthread_cond_t { .__private = {0; 6} };
+  pub const PTHREAD_RWLOCK_INITIALIZER: c_pthread_rwlock_t = c_pthread_rwlock_t { .__private = {0; 7} };
 } else @os[android] {
-  pub const PTHREAD_MUTEX_INITIALIZER: c_pthread_mutex_t = c_pthread_mutex_t { .__private = [0; 5] };
-  pub const PTHREAD_COND_INITIALIZER: c_pthread_cond_t = c_pthread_cond_t { .__private = [0; 6] };
-  pub const PTHREAD_RWLOCK_INITIALIZER: c_pthread_rwlock_t = c_pthread_rwlock_t { .__private = [0; 7] };
+  pub const PTHREAD_MUTEX_INITIALIZER: c_pthread_mutex_t = c_pthread_mutex_t { .__private = {0; 5} };
+  pub const PTHREAD_COND_INITIALIZER: c_pthread_cond_t = c_pthread_cond_t { .__private = {0; 6} };
+  pub const PTHREAD_RWLOCK_INITIALIZER: c_pthread_rwlock_t = c_pthread_rwlock_t { .__private = {0; 7} };
 }
 
 // ---------------------------------------------------------------------------

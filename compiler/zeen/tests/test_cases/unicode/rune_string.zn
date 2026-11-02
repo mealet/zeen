@@ -7,10 +7,10 @@ fn main() {
 
   let text = String.from_rune(smile);
   text.push_rune(letter);
-  text.push_runes([space, smile][..]);
+  text.push_runes({space, smile}[..]);
 
   @println("text {} bytes={} runes={}", text, text.len(), text.rune_count());
-  @println("from_runes {}", String.from_runes([letter, smile][..]));
+  @println("from_runes {}", String.from_runes({letter, smile}[..]));
 
   let iter = text.runes();
 

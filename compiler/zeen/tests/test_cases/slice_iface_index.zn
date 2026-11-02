@@ -19,7 +19,7 @@ implement[T] IndexPtr : Ref[T] {
 }
 
 fn main() i32 {
-  let arr = [10, 20, 30];
+  let arr = {10, 20, 30};
   let ref = Ref.new(&arr[0]);
 
   ref[0] = 100;

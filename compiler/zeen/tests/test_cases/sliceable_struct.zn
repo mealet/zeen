@@ -23,7 +23,7 @@ implement[T] Sliceable : Boxed[T] {
 }
 
 fn main() {
-  let vec: Vector = Vector { .items = [10, 20, 30, 40, 50] };
+  let vec: Vector = Vector { .items = {10, 20, 30, 40, 50} };
 
   // full range: first()/last() are None
   let all = vec[..];
@@ -36,7 +36,7 @@ fn main() {
   let tail = vec[2..];
   @println("vec tail {} {}", tail.len, tail[0]);
 
-  let boxed: Boxed[i32] = Boxed { .data = [1, 2, 3, 4, 5] };
+  let boxed: Boxed[i32] = Boxed { .data = {1, 2, 3, 4, 5} };
   let bslice = boxed[0..=2];
   @println("boxed {} {}", bslice.len, bslice[1]);
 }

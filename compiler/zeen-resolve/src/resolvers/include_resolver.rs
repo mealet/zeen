@@ -382,6 +382,12 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
             }
 
+            ExpressionKind::AnonymousStructInit { fields } => {
+                for field in fields.iter() {
+                    self.expr_usage(field.value, flags);
+                }
+            }
+
             ExpressionKind::ArrayInit { elements } => {
                 for element in elements.iter() {
                     self.expr_usage(element, flags);

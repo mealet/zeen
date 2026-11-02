@@ -20,10 +20,10 @@ struct Wide {
 }
 
 fn main() {
-  let buffer: Buffer = Buffer { .data = [1, 2, 3, 4] };
+  let buffer: Buffer = Buffer { .data = {1, 2, 3, 4} };
   @println("{} {}", buffer.first(), buffer.last());
   @println("{}", @sizeof(Buffer));
 
-  let wide: Wide = Wide { .data = [7, 8, 9, 10, 11, 12] };
+  let wide: Wide = Wide { .data = {7, 8, 9, 10, 11, 12} };
   @println("{} {}", wide.data[0], wide.data[5]);
 }

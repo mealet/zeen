@@ -1,0 +1,23 @@
+struct Inner {
+  pub a: i32,
+  pub b: i32,
+}
+
+struct Outer {
+  pub inner: Inner,
+  pub tag: i32,
+}
+
+struct Line {
+  pub start: Inner,
+  pub end: Inner,
+}
+
+fn main() {
+  let outer: Outer = .{ .inner = .{ .a = 1, .b = 2 }, .tag = 3 };
+  let line: Line = .{ .start = .{ .a = 4, .b = 5 }, .end = .{ .a = 6, .b = 7 } };
+  let points: [2]Inner = { .{ .a = 8, .b = 9 }, .{ .a = 10, .b = 11 } };
+
+  @println("{} {} {}", outer.inner.b, outer.tag, line.end.a);
+  @println("{} {}", points[0].a, points[1].b);
+}

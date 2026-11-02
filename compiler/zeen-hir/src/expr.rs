@@ -75,6 +75,10 @@ pub enum HirExprKind {
         fields: Vec<HirFieldInit>,
     },
 
+    AnonymousStructInit {
+        fields: Vec<HirFieldInit>,
+    },
+
     ArrayInit {
         elements: Vec<Rc<HirExpr>>,
     },
@@ -162,7 +166,6 @@ pub enum HirMacroKind {
     Dbg,     // @dbg(expr) -> expr
     Uninit,  // @uninit() -> any
     EnumTag, // @enumTag(enum value) -> u8
-    Void,    // @void() -> void
 
     VariantNames,
     VariantCount,
@@ -189,7 +192,6 @@ impl HirMacroKind {
             HirMacroKind::Dbg => Some("dbg"),
             HirMacroKind::Uninit => Some("uninit"),
             HirMacroKind::EnumTag => Some("enumTag"),
-            HirMacroKind::Void => Some("void"),
 
             HirMacroKind::VariantNames => Some("variantNames"),
             HirMacroKind::VariantCount => Some("variantCount"),

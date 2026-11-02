@@ -2492,6 +2492,22 @@ impl<'res> TypeChecker<'res> {
                 struct_ty
             }
 
+            HirExprKind::AnonymousStructInit { fields } => {
+                if fields.is_empty() {
+                    let void_ty = self.result.interner.builtin(BuiltinType::void);
+                    self.result.expr_types.insert(expr.id, void_ty);
+                    return void_ty;
+                }
+                self.report(TypeError::AnonymousInitNeedsContext {
+                    src: expr.source.src(),
+                    span: expr.source.span,
+                });
+                self.result
+                    .expr_types
+                    .insert(expr.id, self.result.interner.error());
+                self.result.interner.error()
+            }
+
             HirExprKind::Binary { lhs, rhs, op } => {
                 let lhs_ty = self.synth_expr(lhs);
                 let rhs_ty = self.synth_expr(rhs);
@@ -3010,21 +3026,6 @@ impl<'res> TypeChecker<'res> {
                 self.result.interner.never()
             }
 
-            HirMacroKind::Void => {
-                if !args.is_empty() {
-                    self.report(TypeError::ArgCountMismatch {
-                        expected: 0,
-                        found: args.len(),
-                        src: source.src(),
-                        span: source.span,
-                    });
-
-                    return self.result.interner.error();
-                }
-
-                self.result.interner.void()
-            }
-
             HirMacroKind::SizeOf | HirMacroKind::AlignOf => {
                 if args.len() != 1 {
                     self.report(TypeError::ArgCountMismatch {
@@ -3078,7 +3079,11 @@ impl<'res> TypeChecker<'res> {
                     }
                 };
 
-                let value_ty = self.synth_expr(&args[1]);
+                let value_ty = if matches!(args[1].kind, HirExprKind::AnonymousStructInit { .. }) {
+                    self.check_expr(&args[1], target_ty, false)
+                } else {
+                    self.synth_expr(&args[1])
+                };
                 let value_ty = self.default_literal(value_ty);
 
                 let target_is_enum =
@@ -3256,10 +3261,23 @@ impl<'res> TypeChecker<'res> {
                     self.synth_expr(arg);
                 }
 
-                self.report(TypeError::UnknownMacro {
-                    src: source.src(),
-                    span: kind.1,
-                });
+                let name_span = kind.1;
+                let start = name_span.offset();
+                let end = start + name_span.len();
+                let text = source.src.inner();
+
+                if text.get(start..end) == Some("@void") {
+                    self.report(TypeError::VoidMacroRemoved {
+                        src: source.src(),
+                        span: name_span,
+                    });
+                } else {
+                    self.report(TypeError::UnknownMacro {
+                        src: source.src(),
+                        span: name_span,
+                    });
+                }
+
                 self.result.interner.error()
             }
         }
@@ -3755,6 +3773,27 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn record_field_name(
+        &mut self,
+        provided: &mut HashSet<Spur>,
+        field: &HirFieldInit,
+        source: &Source,
+    ) {
+        if provided.insert(field.name) {
+            return;
+        }
+
+        let interner = self.interner.borrow();
+        let name = interner.resolve(&field.name).into();
+        drop(interner);
+
+        self.report(TypeError::DuplicateField {
+            field: name,
+            src: source.src(),
+            span: field.span,
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn check_struct_init(
         &mut self,
@@ -3848,7 +3887,7 @@ impl<'res> TypeChecker<'res> {
             HashMap::with_capacity_and_hasher(fields.len(), Default::default());
 
         for f in fields {
-            provided_names.insert(f.name);
+            self.record_field_name(&mut provided_names, f, init_source);
 
             let Some(info) = field_table.iter().find(|i| i.name == f.name) else {
                 let interner = self.interner.borrow();
@@ -3866,7 +3905,11 @@ impl<'res> TypeChecker<'res> {
                 continue;
             };
 
-            let value_ty = self.synth_expr(&f.value);
+            let value_ty = if matches!(f.value.kind, HirExprKind::AnonymousStructInit { .. }) {
+                continue;
+            } else {
+                self.synth_expr(&f.value)
+            };
             field_value_types.insert(f.name, value_ty);
 
             if self.type_contains_generic(info.field_ty) {
@@ -3918,7 +3961,9 @@ impl<'res> TypeChecker<'res> {
 
             if matches!(
                 f.value.kind,
-                HirExprKind::ArrayInit { .. } | HirExprKind::ArrayRepeatInit { .. }
+                HirExprKind::ArrayInit { .. }
+                    | HirExprKind::ArrayRepeatInit { .. }
+                    | HirExprKind::AnonymousStructInit { .. }
             ) {
                 self.check_expr(&f.value, expected_ty, false);
             } else {
@@ -4034,6 +4079,32 @@ impl<'res> TypeChecker<'res> {
                 return ty;
             }
 
+            HirExprKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let bool_ty = self.result.interner.builtin(BuiltinType::bool);
+                self.check_expr(condition, bool_ty, false);
+
+                let then_ty = self.check_stmt_as_block_value(then_block, Some(expected));
+                let ty = match else_block {
+                    Some(else_b) => {
+                        let else_ty = self.check_stmt_as_block_value(else_b, Some(expected));
+                        match self
+                            .unify_string_literal_branches(then_block, else_b, then_ty, else_ty)
+                        {
+                            Some(unified) => unified,
+                            None => self.unify_branches(then_ty, else_ty, expr.source.clone()),
+                        }
+                    }
+                    None => self.result.interner.void(),
+                };
+
+                self.result.record_expr_type(expr.id, ty);
+                ty
+            }
+
             HirExprKind::Switch { object, arms } => {
                 let ty = self.check_switch(object, arms, &expr.source, Some(expected));
                 self.result.record_expr_type(expr.id, ty);
@@ -4057,6 +4128,43 @@ impl<'res> TypeChecker<'res> {
                 );
                 self.result.record_expr_type(expr.id, struct_ty);
                 struct_ty
+            }
+
+            HirExprKind::AnonymousStructInit { fields } => {
+                let ty = match self.result.interner.get(expected).clone() {
+                    Type::Struct { def_id, .. } => {
+                        self.check_struct_init(
+                            Some(def_id),
+                            None,
+                            &[],
+                            fields,
+                            expr.source.span,
+                            &expr.source,
+                            Some(expected),
+                        );
+                        expected
+                    }
+                    Type::Void => {
+                        if fields.is_empty() {
+                            self.result.record_expr_type(expr.id, expected);
+                            return expected;
+                        }
+                        self.report(TypeError::AnonymousInitNeedsContext {
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+                        return self.result.interner.error();
+                    }
+                    _ => {
+                        self.report(TypeError::AnonymousInitNeedsContext {
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+                        return self.result.interner.error();
+                    }
+                };
+                self.result.record_expr_type(expr.id, ty);
+                ty
             }
 
             HirExprKind::Call {
@@ -5967,8 +6075,14 @@ impl<'res> TypeChecker<'res> {
         }
 
         if !enum_generics.is_empty() {
-            let value_ty = self.synth_expr(&args[0]);
-            let value_ty = self.default_literal_with_value(&args[0], value_ty);
+            let value_ty = if matches!(args[0].kind, HirExprKind::AnonymousStructInit { .. }) {
+                let substituted = self.substitute_generics(payload_ty, &bindings);
+                self.check_expr(&args[0], substituted, false)
+            } else {
+                let value_ty = self.synth_expr(&args[0]);
+                self.default_literal_with_value(&args[0], value_ty)
+            };
+
             self.result.record_expr_type(args[0].id, value_ty);
             self.unify_for_inference(
                 payload_ty,
@@ -6223,8 +6337,12 @@ impl<'res> TypeChecker<'res> {
             HashMap::with_capacity_and_hasher(fields.len(), Default::default());
 
         for f in fields {
-            provided_names.insert(f.name);
-            let value_ty = self.synth_expr(&f.value);
+            self.record_field_name(&mut provided_names, f, init_source);
+            let value_ty = if matches!(f.value.kind, HirExprKind::AnonymousStructInit { .. }) {
+                continue;
+            } else {
+                self.synth_expr(&f.value)
+            };
             field_value_types.insert(f.name, value_ty);
 
             let Some(info) = payload_info.fields.iter().find(|i| i.name == f.name) else {
@@ -6294,7 +6412,9 @@ impl<'res> TypeChecker<'res> {
 
             if matches!(
                 f.value.kind,
-                HirExprKind::ArrayInit { .. } | HirExprKind::ArrayRepeatInit { .. }
+                HirExprKind::ArrayInit { .. }
+                    | HirExprKind::ArrayRepeatInit { .. }
+                    | HirExprKind::AnonymousStructInit { .. }
             ) {
                 self.check_expr(&f.value, expected_ty, false);
             } else {
@@ -8602,7 +8722,20 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            Eq | Ne => self.result.interner.builtin(BuiltinType::bool),
+            Eq | Ne => {
+                if matches!(self.result.interner.get(operand_ty), Type::Void) {
+                    self.report(TypeError::BinaryNotSupported {
+                        op,
+                        lhs_type: self.display_type(lhs).into(),
+                        rhs_type: self.display_type(rhs).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return self.result.interner.error();
+                }
+
+                self.result.interner.builtin(BuiltinType::bool)
+            }
 
             _ => unreachable!("others must be handled before this fn"),
         }
@@ -9944,7 +10077,7 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let slice = arr[..];
                 let n = slice.count();
             }
@@ -9969,7 +10102,7 @@ mod tests {
             }
 
             fn main() {
-                let bytes: [4]u8 = [1, 2, 3, 4];
+                let bytes: [4]u8 = {1, 2, 3, 4};
                 let n = bytes.total();
             }
             "#,
@@ -9993,7 +10126,7 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let slice = arr[..];
                 let ptr: *[]i32 = &slice;
                 let n = ptr.count();
@@ -10023,7 +10156,7 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let n = len_of(arr[..]);
             }
             "#,
@@ -10053,7 +10186,7 @@ mod tests {
             }
 
             fn main() {
-                let bytes: [4]u8 = [1, 2, 3, 4];
+                let bytes: [4]u8 = {1, 2, 3, 4};
                 let n = bytes.label();
             }
             "#,
@@ -10077,7 +10210,7 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let n = arr.count();
             }
             "#,
@@ -10176,10 +10309,10 @@ mod tests {
             }
 
             fn main() {
-                let arr: [3]i32 = [1, 2, 3];
+                let arr: [3]i32 = {1, 2, 3};
                 let concrete = arr[..].show();
 
-                let reals: [3]f64 = [1.5, 2.5, 3.5];
+                let reals: [3]f64 = {1.5, 2.5, 3.5};
                 let generic = reals[..].show();
             }
             "#,
@@ -10615,7 +10748,7 @@ mod tests {
             }
 
             fn main() {
-              let arr = [1, 2, 3];
+              let arr = {1, 2, 3};
               let first: i32 = first(arr[..]);
             }
             "#,
@@ -10637,7 +10770,7 @@ mod tests {
             }
 
             fn main() {
-              let arr = [1, 2, 3, 4];
+              let arr = {1, 2, 3, 4};
               let max: i32 = max(arr);
             }
             "#,
@@ -10659,7 +10792,7 @@ mod tests {
             }
 
             fn main() {
-              let arr = [1, 2, 3];
+              let arr = {1, 2, 3};
               let slice = arr[..];
               let total: i32 = total(slice.ptr);
             }
@@ -11009,8 +11142,8 @@ mod tests {
             }
 
             fn main() {
-              let o = S { .list = ["aa", "bb"] };
-              let m: [2][2][]const char = [["m00", "m01"], ["m10", "m11"]];
+              let o = S { .list = {"aa", "bb"} };
+              let m: [2][2][]const char = {{"m00", "m01"}, {"m10", "m11"}};
               @println("{}", o.list[0]);
               @println("{}", m[1][0]);
             }
@@ -11033,7 +11166,7 @@ mod tests {
             }
 
             fn main() {
-              @println("{}", take([1, 2, 3]));
+              @println("{}", take({1, 2, 3}));
             }
             "#,
         )
@@ -11087,7 +11220,7 @@ mod tests {
 
             fn main() {
               let a = Foo {};
-              a.write([1, 2, 3]);
+              a.write({1, 2, 3});
             }
             "#,
         )
@@ -11117,7 +11250,7 @@ mod tests {
 
             fn main() {
               let a = Foo {};
-              a.write([1, 2, 3][..]);
+              a.write({1, 2, 3}[..]);
             }
             "#,
         );
@@ -11287,8 +11420,8 @@ mod tests {
         let result = typecheck(
             r#"
             fn main() {
-                let a = [0; 1024];
-                let b = [7; 5];
+                let a = {0; 1024};
+                let b = {7; 5};
                 @println("{}", a[0] + b[1]);
             }
             "#,
@@ -11310,7 +11443,7 @@ mod tests {
             }
 
             fn main() {
-                f([0; 1024]);
+                f({0; 1024});
             }
             "#,
         );
@@ -11329,7 +11462,7 @@ mod tests {
             struct Item {}
 
             fn main() {
-                let a = [Item{}; 3];
+                let a = {Item{}; 3};
             }
             "#,
         )
@@ -11345,7 +11478,7 @@ mod tests {
 
     #[test]
     fn array_repeat_init_zero_length_is_error() {
-        let errors = typecheck("fn main() { let a = [0; 0]; }")
+        let errors = typecheck("fn main() { let a = {0; 0}; }")
             .expect_err("zero-length repeat array init must be reported");
 
         assert!(
@@ -12140,7 +12273,7 @@ mod tests {
         let errors = typecheck(
             r#"
             fn main() {
-                let ints = [1, 2, 3, 4];
+                let ints = {1, 2, 3, 4};
                 @println("{}", ints);
                 @println("{}", ints[..]);
             }
@@ -12173,7 +12306,7 @@ mod tests {
                 @println("{:?}", text);
             }
             fn main() {
-                let chars: [3]char = ['a', 'b', 'c'];
+                let chars: [3]char = {'a', 'b', 'c'};
                 @println("{}", chars);
                 @println("{:?}", chars);
                 show("abc");
@@ -12594,6 +12727,166 @@ mod tests {
                 .iter()
                 .any(|err| matches!(err, TypeError::EnumCallOnStruct { .. })),
             "expected EnumCallOnStruct for calling a struct variant, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn anonymous_init_requires_expected_struct() {
+        let errors = typecheck(
+            r#"
+            struct Point {
+              pub x: i32,
+              pub y: i32,
+            }
+
+            fn main() {
+              let point = .{ .x = 1, .y = 2 };
+            }
+            "#,
+        )
+        .expect_err("anonymous init without context must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AnonymousInitNeedsContext { .. })),
+            "expected AnonymousInitNeedsContext, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn anonymous_init_rejects_non_struct_expected() {
+        let errors = typecheck(
+            r#"
+            fn main() {
+              let value: i32 = .{ .x = 1 };
+            }
+            "#,
+        )
+        .expect_err("anonymous init with a non-struct expected type must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AnonymousInitNeedsContext { .. })),
+            "expected AnonymousInitNeedsContext, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn anonymous_init_checks_fields() {
+        let errors = typecheck(
+            r#"
+            struct Point {
+              pub x: i32,
+              pub y: i32,
+            }
+
+            fn main() {
+              let dup: Point = .{ .x = 1, .x = 2, .y = 3 };
+              let missing: Point = .{ .x = 1 };
+              let unknown: Point = .{ .x = 1, .y = 2, .z = 3 };
+            }
+            "#,
+        )
+        .expect_err("malformed anonymous init must be checked");
+
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::DuplicateField { field, .. } if field == "x"
+            )),
+            "expected DuplicateField, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::MissingFields { fields, .. } if fields.as_str() == "`y`"
+            )),
+            "expected MissingFields, got: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|err| matches!(
+                err,
+                TypeError::UnknownField { field, .. } if field == "z"
+            )),
+            "expected UnknownField, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn anonymous_init_generic_param_needs_context() {
+        let errors = typecheck(
+            r#"
+            struct Box[T] {
+              pub inner: T,
+            }
+
+            fn build[T]() Box[T] {
+              return .{ .inner = .{} };
+            }
+            "#,
+        )
+        .expect_err("anonymous init against an unbound generic param must be rejected");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AnonymousInitNeedsContext { .. })),
+            "expected AnonymousInitNeedsContext, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn anonymous_init_empty_accepts_struct_and_void() {
+        let result = typecheck(
+            r#"
+            struct Empty {
+            }
+
+            fn take(value: Empty) {}
+
+            fn nothing() void {
+              return .{};
+            }
+
+            fn main() {
+              let empty: Empty = .{};
+              take(.{});
+              nothing();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "empty anonymous init should accept struct and void targets: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn anonymous_init_void_enum_payload() {
+        let result = typecheck_full(
+            r#"
+            enum Failure {
+              bad,
+            }
+
+            fn finish() Result[void, Failure] {
+              return Result.Ok(.{});
+            }
+
+            fn main() {
+              let value = finish();
+            }
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "void payload should accept empty anonymous init: {:?}",
+            result.err()
         );
     }
 

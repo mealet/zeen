@@ -1,0 +1,14 @@
+struct Point {
+  pub x: i32,
+  pub y: i32,
+}
+
+fn main() {
+  let point: Point = .{ .x = 1, .y = 2 };
+  let opt: Option[Point] = Option.Some(.{ .x = 3, .y = 4 });
+  let res: Result[Point, i32] = Result.Ok(.{ .x = 5, .y = 6 });
+  let items: [2]Point = { .{ .x = 7, .y = 8 }, .{ .x = 9, .y = 10 } };
+
+  @println("{} {}", point.y, opt.unwrap().x);
+  @println("{} {}", res.unwrap().y, items[1].y);
+}

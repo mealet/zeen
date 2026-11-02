@@ -74,6 +74,10 @@ pub enum ExpressionKind<'arena> {
         fields: Option<&'arena [FieldInit<'arena>]>,
     },
 
+    AnonymousStructInit {
+        fields: &'arena [FieldInit<'arena>],
+    },
+
     ArrayInit {
         elements: &'arena [&'arena Expression<'arena>],
     },

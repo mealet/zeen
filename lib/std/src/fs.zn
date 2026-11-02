@@ -323,13 +323,13 @@ implement File {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     } else {
       if (fsync(self.fd) != 0) {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     }
   }
 
@@ -702,7 +702,7 @@ pub struct Fs {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     } else {
       let c = cpath(path);
 
@@ -710,7 +710,7 @@ pub struct Fs {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     }
   }
 
@@ -729,7 +729,7 @@ pub struct Fs {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     } else {
       let c = cpath(path);
 
@@ -737,7 +737,7 @@ pub struct Fs {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     }
   }
 
@@ -756,7 +756,7 @@ pub struct Fs {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     } else {
       let c = cpath(path);
 
@@ -764,7 +764,7 @@ pub struct Fs {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     }
   }
 
@@ -784,7 +784,7 @@ pub struct Fs {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     } else {
       let cfrom = cpath(from);
       let cto = cpath(to);
@@ -793,7 +793,7 @@ pub struct Fs {
         return Result.Err(IoError.last_os_error());
       };
 
-      return Result.Ok(@void());
+      return Result.Ok(.{});
     }
   }
 

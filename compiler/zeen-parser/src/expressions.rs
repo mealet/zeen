@@ -299,8 +299,8 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 | TokenKind::Tilde
                 | TokenKind::Star
                 | TokenKind::OpenParen
-                | TokenKind::OpenBracket
                 | TokenKind::OpenBrace
+                | TokenKind::Dot
                 | TokenKind::DotDot
                 | TokenKind::DotDotEq
                 | TokenKind::Dollar
@@ -447,8 +447,9 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             | TokenKind::PreprocessorRelease => self.parse_conditional_expr(),
 
             TokenKind::OpenParen => self.parse_grouped(),
-            TokenKind::OpenBracket => self.parse_array_init(),
-            TokenKind::OpenBrace => self.parse_block(),
+            TokenKind::OpenBracket => self.report_bracket_array_init(),
+            TokenKind::OpenBrace => self.parse_brace_array_init(),
+            TokenKind::Dot => self.parse_anonymous_struct_init(),
 
             TokenKind::Eof => {
                 self.p.report(ParserError::UnexpectedEof {
@@ -856,15 +857,46 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         &mut self,
         ty: &'ctx Expression<'ctx>,
     ) -> Option<&'ctx Expression<'ctx>> {
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+        let (fields, close_brace) = self.parse_struct_init_field_list()?;
+
+        let fields = if fields.is_empty() {
+            None
+        } else {
+            Some(fields)
+        };
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::StructInit { ty, fields },
+            span: ty.merge_span(close_brace.span),
+        });
+
+        Some(expr)
+    }
+
+    fn parse_anonymous_struct_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let dot_token = self.p.expect(TokenKind::Dot, ".")?;
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+        let (fields, close_brace) = self.parse_struct_init_field_list()?;
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::AnonymousStructInit { fields },
+            span: dot_token.merge_span(close_brace.span),
+        });
+
+        Some(expr)
+    }
+
+    fn parse_struct_init_field_list(
+        &mut self,
+    ) -> Option<(&'ctx [zeen_ast::expressions::FieldInit<'ctx>], Token)> {
         use zeen_ast::expressions::FieldInit;
-        assert!(self.p.eat(TokenKind::OpenBrace));
 
-        let mut fields: Option<&'ctx [FieldInit<'ctx>]> = None;
-        let mut last_span = self.p.current().span;
+        let mut fields_buffer: SmallVec<[FieldInit; 8]> = SmallVec::new();
 
-        if !self.p.eat(TokenKind::CloseBrace) {
-            let mut fields_buffer: SmallVec<[FieldInit; 8]> = SmallVec::new();
-
+        let close_brace = if self.p.at(TokenKind::CloseBrace) {
+            self.p.expect(TokenKind::CloseBrace, "}")?
+        } else {
             while !matches!(
                 self.p.current().kind,
                 TokenKind::CloseBrace | TokenKind::Eof
@@ -889,21 +921,12 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 });
             }
 
-            let close_brace = self.p.expect(TokenKind::CloseBrace, "}")?;
+            self.p.expect(TokenKind::CloseBrace, "}")?
+        };
 
-            let fields_arena = self.p.arena.alloc_slice_copy(&fields_buffer);
-            drop(fields_buffer);
+        let fields = self.p.arena.alloc_slice_copy(&fields_buffer);
 
-            fields = Some(fields_arena);
-            last_span = close_brace.span;
-        }
-
-        let expr = self.p.arena.alloc(Expression {
-            kind: ExpressionKind::StructInit { ty, fields },
-            span: ty.merge_span(last_span),
-        });
-
-        Some(expr)
+        Some((fields, close_brace))
     }
 
     pub fn parse_grouped(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -1295,11 +1318,24 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         self.parse_conditional_expr().map(Some)
     }
 
-    fn parse_array_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
-        let open = self.p.expect(TokenKind::OpenBracket, "[")?;
+    fn report_bracket_array_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let token = self.p.current_clone();
 
-        if self.p.at(TokenKind::CloseBracket) {
-            let close = self.p.expect(TokenKind::CloseBracket, "]")?;
+        self.p.report(ParserError::SyntaxError {
+            label: "array literals use `{ ... }`".into(),
+            help: Some("write the elements between braces, for example `{1, 2, 3}`".into()),
+            src: self.p.named_src(),
+            span: token.span,
+        });
+
+        None
+    }
+
+    fn parse_brace_array_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let open = self.p.expect(TokenKind::OpenBrace, "{")?;
+
+        if self.p.at(TokenKind::CloseBrace) {
+            let close = self.p.expect(TokenKind::CloseBrace, "}")?;
             let elements = self
                 .p
                 .arena
@@ -1317,7 +1353,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
         if self.p.eat(TokenKind::Semicolon) {
             let len = self.parse()?;
-            let close = self.p.expect(TokenKind::CloseBracket, "]")?;
+            let close = self.p.expect(TokenKind::CloseBrace, "}")?;
 
             let expr = self.p.arena.alloc(Expression {
                 kind: ExpressionKind::ArrayRepeatInit {
@@ -1333,18 +1369,22 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         let mut elements_buffer: SmallVec<[&'ctx Expression; 8]> = SmallVec::new();
         elements_buffer.push(first);
 
-        while !matches!(
-            self.p.current.kind,
-            TokenKind::CloseBracket | TokenKind::Eof
-        ) {
-            if !self.p.at(TokenKind::CloseBracket) {
-                self.p.expect(TokenKind::Comma, ",");
+        loop {
+            if self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof) {
+                break;
             }
+
+            self.p.expect(TokenKind::Comma, ",")?;
+
+            if self.p.at(TokenKind::CloseBrace) {
+                break;
+            }
+
             let expr = self.parse()?;
             elements_buffer.push(expr);
         }
 
-        let close = self.p.expect(TokenKind::CloseBracket, "]")?;
+        let close = self.p.expect(TokenKind::CloseBrace, "}")?;
         let elements = self.p.arena.alloc_slice_copy(&elements_buffer);
 
         let expr = self.p.arena.alloc(Expression {
@@ -1547,12 +1587,16 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
 
         let _ = self.p.expect(TokenKind::FatArrow, "=>")?;
 
-        let Some(body) = self.parse() else {
-            if self.p.panic_mode {
-                self.p.sync()
-            };
-            return None;
+        let body = if self.p.at(TokenKind::OpenBrace) && !self.p.brace_has_top_level_comma() {
+            self.parse_block()?
+        } else {
+            self.parse()?
         };
+
+        if self.p.panic_mode {
+            self.p.sync();
+            return None;
+        }
 
         let _ = self.p.eat(TokenKind::Comma);
 
@@ -2410,6 +2454,79 @@ mod tests {
     }
 
     #[test]
+    fn anonymous_init_empty() {
+        const SRC: &str = ".{}";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser
+            .parse()
+            .expect("empty anonymous init should parse");
+
+        let ExpressionKind::AnonymousStructInit { fields } = parsed.kind else {
+            panic!("expected AnonymousStructInit, got {:?}", parsed.kind);
+        };
+
+        assert!(fields.is_empty());
+        assert_eq!(parsed.span, (0, 3).into());
+    }
+
+    #[test]
+    fn anonymous_init_with_fields() {
+        const SRC: &str = ".{ .a = 123, .b = 321 }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().expect("anonymous init should parse");
+
+        let ExpressionKind::AnonymousStructInit { fields } = parsed.kind else {
+            panic!("expected AnonymousStructInit, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, rodeo.borrow_mut().get_or_intern("a"));
+        assert_eq!(fields[1].name, rodeo.borrow_mut().get_or_intern("b"));
+    }
+
+    #[test]
+    fn anonymous_init_trailing_comma() {
+        const SRC: &str = ".{ .a = 1, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser
+            .parse()
+            .expect("anonymous init with trailing comma should parse");
+
+        let ExpressionKind::AnonymousStructInit { fields } = parsed.kind else {
+            panic!("expected AnonymousStructInit, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(fields.len(), 1);
+    }
+
+    #[test]
+    fn anonymous_init_nested() {
+        const SRC: &str = ".{ .inner = .{ .value = 1 } }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser
+            .parse()
+            .expect("nested anonymous init should parse");
+
+        let ExpressionKind::AnonymousStructInit { fields } = parsed.kind else {
+            panic!("expected AnonymousStructInit, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(fields.len(), 1);
+        assert!(matches!(
+            fields[0].value.kind,
+            ExpressionKind::AnonymousStructInit { .. }
+        ));
+    }
+
+    #[test]
     fn grouped_expr() {
         const SRC: &str = "(1 + 1)";
 
@@ -2597,7 +2714,7 @@ mod tests {
 
     #[test]
     fn array_init() {
-        const SRC: &str = "[1, 1.0, \"hello\", foo(), field.sub_field.some_struct#[i32] {.a = 123, .b = 321} .call()]";
+        const SRC: &str = "{1, 1.0, \"hello\", foo(), field.sub_field.some_struct#[i32] {.a = 123, .b = 321} .call()}";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
@@ -2607,8 +2724,57 @@ mod tests {
     }
 
     #[test]
+    fn array_init_trailing_comma() {
+        const SRC: &str = "{1, 2,}";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().expect("array init should parse");
+
+        let ExpressionKind::ArrayInit { elements } = parsed.kind else {
+            panic!("expected ArrayInit, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(elements.len(), 2);
+    }
+
+    #[test]
+    fn array_init_empty() {
+        const SRC: &str = "{}";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().expect("empty array init should parse");
+
+        let ExpressionKind::ArrayInit { elements } = parsed.kind else {
+            panic!("expected ArrayInit, got {:?}", parsed.kind);
+        };
+
+        assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn array_init_nested() {
+        const SRC: &str = "{{1, 2}, {3, 4}}";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().expect("nested array init should parse");
+
+        let ExpressionKind::ArrayInit { elements } = parsed.kind else {
+            panic!("expected ArrayInit, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(elements.len(), 2);
+
+        for element in elements {
+            assert!(matches!(element.kind, ExpressionKind::ArrayInit { .. }));
+        }
+    }
+
+    #[test]
     fn array_repeat_init() {
-        const SRC: &str = "[0; 1024]";
+        const SRC: &str = "{0; 1024}";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
@@ -2625,14 +2791,13 @@ mod tests {
     }
 
     #[test]
-    fn block_expr() {
-        const SRC: &str = "{ let a = 123; let b = 321; }";
+    fn bracket_array_init_is_rejected() {
+        const SRC: &str = "[1, 2, 3]";
 
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
-        assert!(expr_parser.parse().is_some());
-
         assert!(expr_parser.parse().is_none());
+        assert!(parser.panic_mode);
     }
 
     #[test]
@@ -2679,6 +2844,43 @@ mod tests {
         assert!(arms[0].guard.is_none());
         assert!(matches!(arms[1].pattern, expressions::Pattern::Wildcard));
         assert!(arms[1].guard.is_none());
+    }
+
+    #[test]
+    fn switch_arm_block_and_array_bodies() {
+        const SRC: &str = "switch (a) { 1 => { foo(); 2 }, _ => {3, 4}, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(arms.len(), 2);
+        assert!(matches!(arms[0].body.kind, ExpressionKind::Block { .. }));
+        assert!(matches!(
+            arms[1].body.kind,
+            ExpressionKind::ArrayInit { .. }
+        ));
+    }
+
+    #[test]
+    fn switch_arm_empty_block_body() {
+        const SRC: &str = "switch (a) { 1 => {}, _ => {} }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().unwrap();
+        let ExpressionKind::Switch { arms, .. } = parsed.kind else {
+            panic!("expected Switch, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(arms.len(), 2);
+
+        for arm in arms {
+            assert!(matches!(arm.body.kind, ExpressionKind::Block { .. }));
+        }
     }
 
     #[test]

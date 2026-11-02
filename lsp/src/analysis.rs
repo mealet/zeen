@@ -1926,6 +1926,14 @@ impl<'ctx> Walker<'ctx> {
                 }
             }
 
+            HirExprKind::AnonymousStructInit { fields } => {
+                for init in fields {
+                    self.emit_def(init.span.offset(), init.span.len(), Role::Property, None);
+
+                    self.walk_expr(&init.value);
+                }
+            }
+
             HirExprKind::ArrayInit { elements } => {
                 for element in elements {
                     self.walk_expr(element);
@@ -2582,6 +2590,12 @@ fn walk_syntax_expr(expr: &Expression<'_>, text: &str, occurrences: &mut Vec<Occ
                 for field in *fields {
                     walk_syntax_expr(field.value, text, occurrences);
                 }
+            }
+        }
+
+        ExpressionKind::AnonymousStructInit { fields } => {
+            for field in *fields {
+                walk_syntax_expr(field.value, text, occurrences);
             }
         }
 

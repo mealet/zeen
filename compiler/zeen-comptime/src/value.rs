@@ -29,6 +29,7 @@ pub enum Value<'arena> {
     Str(Rc<str>),
     Array(Vec<Value<'arena>>),
     Struct(Rc<StructValue<'arena>>),
+    Void,
 
     Type(&'arena TypeExpr<'arena>),
     Expr(&'arena Expression<'arena>),
@@ -45,6 +46,7 @@ impl Value<'_> {
             Self::Str(_) => "comptime_str".to_string(),
             Self::Array(_) => "comptime_array".to_string(),
             Self::Struct(value) => value.name.to_string(),
+            Self::Void => "void".to_string(),
             Self::Type(_) => "zeen_type".to_string(),
             Self::Expr(_) => "zeen_expr".to_string(),
             Self::Decl(_) => "zeen_decl".to_string(),
@@ -83,6 +85,7 @@ impl Value<'_> {
                 s.push_str(" }");
                 s
             }
+            Self::Void => "void".to_string(),
             Self::Type(_) => "type".to_string(),
             Self::Expr(_) => "expression".to_string(),
             Self::Decl(_) => "declaration".to_string(),

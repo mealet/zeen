@@ -13,23 +13,23 @@ implement Debug : Label {
 }
 
 fn main() {
-  let ints = [1, 2, 3, 4];
+  let ints = {1, 2, 3, 4};
   @println("{:?}", ints);
   @println("{:?}", ints[..]);
 
-  let nested = [[1, 2], [3, 4]];
+  let nested = {{1, 2}, {3, 4}};
   @println("{:?}", nested);
 
-  let chars: [5]char = ['h', 'e', 'l', 'l', 'o'];
+  let chars: [5]char = {'h', 'e', 'l', 'l', 'o'};
   @println("{}", chars);
   @println("{:?}", chars);
   @println("{}", chars[..]);
   @println("{:?}", chars[..]);
 
-  let labels = [
+  let labels = {
     Label { .text = String.from("a") },
     Label { .text = String.from("bb") }
-  ];
+  };
   @println("{:?}", labels);
 
   let formatted = @format("{:?}", ints[..]);

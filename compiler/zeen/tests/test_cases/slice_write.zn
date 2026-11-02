@@ -3,7 +3,7 @@ fn first[T](s: []T) T {
 }
 
 fn main() {
-  let a = [1, 2, 3, 4, 5];
+  let a = {1, 2, 3, 4, 5};
 
   a[1..3][0] = 99;
   @println("range-write {}", a[1]);
@@ -15,6 +15,6 @@ fn main() {
   a[2..][0] = a[3..][0] + 1;
   @println("shift {}", a[2]);
 
-  let sc: []const i32 = [8, 9, 10][..];
+  let sc: []const i32 = {8, 9, 10}[..];
   @println("const-generic {}", first(sc[1..]));
 }

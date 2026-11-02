@@ -1,5 +1,5 @@
 fn main() {
-  let array = [123, 321, 333, 444] ;
+  let array = {123, 321, 333, 444} ;
   let slice = array[..];
 
   for (element : slice) {
