@@ -3773,6 +3773,27 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn record_field_name(
+        &mut self,
+        provided: &mut HashSet<Spur>,
+        field: &HirFieldInit,
+        source: &Source,
+    ) {
+        if provided.insert(field.name) {
+            return;
+        }
+
+        let interner = self.interner.borrow();
+        let name = interner.resolve(&field.name).into();
+        drop(interner);
+
+        self.report(TypeError::DuplicateField {
+            field: name,
+            src: source.src(),
+            span: field.span,
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn check_struct_init(
         &mut self,
@@ -3866,7 +3887,7 @@ impl<'res> TypeChecker<'res> {
             HashMap::with_capacity_and_hasher(fields.len(), Default::default());
 
         for f in fields {
-            provided_names.insert(f.name);
+            self.record_field_name(&mut provided_names, f, init_source);
 
             let Some(info) = field_table.iter().find(|i| i.name == f.name) else {
                 let interner = self.interner.borrow();
@@ -6316,7 +6337,7 @@ impl<'res> TypeChecker<'res> {
             HashMap::with_capacity_and_hasher(fields.len(), Default::default());
 
         for f in fields {
-            provided_names.insert(f.name);
+            self.record_field_name(&mut provided_names, f, init_source);
             let value_ty = if matches!(f.value.kind, HirExprKind::AnonymousStructInit { .. }) {
                 continue;
             } else {

@@ -119,6 +119,21 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("field `{field}` is initialized more than once")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::duplicate_field),
+        help("keep only one `.field = value` entry")
+    )]
+    DuplicateField {
+        field: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("missing fields in '{struct_name}': {fields}")]
     #[diagnostic(severity(Error), code(zeen::typechecker::missing_fields))]
     MissingFields {
