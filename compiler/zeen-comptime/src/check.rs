@@ -295,6 +295,12 @@ impl<'arena> Checker<'_> {
                 }
             }
 
+            ExpressionKind::AnonymousStructInit { fields } => {
+                for field in fields.iter() {
+                    self.expression(field.value, comptime);
+                }
+            }
+
             ExpressionKind::ArrayInit { elements } => {
                 for element in elements.iter() {
                     self.expression(element, comptime);

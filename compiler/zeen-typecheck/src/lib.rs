@@ -2492,6 +2492,22 @@ impl<'res> TypeChecker<'res> {
                 struct_ty
             }
 
+            HirExprKind::AnonymousStructInit { fields } => {
+                if fields.is_empty() {
+                    let void_ty = self.result.interner.builtin(BuiltinType::void);
+                    self.result.expr_types.insert(expr.id, void_ty);
+                    return void_ty;
+                }
+                self.report(TypeError::AnonymousInitNeedsContext {
+                    src: expr.source.src(),
+                    span: expr.source.span,
+                });
+                self.result
+                    .expr_types
+                    .insert(expr.id, self.result.interner.error());
+                self.result.interner.error()
+            }
+
             HirExprKind::Binary { lhs, rhs, op } => {
                 let lhs_ty = self.synth_expr(lhs);
                 let rhs_ty = self.synth_expr(rhs);
@@ -3078,7 +3094,11 @@ impl<'res> TypeChecker<'res> {
                     }
                 };
 
-                let value_ty = self.synth_expr(&args[1]);
+                let value_ty = if matches!(args[1].kind, HirExprKind::AnonymousStructInit { .. }) {
+                    self.check_expr(&args[1], target_ty, false)
+                } else {
+                    self.synth_expr(&args[1])
+                };
                 let value_ty = self.default_literal(value_ty);
 
                 let target_is_enum =
@@ -3866,7 +3886,11 @@ impl<'res> TypeChecker<'res> {
                 continue;
             };
 
-            let value_ty = self.synth_expr(&f.value);
+            let value_ty = if matches!(f.value.kind, HirExprKind::AnonymousStructInit { .. }) {
+                continue;
+            } else {
+                self.synth_expr(&f.value)
+            };
             field_value_types.insert(f.name, value_ty);
 
             if self.type_contains_generic(info.field_ty) {
@@ -3918,7 +3942,9 @@ impl<'res> TypeChecker<'res> {
 
             if matches!(
                 f.value.kind,
-                HirExprKind::ArrayInit { .. } | HirExprKind::ArrayRepeatInit { .. }
+                HirExprKind::ArrayInit { .. }
+                    | HirExprKind::ArrayRepeatInit { .. }
+                    | HirExprKind::AnonymousStructInit { .. }
             ) {
                 self.check_expr(&f.value, expected_ty, false);
             } else {
@@ -4034,6 +4060,32 @@ impl<'res> TypeChecker<'res> {
                 return ty;
             }
 
+            HirExprKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let bool_ty = self.result.interner.builtin(BuiltinType::bool);
+                self.check_expr(condition, bool_ty, false);
+
+                let then_ty = self.check_stmt_as_block_value(then_block, Some(expected));
+                let ty = match else_block {
+                    Some(else_b) => {
+                        let else_ty = self.check_stmt_as_block_value(else_b, Some(expected));
+                        match self
+                            .unify_string_literal_branches(then_block, else_b, then_ty, else_ty)
+                        {
+                            Some(unified) => unified,
+                            None => self.unify_branches(then_ty, else_ty, expr.source.clone()),
+                        }
+                    }
+                    None => self.result.interner.void(),
+                };
+
+                self.result.record_expr_type(expr.id, ty);
+                ty
+            }
+
             HirExprKind::Switch { object, arms } => {
                 let ty = self.check_switch(object, arms, &expr.source, Some(expected));
                 self.result.record_expr_type(expr.id, ty);
@@ -4057,6 +4109,43 @@ impl<'res> TypeChecker<'res> {
                 );
                 self.result.record_expr_type(expr.id, struct_ty);
                 struct_ty
+            }
+
+            HirExprKind::AnonymousStructInit { fields } => {
+                let ty = match self.result.interner.get(expected).clone() {
+                    Type::Struct { def_id, .. } => {
+                        self.check_struct_init(
+                            Some(def_id),
+                            None,
+                            &[],
+                            fields,
+                            expr.source.span,
+                            &expr.source,
+                            Some(expected),
+                        );
+                        expected
+                    }
+                    Type::Void => {
+                        if fields.is_empty() {
+                            self.result.record_expr_type(expr.id, expected);
+                            return expected;
+                        }
+                        self.report(TypeError::AnonymousInitNeedsContext {
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+                        return self.result.interner.error();
+                    }
+                    _ => {
+                        self.report(TypeError::AnonymousInitNeedsContext {
+                            src: expr.source.src(),
+                            span: expr.source.span,
+                        });
+                        return self.result.interner.error();
+                    }
+                };
+                self.result.record_expr_type(expr.id, ty);
+                ty
             }
 
             HirExprKind::Call {
@@ -5967,8 +6056,14 @@ impl<'res> TypeChecker<'res> {
         }
 
         if !enum_generics.is_empty() {
-            let value_ty = self.synth_expr(&args[0]);
-            let value_ty = self.default_literal_with_value(&args[0], value_ty);
+            let value_ty = if matches!(args[0].kind, HirExprKind::AnonymousStructInit { .. }) {
+                let substituted = self.substitute_generics(payload_ty, &bindings);
+                self.check_expr(&args[0], substituted, false)
+            } else {
+                let value_ty = self.synth_expr(&args[0]);
+                self.default_literal_with_value(&args[0], value_ty)
+            };
+
             self.result.record_expr_type(args[0].id, value_ty);
             self.unify_for_inference(
                 payload_ty,
@@ -6224,7 +6319,11 @@ impl<'res> TypeChecker<'res> {
 
         for f in fields {
             provided_names.insert(f.name);
-            let value_ty = self.synth_expr(&f.value);
+            let value_ty = if matches!(f.value.kind, HirExprKind::AnonymousStructInit { .. }) {
+                continue;
+            } else {
+                self.synth_expr(&f.value)
+            };
             field_value_types.insert(f.name, value_ty);
 
             let Some(info) = payload_info.fields.iter().find(|i| i.name == f.name) else {
@@ -6294,7 +6393,9 @@ impl<'res> TypeChecker<'res> {
 
             if matches!(
                 f.value.kind,
-                HirExprKind::ArrayInit { .. } | HirExprKind::ArrayRepeatInit { .. }
+                HirExprKind::ArrayInit { .. }
+                    | HirExprKind::ArrayRepeatInit { .. }
+                    | HirExprKind::AnonymousStructInit { .. }
             ) {
                 self.check_expr(&f.value, expected_ty, false);
             } else {

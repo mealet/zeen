@@ -916,6 +916,19 @@ impl<'res> HirLowering<'res> {
                 }
             }
 
+            ExpressionKind::AnonymousStructInit { fields } => {
+                let hir_fields: Vec<HirFieldInit> = fields
+                    .iter()
+                    .map(|f| HirFieldInit {
+                        name: f.name,
+                        span: f.span,
+                        value: Rc::new(self.lower_expr(f.value)),
+                    })
+                    .collect();
+
+                HirExprKind::AnonymousStructInit { fields: hir_fields }
+            }
+
             ExpressionKind::ArrayInit { elements } => HirExprKind::ArrayInit {
                 elements: elements
                     .iter()

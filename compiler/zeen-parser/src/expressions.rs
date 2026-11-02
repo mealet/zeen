@@ -449,6 +449,7 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
             TokenKind::OpenParen => self.parse_grouped(),
             TokenKind::OpenBracket => self.report_bracket_array_init(),
             TokenKind::OpenBrace => self.parse_brace_array_init(),
+            TokenKind::Dot => self.parse_anonymous_struct_init(),
 
             TokenKind::Eof => {
                 self.p.report(ParserError::UnexpectedEof {
@@ -856,15 +857,46 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
         &mut self,
         ty: &'ctx Expression<'ctx>,
     ) -> Option<&'ctx Expression<'ctx>> {
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+        let (fields, close_brace) = self.parse_struct_init_field_list()?;
+
+        let fields = if fields.is_empty() {
+            None
+        } else {
+            Some(fields)
+        };
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::StructInit { ty, fields },
+            span: ty.merge_span(close_brace.span),
+        });
+
+        Some(expr)
+    }
+
+    fn parse_anonymous_struct_init(&mut self) -> Option<&'ctx Expression<'ctx>> {
+        let dot_token = self.p.expect(TokenKind::Dot, ".")?;
+        let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
+        let (fields, close_brace) = self.parse_struct_init_field_list()?;
+
+        let expr = self.p.arena.alloc(Expression {
+            kind: ExpressionKind::AnonymousStructInit { fields },
+            span: dot_token.merge_span(close_brace.span),
+        });
+
+        Some(expr)
+    }
+
+    fn parse_struct_init_field_list(
+        &mut self,
+    ) -> Option<(&'ctx [zeen_ast::expressions::FieldInit<'ctx>], Token)> {
         use zeen_ast::expressions::FieldInit;
-        assert!(self.p.eat(TokenKind::OpenBrace));
 
-        let mut fields: Option<&'ctx [FieldInit<'ctx>]> = None;
-        let mut last_span = self.p.current().span;
+        let mut fields_buffer: SmallVec<[FieldInit; 8]> = SmallVec::new();
 
-        if !self.p.eat(TokenKind::CloseBrace) {
-            let mut fields_buffer: SmallVec<[FieldInit; 8]> = SmallVec::new();
-
+        let close_brace = if self.p.at(TokenKind::CloseBrace) {
+            self.p.expect(TokenKind::CloseBrace, "}")?
+        } else {
             while !matches!(
                 self.p.current().kind,
                 TokenKind::CloseBrace | TokenKind::Eof
@@ -889,21 +921,12 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                 });
             }
 
-            let close_brace = self.p.expect(TokenKind::CloseBrace, "}")?;
+            self.p.expect(TokenKind::CloseBrace, "}")?
+        };
 
-            let fields_arena = self.p.arena.alloc_slice_copy(&fields_buffer);
-            drop(fields_buffer);
+        let fields = self.p.arena.alloc_slice_copy(&fields_buffer);
 
-            fields = Some(fields_arena);
-            last_span = close_brace.span;
-        }
-
-        let expr = self.p.arena.alloc(Expression {
-            kind: ExpressionKind::StructInit { ty, fields },
-            span: ty.merge_span(last_span),
-        });
-
-        Some(expr)
+        Some((fields, close_brace))
     }
 
     pub fn parse_grouped(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -2428,6 +2451,79 @@ mod tests {
                 span: (0, 16).into()
             }
         );
+    }
+
+    #[test]
+    fn anonymous_init_empty() {
+        const SRC: &str = ".{}";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser
+            .parse()
+            .expect("empty anonymous init should parse");
+
+        let ExpressionKind::AnonymousStructInit { fields } = parsed.kind else {
+            panic!("expected AnonymousStructInit, got {:?}", parsed.kind);
+        };
+
+        assert!(fields.is_empty());
+        assert_eq!(parsed.span, (0, 3).into());
+    }
+
+    #[test]
+    fn anonymous_init_with_fields() {
+        const SRC: &str = ".{ .a = 123, .b = 321 }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser.parse().expect("anonymous init should parse");
+
+        let ExpressionKind::AnonymousStructInit { fields } = parsed.kind else {
+            panic!("expected AnonymousStructInit, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, rodeo.borrow_mut().get_or_intern("a"));
+        assert_eq!(fields[1].name, rodeo.borrow_mut().get_or_intern("b"));
+    }
+
+    #[test]
+    fn anonymous_init_trailing_comma() {
+        const SRC: &str = ".{ .a = 1, }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser
+            .parse()
+            .expect("anonymous init with trailing comma should parse");
+
+        let ExpressionKind::AnonymousStructInit { fields } = parsed.kind else {
+            panic!("expected AnonymousStructInit, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(fields.len(), 1);
+    }
+
+    #[test]
+    fn anonymous_init_nested() {
+        const SRC: &str = ".{ .inner = .{ .value = 1 } }";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let parsed = expr_parser
+            .parse()
+            .expect("nested anonymous init should parse");
+
+        let ExpressionKind::AnonymousStructInit { fields } = parsed.kind else {
+            panic!("expected AnonymousStructInit, got {:?}", parsed.kind);
+        };
+
+        assert_eq!(fields.len(), 1);
+        assert!(matches!(
+            fields[0].value.kind,
+            ExpressionKind::AnonymousStructInit { .. }
+        ));
     }
 
     #[test]

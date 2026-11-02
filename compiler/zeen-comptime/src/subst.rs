@@ -1238,6 +1238,39 @@ impl<'arena> Interp<'arena> {
                 Ok(Some(self.arena.alloc(rebuilt)))
             }
 
+            ExpressionKind::AnonymousStructInit { fields } => {
+                let mut new_fields: Vec<FieldInit<'arena>> = Vec::with_capacity(fields.len());
+                let mut changed = false;
+
+                for field in fields.iter() {
+                    match self.substitute_expr(module, field.value) {
+                        Ok(None) => new_fields.push(*field),
+                        Ok(Some(new_value)) => {
+                            changed = true;
+                            new_fields.push(FieldInit {
+                                name: field.name,
+                                value: new_value,
+                                span: field.span,
+                            });
+                        }
+                        Err(errors) => return Err(errors),
+                    }
+                }
+
+                if !changed {
+                    return Ok(None);
+                }
+
+                let rebuilt = Expression {
+                    kind: ExpressionKind::AnonymousStructInit {
+                        fields: self.arena.alloc_slice_copy(&new_fields),
+                    },
+                    span: expr.span,
+                };
+
+                Ok(Some(self.arena.alloc(rebuilt)))
+            }
+
             ExpressionKind::ArrayInit { elements } => {
                 self.substitute_expr_list(module, elements, |arena, list| Expression {
                     kind: ExpressionKind::ArrayInit {
@@ -1939,6 +1972,17 @@ impl<'arena> Interp<'arena> {
                 return Ok(Expression {
                     kind: ExpressionKind::ArrayInit {
                         elements: self.arena.alloc_slice_copy(&elements),
+                    },
+                    span,
+                });
+            }
+
+            Value::Void => {
+                let fields: &[FieldInit<'arena>] = &[];
+
+                return Ok(Expression {
+                    kind: ExpressionKind::AnonymousStructInit {
+                        fields: self.arena.alloc_slice_copy(fields),
                     },
                     span,
                 });

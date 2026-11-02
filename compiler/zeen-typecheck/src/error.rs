@@ -131,6 +131,19 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("cannot infer the type of `.{{ ... }}`, expected a struct or `void`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::anonymous_init_needs_context),
+        help("annotate the type, for example `let x: Point = .{{ .a = 1 }};`")
+    )]
+    AnonymousInitNeedsContext {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
     #[error("`{object}` has no method `{name}`")]
     #[diagnostic(severity(Error), code(zeen::typechecker::unknown_method))]
     UnknownMethod {

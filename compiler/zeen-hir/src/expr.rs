@@ -75,6 +75,10 @@ pub enum HirExprKind {
         fields: Vec<HirFieldInit>,
     },
 
+    AnonymousStructInit {
+        fields: Vec<HirFieldInit>,
+    },
+
     ArrayInit {
         elements: Vec<Rc<HirExpr>>,
     },

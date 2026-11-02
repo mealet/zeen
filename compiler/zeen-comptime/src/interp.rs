@@ -59,6 +59,7 @@ enum ValueKey {
     Type(usize),
     Expr(usize),
     Decl(usize),
+    Void,
 }
 
 fn value_key(value: &Value<'_>) -> ValueKey {
@@ -81,6 +82,7 @@ fn value_key(value: &Value<'_>) -> ValueKey {
         Value::Type(ty) => ValueKey::Type(*ty as *const TypeExpr<'_> as usize),
         Value::Expr(expr) => ValueKey::Expr(*expr as *const Expression<'_> as usize),
         Value::Decl(decl) => ValueKey::Decl(*decl as *const Declaration<'_> as usize),
+        Value::Void => ValueKey::Void,
     }
 }
 
@@ -1971,6 +1973,19 @@ impl<'arena> Interp<'arena> {
 
             ExpressionKind::StructInit { ty, fields } => {
                 self.eval_struct_init(ty, *fields, expr.span)
+            }
+
+            ExpressionKind::AnonymousStructInit { fields } => {
+                if fields.is_empty() {
+                    Ok(Value::Void)
+                } else {
+                    self.errors.push(Error::Unsupported {
+                        message: "anonymous struct initialization needs a type, use `Type { ... }` in comptime".into(),
+                        src: self.current_src(),
+                        span: expr.span,
+                    });
+                    Err(Unwind::Break)
+                }
             }
 
             ExpressionKind::Type(ty) => Ok(Value::Type(ty)),

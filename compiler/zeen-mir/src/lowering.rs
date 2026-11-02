@@ -672,6 +672,11 @@ impl<'ctx> MirLowering<'ctx> {
                     self.collect_global_expr_deps(&field.value, out);
                 }
             }
+            HirExprKind::AnonymousStructInit { fields } => {
+                for field in fields {
+                    self.collect_global_expr_deps(&field.value, out);
+                }
+            }
             HirExprKind::ArrayInit { elements } => {
                 for element in elements {
                     self.collect_global_expr_deps(element, out);
@@ -3781,6 +3786,66 @@ impl<'ctx> MirLowering<'ctx> {
                     block,
                     self.place_to_operand(Place::from_local(temp), ty, Some(expr.source.clone())),
                 )
+            }
+
+            HirExprKind::AnonymousStructInit { fields } => {
+                let ty = self.expr_type(fb, expr);
+                match self.typecheck.interner.get(ty).clone() {
+                    Type::Void if fields.is_empty() => (
+                        block,
+                        Operand::Constant(ConstValue::Void, Some(expr.source.clone())),
+                    ),
+                    Type::Struct { def_id, .. } => {
+                        self.register_struct_layout(ty, def_id);
+
+                        let info = self
+                            .struct_info(def_id)
+                            .expect("struct info is missing")
+                            .clone();
+
+                        let mut block = block;
+                        let mut ordered_operands = Vec::with_capacity(info.fields.len());
+
+                        for field_info in &info.fields {
+                            let matching = fields
+                                .iter()
+                                .find(|f| f.name == field_info.name)
+                                .expect("typechecker should have caught missing field");
+
+                            let (bl, operand) =
+                                self.lower_expr_to_operand(fb, &matching.value, block);
+                            block = bl;
+                            ordered_operands.push(operand);
+                        }
+
+                        let temp = fb.new_temp(ty);
+
+                        fb.push_stmt(
+                            block,
+                            MirStatement::Assign {
+                                place: Place::from_local(temp),
+                                rvalue: Rvalue::Aggregate {
+                                    kind: AggregateKind::Struct(def_id),
+                                    operands: ordered_operands,
+                                },
+                                source: Some(expr.source.clone()),
+                            },
+                        );
+
+                        (
+                            block,
+                            self.place_to_operand(
+                                Place::from_local(temp),
+                                ty,
+                                Some(expr.source.clone()),
+                            ),
+                        )
+                    }
+                    wildcard => panic!(
+                        "non-struct type in AnonymousStructInit lowering: {:?}",
+                        wildcard
+                    ),
+                }
             }
 
             HirExprKind::ArrayInit { elements } => {

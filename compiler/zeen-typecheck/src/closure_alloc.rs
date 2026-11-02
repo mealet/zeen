@@ -246,6 +246,12 @@ impl<'a> Analyzer<'a> {
                 }
             }
 
+            HirExprKind::AnonymousStructInit { fields } => {
+                for field in fields {
+                    self.expr(&field.value, &Fate::Escaping);
+                }
+            }
+
             HirExprKind::ArrayInit { elements } => {
                 for element in elements {
                     self.expr(element, &Fate::Escaping);
