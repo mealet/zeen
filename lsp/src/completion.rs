@@ -2331,9 +2331,6 @@ mod tests {
 
         let repaired = repair_for_completion(&broken, offset).unwrap();
         let fresh = crate::diagnostics::check(&uri, &repaired, &[]);
-        for (def, members) in &fresh.analysis.members {
-            eprintln!("MEMBERS {def:?} count {}", members.len());
-        }
         let items = dot_complete(
             &broken,
             &fresh.analysis,
