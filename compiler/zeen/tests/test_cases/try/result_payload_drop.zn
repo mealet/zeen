@@ -1,0 +1,38 @@
+struct Handle {
+  pub id: i32,
+}
+
+implement Drop : Handle {
+  fn drop(self) void {
+    @println("drop: {}", self.id);
+  }
+}
+
+fn make(flag: bool) Result[Handle, i32] {
+  if (flag) {
+    return Result.Ok(Handle { .id = 1 });
+  }
+
+  return Result.Err(2);
+}
+
+fn relay(flag: bool) Result[Handle, i32] {
+  let handle = make(flag)?;
+
+  return Result.Ok(handle);
+}
+
+fn main() {
+  let ok = relay(true);
+  let err = relay(false);
+
+  switch (ok) {
+    .Ok(handle) => @println("ok: {}", handle.id),
+    .Err(code) => @println("err: {}", code),
+  };
+
+  switch (err) {
+    .Ok(handle) => @println("ok: {}", handle.id),
+    .Err(code) => @println("err: {}", code),
+  };
+}

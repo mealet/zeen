@@ -1,0 +1,28 @@
+fn parse(value: i32) Result[i32, i32] {
+  if (value < 0) {
+    return Result.Err(7);
+  }
+
+  return Result.Ok(value);
+}
+
+fn twice(value: i32) Result[i32, i32] {
+  let inner = parse(value)?;
+
+  return Result.Ok(inner * 2);
+}
+
+fn main() {
+  let ok = twice(3);
+  let err = twice(-1);
+
+  switch (ok) {
+    .Ok(value) => @println("ok: {}", value),
+    .Err(code) => @println("err: {}", code),
+  };
+
+  switch (err) {
+    .Ok(value) => @println("ok: {}", value),
+    .Err(code) => @println("err: {}", code),
+  };
+}
