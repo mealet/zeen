@@ -24,8 +24,8 @@ implement[T] List[T] {
 
   /// Create new `List` instance with aligned capacity
   pub fn with_capacity(capacity: usize) Self {
-    let bytes_capacity = align_capacity_up(capacity * @sizeof(T));
-    let ptr = @as([*]T, Allocator.alloc(bytes_capacity));
+    const bytes_capacity = align_capacity_up(capacity * @sizeof(T));
+    const ptr = @as([*]T, Allocator.alloc(bytes_capacity));
 
     Self {
       .ptr = ptr,
@@ -49,7 +49,7 @@ implement[T] List[T] {
       return;
     }
 
-    let init_ptr: *T = Allocator.alloc(@sizeof(T) * InitialListCapacity);
+    const init_ptr: *T = Allocator.alloc(@sizeof(T) * InitialListCapacity);
 
     self.ptr = @as([*]T, init_ptr);
     self._len = 0;
@@ -76,7 +76,7 @@ implement[T] List[T] {
     if (self._capacity - 1 < self._len) {
       self._capacity = align_capacity_up(self._len + 1);
 
-      let new_ptr = @as(
+      const new_ptr = @as(
         [*]T,
         Allocator.realloc(
           @as(*void, self.ptr),
@@ -104,7 +104,7 @@ implement[T] List[T] {
     }
 
     self._len -= 1;
-    let output = self.ptr[self._len];
+    const output = self.ptr[self._len];
 
     Option.Some(output)
   }
@@ -655,8 +655,8 @@ implement[T] List[T] {
 implement[T: Copy] List[T] {
   /// Allocate new `List` with copying values from slice
   pub fn from(value: []const T) Self {
-    let len = value.len;
-    let capacity = align_capacity_up(value.len + 1);
+    const len = value.len;
+    const capacity = align_capacity_up(value.len + 1);
     let ptr = @as([*]T, Allocator.alloc(capacity * @sizeof(T)));
 
     let i: usize = 0;
@@ -700,7 +700,7 @@ implement[T] Drop : List[T] {
   fn drop(self) {
     self.clear();
 
-    let self_voided = @as(*void, self.ptr);
+    const self_voided = @as(*void, self.ptr);
     if (self_voided != nullptr)
       Allocator.dealloc(self_voided);
   }
@@ -759,7 +759,7 @@ implement[T: Eq] Eq : List[T] {
 
 implement[T: Copy] Index : List[T] {
   fn index(*const self, index: usize) T {
-    let opt = self.get(index);
+    const opt = self.get(index);
 
     if (opt.is_none()) {
       @panic("out of bounds, List len is {} but index is {}", self.len(), index);

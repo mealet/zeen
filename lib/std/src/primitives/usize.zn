@@ -31,7 +31,7 @@ implement builtin usize {
   }
 
   pub fn leading_zeros(self) u32 {
-    let v = @as(usize, self);
+    const v = @as(usize, self);
 
     if (v == 0) { return usize.bits(); };
     let mask: usize = @as(usize, 1) << @as(usize, usize.bits() - 1);
@@ -60,33 +60,33 @@ implement builtin usize {
   }
 
   pub fn leading_ones(self) u32 {
-    let inverted = ~self;
+    const inverted = ~self;
 
     return inverted.leading_zeros();
   }
 
   pub fn trailing_ones(self) u32 {
-    let inverted = ~self;
+    const inverted = ~self;
 
     return inverted.trailing_zeros();
   }
 
   pub fn rotate_left(self, n: u32) usize {
-    let bits = usize.bits();
-    let shift = n % bits;
+    const bits = usize.bits();
+    const shift = n % bits;
 
     if (shift == 0) { return self; };
-    let v = @as(usize, self);
+    const v = @as(usize, self);
 
     return @as(usize, (v << @as(usize, shift)) | (v >> @as(usize, bits - shift)));
   }
 
   pub fn rotate_right(self, n: u32) usize {
-    let bits = usize.bits();
-    let shift = n % bits;
+    const bits = usize.bits();
+    const shift = n % bits;
 
     if (shift == 0) { return self; };
-    let v = @as(usize, self);
+    const v = @as(usize, self);
 
     return @as(usize, (v >> @as(usize, shift)) | (v << @as(usize, bits - shift)));
   }
@@ -157,7 +157,7 @@ implement builtin usize {
 
     while (e > 0) {
       if ((e & 1) == 1) {
-        let next = result.checked_mul(base);
+        const next = result.checked_mul(base);
 
         if (next.is_none()) { return Option.None; };
 
@@ -166,7 +166,7 @@ implement builtin usize {
 
       e = e >> 1;
       if (e > 0) {
-        let squared = base.checked_mul(base);
+        const squared = base.checked_mul(base);
 
         if (squared.is_none()) { return Option.None; };
 
@@ -225,32 +225,32 @@ implement builtin usize {
   }
 
   pub fn wrapping_shl(self, rhs: u32) usize {
-    let shift = rhs % usize.bits();
+    const shift = rhs % usize.bits();
 
     return self << @as(usize, shift);
   }
 
   pub fn wrapping_shr(self, rhs: u32) usize {
-    let shift = rhs % usize.bits();
+    const shift = rhs % usize.bits();
 
     return self >> @as(usize, shift);
   }
 
   pub fn overflowing_add(self, rhs: usize) Overflowing[usize] {
-    let sum = self + rhs;
+    const sum = self + rhs;
 
     return Overflowing { .value = sum, .overflowed = sum < self };
   }
 
   pub fn overflowing_sub(self, rhs: usize) Overflowing[usize] {
-    let difference = self - rhs;
+    const difference = self - rhs;
 
     return Overflowing { .value = difference, .overflowed = self < rhs };
   }
 
   pub fn overflowing_mul(self, rhs: usize) Overflowing[usize] {
-    let product = self * rhs;
-    let overflowed = rhs != 0 && self > usize.max_value() / rhs;
+    const product = self * rhs;
+    const overflowed = rhs != 0 && self > usize.max_value() / rhs;
 
     return Overflowing { .value = product, .overflowed = overflowed };
   }
@@ -263,14 +263,14 @@ implement builtin usize {
 
     while (e > 0) {
       if ((e & 1) == 1) {
-        let next = result.overflowing_mul(base);
+        const next = result.overflowing_mul(base);
         result = next.value;
         overflowed = overflowed || next.overflowed;
       };
 
       e = e >> 1;
       if (e > 0) {
-        let squared = base.overflowing_mul(base);
+        const squared = base.overflowing_mul(base);
         base = squared.value;
         overflowed = overflowed || squared.overflowed;
       };
@@ -280,21 +280,21 @@ implement builtin usize {
   }
 
   pub fn overflowing_shl(self, rhs: u32) Overflowing[usize] {
-    let shift = rhs % usize.bits();
-    let value = self << @as(usize, shift);
+    const shift = rhs % usize.bits();
+    const value = self << @as(usize, shift);
 
     return Overflowing { .value = value, .overflowed = rhs >= usize.bits() };
   }
 
   pub fn overflowing_shr(self, rhs: u32) Overflowing[usize] {
-    let shift = rhs % usize.bits();
-    let value = self >> @as(usize, shift);
+    const shift = rhs % usize.bits();
+    const value = self >> @as(usize, shift);
 
     return Overflowing { .value = value, .overflowed = rhs >= usize.bits() };
   }
 
   pub fn saturating_add(self, rhs: usize) usize {
-    let sum = self.checked_add(rhs);
+    const sum = self.checked_add(rhs);
 
     if (sum.is_some()) { return sum.unwrap(); };
 
@@ -302,7 +302,7 @@ implement builtin usize {
   }
 
   pub fn saturating_sub(self, rhs: usize) usize {
-    let difference = self.checked_sub(rhs);
+    const difference = self.checked_sub(rhs);
 
     if (difference.is_some()) { return difference.unwrap(); };
 
@@ -310,7 +310,7 @@ implement builtin usize {
   }
 
   pub fn saturating_mul(self, rhs: usize) usize {
-    let product = self.checked_mul(rhs);
+    const product = self.checked_mul(rhs);
 
     if (product.is_some()) { return product.unwrap(); };
 
@@ -322,7 +322,7 @@ implement builtin usize {
   }
 
   pub fn saturating_pow(self, exp: u32) usize {
-    let powered = self.checked_pow(exp);
+    const powered = self.checked_pow(exp);
 
     if (powered.is_some()) { return powered.unwrap(); };
 
@@ -350,7 +350,7 @@ implement builtin usize {
   }
 
   pub fn div_ceil(self, rhs: usize) usize {
-    let quotient = self / rhs;
+    const quotient = self / rhs;
 
     if (self % rhs == 0) { return quotient; };
 
@@ -358,7 +358,7 @@ implement builtin usize {
   }
 
   pub fn next_multiple_of(self, rhs: usize) usize {
-    let remainder = self % rhs;
+    const remainder = self % rhs;
 
     if (remainder == 0) { return self; };
 
@@ -366,7 +366,7 @@ implement builtin usize {
   }
 
   pub fn checked_next_multiple_of(self, rhs: usize) Option[usize] {
-    let remainder = self % rhs;
+    const remainder = self % rhs;
 
     if (remainder == 0) { return Option.Some(self); };
 
@@ -422,7 +422,7 @@ implement builtin usize {
 
   pub fn checked_next_power_of_two(self) Option[usize] {
     if (self <= 1) { return Option.Some(@as(usize, 1)); };
-    let next = self.next_power_of_two();
+    const next = self.next_power_of_two();
 
     if (next == 0) { return Option.None; };
 
@@ -465,7 +465,7 @@ implement builtin usize {
     if (self == 0) { @panic("ilog: argument must be positive"); };
     if (base < 2) { @panic("ilog: base must be at least 2"); };
     let value = @as(u64, self);
-    let step = @as(u64, base);
+    const step = @as(u64, base);
     let count: u32 = 0;
 
     while (value >= step) {
@@ -493,7 +493,7 @@ implement builtin usize {
   }
 
   pub fn to_be_bytes(self) [8]u8 {
-    let v = @as(u64, self);
+    const v = @as(u64, self);
     let bytes: [8]u8 = {0; 8};
     let i: u32 = 0;
 
@@ -506,7 +506,7 @@ implement builtin usize {
   }
 
   pub fn to_le_bytes(self) [8]u8 {
-    let v = @as(u64, self);
+    const v = @as(u64, self);
     let bytes: [8]u8 = {0; 8};
     let i: u32 = 0;
 

@@ -3,7 +3,7 @@ use std.string;
 
 implement builtin f32 {
   pub fn min_value() f32 {
-    let max = f32.max_value();
+    const max = f32.max_value();
 
     return 0.0 - max;
   }
@@ -25,7 +25,7 @@ implement builtin f32 {
   }
 
   pub fn neg_infinity() f32 {
-    let infinity = f32.infinity();
+    const infinity = f32.infinity();
 
     return 0.0 - infinity;
   }
@@ -35,36 +35,36 @@ implement builtin f32 {
   }
 
   pub fn to_bits(self) u32 {
-    let p = @as(*u32, @as(*void, @as(*f32, &self)));
+    const p = @as(*u32, @as(*void, @as(*f32, &self)));
 
     return *p;
   }
 
   pub fn from_bits(bits: u32) f32 {
-    let p = @as(*f32, @as(*void, @as(*u32, &bits)));
+    const p = @as(*f32, @as(*void, @as(*u32, &bits)));
 
     return *p;
   }
 
   pub fn is_nan(self) bool {
-    let bits = self.to_bits();
-    let exponent = (bits >> 23) & 0x7F;
-    let mantissa = bits & 0x007FFFFF;
+    const bits = self.to_bits();
+    const exponent = (bits >> 23) & 0x7F;
+    const mantissa = bits & 0x007FFFFF;
 
     return exponent == 0x7F && mantissa != 0;
   }
 
   pub fn is_infinite(self) bool {
-    let bits = self.to_bits();
-    let exponent = (bits >> 23) & 0x7F;
-    let mantissa = bits & 0x007FFFFF;
+    const bits = self.to_bits();
+    const exponent = (bits >> 23) & 0x7F;
+    const mantissa = bits & 0x007FFFFF;
 
     return exponent == 0x7F && mantissa == 0;
   }
 
   pub fn is_finite(self) bool {
-    let bits = self.to_bits();
-    let exponent = (bits >> 23) & 0x7F;
+    const bits = self.to_bits();
+    const exponent = (bits >> 23) & 0x7F;
 
     return exponent != 0x7F;
   }
@@ -303,8 +303,8 @@ implement builtin f32 {
   }
 
   pub fn div_euclid(self, rhs: f32) f32 {
-    let quotient = truncf(self / rhs);
-    let remainder = self % rhs;
+    const quotient = truncf(self / rhs);
+    const remainder = self % rhs;
 
     return switch (true) {
       _ if (remainder < 0.0 && rhs > 0.0) => quotient - 1.0,
@@ -314,7 +314,7 @@ implement builtin f32 {
   }
 
   pub fn rem_euclid(self, rhs: f32) f32 {
-    let remainder = self % rhs;
+    const remainder = self % rhs;
 
     if (remainder < 0.0) {
       return remainder + fabsf(rhs);

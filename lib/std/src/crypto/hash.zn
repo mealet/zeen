@@ -2,8 +2,8 @@
 pub struct Hasher {
   /// 64-bit FNV-1a.
   pub fn fnv1a64(data: []const char) u64 {
-    let hi: u64 = 0xCBF29CE4;
-    let lo: u64 = 0x84222325;
+    const hi: u64 = 0xCBF29CE4;
+    const lo: u64 = 0x84222325;
     let hash = (hi << 32) | lo;
     let i: usize = 0;
 

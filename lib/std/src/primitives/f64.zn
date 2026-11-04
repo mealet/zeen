@@ -3,7 +3,7 @@ use std.string;
 
 implement builtin f64 {
   pub fn min_value() f64 {
-    let max = f64.max_value();
+    const max = f64.max_value();
 
     return 0.0 - max;
   }
@@ -25,7 +25,7 @@ implement builtin f64 {
   }
 
   pub fn neg_infinity() f64 {
-    let infinity = f64.infinity();
+    const infinity = f64.infinity();
 
     return 0.0 - infinity;
   }
@@ -35,36 +35,36 @@ implement builtin f64 {
   }
 
   pub fn to_bits(self) u64 {
-    let p = @as(*u64, @as(*void, @as(*f64, &self)));
+    const p = @as(*u64, @as(*void, @as(*f64, &self)));
 
     return *p;
   }
 
   pub fn from_bits(bits: u64) f64 {
-    let p = @as(*f64, @as(*void, @as(*u64, &bits)));
+    const p = @as(*f64, @as(*void, @as(*u64, &bits)));
 
     return *p;
   }
 
   pub fn is_nan(self) bool {
-    let bits = self.to_bits();
-    let exponent = (bits >> 52) & 0x7FF;
-    let mantissa = bits & 0x000FFFFFFFFFFFFF;
+    const bits = self.to_bits();
+    const exponent = (bits >> 52) & 0x7FF;
+    const mantissa = bits & 0x000FFFFFFFFFFFFF;
 
     return exponent == 0x7FF && mantissa != 0;
   }
 
   pub fn is_infinite(self) bool {
-    let bits = self.to_bits();
-    let exponent = (bits >> 52) & 0x7FF;
-    let mantissa = bits & 0x000FFFFFFFFFFFFF;
+    const bits = self.to_bits();
+    const exponent = (bits >> 52) & 0x7FF;
+    const mantissa = bits & 0x000FFFFFFFFFFFFF;
 
     return exponent == 0x7FF && mantissa == 0;
   }
 
   pub fn is_finite(self) bool {
-    let bits = self.to_bits();
-    let exponent = (bits >> 52) & 0x7FF;
+    const bits = self.to_bits();
+    const exponent = (bits >> 52) & 0x7FF;
 
     return exponent != 0x7FF;
   }
@@ -303,8 +303,8 @@ implement builtin f64 {
   }
 
   pub fn div_euclid(self, rhs: f64) f64 {
-    let quotient = trunc(self / rhs);
-    let remainder = self % rhs;
+    const quotient = trunc(self / rhs);
+    const remainder = self % rhs;
 
     return switch (true) {
       _ if (remainder < 0.0 && rhs > 0.0) => quotient - 1.0,
@@ -314,7 +314,7 @@ implement builtin f64 {
   }
 
   pub fn rem_euclid(self, rhs: f64) f64 {
-    let remainder = self % rhs;
+    const remainder = self % rhs;
 
     if (remainder < 0.0) {
       return remainder + fabs(rhs);

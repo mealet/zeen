@@ -42,10 +42,10 @@ implement Rng {
 
   /// Next unsigned value.
   pub fn next_u64(*self) u64 {
-    let x = self.state;
-    let x = x ^ (x >> 12);
-    let x = x ^ (x << 25);
-    let x = x ^ (x >> 27);
+    const x = self.state;
+    const x = x ^ (x >> 12);
+    const x = x ^ (x << 25);
+    const x = x ^ (x >> 27);
     self.state = x;
     return x * 2685821657736338717;
   }

@@ -54,7 +54,7 @@ pub fn gcd(a: i64, b: i64) i64 {
   let y = if (b < 0) { -b } else { b };
 
   while (y != 0) {
-    let r = x % y;
+    const r = x % y;
     x = y;
     y = r;
   };
@@ -68,7 +68,7 @@ pub fn lcm(a: i64, b: i64) i64 {
     return 0;
   };
 
-  let d = gcd(a, b);
+  const d = gcd(a, b);
   return (a / d) * b;
 }
 

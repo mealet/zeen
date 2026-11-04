@@ -18,7 +18,7 @@ fn bucket_index(hash: u64, cap: usize) usize {
 }
 
 fn find_in_bucket[K: Hash + Eq, V](bucket: *List[Entry[K, V]], key: *const K, hash: u64) Option[usize] {
-  let len = bucket.len();
+  const len = bucket.len();
   let idx: usize = 0;
 
   while (idx < len) {
@@ -59,7 +59,7 @@ pub struct HashMap[K: Hash + Eq, V] {
 
 implement[K: Hash + Eq, V] HashMap[K, V] {
   pub fn new() Self {
-    let cap: usize = InitialMapCapacity;
+    const cap: usize = InitialMapCapacity;
     let buckets = List#[List[Entry[K, V]]].with_capacity(cap);
 
     let idx: usize = 0;
@@ -124,8 +124,8 @@ implement[K: Hash + Eq, V] HashMap[K, V] {
       return false;
     };
 
-    let hash = (*key).hash();
-    let idx = bucket_index(hash, self._capacity);
+    const hash = (*key).hash();
+    const idx = bucket_index(hash, self._capacity);
 
     switch (self.buckets.get_ptr(idx)) {
       .Some(bucket) => {
@@ -143,8 +143,8 @@ implement[K: Hash + Eq, V] HashMap[K, V] {
       return Option.None;
     };
 
-    let hash = (*key).hash();
-    let idx = bucket_index(hash, self._capacity);
+    const hash = (*key).hash();
+    const idx = bucket_index(hash, self._capacity);
 
     switch (self.buckets.get_ptr(idx)) {
       .Some(bucket) => {
@@ -200,8 +200,8 @@ implement[K: Hash + Eq, V] HashMap[K, V] {
       self._capacity = InitialMapCapacity;
     };
 
-    let hash = key.hash();
-    let idx = bucket_index(hash, self._capacity);
+    const hash = key.hash();
+    const idx = bucket_index(hash, self._capacity);
 
     switch (self.buckets.get_ptr(idx)) {
       .Some(bucket) => {
@@ -209,7 +209,7 @@ implement[K: Hash + Eq, V] HashMap[K, V] {
           .Some(pos) => {
             switch (bucket.get_ptr(pos)) {
               .Some(entry) => {
-                let old = (*entry).value;
+                const old = (*entry).value;
                 (*entry).value = value;
 
                 let _drop_key = key;
@@ -235,7 +235,7 @@ implement[K: Hash + Eq, V] HashMap[K, V] {
   }
 
   fn grow(*self) {
-    let new_cap = self._capacity * @as(usize, 2);
+    const new_cap = self._capacity * @as(usize, 2);
     let new_buckets = List#[List[Entry[K, V]]].with_capacity(new_cap);
 
     let idx: usize = 0;
@@ -251,7 +251,7 @@ implement[K: Hash + Eq, V] HashMap[K, V] {
           while (!bucket.is_empty()) {
             switch (bucket.pop()) {
               .Some(entry) => {
-                let new_idx = bucket_index(entry.hash, new_cap);
+                const new_idx = bucket_index(entry.hash, new_cap);
 
                 switch (new_buckets.get_ptr(new_idx)) {
                   .Some(dest) => dest.push(entry),

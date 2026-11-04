@@ -74,15 +74,15 @@ pub struct Process {
       Allocator.dealloc(buf);
       return Result.Ok(out);
     } else {
-      let buf = Allocator.alloc(4096);
-      let res = getcwd(@as([*]char, buf), 4096);
+      const buf = Allocator.alloc(4096);
+      const res = getcwd(@as([*]char, buf), 4096);
 
       if (@as(*void, res) == nullptr) {
         Allocator.dealloc(buf);
         return Result.Err(IoError.last_os_error());
       };
 
-      let out = String.from_cstr(@as([*]const char, buf));
+      const out = String.from_cstr(@as([*]const char, buf));
       Allocator.dealloc(buf);
       return Result.Ok(out);
     }
@@ -102,7 +102,7 @@ implement ArgsIter {
 
 implement Iterator : ArgsIter {
   pub fn next(*self) Option[[]const char] {
-    let at = @as(usize, self.index);
+    const at = @as(usize, self.index);
 
     if (self.index >= __zeen_argc) {
       return Option.None;
@@ -110,7 +110,7 @@ implement Iterator : ArgsIter {
 
     self.index += 1;
 
-    let len = strlen(@as([*]const char, __zeen_argv[at]));
+    const len = strlen(@as([*]const char, __zeen_argv[at]));
     return Option.Some(__zeen_argv[at][0..@as(usize, len)]);
   }
 }
@@ -249,7 +249,7 @@ implement Child {
         return Option.None;
       };
 
-      let fd = self.in_fd;
+      const fd = self.in_fd;
       self.in_fd = -1;
 
       return Option.Some(PipeWriter { .fd = fd, .handle = nullptr });
@@ -271,7 +271,7 @@ implement Child {
         return Option.None;
       };
 
-      let fd = self.out_fd;
+      const fd = self.out_fd;
       self.out_fd = -1;
 
       return Option.Some(PipeReader { .fd = fd, .handle = nullptr });
@@ -293,7 +293,7 @@ implement Child {
         return Option.None;
       };
 
-      let fd = self.err_fd;
+      const fd = self.err_fd;
       self.err_fd = -1;
 
       return Option.Some(PipeReader { .fd = fd, .handle = nullptr });
@@ -318,13 +318,13 @@ implement Child {
       let status: c_int = 0;
 
       while (true) {
-        let r = waitpid(@as(c_pid_t, self.pid), &status, 0);
+        const r = waitpid(@as(c_pid_t, self.pid), &status, 0);
 
         if (r >= 0) {
           break;
         };
 
-        let err_slot = __errno_location();
+        const err_slot = __errno_location();
 
         if (*err_slot != EINTR) {
           return Result.Err(IoError.last_os_error());
@@ -357,14 +357,14 @@ implement Child {
       return Result.Ok(Option.Some(ExitStatus { .exit_code = @as(i32, code), .term_signal = 0 }));
     } else {
       let status: c_int = 0;
-      let r = waitpid(@as(c_pid_t, self.pid), &status, WNOHANG);
+      const r = waitpid(@as(c_pid_t, self.pid), &status, WNOHANG);
 
       if (r < 0) {
         return Result.Err(IoError.last_os_error());
       };
 
       if (r == 0) {
-        let idle: Option[ExitStatus] = Option.None;
+        const idle: Option[ExitStatus] = Option.None;
 
         return Result.Ok(idle);
       };
@@ -532,7 +532,7 @@ implement Command {
   }
 
   pub fn status(*const self) Result[ExitStatus, IoError] {
-    let spawned = self.spawn();
+    const spawned = self.spawn();
 
     if (spawned.is_err()) {
       return Result.Err(spawned.unwrap_err());
@@ -549,7 +549,7 @@ implement Command {
       self.stdin_mode = Stdio.Null;
     };
 
-    let spawned = self.spawn();
+    const spawned = self.spawn();
 
     if (spawned.is_err()) {
       return Result.Err(spawned.unwrap_err());
@@ -592,19 +592,19 @@ implement Command {
         .stderr = err_text.unwrap(),
       });
     } else {
-      let out_fd = child.out_fd;
-      let err_fd = child.err_fd;
+      const out_fd = child.out_fd;
+      const err_fd = child.err_fd;
 
-      let out_thread = Thread.spawn(fn() Result[String, IoError] {
+      const out_thread = Thread.spawn(fn() Result[String, IoError] {
         return drain_fd_to_string(out_fd);
       });
 
-      let err_thread = Thread.spawn(fn() Result[String, IoError] {
+      const err_thread = Thread.spawn(fn() Result[String, IoError] {
         return drain_fd_to_string(err_fd);
       });
 
-      let out_text = out_thread.join();
-      let err_text = err_thread.join();
+      const out_text = out_thread.join();
+      const err_text = err_thread.join();
 
       if (out_text.is_err()) {
         return Result.Err(out_text.unwrap_err());
@@ -614,7 +614,7 @@ implement Command {
         return Result.Err(err_text.unwrap_err());
       };
 
-      let waited = child.wait();
+      const waited = child.wait();
 
       if (waited.is_err()) {
         return Result.Err(waited.unwrap_err());
@@ -727,12 +727,12 @@ fn merged_env(cmd: *const Command) List[String] {
   let out = List#[String].new();
 
   if (!(*cmd).env_cleared) {
-    let current = Env.vars();
+    const current = Env.vars();
     let i: usize = 0;
 
     while (i < current.len()) {
       let entry = current.get_ptr(i).unwrap();
-      let key = (*entry).key.slice(..);
+      const key = (*entry).key.slice(..);
 
       if (!is_env_removed(cmd, key) && !is_env_overridden(cmd, key)) {
         let pair = String.from(key);
@@ -750,7 +750,7 @@ fn merged_env(cmd: *const Command) List[String] {
 
   while (j < (*cmd).envs.len()) {
     let spec = (*cmd).envs.get_ptr(j).unwrap();
-    let key = (*spec).key.slice(..);
+    const key = (*spec).key.slice(..);
 
     if (!(*spec).remove && !removed_after(cmd, j, key) && !overridden_after(cmd, j, key)) {
       let pair = String.from(key);
@@ -790,14 +790,14 @@ fn merged_env(cmd: *const Command) List[String] {
       return Option.Some(String.from(program));
     };
 
-    let path = Env.var("PATH");
+    const path = Env.var("PATH");
 
     if (path.is_none()) {
       return Option.None;
     };
 
-    let owned_path = path.unwrap();
-    let dirs = owned_path.split(':');
+    const owned_path = path.unwrap();
+    const dirs = owned_path.split(':');
     let i: usize = 0;
 
     while (i < dirs.len()) {
@@ -851,8 +851,8 @@ fn merged_env(cmd: *const Command) List[String] {
 
   fn open_null(write: bool) Result[c_int, IoError] {
     let path = cstr("/dev/null");
-    let mode = if (write) { O_WRONLY } else { O_RDONLY };
-    let fd = open(@as([*]const char, path.slice(..).ptr), mode, 0);
+    const mode = if (write) { O_WRONLY } else { O_RDONLY };
+    const fd = open(@as([*]const char, path.slice(..).ptr), mode, 0);
 
     if (fd < 0) {
       return Result.Err(IoError.last_os_error());
@@ -866,10 +866,10 @@ fn merged_env(cmd: *const Command) List[String] {
 
     while (true) {
       let chunk: [256]char = @uninit();
-      let got = read(fd, @as(*void, &chunk[0]), 256);
+      const got = read(fd, @as(*void, &chunk[0]), 256);
 
       if (got < 0) {
-        let err_slot = __errno_location();
+        const err_slot = __errno_location();
 
         if (*err_slot == EINTR) {
           continue;
@@ -893,11 +893,11 @@ fn merged_env(cmd: *const Command) List[String] {
     let off: usize = 0;
 
     while (off < buf.len) {
-      let rest = buf[off..buf.len];
-      let n = write(fd, @as([*]const void, rest.ptr), @as(c_size_t, rest.len));
+      const rest = buf[off..buf.len];
+      const n = write(fd, @as([*]const void, rest.ptr), @as(c_size_t, rest.len));
 
       if (n < 0) {
-        let err_slot = __errno_location();
+        const err_slot = __errno_location();
 
         if (*err_slot == EINTR) {
           continue;
@@ -914,7 +914,7 @@ fn merged_env(cmd: *const Command) List[String] {
 
   fn drain_fd_to_string(fd: c_int) Result[String, IoError] {
     let out = String.new();
-    let r = read_fd_to_string(fd, &out);
+    const r = read_fd_to_string(fd, &out);
 
     if (r.is_err()) {
       return Result.Err(r.unwrap_err());
@@ -924,14 +924,14 @@ fn merged_env(cmd: *const Command) List[String] {
   }
 
   fn spawn_posix(cmd: *const Command) Result[Child, IoError] {
-    let prog = find_program((*cmd).program.slice(..));
+    const prog = find_program((*cmd).program.slice(..));
 
     if (prog.is_none()) {
       return Result.Err(IoError.new(IoErrorKind.NotFound, "program not found in PATH"));
     };
 
     let prog_path = cstr(prog.unwrap().slice(..));
-    let prog_ptr = @as([*]const char, prog_path.slice(..).ptr);
+    const prog_ptr = @as([*]const char, prog_path.slice(..).ptr);
 
     let argv_strs = List#[String].new();
 
@@ -956,14 +956,14 @@ fn merged_env(cmd: *const Command) List[String] {
 
     argv.push(@as([*]const char, nullptr));
 
-    let argv_ptr = argv.get_ptr(0).unwrap();
+    const argv_ptr = argv.get_ptr(0).unwrap();
 
-    let inherit_env = !cmd_has_env_changes(cmd);
+    const inherit_env = !cmd_has_env_changes(cmd);
     let env_strs = List#[String].new();
     let envp = List#[[*]const char].new();
 
     if (!inherit_env) {
-      let merged = merged_env(cmd);
+      const merged = merged_env(cmd);
       let mi: usize = 0;
 
       while (mi < merged.len()) {
@@ -991,18 +991,18 @@ fn merged_env(cmd: *const Command) List[String] {
     let stderr_write: c_int = -1;
 
     if ((*cmd).stdin_mode == Stdio.Piped) {
-      let made = make_pipe();
+      const made = make_pipe();
 
       if (made.is_err()) {
         return Result.Err(made.unwrap_err());
       };
 
-      let ends = made.unwrap();
+      const ends = made.unwrap();
 
       stdin_read = ends.read_end;
       stdin_write = ends.write_end;
     } else if ((*cmd).stdin_mode == Stdio.Null) {
-      let opened = open_null(false);
+      const opened = open_null(false);
 
       if (opened.is_err()) {
         return Result.Err(opened.unwrap_err());
@@ -1012,7 +1012,7 @@ fn merged_env(cmd: *const Command) List[String] {
     };
 
     if ((*cmd).stdout_mode == Stdio.Piped) {
-      let made = make_pipe();
+      const made = make_pipe();
 
       if (made.is_err()) {
         close_if_valid(stdin_read);
@@ -1021,12 +1021,12 @@ fn merged_env(cmd: *const Command) List[String] {
         return Result.Err(made.unwrap_err());
       };
 
-      let ends = made.unwrap();
+      const ends = made.unwrap();
 
       stdout_read = ends.read_end;
       stdout_write = ends.write_end;
     } else if ((*cmd).stdout_mode == Stdio.Null) {
-      let opened = open_null(true);
+      const opened = open_null(true);
 
       if (opened.is_err()) {
         close_if_valid(stdin_read);
@@ -1039,7 +1039,7 @@ fn merged_env(cmd: *const Command) List[String] {
     };
 
     if ((*cmd).stderr_mode == Stdio.Piped) {
-      let made = make_pipe();
+      const made = make_pipe();
 
       if (made.is_err()) {
         close_if_valid(stdin_read);
@@ -1050,12 +1050,12 @@ fn merged_env(cmd: *const Command) List[String] {
         return Result.Err(made.unwrap_err());
       };
 
-      let ends = made.unwrap();
+      const ends = made.unwrap();
 
       stderr_read = ends.read_end;
       stderr_write = ends.write_end;
     } else if ((*cmd).stderr_mode == Stdio.Null) {
-      let opened = open_null(true);
+      const opened = open_null(true);
 
       if (opened.is_err()) {
         close_if_valid(stdin_read);
@@ -1069,7 +1069,7 @@ fn merged_env(cmd: *const Command) List[String] {
       stderr_write = opened.unwrap();
     };
 
-    let err_pair = make_pipe();
+    const err_pair = make_pipe();
 
     if (err_pair.is_err()) {
       close_if_valid(stdin_read);
@@ -1082,16 +1082,16 @@ fn merged_env(cmd: *const Command) List[String] {
       return Result.Err(err_pair.unwrap_err());
     };
 
-    let err_ends = err_pair.unwrap();
-    let err_read = err_ends.read_end;
-    let err_write = err_ends.write_end;
+    const err_ends = err_pair.unwrap();
+    const err_read = err_ends.read_end;
+    const err_write = err_ends.write_end;
 
     let _ = fcntl(err_write, F_SETFD, FD_CLOEXEC);
 
-    let pid = fork();
+    const pid = fork();
 
     if (pid < 0) {
-      let err = IoError.last_os_error();
+      const err = IoError.last_os_error();
 
       close_if_valid(stdin_read);
       close_if_valid(stdin_write);
@@ -1112,7 +1112,7 @@ fn merged_env(cmd: *const Command) List[String] {
         let dir = cstr((*cmd).cwd.slice(..));
 
         if (chdir(@as([*]const char, dir.slice(..).ptr)) != 0) {
-          let slot = __errno_location();
+          const slot = __errno_location();
           let code: c_int = *slot;
           let _ = write(err_write, @as([*]const void, &code), 4);
 
@@ -1141,10 +1141,10 @@ fn merged_env(cmd: *const Command) List[String] {
       if (inherit_env) {
         let _ = execvp(prog_ptr, argv_ptr);
       } else {
-        let envp_ptr = envp.get_ptr(0).unwrap();
+        const envp_ptr = envp.get_ptr(0).unwrap();
         let _ = execve(prog_ptr, argv_ptr, envp_ptr);
       };
-      let slot = __errno_location();
+      const slot = __errno_location();
       let code: c_int = *slot;
       let _ = write(err_write, @as([*]const void, &code), 4);
       _exit(127);
@@ -1165,7 +1165,7 @@ fn merged_env(cmd: *const Command) List[String] {
     };
 
     let err_code: c_int = 0;
-    let got = read(err_read, @as(*void, &err_code), 4);
+    const got = read(err_read, @as(*void, &err_code), 4);
 
     let _ = close(err_read);
 

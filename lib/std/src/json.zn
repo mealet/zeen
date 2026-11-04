@@ -41,7 +41,7 @@ implement JsonValue {
     let parser = JsonParser { .text = text, .pos = 0 };
     parser.skip_ws();
 
-    let parsed = parser.parse_value(0);
+    const parsed = parser.parse_value(0);
     if (parsed.is_err()) {
       return Result.Err(parsed.unwrap_err());
     };
@@ -78,11 +78,11 @@ implement JsonValue {
   }
 
   fn at_index(items: *const List[JsonValue], index: usize) Option[*const JsonValue] {
-    let found = items.get_ptr(index);
+    const found = items.get_ptr(index);
     if (found.is_none()) {
       return Option.None;
     };
-    let slot: *const JsonValue = found.unwrap();
+    const slot: *const JsonValue = found.unwrap();
     return Option.Some(slot);
   }
 
@@ -152,7 +152,7 @@ implement JsonValue {
   }
 
   pub fn as_i64(*const self) Option[i64] {
-    let text = self.as_num();
+    const text = self.as_num();
     if (text.is_none()) {
       return Option.None;
     };
@@ -160,7 +160,7 @@ implement JsonValue {
   }
 
   pub fn as_f64(*const self) Option[f64] {
-    let text = self.as_num();
+    const text = self.as_num();
     if (text.is_none()) {
       return Option.None;
     };
@@ -199,7 +199,7 @@ implement JsonValue {
           if (i != 0) {
             out.push(',');
           };
-          let elem = items.get_ptr(i).unwrap();
+          const elem = items.get_ptr(i).unwrap();
           elem.write_into(out);
           i += 1;
         }
@@ -212,13 +212,13 @@ implement JsonValue {
   }
 
   pub fn write_string(out: *String, text: *String) {
-    let hex: []const char = "0123456789abcdef";
-    let backslash = @as(char, 92);
+    const hex: []const char = "0123456789abcdef";
+    const backslash = @as(char, 92);
     out.push('"');
 
     let i: usize = 0;
     while (i < text.len()) {
-      let c = text.get(i).unwrap();
+      const c = text.get(i).unwrap();
       if (c == '"') {
         out.push(backslash);
         out.push('"');
@@ -276,7 +276,7 @@ implement JsonObject {
   }
 
   pub fn get(*const self, key: []const char) Option[*const JsonValue] {
-    let owned = String.from(key);
+    const owned = String.from(key);
     return self.map.get(&owned);
   }
 
@@ -285,7 +285,7 @@ implement JsonObject {
   }
 
   pub fn get_at(*const self, index: usize) *const JsonValue {
-    let key = self.key_at(index);
+    const key = self.key_at(index);
     return self.map.get(key).unwrap();
   }
 
@@ -300,10 +300,10 @@ implement JsonObject {
       if (i != 0) {
         out.push(',');
       };
-      let key = self.key_at(i);
+      const key = self.key_at(i);
       JsonValue.write_string(out, key);
       out.push(':');
-      let value = self.get_at(i);
+      const value = self.get_at(i);
       value.write_into(out);
       i += 1;
     }
@@ -325,7 +325,7 @@ implement JsonParser {
   }
 
   fn peek_is(*const self, want: char) bool {
-    let c = self.peek();
+    const c = self.peek();
     if (c.is_none()) {
       return false;
     };
@@ -346,7 +346,7 @@ implement JsonParser {
 
   pub fn skip_ws(*self) {
     while (self.pos < self.text.len) {
-      let ch = self.text[self.pos];
+      const ch = self.text[self.pos];
       if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
         self.bump();
       } else {
@@ -361,12 +361,12 @@ implement JsonParser {
     };
 
     self.skip_ws();
-    let head = self.peek();
+    const head = self.peek();
     if (head.is_none()) {
       return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedEnd, .pos = self.pos });
     };
 
-    let ch = head.unwrap();
+    const ch = head.unwrap();
     if (ch == '{') {
       return self.parse_object(depth);
     };
@@ -374,7 +374,7 @@ implement JsonParser {
       return self.parse_array(depth);
     };
     if (ch == '"') {
-      let text = self.parse_string();
+      const text = self.parse_string();
       if (text.is_err()) {
         return Result.Err(text.unwrap_err());
       };
@@ -399,7 +399,7 @@ implement JsonParser {
   fn parse_literal(*self, word: []const char, value: JsonValue) Result[JsonValue, JsonError] {
     let i: usize = 0;
     while (i < word.len) {
-      let c = self.peek();
+      const c = self.peek();
       if (c.is_none() || c.unwrap() != word[i]) {
         return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedChar, .pos = self.pos });
       };
@@ -419,7 +419,7 @@ implement JsonParser {
     };
 
     while (self.pos < self.text.len) {
-      let item = self.parse_value(depth + 1);
+      const item = self.parse_value(depth + 1);
       if (item.is_err()) {
         return Result.Err(item.unwrap_err());
       };
@@ -456,7 +456,7 @@ implement JsonParser {
       if (!self.peek_is('"')) {
         return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedChar, .pos = self.pos });
       };
-      let key = self.parse_string();
+      const key = self.parse_string();
       if (key.is_err()) {
         return Result.Err(key.unwrap_err());
       };
@@ -468,7 +468,7 @@ implement JsonParser {
       self.bump();
       self.skip_ws();
 
-      let value = self.parse_value(depth + 1);
+      const value = self.parse_value(depth + 1);
       if (value.is_err()) {
         return Result.Err(value.unwrap_err());
       };
@@ -496,7 +496,7 @@ implement JsonParser {
     let out = String.new();
 
     while (self.pos < self.text.len) {
-      let ch = self.text[self.pos];
+      const ch = self.text[self.pos];
       if (ch == '"') {
         self.bump();
         return Result.Ok(out);
@@ -504,7 +504,7 @@ implement JsonParser {
 
       if (@as(u32, ch) == 92) {
         self.bump();
-        let esc = self.parse_escape();
+        const esc = self.parse_escape();
         if (esc.is_err()) {
           return Result.Err(esc.unwrap_err());
         };
@@ -524,12 +524,12 @@ implement JsonParser {
   }
 
   fn parse_escape(*self) Result[Rune, JsonError] {
-    let head = self.peek();
+    const head = self.peek();
     if (head.is_none()) {
       return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedEnd, .pos = self.pos });
     };
 
-    let ch = head.unwrap();
+    const ch = head.unwrap();
     self.bump();
 
     if (ch == '"') {
@@ -563,11 +563,11 @@ implement JsonParser {
   }
 
   fn parse_unicode(*self) Result[Rune, JsonError] {
-    let hi = self.parse_hex4();
+    const hi = self.parse_hex4();
     if (hi.is_err()) {
       return Result.Err(hi.unwrap_err());
     };
-    let high = hi.unwrap();
+    const high = hi.unwrap();
 
     if (high < SurrogateMin || high > SurrogateMax) {
       return Result.Ok(Rune.from_u32_unchecked(high));
@@ -576,29 +576,29 @@ implement JsonParser {
       return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
     };
 
-    let slash = self.peek();
+    const slash = self.peek();
     if (slash.is_none() || slash.unwrap() != @as(char, 92)) {
       return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
     };
     self.bump();
 
-    let marker = self.peek();
+    const marker = self.peek();
     if (marker.is_none() || marker.unwrap() != 'u') {
       return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
     };
     self.bump();
 
-    let lo = self.parse_hex4();
+    const lo = self.parse_hex4();
     if (lo.is_err()) {
       return Result.Err(lo.unwrap_err());
     };
-    let low = lo.unwrap();
+    const low = lo.unwrap();
 
     if (low < SurrogateLowMin || low > SurrogateMax) {
       return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
     };
 
-    let value = 0x10000 + ((high - SurrogateMin) << 10) + (low - SurrogateLowMin);
+    const value = 0x10000 + ((high - SurrogateMin) << 10) + (low - SurrogateLowMin);
 
     return Result.Ok(Rune.from_u32_unchecked(value));
   }
@@ -607,11 +607,11 @@ implement JsonParser {
     let value: u32 = 0;
     let i: i32 = 0;
     while (i < 4) {
-      let head = self.peek();
+      const head = self.peek();
       if (head.is_none()) {
         return Result.Err(JsonError { .kind = JsonErrorKind.UnexpectedEnd, .pos = self.pos });
       };
-      let digit = JsonParser.hex_value(head.unwrap());
+      const digit = JsonParser.hex_value(head.unwrap());
       if (digit.is_none()) {
         return Result.Err(JsonError { .kind = JsonErrorKind.InvalidEscape, .pos = self.pos });
       };
@@ -623,7 +623,7 @@ implement JsonParser {
   }
 
   fn hex_value(c: char) Option[u32] {
-    let code = @as(u32, c);
+    const code = @as(u32, c);
     if (code >= @as(u32, '0') && code <= @as(u32, '9')) {
       return Option.Some(code - @as(u32, '0'));
     };
@@ -637,7 +637,7 @@ implement JsonParser {
   }
 
   fn parse_number(*self) Result[JsonValue, JsonError] {
-    let start = self.pos;
+    const start = self.pos;
 
     if (self.peek_is('-')) {
       self.bump();
@@ -653,7 +653,7 @@ implement JsonParser {
       };
     };
 
-    let mark = self.peek();
+    const mark = self.peek();
     if (mark.is_some() && (mark.unwrap() == 'e' || mark.unwrap() == 'E')) {
       self.bump();
       if (self.peek_is('-') || self.peek_is('+')) {
@@ -668,7 +668,7 @@ implement JsonParser {
   }
 
   fn take_int_part(*self) bool {
-    let c = self.peek();
+    const c = self.peek();
     if (c.is_none()) {
       return false;
     };
@@ -680,9 +680,9 @@ implement JsonParser {
   }
 
   fn take_digits(*self) bool {
-    let start = self.pos;
+    const start = self.pos;
     while (self.pos < self.text.len) {
-      let c = self.text[self.pos];
+      const c = self.text[self.pos];
       if (!JsonParser.is_digit(c)) {
         break;
       };
@@ -692,7 +692,7 @@ implement JsonParser {
   }
 
   fn is_digit(c: char) bool {
-    let code = @as(u32, c);
+    const code = @as(u32, c);
     return code >= @as(u32, '0') && code <= @as(u32, '9');
   }
 }

@@ -52,7 +52,7 @@ implement Headers {
 }
 
 fn lower_byte(c: char) char {
-  let v = @as(u32, c);
+  const v = @as(u32, c);
 
   if (v >= @as(u32, 'A') && v <= @as(u32, 'Z')) {
     return @as(char, v + 32);
@@ -704,14 +704,14 @@ implement HttpServer {
 }
 
 fn parse_request(head: *String, stream: *TcpStream) Result[Request, IoError] {
-  let lines = (*head).split('\n');
+  const lines = (*head).split('\n');
 
   if (lines.is_empty()) {
     return Result.Err(IoError.new(IoErrorKind.InvalidData, "empty request"));
   };
 
-  let request_line = String.from(lines.get_ptr(0).unwrap().trim_end());
-  let parts = request_line.split(' ');
+  const request_line = String.from(lines.get_ptr(0).unwrap().trim_end());
+  const parts = request_line.split(' ');
 
   switch (parts.get_ptr(0)) {
     .Some(_) => {},
@@ -727,17 +727,17 @@ fn parse_request(head: *String, stream: *TcpStream) Result[Request, IoError] {
     },
   };
 
-  let method = parse_method(parts.get_ptr(0).unwrap());
-  let path = parts.get_ptr(1).unwrap().clone();
+  const method = parse_method(parts.get_ptr(0).unwrap());
+  const path = parts.get_ptr(1).unwrap().clone();
 
-  let headers = Headers { .inner = List#[Header].new() };
+  const headers = Headers { .inner = List#[Header].new() };
   let mut_headers = headers;
   let i: usize = 1;
 
   while (i < lines.len()) {
     switch (lines.get_ptr(i)) {
       .Some(line) => {
-        let text = (*line).trim_end();
+        const text = (*line).trim_end();
 
         if (text.len == 0) {
           break;
@@ -745,7 +745,7 @@ fn parse_request(head: *String, stream: *TcpStream) Result[Request, IoError] {
 
         switch (find_colon(text)) {
           .Some(at) => {
-            let vs = at + 1;
+            const vs = at + 1;
             mut_headers.push(String.from(trim_view(text.ptr, at)), String.from(trim_view(text.ptr + vs, text.len - vs)));
           },
           .None => {
@@ -785,7 +785,7 @@ fn parse_request(head: *String, stream: *TcpStream) Result[Request, IoError] {
       return Result.Err(IoError.new(IoErrorKind.InvalidData, "bad request"));
     },
   };
-  let buffered = (*head).len() - from;
+  const buffered = (*head).len() - from;
   let body = String.from((*head).slice(..)[from..(*head).len()]);
 
   if (buffered < need) {
@@ -876,27 +876,27 @@ fn trim_view(ptr: [*]const char, len: usize) []const char {
 }
 
 fn parse_digits(s: *const String) Option[usize] {
-  let len = (*s).len();
+  const len = (*s).len();
 
   if (len == 0) {
     return Option.None;
   };
 
-  let max: u64 = @as(u64, MaxRequestBodySize);
-  let cutoff = max / @as(u64, 10);
-  let cutlim = max % @as(u64, 10);
+  const max: u64 = @as(u64, MaxRequestBodySize);
+  const cutoff = max / @as(u64, 10);
+  const cutlim = max % @as(u64, 10);
 
   let num: u64 = 0;
   let i: usize = 0;
 
   while (i < len) {
-    let d = @as(u64, (*s).get(i).unwrap());
+    const d = @as(u64, (*s).get(i).unwrap());
 
     if (d < @as(u64, '0') || d > @as(u64, '9')) {
       return Option.None;
     };
 
-    let digit = d - @as(u64, '0');
+    const digit = d - @as(u64, '0');
 
     if (num > cutoff || (num == cutoff && digit > cutlim)) {
       return Option.None;

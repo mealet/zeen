@@ -60,7 +60,7 @@ implement File {
       return Result.Ok(File { .fd = -1, .handle = @as(*void, handle) });
     } else {
       let c = cpath(path);
-      let fd = open(@as([*]const char, c.slice(..).ptr), O_RDONLY, 0);
+      const fd = open(@as([*]const char, c.slice(..).ptr), O_RDONLY, 0);
 
       if (fd < 0) {
         return Result.Err(IoError.last_os_error());
@@ -98,7 +98,7 @@ implement File {
       return Result.Ok(File { .fd = -1, .handle = @as(*void, handle) });
     } else {
       let c = cpath(path);
-      let fd = open(@as([*]const char, c.slice(..).ptr), O_CREAT | O_WRONLY | O_TRUNC, 0o666);
+      const fd = open(@as([*]const char, c.slice(..).ptr), O_CREAT | O_WRONLY | O_TRUNC, 0o666);
 
       if (fd < 0) {
         return Result.Err(IoError.last_os_error());
@@ -140,7 +140,7 @@ implement File {
       return Result.Ok(@as(usize, got));
     } else {
       let chunk: [256]char = @uninit();
-      let got = read(self.fd, @as(*void, &chunk[0]), 256);
+      const got = read(self.fd, @as(*void, &chunk[0]), 256);
 
       if (got < 0) {
         return Result.Err(IoError.last_os_error());
@@ -209,7 +209,7 @@ implement File {
           want = n - total;
         };
 
-        let got = read(self.fd, @as(*void, &chunk[0]), want);
+        const got = read(self.fd, @as(*void, &chunk[0]), want);
 
         if (got < 0) {
           return Result.Err(IoError.last_os_error());
@@ -275,7 +275,7 @@ implement File {
 
       return Result.Ok(@as(usize, written));
     } else {
-      let n = write(self.fd, @as([*]const void, buf.ptr), buf.len);
+      const n = write(self.fd, @as([*]const void, buf.ptr), buf.len);
 
       if (n < 0) {
         return Result.Err(IoError.last_os_error());
@@ -295,7 +295,7 @@ implement File {
     let total: usize = 0;
 
     while (total < buf.len) {
-      let rest = buf[total..buf.len];
+      const rest = buf[total..buf.len];
 
       switch (self.write(rest)) {
         .Ok(n) => if (n == 0) {
@@ -518,7 +518,7 @@ implement OpenOptions {
       };
 
       let c = cpath(path);
-      let fd = open(@as([*]const char, c.slice(..).ptr), flags, @as(c_mode_t, self._mode));
+      const fd = open(@as([*]const char, c.slice(..).ptr), flags, @as(c_mode_t, self._mode));
 
       if (fd < 0) {
         return Result.Err(IoError.last_os_error());
@@ -566,7 +566,7 @@ implement Metadata {
 
 @os[linux | android | darwin | freebsd] {
   fn metadata_of(st: *const c_Stat) Metadata {
-    let kind = (*st).st_mode & S_IFMT;
+    const kind = (*st).st_mode & S_IFMT;
 
     Metadata {
       ._len = @as(u64, (*st).st_size),
@@ -865,7 +865,7 @@ pub struct Fs {
       return Result.Ok(out);
     } else {
       let c = cpath(path);
-      let dir = opendir(@as([*]const char, c.slice(..).ptr));
+      const dir = opendir(@as([*]const char, c.slice(..).ptr));
 
       if (dir == nullptr) {
         return Result.Err(IoError.last_os_error());
@@ -880,7 +880,7 @@ pub struct Fs {
           break;
         };
 
-        let raw = @as([*]const char, &(*e).d_name[0]);
+        const raw = @as([*]const char, &(*e).d_name[0]);
 
         if (raw[0] == '.') {
           if (raw[1] == '\0') {
@@ -898,7 +898,7 @@ pub struct Fs {
         full.push('/');
         full.push_str(name.slice(..));
 
-        let dtype = (*e).d_type;
+        const dtype = (*e).d_type;
 
         out.push(DirEntry {
           ._name = name,
