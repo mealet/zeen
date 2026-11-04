@@ -274,6 +274,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 self.expr_usage(condition, flags);
 
@@ -282,13 +283,24 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
 
                 self.stmt_usage(block, flags);
+
+                if let Some(else_block) = else_block {
+                    self.stmt_usage(else_block, flags);
+                }
             }
 
             StatementKind::For {
-                iterator, block, ..
+                iterator,
+                block,
+                else_block,
+                ..
             } => {
                 self.expr_usage(iterator, flags);
                 self.stmt_usage(block, flags);
+
+                if let Some(else_block) = else_block {
+                    self.stmt_usage(else_block, flags);
+                }
             }
 
             StatementKind::FnDecl(decl) => self.decl_usage(decl, flags),

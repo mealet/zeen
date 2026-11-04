@@ -1,0 +1,19 @@
+while finished 3
+while broke at 2
+range 0
+range 1
+range 2
+range finished
+range broke at 1
+array 1
+array 2
+array 3
+array finished
+slice 1
+slice broke at 2
+inner 1
+inner done for outer 1
+inner 1
+inner done for outer 2
+outer done
+update loop done at 4

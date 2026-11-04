@@ -345,18 +345,34 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         let mut stmt_parser = StmtParser::new(self.p).with_optional_semicolon(false);
         let block = stmt_parser.parse()?;
 
+        let else_block = self.parse_loop_else()?;
+
         let _ = self.p.eat(TokenKind::Semicolon);
+
+        let end_span = else_block.map_or(block.span, |else_block| else_block.span);
 
         let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::While {
                 condition,
                 update,
                 block,
+                else_block,
             },
-            span: while_kw.merge_span(block.span),
+            span: while_kw.merge_span(end_span),
         });
 
         Some(stmt)
+    }
+
+    fn parse_loop_else(&mut self) -> Option<Option<&'ctx Statement<'ctx>>> {
+        if !self.p.eat(TokenKind::Keyword(CompilerKeyword::Else)) {
+            return Some(None);
+        }
+
+        let mut stmt_parser = StmtParser::new(self.p).with_optional_semicolon(false);
+        let else_block = stmt_parser.parse()?;
+
+        Some(Some(else_block))
     }
 
     pub fn parse_loop_update(&mut self) -> Option<&'ctx Statement<'ctx>> {
@@ -414,15 +430,20 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         let mut stmt_parser = StmtParser::new(self.p).with_optional_semicolon(false);
         let block = stmt_parser.parse()?;
 
+        let else_block = self.parse_loop_else()?;
+
         let _ = self.p.eat(TokenKind::Semicolon);
+
+        let end_span = else_block.map_or(block.span, |else_block| else_block.span);
 
         let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::For {
                 varname: (varname_id, varname_span),
                 iterator,
                 block,
+                else_block,
             },
-            span: for_kw.merge_span(block.span),
+            span: for_kw.merge_span(end_span),
         });
 
         Some(stmt)
@@ -1045,7 +1066,8 @@ mod tests {
                     block: Statement {
                         kind: StatementKind::Let { .. },
                         ..
-                    }
+                    },
+                    else_block: _,
                 },
                 ..
             }
@@ -1103,6 +1125,7 @@ mod tests {
                         ..
                     }),
                     block: Statement { .. },
+                    else_block: _,
                 },
                 ..
             }
@@ -1125,6 +1148,56 @@ mod tests {
     }
 
     #[test]
+    fn while_else() {
+        const SRC: &str = "while (1 == 1) { let a = 123; } else { let b = 123; };";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::While {
+                    condition: _,
+                    update: _,
+                    block: Statement { .. },
+                    else_block: Some(Statement {
+                        kind: StatementKind::Expr(..),
+                        ..
+                    }),
+                },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn for_else() {
+        const SRC: &str = "for (i : 123) { let a = 123; } else { let b = 123; };";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::For {
+                    varname: _,
+                    iterator: _,
+                    block: Statement { .. },
+                    else_block: Some(Statement {
+                        kind: StatementKind::Expr(..),
+                        ..
+                    }),
+                },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
     fn while_block() {
         const SRC: &str = "while (1 == 1) { let a = 123; };";
 
@@ -1139,7 +1212,8 @@ mod tests {
                     block: Statement {
                         kind: StatementKind::Expr(..),
                         ..
-                    }
+                    },
+                    else_block: _,
                 },
                 ..
             }
@@ -1166,7 +1240,8 @@ mod tests {
                     block: Statement {
                         kind: StatementKind::Let { .. },
                         ..
-                    }
+                    },
+                    else_block: _,
                 },
                 ..
             }
@@ -1193,7 +1268,8 @@ mod tests {
                     block: Statement {
                         kind: StatementKind::Expr(..),
                         ..
-                    }
+                    },
+                    else_block: _,
                 },
                 ..
             }

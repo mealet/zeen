@@ -2097,6 +2097,7 @@ impl<'res> TypeChecker<'res> {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 let bool_ty = self.result.interner.builtin(BuiltinType::bool);
                 self.check_expr(condition, bool_ty, false);
@@ -2108,6 +2109,10 @@ impl<'res> TypeChecker<'res> {
                 self.ctx.enter_loop();
                 self.check_stmt(block);
                 self.ctx.exit_loop();
+
+                if let Some(else_block) = else_block {
+                    self.check_stmt(else_block);
+                }
             }
 
             HirStmtKind::For {
@@ -2115,6 +2120,7 @@ impl<'res> TypeChecker<'res> {
                 varname: _,
                 iterator,
                 block,
+                else_block,
             } => {
                 let iter_ty = self.synth_expr(iterator);
                 let elem_ty = match self.result.interner.get(iter_ty).clone() {
@@ -2158,6 +2164,10 @@ impl<'res> TypeChecker<'res> {
                 self.ctx.enter_loop();
                 self.check_stmt(block);
                 self.ctx.exit_loop();
+
+                if let Some(else_block) = else_block {
+                    self.check_stmt(else_block);
+                }
             }
 
             HirStmtKind::Break => {

@@ -1223,6 +1223,7 @@ impl<'ctx> NameResolver {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 self.collect_global_deps(condition, out);
 
@@ -1231,13 +1232,24 @@ impl<'ctx> NameResolver {
                 }
 
                 self.collect_global_stmt_deps(block, out);
+
+                if let Some(else_block) = else_block {
+                    self.collect_global_stmt_deps(else_block, out);
+                }
             }
 
             StatementKind::For {
-                iterator, block, ..
+                iterator,
+                block,
+                else_block,
+                ..
             } => {
                 self.collect_global_deps(iterator, out);
                 self.collect_global_stmt_deps(block, out);
+
+                if let Some(else_block) = else_block {
+                    self.collect_global_stmt_deps(else_block, out);
+                }
             }
 
             StatementKind::FnDecl(_) => {}
@@ -1716,6 +1728,7 @@ impl<'ctx> NameResolver {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 self.resolve_expr(condition);
 
@@ -1726,12 +1739,19 @@ impl<'ctx> NameResolver {
                 self.table.push(ScopeKind::Block);
                 self.resolve_stmt(block);
                 self.table.pop();
+
+                if let Some(else_block) = else_block {
+                    self.table.push(ScopeKind::Block);
+                    self.resolve_stmt(else_block);
+                    self.table.pop();
+                }
             }
 
             StatementKind::For {
                 varname,
                 iterator,
                 block,
+                else_block,
             } => {
                 self.resolve_expr(iterator);
 
@@ -1753,6 +1773,12 @@ impl<'ctx> NameResolver {
 
                 self.resolve_stmt(block);
                 self.table.pop();
+
+                if let Some(else_block) = else_block {
+                    self.table.push(ScopeKind::Block);
+                    self.resolve_stmt(else_block);
+                    self.table.pop();
+                }
             }
 
             StatementKind::FnDecl(decl) => {

@@ -1161,6 +1161,7 @@ impl<'arena> Interp<'arena> {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 let new_condition = self.capture_expr(module, condition)?;
 
@@ -1171,9 +1172,15 @@ impl<'arena> Interp<'arena> {
 
                 let new_block = self.capture_statement(module, block)?;
 
+                let new_else = match else_block {
+                    Some(else_block) => Some(self.capture_statement(module, else_block)?),
+                    None => None,
+                };
+
                 if unchanged(condition, new_condition)
                     && option_unchanged(update, new_update)
                     && unchanged(block, new_block)
+                    && option_unchanged(else_block, new_else)
                 {
                     return Ok(stmt);
                 }
@@ -1183,6 +1190,7 @@ impl<'arena> Interp<'arena> {
                         condition: new_condition,
                         update: new_update,
                         block: new_block,
+                        else_block: new_else,
                     },
                     span: stmt.span,
                 }))
@@ -1192,11 +1200,20 @@ impl<'arena> Interp<'arena> {
                 varname,
                 iterator,
                 block,
+                else_block,
             } => {
                 let new_iterator = self.capture_expr(module, iterator)?;
                 let new_block = self.capture_statement(module, block)?;
 
-                if unchanged(iterator, new_iterator) && unchanged(block, new_block) {
+                let new_else = match else_block {
+                    Some(else_block) => Some(self.capture_statement(module, else_block)?),
+                    None => None,
+                };
+
+                if unchanged(iterator, new_iterator)
+                    && unchanged(block, new_block)
+                    && option_unchanged(else_block, new_else)
+                {
                     return Ok(stmt);
                 }
 
@@ -1205,6 +1222,7 @@ impl<'arena> Interp<'arena> {
                         varname,
                         iterator: new_iterator,
                         block: new_block,
+                        else_block: new_else,
                     },
                     span: stmt.span,
                 }))

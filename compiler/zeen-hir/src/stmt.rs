@@ -46,6 +46,7 @@ pub enum HirStmtKind {
         condition: Rc<HirExpr>,
         update: Option<Rc<HirStmt>>,
         block: Rc<HirStmt>,
+        else_block: Option<Rc<HirStmt>>,
     },
 
     For {
@@ -53,6 +54,7 @@ pub enum HirStmtKind {
         varname: (Spur, SourceSpan),
         iterator: Rc<HirExpr>,
         block: Rc<HirStmt>,
+        else_block: Option<Rc<HirStmt>>,
     },
 
     Expr(Rc<HirExpr>),

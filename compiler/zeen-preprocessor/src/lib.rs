@@ -534,20 +534,24 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 condition,
                 update,
                 block,
+                else_block,
             } => StatementKind::While {
                 condition: self.resolve_expr(condition),
                 update: update.map(|update| self.resolve_stmt(update)),
                 block: self.resolve_stmt(block),
+                else_block: else_block.map(|else_block| self.resolve_stmt(else_block)),
             },
 
             StatementKind::For {
                 varname,
                 iterator,
                 block,
+                else_block,
             } => StatementKind::For {
                 varname,
                 iterator: self.resolve_expr(iterator),
                 block: self.resolve_stmt(block),
+                else_block: else_block.map(|else_block| self.resolve_stmt(else_block)),
             },
 
             StatementKind::Expr(expr) => StatementKind::Expr(self.resolve_expr(expr)),

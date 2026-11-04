@@ -1227,6 +1227,7 @@ impl<'arena> Interp<'arena> {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 self.depth += 1;
                 if self.depth > DEPTH_LIMIT {
@@ -1238,6 +1239,8 @@ impl<'arena> Interp<'arena> {
                     });
                     return Err(Unwind::Break);
                 }
+
+                let mut broke = false;
 
                 loop {
                     let keep_going = match self.eval_expr(condition)? {
@@ -1262,14 +1265,20 @@ impl<'arena> Interp<'arena> {
 
                     match self.eval_statement(block) {
                         Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                        Err(Unwind::Break) => break,
+                        Err(Unwind::Break) => {
+                            broke = true;
+                            break;
+                        }
                         Err(Unwind::Continue) | Ok(_) => {}
                     }
 
                     if let Some(update) = update {
                         match self.eval_statement(update) {
                             Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                            Err(Unwind::Break) => break,
+                            Err(Unwind::Break) => {
+                                broke = true;
+                                break;
+                            }
                             Err(Unwind::Continue) => continue,
                             Ok(_) => {}
                         }
@@ -1277,6 +1286,14 @@ impl<'arena> Interp<'arena> {
                 }
 
                 self.depth -= 1;
+
+                if !broke && let Some(else_block) = else_block {
+                    match self.eval_statement(else_block) {
+                        Ok(_) => {}
+                        Err(unwind) => return Err(unwind),
+                    }
+                }
+
                 Ok(None)
             }
 
@@ -1284,7 +1301,8 @@ impl<'arena> Interp<'arena> {
                 varname,
                 iterator,
                 block,
-            } => self.eval_for_statement(varname.0, iterator, block, stmt.span),
+                else_block,
+            } => self.eval_for_statement(varname.0, iterator, block, *else_block, stmt.span),
 
             StatementKind::Expr(expr) => match self.eval_expr(expr) {
                 Ok(value) => Ok(Some(value)),
@@ -1322,6 +1340,7 @@ impl<'arena> Interp<'arena> {
         name: Spur,
         iterator: &'arena Expression<'arena>,
         block: &'arena Statement<'arena>,
+        else_block: Option<&'arena Statement<'arena>>,
         span: miette::SourceSpan,
     ) -> StmtResult<'arena> {
         self.depth += 1;
@@ -1385,7 +1404,15 @@ impl<'arena> Interp<'arena> {
         self.depth -= 1;
 
         match outcome {
-            Ok(()) => Ok(None),
+            Ok(true) => {
+                if let Some(else_block) = else_block {
+                    self.eval_statement(else_block)?;
+                }
+
+                Ok(None)
+            }
+
+            Ok(false) => Ok(None),
             Err(unwind) => Err(unwind),
         }
     }
@@ -1398,7 +1425,7 @@ impl<'arena> Interp<'arena> {
         inclusive: bool,
         block: &'arena Statement<'arena>,
         span: miette::SourceSpan,
-    ) -> Result<(), Unwind<'arena>> {
+    ) -> Result<bool, Unwind<'arena>> {
         let start = match start {
             Some(Value::Int(value)) => value,
             Some(other) => {
@@ -1447,7 +1474,7 @@ impl<'arena> Interp<'arena> {
         name: Spur,
         values: Vec<Value<'arena>>,
         block: &'arena Statement<'arena>,
-    ) -> Result<(), Unwind<'arena>> {
+    ) -> Result<bool, Unwind<'arena>> {
         for value in values {
             {
                 let frame = self.frames.last_mut().expect("comptime frame");
@@ -1457,13 +1484,13 @@ impl<'arena> Interp<'arena> {
 
             match self.eval_statement(block) {
                 Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                Err(Unwind::Break) => break,
+                Err(Unwind::Break) => return Ok(false),
                 Err(Unwind::Continue) => continue,
                 Ok(_) => {}
             }
         }
 
-        Ok(())
+        Ok(true)
     }
 
     fn eval_ident_value(&mut self, name: Spur, span: miette::SourceSpan) -> EvalResult<'arena> {

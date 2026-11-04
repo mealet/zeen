@@ -485,6 +485,96 @@ fn main() {
 }
 
 #[test]
+fn loop_else_runs_on_natural_completion() {
+    let source = r#"comptime fn totals() comptime_int {
+  let sum = 0;
+  let i = 0;
+
+  while (i < 3) {
+    sum += i;
+    i += 1;
+  } else {
+    sum += 10;
+  }
+
+  for (x : 3) {
+    sum += x;
+  } else {
+    sum += 100;
+  }
+
+  let j = 0;
+
+  while (j < 2) : (j += 1) {
+    if (j == 0) {
+      continue;
+    }
+
+    sum += 1;
+  } else {
+    sum += 20;
+  }
+
+  return sum;
+}
+
+fn main() {
+  comptime {
+    @println("{}", totals());
+  };
+}
+"#;
+
+    let result = compile("loop_else_natural", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("137"), "stdout: {}", result.stdout);
+}
+
+#[test]
+fn loop_else_skipped_by_break() {
+    let source = r#"comptime fn totals() comptime_int {
+  let sum = 0;
+  let i = 0;
+
+  while (i < 10) {
+    if (i == 1) {
+      break;
+    }
+
+    sum += 1;
+    i += 1;
+  } else {
+    sum += 1000;
+  }
+
+  for (x : 10) {
+    if (x == 2) {
+      break;
+    }
+
+    sum += 1;
+  } else {
+    sum += 1000;
+  }
+
+  return sum;
+}
+
+fn main() {
+  comptime {
+    @println("{}", totals());
+  };
+}
+"#;
+
+    let result = compile("loop_else_break", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(result.stdout.contains("3"), "stdout: {}", result.stdout);
+}
+
+#[test]
 fn rejects_step_limit() {
     let source = r#"comptime fn spin() comptime_int {
   let i = 0;

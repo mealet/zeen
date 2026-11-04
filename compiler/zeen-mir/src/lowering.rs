@@ -754,6 +754,7 @@ impl<'ctx> MirLowering<'ctx> {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 self.collect_global_expr_deps(condition, out);
 
@@ -762,12 +763,23 @@ impl<'ctx> MirLowering<'ctx> {
                 }
 
                 self.collect_global_stmt_deps(block, out);
+
+                if let Some(else_block) = else_block {
+                    self.collect_global_stmt_deps(else_block, out);
+                }
             }
             HirStmtKind::For {
-                iterator, block, ..
+                iterator,
+                block,
+                else_block,
+                ..
             } => {
                 self.collect_global_expr_deps(iterator, out);
                 self.collect_global_stmt_deps(block, out);
+
+                if let Some(else_block) = else_block {
+                    self.collect_global_stmt_deps(else_block, out);
+                }
             }
             HirStmtKind::Expr(expr) => self.collect_global_expr_deps(expr, out),
             HirStmtKind::Break
@@ -8833,6 +8845,7 @@ impl<'ctx> MirLowering<'ctx> {
                 condition,
                 update,
                 block: body,
+                else_block,
             } => {
                 let header = fb.new_block();
                 fb.set_terminator(block, Terminator::Goto(header));
@@ -8841,13 +8854,14 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let body_bb = fb.new_block();
                 let exit_bb = fb.new_block();
+                let natural_bb = else_block.as_ref().map_or(exit_bb, |_| fb.new_block());
 
                 fb.set_terminator(
                     cond_end,
                     Terminator::SwitchInt {
                         discriminant: cond_operand,
                         targets: vec![(1, body_bb)],
-                        otherwise: exit_bb,
+                        otherwise: natural_bb,
                     },
                 );
 
@@ -8871,6 +8885,11 @@ impl<'ctx> MirLowering<'ctx> {
                     None => fb.join_if_open(body_end, header),
                 }
 
+                if let Some(else_block) = else_block {
+                    let else_end = self.lower_stmt_as_block_value(fb, else_block, natural_bb).0;
+                    fb.join_if_open(else_end, exit_bb);
+                }
+
                 exit_bb
             }
 
@@ -8878,6 +8897,7 @@ impl<'ctx> MirLowering<'ctx> {
                 def_id,
                 iterator,
                 block: body,
+                else_block,
                 ..
             } => {
                 let (block, iter_ty) = {
@@ -8885,23 +8905,35 @@ impl<'ctx> MirLowering<'ctx> {
                     (block, ty)
                 };
 
+                let exit_bb = fb.new_block();
+                let natural_bb = else_block.as_ref().map_or(exit_bb, |_| fb.new_block());
+
                 match self.typecheck.interner.get(iter_ty).clone() {
                     Type::Builtin(b) if builtin_is_integer(b) => {
-                        self.lower_for_range(fb, def_id, iterator, body, block)
+                        self.lower_for_range(fb, def_id, iterator, body, block, exit_bb, natural_bb)
                     }
 
-                    Type::IntLiteral => self.lower_for_range(fb, def_id, iterator, body, block),
-
-                    Type::Array { .. } | Type::Slice { .. } => {
-                        self.lower_for_iterable(fb, def_id, iterator, iter_ty, body, block)
+                    Type::IntLiteral => {
+                        self.lower_for_range(fb, def_id, iterator, body, block, exit_bb, natural_bb)
                     }
 
-                    Type::Struct { .. } => {
-                        self.lower_for_iterator(fb, def_id, iterator, iter_ty, body, block, stmt.id)
-                    }
+                    Type::Array { .. } | Type::Slice { .. } => self.lower_for_iterable(
+                        fb, def_id, iterator, iter_ty, body, block, exit_bb, natural_bb,
+                    ),
+
+                    Type::Struct { .. } => self.lower_for_iterator(
+                        fb, def_id, iterator, iter_ty, body, block, exit_bb, natural_bb, stmt.id,
+                    ),
 
                     _ => panic!("non-iterable type passed Typechecker: {:?}", iter_ty),
+                };
+
+                if let Some(else_block) = else_block {
+                    let else_end = self.lower_stmt_as_block_value(fb, else_block, natural_bb).0;
+                    fb.join_if_open(else_end, exit_bb);
                 }
+
+                exit_bb
             }
 
             HirStmtKind::Return { value } => {
@@ -9005,6 +9037,7 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_for_range(
         &mut self,
         fb: &mut FnBuilder,
@@ -9012,6 +9045,8 @@ impl<'ctx> MirLowering<'ctx> {
         iterator: &HirExpr,
         body: &HirStmt,
         block: BlockId,
+        exit_bb: BlockId,
+        natural_bb: BlockId,
     ) -> BlockId {
         let (block, count_operand) = self.lower_expr_to_operand(fb, iterator, block);
 
@@ -9082,7 +9117,6 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         let body_bb = fb.new_block();
-        let exit_bb = fb.new_block();
         let continue_bb = fb.new_block();
 
         fb.set_terminator(
@@ -9090,7 +9124,7 @@ impl<'ctx> MirLowering<'ctx> {
             Terminator::SwitchInt {
                 discriminant: Operand::Move(Place::from_local(cmp_result), None),
                 targets: vec![(1, body_bb)],
-                otherwise: exit_bb,
+                otherwise: natural_bb,
             },
         );
 
@@ -9128,6 +9162,7 @@ impl<'ctx> MirLowering<'ctx> {
         exit_bb
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_for_iterable(
         &mut self,
         fb: &mut FnBuilder,
@@ -9136,6 +9171,8 @@ impl<'ctx> MirLowering<'ctx> {
         iter_ty: TypeId,
         body: &HirStmt,
         block: BlockId,
+        exit_bb: BlockId,
+        natural_bb: BlockId,
     ) -> BlockId {
         let (block, iter_place) = self.lower_expr_to_place_or_temp(fb, iterator, block);
 
@@ -9208,7 +9245,6 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         let body_bb = fb.new_block();
-        let exit_bb = fb.new_block();
         let continue_bb = fb.new_block();
 
         fb.set_terminator(
@@ -9216,7 +9252,7 @@ impl<'ctx> MirLowering<'ctx> {
             Terminator::SwitchInt {
                 discriminant: Operand::Move(Place::from_local(cmp_result), None),
                 targets: vec![(1, body_bb)],
-                otherwise: exit_bb,
+                otherwise: natural_bb,
             },
         );
 
@@ -9301,6 +9337,8 @@ impl<'ctx> MirLowering<'ctx> {
         iter_ty: TypeId,
         body: &HirStmt,
         block: BlockId,
+        exit_bb: BlockId,
+        natural_bb: BlockId,
         stmt_id: HirId,
     ) -> BlockId {
         let Type::Struct {
@@ -9399,13 +9437,12 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         let body_bb = fb.new_block();
-        let exit_bb = fb.new_block();
         fb.set_terminator(
             check_block,
             Terminator::SwitchInt {
                 discriminant: Operand::Move(Place::from_local(tag_local), None),
                 targets: vec![(some_tag as u128, body_bb)],
-                otherwise: exit_bb,
+                otherwise: natural_bb,
             },
         );
 
