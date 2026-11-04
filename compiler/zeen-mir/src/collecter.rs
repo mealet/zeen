@@ -217,6 +217,8 @@ fn collect_from_expr(expr: &zeen_hir::expr::HirExpr, map: &mut HashMap<DefId, Rc
             collect_from_expr(len, map);
         }
 
+        HirExprKind::Try { expr } => collect_from_expr(expr, map),
+
         HirExprKind::Closure { def_id, def } => {
             map.insert(*def_id, def.clone());
 

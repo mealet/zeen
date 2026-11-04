@@ -1,0 +1,32 @@
+fn maybe(flag: bool, value: i32) Option[i32] {
+  if (flag) {
+    return Option.Some(value);
+  }
+
+  return Option.None;
+}
+
+fn consume(value: i32) Option[i32] {
+  return Option.Some(value * 2);
+}
+
+fn call(flag: bool) Option[i32] {
+  let result = consume(maybe(flag, 5)?)?;
+
+  return Option.Some(result);
+}
+
+fn main() {
+  let ok = call(true);
+  let none = call(false);
+
+  switch (ok) {
+    .Some(value) => @println("ok: {}", value),
+    .None => @println("ok: none"),
+  };
+
+  switch (none) {
+    .Some(value) => @println("none: {}", value),
+    .None => @println("none: none"),
+  };
+}

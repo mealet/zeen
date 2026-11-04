@@ -723,6 +723,7 @@ impl<'ctx> MirLowering<'ctx> {
                     self.collect_global_expr_deps(&arm.body, out);
                 }
             }
+            HirExprKind::Try { expr: inner } => self.collect_global_expr_deps(inner, out),
             HirExprKind::Literal(_)
             | HirExprKind::GenericParamRef(_)
             | HirExprKind::Type(_)
@@ -4545,6 +4546,7 @@ impl<'ctx> MirLowering<'ctx> {
             HirExprKind::Switch { object, arms } => {
                 self.lower_switch(fb, object, arms, expr, block)
             }
+            HirExprKind::Try { expr: inner } => self.lower_try(fb, inner, expr, block),
             HirExprKind::Type(_) => unreachable!(),
 
             HirExprKind::Closure { def_id, .. } => {
@@ -4887,6 +4889,126 @@ impl<'ctx> MirLowering<'ctx> {
             join,
             Operand::Move(Place::from_local(result_local), Some(expr.source.clone())),
         )
+    }
+
+    fn lower_try(
+        &mut self,
+        fb: &mut FnBuilder,
+        inner: &HirExpr,
+        expr: &HirExpr,
+        block: BlockId,
+    ) -> (BlockId, Operand) {
+        let (block, place) = self.lower_expr_to_place_or_temp(fb, inner, block);
+        let inner_ty = self.expr_type(fb, inner);
+        let ret_ty = fb.func.ret_ty;
+
+        let Type::Enum {
+            def_id,
+            generic_args,
+        } = self.typecheck.interner.get(inner_ty).clone()
+        else {
+            unreachable!("typechecker rejects `?` on non enum values");
+        };
+
+        self.register_enum_layout(inner_ty, def_id);
+        self.register_enum_layout(ret_ty, def_id);
+
+        let is_result = generic_args.len() > 1;
+
+        let (success_variant, failure_variant) = if is_result {
+            (
+                self.enum_variant_by_name(def_id, "Ok")
+                    .expect("core.result `Result` must declare Ok and Err"),
+                self.enum_variant_by_name(def_id, "Err")
+                    .expect("core.result `Result` must declare Ok and Err"),
+            )
+        } else {
+            (
+                self.enum_variant_by_name(def_id, "Some")
+                    .expect("core.option `Option` must declare None and Some"),
+                self.enum_variant_by_name(def_id, "None")
+                    .expect("core.option `Option` must declare None and Some"),
+            )
+        };
+
+        let tag_ty = self
+            .typecheck
+            .interner
+            .intern(Type::Builtin(zeen_ast::types::BuiltinType::u8));
+        let tag_local = fb.new_temp(tag_ty);
+
+        fb.push_stmt(
+            block,
+            MirStatement::Assign {
+                place: Place::from_local(tag_local),
+                rvalue: Rvalue::Discriminant(place.clone()),
+                source: Some(expr.source.clone()),
+            },
+        );
+
+        let success_bb = fb.new_block();
+        let failure_bb = fb.new_block();
+
+        fb.set_terminator(
+            block,
+            Terminator::SwitchInt {
+                discriminant: Operand::Copy(Place::from_local(tag_local), None),
+                targets: vec![(
+                    self.enum_variant_tag(def_id, success_variant) as u128,
+                    success_bb,
+                )],
+                otherwise: failure_bb,
+            },
+        );
+
+        let error_operand = if is_result {
+            let error_ty = generic_args[1];
+            let error_place = place.clone().enum_payload(failure_variant);
+            let error = self.place_to_operand(error_place, error_ty, Some(expr.source.clone()));
+
+            vec![error]
+        } else {
+            Vec::new()
+        };
+
+        let failure_local = fb.new_temp(ret_ty);
+        fb.push_stmt(
+            failure_bb,
+            MirStatement::Assign {
+                place: Place::from_local(failure_local),
+                rvalue: Rvalue::Aggregate {
+                    kind: AggregateKind::Enum {
+                        enum_def: def_id,
+                        variant_def: failure_variant,
+                    },
+                    operands: error_operand,
+                },
+                source: Some(expr.source.clone()),
+            },
+        );
+
+        let failure_operand =
+            Operand::Move(Place::from_local(failure_local), Some(expr.source.clone()));
+        let failure_operand = self.normalize_return_operand(fb, failure_operand);
+
+        fb.set_terminator(failure_bb, Terminator::Return(failure_operand));
+
+        let success_ty = generic_args[0];
+        let success_place = place.enum_payload(success_variant);
+        let success_operand =
+            self.place_to_operand(success_place, success_ty, Some(expr.source.clone()));
+
+        (success_bb, success_operand)
+    }
+
+    fn enum_variant_by_name(&self, enum_def: DefId, name: &str) -> Option<DefId> {
+        let info = self.enum_info(enum_def)?;
+        let rodeo = self.rodeo.borrow();
+
+        info.variants
+            .iter()
+            .find(|variant| rodeo.resolve(&variant.name) == name)
+            .map(|variant| variant.def_id)
     }
 
     fn arm_literals(pattern: &HirPattern) -> Vec<Literal> {

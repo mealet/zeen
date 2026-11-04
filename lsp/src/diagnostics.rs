@@ -1013,6 +1013,19 @@ mod tests {
     }
 
     #[test]
+    fn try_operator_checks_cleanly() {
+        let text = "fn maybe(flag: bool) Option[i32] {\n    if (flag) {\n        return Option.Some(1);\n    }\n\n    return Option.None;\n}\n\nfn caller(flag: bool) Option[i32] {\n    let value = maybe(flag)?;\n\n    return Option.Some(value + 1);\n}\n\nfn main() {}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-try-operator.zn").unwrap();
+        let output = check(&uri, text, &[]);
+
+        assert!(
+            only_errors(&output.diagnostics).is_empty(),
+            "{:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
     fn module_marker_silences_warnings() {
         let unsuppressed =
             "fn helper() i32 {\n    return 1;\n}\n\nfn main() i32 {\n    return 0;\n}\n";

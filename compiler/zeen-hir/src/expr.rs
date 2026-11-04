@@ -105,6 +105,10 @@ pub enum HirExprKind {
         inclusive: bool,
     },
 
+    Try {
+        expr: Rc<HirExpr>,
+    },
+
     Error,
 }
 

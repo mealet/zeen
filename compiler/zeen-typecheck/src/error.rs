@@ -1115,4 +1115,37 @@ pub enum TypeError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("operator `?` requires `Option[T]` or `Result[T, E]`, found `{ty}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::try_requires_option_or_result),
+        help("apply `?` to an owned `Option` or `Result` value")
+    )]
+    TryRequiresOptionOrResult {
+        ty: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("operator `?` cannot propagate `{ty}` from a function returning `{ret}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::try_return_type_mismatch),
+        help(
+            "the function must return the same enum, and `Result` error types must match exactly"
+        )
+    )]
+    TryReturnTypeMismatch {
+        ty: SmolStr,
+        ret: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }

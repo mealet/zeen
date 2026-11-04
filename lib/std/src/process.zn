@@ -532,13 +532,7 @@ implement Command {
   }
 
   pub fn status(*const self) Result[ExitStatus, IoError] {
-    const spawned = self.spawn();
-
-    if (spawned.is_err()) {
-      return Result.Err(spawned.unwrap_err());
-    };
-
-    return spawned.unwrap().wait();
+    return self.spawn()?.wait();
   }
 
   pub fn output(*self) Result[Output, IoError] {

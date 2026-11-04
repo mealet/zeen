@@ -1,0 +1,29 @@
+fn step(flag: bool) Result[void, i32] {
+  if (flag) {
+    return Result.Ok(.{ });
+  }
+
+  return Result.Err(3);
+}
+
+fn chain(flag: bool) Result[void, i32] {
+  step(flag)?;
+  step(false)?;
+
+  return Result.Ok(.{ });
+}
+
+fn main() {
+  let first = chain(true);
+  let second = chain(false);
+
+  switch (first) {
+    .Ok(_) => @println("first: ok"),
+    .Err(code) => @println("first: err {}", code),
+  };
+
+  switch (second) {
+    .Ok(_) => @println("second: ok"),
+    .Err(code) => @println("second: err {}", code),
+  };
+}

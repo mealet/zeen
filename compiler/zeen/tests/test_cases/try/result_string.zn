@@ -1,0 +1,20 @@
+use std.string;
+
+fn fail() Result[i32, String] {
+  return Result.Err(String.from("boom"));
+}
+
+fn relay() Result[i32, String] {
+  let value = fail()?;
+
+  return Result.Ok(value + 1);
+}
+
+fn main() {
+  let result = relay();
+
+  switch (result) {
+    .Ok(value) => @println("ok: {}", value),
+    .Err(message) => @println("err: {}", message),
+  };
+}

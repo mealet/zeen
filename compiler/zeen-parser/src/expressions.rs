@@ -392,12 +392,23 @@ impl<'tok, 'ctx, 'pr> ExprParser<'tok, 'ctx, 'pr> {
                     self.parse_struct_init_fields(expr)?
                 }
                 TokenKind::Dot => self.parse_field_access(expr)?,
+                TokenKind::Question => self.parse_try(expr)?,
 
                 _ => break,
             }
         }
 
         Some(expr)
+    }
+
+    fn parse_try(&mut self, expr: &'ctx Expression<'ctx>) -> Option<&'ctx Expression<'ctx>> {
+        let span = self.p.current().span;
+        let _ = self.p.advance_not_eof()?;
+
+        Some(self.p.arena.alloc(Expression {
+            kind: ExpressionKind::Try { expr },
+            span: expr.merge_span(span),
+        }))
     }
 
     fn parse_primary(&mut self) -> Option<&'ctx Expression<'ctx>> {
@@ -2650,6 +2661,28 @@ mod tests {
         make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
 
         assert!(expr_parser.parse().is_some());
+
+        assert!(expr_parser.parse().is_none());
+    }
+
+    #[test]
+    fn try_postfix() {
+        const SRC: &str = "call()?.field";
+
+        make_expr_parser!(SRC, tokens, bump, rodeo, parser, expr_parser);
+
+        let expr = expr_parser.parse().unwrap();
+
+        assert!(matches!(
+            expr.kind,
+            ExpressionKind::FieldAccess {
+                object: &Expression {
+                    kind: ExpressionKind::Try { .. },
+                    ..
+                },
+                ..
+            }
+        ));
 
         assert!(expr_parser.parse().is_none());
     }

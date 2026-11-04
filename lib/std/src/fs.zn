@@ -238,16 +238,13 @@ implement File {
     let total: usize = 0;
 
     while (true) {
-      switch (self.read(buf)) {
-        .Ok(got) => if (got == 0) {
-          break;
-        } else {
-          total += got;
-        },
-        .Err(e) => {
-          return Result.Err(e);
-        },
-      };
+      const got = self.read(buf)?;
+
+      if (got == 0) {
+        break;
+      } else {
+        total += got;
+      }
     };
 
     return Result.Ok(total);
@@ -297,16 +294,13 @@ implement File {
     while (total < buf.len) {
       const rest = buf[total..buf.len];
 
-      switch (self.write(rest)) {
-        .Ok(n) => if (n == 0) {
-          return Result.Err(IoError.new(IoErrorKind.WriteZero, "failed to write whole buffer"));
-        } else {
-          total += n;
-        },
-        .Err(e) => {
-          return Result.Err(e);
-        },
-      };
+      const n = self.write(rest)?;
+
+      if (n == 0) {
+        return Result.Err(IoError.new(IoErrorKind.WriteZero, "failed to write whole buffer"));
+      } else {
+        total += n;
+      }
     };
 
     return Result.Ok(total);

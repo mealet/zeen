@@ -413,6 +413,19 @@ impl<'arena> Interp<'arena> {
                 unreachable!("conditional expressions are expanded before comptime")
             }
 
+            ExpressionKind::Try { expr: inner } => {
+                let new_inner = self.capture_expr(module, inner)?;
+
+                if option_unchanged(Some(inner), Some(new_inner)) {
+                    return Ok(expr);
+                }
+
+                Ok(self.arena.alloc(Expression {
+                    kind: ExpressionKind::Try { expr: new_inner },
+                    span: expr.span,
+                }))
+            }
+
             ExpressionKind::Splice { .. } => unreachable!("splices are expanded above"),
         }
     }
