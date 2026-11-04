@@ -259,6 +259,8 @@ impl<'a> Analyzer<'a> {
                 }
             }
 
+            HirExprKind::Try { expr: inner } => self.expr(inner, &Fate::Discard),
+
             HirExprKind::StructInit { fields, .. } => {
                 for field in fields {
                     self.expr(&field.value, &Fate::Escaping);

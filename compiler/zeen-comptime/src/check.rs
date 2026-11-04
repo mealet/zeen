@@ -365,6 +365,18 @@ impl<'arena> Checker<'_> {
 
             ExpressionKind::Splice { expr } => self.expression(expr, comptime),
 
+            ExpressionKind::Try { expr } => {
+                if comptime {
+                    self.errors.push(Error::Unsupported {
+                        message: "`?` is not supported in comptime code".into(),
+                        src: self.current_src(),
+                        span: expr.span,
+                    });
+                } else {
+                    self.expression(expr, comptime);
+                }
+            }
+
             ExpressionKind::ComptimeBlock { stmts, trailing } => {
                 for stmt in stmts.iter() {
                     self.statement(stmt, true);

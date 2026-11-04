@@ -116,6 +116,10 @@ pub enum ExpressionKind<'arena> {
         expr: &'arena Expression<'arena>,
     },
 
+    Try {
+        expr: &'arena Expression<'arena>,
+    },
+
     ComptimeBlock {
         stmts: &'arena [&'arena crate::statements::Statement<'arena>],
         trailing: Option<&'arena Expression<'arena>>,

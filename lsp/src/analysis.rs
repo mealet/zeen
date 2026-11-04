@@ -1997,6 +1997,8 @@ impl<'ctx> Walker<'ctx> {
                     self.walk_expr(end);
                 }
             }
+
+            HirExprKind::Try { expr: inner } => self.walk_expr(inner),
         }
     }
 
@@ -2666,6 +2668,8 @@ fn walk_syntax_expr(expr: &Expression<'_>, text: &str, occurrences: &mut Vec<Occ
         ExpressionKind::Decl(decl) => walk_syntax_decl(decl, false, text, occurrences),
 
         ExpressionKind::Splice { expr } => walk_syntax_expr(expr, text, occurrences),
+
+        ExpressionKind::Try { expr } => walk_syntax_expr(expr, text, occurrences),
 
         ExpressionKind::ComptimeBlock { stmts, trailing } => {
             let end = span_end(expr.span).min(text.len());

@@ -2202,6 +2202,15 @@ impl<'arena> Interp<'arena> {
 
             ExpressionKind::Splice { expr } => self.eval_expr(expr),
 
+            ExpressionKind::Try { .. } => {
+                self.errors.push(Error::Unsupported {
+                    message: "`?` is not supported in comptime code".into(),
+                    src: self.current_src(),
+                    span: expr.span,
+                });
+                Err(Unwind::Break)
+            }
+
             _ => {
                 self.errors.push(Error::Unsupported {
                     message: "expression is not supported in comptime".to_string().into(),

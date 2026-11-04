@@ -1519,6 +1519,14 @@ impl<'arena> Interp<'arena> {
                 }
             }
 
+            ExpressionKind::Try { expr: inner } => match self.substitute_expr(module, inner)? {
+                Some(new_inner) => Ok(Some(self.arena.alloc(Expression {
+                    kind: ExpressionKind::Try { expr: new_inner },
+                    span: expr.span,
+                }))),
+                None => Ok(None),
+            },
+
             other => {
                 let _ = other;
                 Ok(None)

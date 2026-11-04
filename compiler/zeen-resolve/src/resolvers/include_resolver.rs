@@ -464,6 +464,7 @@ impl<'ctx> IncludeResolver<'ctx> {
             }
 
             ExpressionKind::Splice { .. } => {}
+            ExpressionKind::Try { expr } => self.expr_usage(expr, flags),
         }
     }
 

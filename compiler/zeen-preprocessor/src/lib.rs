@@ -734,6 +734,10 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 expr: self.resolve_expr(expr),
             },
 
+            ExpressionKind::Try { expr } => ExpressionKind::Try {
+                expr: self.resolve_expr(expr),
+            },
+
             ExpressionKind::ConditionalBlock(_) => {
                 unreachable!("conditional expressions are expanded by resolve_expr")
             }

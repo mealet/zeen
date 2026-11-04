@@ -1010,6 +1010,10 @@ impl<'res> HirLowering<'res> {
                 unreachable!("comptime splice must be substituted before HIR lowering")
             }
 
+            ExpressionKind::Try { expr: inner } => HirExprKind::Try {
+                expr: Rc::new(self.lower_expr(inner)),
+            },
+
             ExpressionKind::ComptimeBlock { .. } => {
                 unreachable!("comptime blocks must be evaluated before HIR lowering")
             }

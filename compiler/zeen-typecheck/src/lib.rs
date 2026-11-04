@@ -2868,8 +2868,118 @@ impl<'res> TypeChecker<'res> {
 
                 self.result.interner.error()
             }
+            HirExprKind::Try { expr: inner } => self.check_try_expr(expr, inner),
+
             HirExprKind::Error => self.result.interner.error(),
         }
+    }
+
+    fn check_try_expr(&mut self, expr: &HirExpr, inner: &HirExpr) -> TypeId {
+        let inner_ty = self.synth_expr(inner);
+
+        if matches!(self.result.interner.get(inner_ty), Type::Error) {
+            return self.result.interner.error();
+        }
+
+        let Type::Enum {
+            def_id,
+            generic_args,
+        } = self.result.interner.get(inner_ty).clone()
+        else {
+            self.report(TypeError::TryRequiresOptionOrResult {
+                ty: self.display_type(inner_ty).into(),
+                src: expr.source.src(),
+                span: expr.source.span,
+            });
+
+            return self.result.interner.error();
+        };
+
+        let module = self
+            .resolution
+            .def_modules
+            .get(&def_id)
+            .cloned()
+            .unwrap_or_default();
+
+        let (success_ty, error_ty) = match module.as_str() {
+            "core.option" => match generic_args.first() {
+                Some(success) => (*success, None),
+                None => {
+                    self.report(TypeError::TryRequiresOptionOrResult {
+                        ty: self.display_type(inner_ty).into(),
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+
+                    return self.result.interner.error();
+                }
+            },
+
+            "core.result" => match (generic_args.first(), generic_args.get(1)) {
+                (Some(success), Some(error)) => (*success, Some(*error)),
+                _ => {
+                    self.report(TypeError::TryRequiresOptionOrResult {
+                        ty: self.display_type(inner_ty).into(),
+                        src: expr.source.src(),
+                        span: expr.source.span,
+                    });
+
+                    return self.result.interner.error();
+                }
+            },
+
+            _ => {
+                self.report(TypeError::TryRequiresOptionOrResult {
+                    ty: self.display_type(inner_ty).into(),
+                    src: expr.source.src(),
+                    span: expr.source.span,
+                });
+
+                return self.result.interner.error();
+            }
+        };
+
+        let Some(_) = self.ctx.current_fn_def() else {
+            self.report(TypeError::TryReturnTypeMismatch {
+                ty: self.display_type(inner_ty).into(),
+                ret: "no function".into(),
+                src: expr.source.src(),
+                span: expr.source.span,
+            });
+
+            return self.result.interner.error();
+        };
+
+        let return_ty = self.ctx.current().return_type;
+
+        if matches!(self.result.interner.get(return_ty), Type::Error) {
+            return success_ty;
+        }
+
+        let matches_family = match self.result.interner.get(return_ty).clone() {
+            Type::Enum {
+                def_id: ret_def,
+                generic_args: ret_args,
+            } if ret_def == def_id => match error_ty {
+                None => true,
+                Some(error) => ret_args.get(1) == Some(&error),
+            },
+            _ => false,
+        };
+
+        if !matches_family {
+            self.report(TypeError::TryReturnTypeMismatch {
+                ty: self.display_type(inner_ty).into(),
+                ret: self.display_type(return_ty).into(),
+                src: expr.source.src(),
+                span: expr.source.span,
+            });
+
+            return self.result.interner.error();
+        }
+
+        success_ty
     }
 
     fn check_block(
@@ -14033,6 +14143,169 @@ mod tests {
             "#,
         )
         .expect("or with a binding must typecheck");
+    }
+
+    #[test]
+    fn try_option_success_typechecks() {
+        let result = typecheck_full(
+            r#"
+            fn maybe(flag: bool) Option[i32] {
+                if (flag) {
+                    return Option.Some(1);
+                }
+
+                return Option.None;
+            }
+
+            fn caller(flag: bool) Option[i32] {
+                let value = maybe(flag)?;
+
+                return Option.Some(value + 1);
+            }
+
+            fn main() {}
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "`?` on Option must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn try_result_success_typechecks() {
+        let result = typecheck_full(
+            r#"
+            fn parse(value: i32) Result[i32, i32] {
+                if (value < 0) {
+                    return Result.Err(7);
+                }
+
+                return Result.Ok(value);
+            }
+
+            fn twice(value: i32) Result[i32, i32] {
+                let inner = parse(value)?;
+
+                return Result.Ok(inner * 2);
+            }
+
+            fn main() {}
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "`?` on Result must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn try_void_success_typechecks() {
+        let result = typecheck_full(
+            r#"
+            fn step(flag: bool) Result[void, i32] {
+                if (flag) {
+                    return Result.Ok(.{ });
+                }
+
+                return Result.Err(3);
+            }
+
+            fn chain(flag: bool) Result[void, i32] {
+                step(flag)?;
+
+                return Result.Ok(.{ });
+            }
+
+            fn main() {}
+            "#,
+        );
+
+        assert!(
+            result.is_ok(),
+            "`?` on Result[void, E] must typecheck: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn try_non_option_operand_is_reported() {
+        let errors = typecheck(
+            r#"
+            fn main() i32 {
+                let value = 1;
+                let x = value?;
+
+                return x;
+            }
+            "#,
+        )
+        .expect_err("`?` on a plain value must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::TryRequiresOptionOrResult { .. })),
+            "expected TryRequiresOptionOrResult, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn try_wrong_family_is_reported() {
+        let errors = typecheck_full(
+            r#"
+            fn maybe() Option[i32] {
+                return Option.Some(1);
+            }
+
+            fn caller() Result[i32, i32] {
+                let value = maybe()?;
+
+                return Result.Ok(value);
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("`?` with a different return family must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::TryReturnTypeMismatch { .. })),
+            "expected TryReturnTypeMismatch, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn try_error_type_mismatch_is_reported() {
+        let errors = typecheck_full(
+            r#"
+            fn fail() Result[i32, i32] {
+                return Result.Err(1);
+            }
+
+            fn caller() Result[i32, u8] {
+                let value = fail()?;
+
+                return Result.Ok(value);
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("`?` with a different error type must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::TryReturnTypeMismatch { .. })),
+            "expected TryReturnTypeMismatch, got: {errors:?}"
+        );
     }
 
     #[test]
