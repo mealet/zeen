@@ -1714,8 +1714,17 @@ impl<'ctx> Walker<'ctx> {
 
             HirStmtKind::Break | HirStmtKind::Continue | HirStmtKind::Error => {}
 
-            HirStmtKind::While { condition, block } => {
+            HirStmtKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 self.walk_expr(condition);
+
+                if let Some(update) = update {
+                    self.walk_stmt(update);
+                }
+
                 self.walk_stmt(block);
             }
 
@@ -2456,8 +2465,17 @@ fn walk_syntax_stmt(
 
         StatementKind::Break | StatementKind::Continue => {}
 
-        StatementKind::While { condition, block } => {
+        StatementKind::While {
+            condition,
+            update,
+            block,
+        } => {
             walk_syntax_expr(condition, text, occurrences);
+
+            if let Some(update) = update {
+                walk_syntax_stmt(update, span_end(update.span), text, occurrences);
+            }
+
             walk_syntax_stmt(block, block_end, text, occurrences);
         }
 

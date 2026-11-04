@@ -87,7 +87,15 @@ fn collect_from_stmt(stmt: &HirStmt, map: &mut HashMap<DefId, Rc<HirFn>>) {
             }
         }
 
-        HirStmtKind::While { block, .. } | HirStmtKind::For { block, .. } => {
+        HirStmtKind::While { update, block, .. } => {
+            if let Some(update) = update {
+                collect_from_stmt(update, map);
+            }
+
+            collect_from_stmt(block, map);
+        }
+
+        HirStmtKind::For { block, .. } => {
             collect_from_stmt(block, map);
         }
 

@@ -750,8 +750,17 @@ impl<'ctx> MirLowering<'ctx> {
                     self.collect_global_expr_deps(value, out);
                 }
             }
-            HirStmtKind::While { condition, block } => {
+            HirStmtKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 self.collect_global_expr_deps(condition, out);
+
+                if let Some(update) = update {
+                    self.collect_global_stmt_deps(update, out);
+                }
+
                 self.collect_global_stmt_deps(block, out);
             }
             HirStmtKind::For {
@@ -8822,6 +8831,7 @@ impl<'ctx> MirLowering<'ctx> {
 
             HirStmtKind::While {
                 condition,
+                update,
                 block: body,
             } => {
                 let header = fb.new_block();
@@ -8841,14 +8851,25 @@ impl<'ctx> MirLowering<'ctx> {
                     },
                 );
 
+                let update_bb = update.as_ref().map(|_| fb.new_block());
+
                 fb.loop_stack.push(LoopTargets {
                     break_target: exit_bb,
-                    continue_target: header,
+                    continue_target: update_bb.unwrap_or(header),
                 });
                 let body_end = self.lower_stmt_as_block_value(fb, body, body_bb).0;
                 fb.loop_stack.pop();
 
-                fb.join_if_open(body_end, header);
+                match update_bb {
+                    Some(update_bb) => {
+                        fb.join_if_open(body_end, update_bb);
+
+                        let update_end = self.lower_stmt(fb, update.as_ref().unwrap(), update_bb);
+                        fb.join_if_open(update_end, header);
+                    }
+
+                    None => fb.join_if_open(body_end, header),
+                }
 
                 exit_bb
             }

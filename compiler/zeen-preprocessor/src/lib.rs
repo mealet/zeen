@@ -530,8 +530,13 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
             StatementKind::Break => StatementKind::Break,
             StatementKind::Continue => StatementKind::Continue,
 
-            StatementKind::While { condition, block } => StatementKind::While {
+            StatementKind::While {
+                condition,
+                update,
+                block,
+            } => StatementKind::While {
                 condition: self.resolve_expr(condition),
+                update: update.map(|update| self.resolve_stmt(update)),
                 block: self.resolve_stmt(block),
             },
 

@@ -974,6 +974,19 @@ mod tests {
     }
 
     #[test]
+    fn while_update_checks_cleanly() {
+        let text = "fn main() {\n    let i = 0;\n\n    while (i < 3) : (i += 1) {\n        if (i == 1) {\n            continue;\n        }\n    }\n}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-while-update.zn").unwrap();
+        let output = check(&uri, text, &[]);
+
+        assert!(
+            only_errors(&output.diagnostics).is_empty(),
+            "{:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
     fn anonymous_init_checks_cleanly() {
         let text = "struct Point {\n    pub x: i32,\n    pub y: i32,\n}\n\nfn main() {\n    let point: Point = .{ .x = 1, .y = 2 };\n    @println(\"{} {}\", point.x, point.y);\n}\n";
         let uri = Uri::from_str("file:///tmp/zeen-lsp-anonymous-init-ok.zn").unwrap();

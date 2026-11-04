@@ -44,6 +44,7 @@ pub enum HirStmtKind {
 
     While {
         condition: Rc<HirExpr>,
+        update: Option<Rc<HirStmt>>,
         block: Rc<HirStmt>,
     },
 

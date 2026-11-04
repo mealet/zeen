@@ -1219,8 +1219,17 @@ impl<'ctx> NameResolver {
                 }
             }
 
-            StatementKind::While { condition, block } => {
+            StatementKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 self.collect_global_deps(condition, out);
+
+                if let Some(update) = update {
+                    self.collect_global_stmt_deps(update, out);
+                }
+
                 self.collect_global_stmt_deps(block, out);
             }
 
@@ -1703,8 +1712,16 @@ impl<'ctx> NameResolver {
             StatementKind::Break => {}
             StatementKind::Continue => {}
 
-            StatementKind::While { condition, block } => {
+            StatementKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 self.resolve_expr(condition);
+
+                if let Some(update) = update {
+                    self.resolve_stmt(update);
+                }
 
                 self.table.push(ScopeKind::Block);
                 self.resolve_stmt(block);

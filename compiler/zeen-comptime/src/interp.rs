@@ -1139,7 +1139,8 @@ impl<'arena> Interp<'arena> {
                 Ok(Some(_)) => continue,
                 Ok(None) => continue,
                 Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                Err(_) => return Err(Unwind::Break),
+                Err(Unwind::Break) => return Err(Unwind::Break),
+                Err(Unwind::Continue) => return Err(Unwind::Continue),
             }
         }
 
@@ -1222,7 +1223,11 @@ impl<'arena> Interp<'arena> {
             StatementKind::Break => Err(Unwind::Break),
             StatementKind::Continue => Err(Unwind::Continue),
 
-            StatementKind::While { condition, block } => {
+            StatementKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 self.depth += 1;
                 if self.depth > DEPTH_LIMIT {
                     self.depth -= 1;
@@ -1258,8 +1263,16 @@ impl<'arena> Interp<'arena> {
                     match self.eval_statement(block) {
                         Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
                         Err(Unwind::Break) => break,
-                        Err(Unwind::Continue) => continue,
-                        Ok(_) => {}
+                        Err(Unwind::Continue) | Ok(_) => {}
+                    }
+
+                    if let Some(update) = update {
+                        match self.eval_statement(update) {
+                            Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
+                            Err(Unwind::Break) => break,
+                            Err(Unwind::Continue) => continue,
+                            Ok(_) => {}
+                        }
                     }
                 }
 
@@ -1276,13 +1289,15 @@ impl<'arena> Interp<'arena> {
             StatementKind::Expr(expr) => match self.eval_expr(expr) {
                 Ok(value) => Ok(Some(value)),
                 Err(Unwind::Return(v)) => Err(Unwind::Return(v)),
-                Err(_) => Err(Unwind::Break),
+                Err(Unwind::Break) => Err(Unwind::Break),
+                Err(Unwind::Continue) => Err(Unwind::Continue),
             },
 
             StatementKind::TrailingExpr(expr) => match self.eval_expr(expr) {
                 Ok(value) => Ok(Some(value)),
                 Err(Unwind::Return(v)) => Err(Unwind::Return(v)),
-                Err(_) => Err(Unwind::Break),
+                Err(Unwind::Break) => Err(Unwind::Break),
+                Err(Unwind::Continue) => Err(Unwind::Continue),
             },
 
             StatementKind::FnDecl(_) => {
@@ -2424,7 +2439,8 @@ impl<'arena> Interp<'arena> {
                 Some(else_statement) => match self.eval_statement(else_statement) {
                     Ok(value) => return Ok(value.unwrap_or(Value::Bool(false))),
                     Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                    Err(_) => return Err(Unwind::Break),
+                    Err(Unwind::Break) => return Err(Unwind::Break),
+                    Err(Unwind::Continue) => return Err(Unwind::Continue),
                 },
                 None => return Ok(Value::Bool(false)),
             };
@@ -2433,7 +2449,8 @@ impl<'arena> Interp<'arena> {
         match self.eval_statement(then_block) {
             Ok(value) => Ok(value.unwrap_or(Value::Bool(false))),
             Err(Unwind::Return(v)) => Err(Unwind::Return(v)),
-            Err(_) => Err(Unwind::Break),
+            Err(Unwind::Break) => Err(Unwind::Break),
+            Err(Unwind::Continue) => Err(Unwind::Continue),
         }
     }
 
