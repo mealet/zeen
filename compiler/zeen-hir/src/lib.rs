@@ -582,16 +582,19 @@ impl<'res> HirLowering<'res> {
                 condition,
                 update,
                 block,
+                else_block,
             } => HirStmtKind::While {
                 condition: Rc::new(self.lower_expr(condition)),
                 update: update.map(|update| Rc::new(self.lower_stmt(update))),
                 block: Rc::new(self.lower_stmt(block)),
+                else_block: else_block.map(|else_block| Rc::new(self.lower_stmt(else_block))),
             },
 
             StatementKind::For {
                 varname,
                 iterator,
                 block,
+                else_block,
             } => {
                 let def_id = match self.resolution_of_stmt(stmt) {
                     Some(Resolution::Def(id)) => id,
@@ -603,6 +606,7 @@ impl<'res> HirLowering<'res> {
                     varname,
                     iterator: Rc::new(self.lower_expr(iterator)),
                     block: Rc::new(self.lower_stmt(block)),
+                    else_block: else_block.map(|else_block| Rc::new(self.lower_stmt(else_block))),
                 }
             }
 

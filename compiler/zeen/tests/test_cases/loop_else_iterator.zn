@@ -1,0 +1,43 @@
+struct Counter {
+  n: i32,
+}
+
+implement Iterator : Counter {
+  fn next(*self) Option[i32] {
+    if (self.n < 3) {
+      self.n = self.n + 1;
+      return Option.Some(self.n);
+    }
+
+    Option.None
+  }
+}
+
+fn main() {
+  const counter = Counter { .n = 0 };
+
+  for (i : counter) {
+    @println("value {}", i);
+  } else {
+    @println("counter exhausted");
+  }
+
+  const short = Counter { .n = 0 };
+
+  for (i : short) {
+    if (i == 2) {
+      @println("broke at {}", i);
+      break;
+    }
+  } else {
+    @println("iterator else must not run");
+  }
+
+  const last = Counter { .n = 5 };
+
+  for (i : last) {
+    @println("unreachable {}", i);
+  } else {
+    @println("empty iterator ran else");
+  }
+}

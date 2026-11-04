@@ -1718,6 +1718,7 @@ impl<'ctx> Walker<'ctx> {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 self.walk_expr(condition);
 
@@ -1726,6 +1727,10 @@ impl<'ctx> Walker<'ctx> {
                 }
 
                 self.walk_stmt(block);
+
+                if let Some(else_block) = else_block {
+                    self.walk_stmt(else_block);
+                }
             }
 
             HirStmtKind::For {
@@ -1733,7 +1738,7 @@ impl<'ctx> Walker<'ctx> {
                 varname,
                 iterator,
                 block,
-                ..
+                else_block,
             } => {
                 let role = self.role_of_def(*def_id).unwrap_or(Role::Variable);
                 let start = varname
@@ -1760,6 +1765,10 @@ impl<'ctx> Walker<'ctx> {
 
                 self.walk_expr(iterator);
                 self.walk_stmt(block);
+
+                if let Some(else_block) = else_block {
+                    self.walk_stmt(else_block);
+                }
             }
 
             HirStmtKind::Expr(expr) => self.walk_expr(expr),
@@ -2469,6 +2478,7 @@ fn walk_syntax_stmt(
             condition,
             update,
             block,
+            else_block,
         } => {
             walk_syntax_expr(condition, text, occurrences);
 
@@ -2477,12 +2487,17 @@ fn walk_syntax_stmt(
             }
 
             walk_syntax_stmt(block, block_end, text, occurrences);
+
+            if let Some(else_block) = else_block {
+                walk_syntax_stmt(else_block, span_end(else_block.span), text, occurrences);
+            }
         }
 
         StatementKind::For {
             varname,
             iterator,
             block,
+            else_block,
         } => {
             let start = span_end(varname.1).min(text.len());
             let end = span_end(block.span).min(text.len());
@@ -2497,6 +2512,10 @@ fn walk_syntax_stmt(
 
             walk_syntax_expr(iterator, text, occurrences);
             walk_syntax_stmt(block, end, text, occurrences);
+
+            if let Some(else_block) = else_block {
+                walk_syntax_stmt(else_block, span_end(else_block.span), text, occurrences);
+            }
         }
 
         StatementKind::Expr(expr) | StatementKind::TrailingExpr(expr) => {

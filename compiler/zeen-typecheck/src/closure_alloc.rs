@@ -133,6 +133,7 @@ impl<'a> Analyzer<'a> {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 self.expr(condition, &Fate::Discard);
 
@@ -141,18 +142,27 @@ impl<'a> Analyzer<'a> {
                 }
 
                 self.stmt(block);
+
+                if let Some(else_block) = else_block {
+                    self.stmt(else_block);
+                }
             }
 
             HirStmtKind::For {
                 def_id,
                 iterator,
                 block,
+                else_block,
                 ..
             } => {
                 self.expr(iterator, &Fate::Discard);
                 self.locals.entry(*def_id).or_default();
                 self.scope.iter_mut().last().unwrap().insert(*def_id);
                 self.stmt(block);
+
+                if let Some(else_block) = else_block {
+                    self.stmt(else_block);
+                }
             }
 
             HirStmtKind::Expr(expr) => self.expr(expr, fate),

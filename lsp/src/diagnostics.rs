@@ -987,6 +987,19 @@ mod tests {
     }
 
     #[test]
+    fn loop_else_checks_cleanly() {
+        let text = "fn main() {\n    let found = 0;\n\n    while (found < 3) {\n        found += 1;\n    } else {\n        @println(\"done\");\n    }\n\n    for (i : 3) {\n        if (i == 1) {\n            break;\n        }\n    } else {\n        @println(\"never\");\n    }\n}\n";
+        let uri = Uri::from_str("file:///tmp/zeen-lsp-loop-else.zn").unwrap();
+        let output = check(&uri, text, &[]);
+
+        assert!(
+            only_errors(&output.diagnostics).is_empty(),
+            "{:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
     fn anonymous_init_checks_cleanly() {
         let text = "struct Point {\n    pub x: i32,\n    pub y: i32,\n}\n\nfn main() {\n    let point: Point = .{ .x = 1, .y = 2 };\n    @println(\"{} {}\", point.x, point.y);\n}\n";
         let uri = Uri::from_str("file:///tmp/zeen-lsp-anonymous-init-ok.zn").unwrap();

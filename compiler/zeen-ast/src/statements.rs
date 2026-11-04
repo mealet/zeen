@@ -53,12 +53,14 @@ pub enum StatementKind<'arena> {
         condition: &'arena Expression<'arena>,
         update: Option<&'arena Statement<'arena>>,
         block: &'arena Statement<'arena>,
+        else_block: Option<&'arena Statement<'arena>>,
     },
 
     For {
         varname: (Spur, SourceSpan),
         iterator: &'arena Expression<'arena>,
         block: &'arena Statement<'arena>,
+        else_block: Option<&'arena Statement<'arena>>,
     },
 
     Expr(&'arena Expression<'arena>),

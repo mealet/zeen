@@ -1693,11 +1693,17 @@ impl<'arena> Interp<'arena> {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 let cond_new = self.substitute_expr(module, condition)?;
 
                 let update_new = match update {
                     Some(update) => self.substitute_statement(module, update)?,
+                    None => None,
+                };
+
+                let else_new = match else_block {
+                    Some(else_block) => self.substitute_statement(module, else_block)?,
                     None => None,
                 };
 
@@ -1709,7 +1715,10 @@ impl<'arena> Interp<'arena> {
                     Err(errors) => Err(errors),
 
                     Ok(new_block)
-                        if new_block.is_none() && cond_new.is_none() && update_new.is_none() =>
+                        if new_block.is_none()
+                            && cond_new.is_none()
+                            && update_new.is_none()
+                            && else_new.is_none() =>
                     {
                         Ok(None)
                     }
@@ -1719,6 +1728,7 @@ impl<'arena> Interp<'arena> {
                             condition: cond_new.unwrap_or(condition),
                             update: update_new.or(*update),
                             block: new_block.unwrap_or(block),
+                            else_block: else_new.or(*else_block),
                         },
                         span: stmt.span,
                     }))),
@@ -1729,8 +1739,14 @@ impl<'arena> Interp<'arena> {
                 varname,
                 iterator,
                 block,
+                else_block,
             } => {
                 let iter_new = self.substitute_expr(module, iterator)?;
+
+                let else_new = match else_block {
+                    Some(else_block) => self.substitute_statement(module, else_block)?,
+                    None => None,
+                };
 
                 self.push_shadow();
                 self.bind_shadow(varname.0);
@@ -1739,12 +1755,13 @@ impl<'arena> Interp<'arena> {
 
                 match block_new {
                     Err(errors) => Err(errors),
-                    Ok(None) if iter_new.is_none() => Ok(None),
+                    Ok(None) if iter_new.is_none() && else_new.is_none() => Ok(None),
                     Ok(new_block) => Ok(Some(self.arena.alloc(Statement {
                         kind: StatementKind::For {
                             varname: *varname,
                             iterator: iter_new.unwrap_or(iterator),
                             block: new_block.unwrap_or(block),
+                            else_block: else_new.or(*else_block),
                         },
                         span: stmt.span,
                     }))),

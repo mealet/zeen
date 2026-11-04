@@ -193,6 +193,7 @@ impl<'arena> Checker<'_> {
                 condition,
                 update,
                 block,
+                else_block,
             } => {
                 self.expression(condition, comptime);
 
@@ -201,13 +202,24 @@ impl<'arena> Checker<'_> {
                 }
 
                 self.statement(block, comptime);
+
+                if let Some(else_block) = else_block {
+                    self.statement(else_block, comptime);
+                }
             }
 
             StatementKind::For {
-                iterator, block, ..
+                iterator,
+                block,
+                else_block,
+                ..
             } => {
                 self.expression(iterator, comptime);
                 self.statement(block, comptime);
+
+                if let Some(else_block) = else_block {
+                    self.statement(else_block, comptime);
+                }
             }
 
             StatementKind::Expr(expr) | StatementKind::TrailingExpr(expr) => {

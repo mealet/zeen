@@ -1,0 +1,86 @@
+fn main() {
+  let attempts = 0;
+
+  while (attempts < 3) {
+    attempts += 1;
+  } else {
+    @println("while finished {}", attempts);
+  }
+
+  let found = 0;
+
+  while (found < 10) {
+    if (found == 2) {
+      @println("while broke at {}", found);
+      break;
+    }
+
+    found += 1;
+  } else {
+    @println("while else must not run");
+  }
+
+  for (i : 3) {
+    @println("range {}", i);
+  } else {
+    @println("range finished");
+  }
+
+  for (i : 3) {
+    if (i == 1) {
+      @println("range broke at {}", i);
+      break;
+    }
+  } else {
+    @println("range else must not run");
+  }
+
+  let items = {1, 2, 3};
+
+  for (item : items) {
+    @println("array {}", item);
+  } else {
+    @println("array finished");
+  }
+
+  const slice: []i32 = items[..];
+
+  for (item : slice) {
+    if (item == 2) {
+      @println("slice broke at {}", item);
+      break;
+    }
+
+    @println("slice {}", item);
+  } else {
+    @println("slice else must not run");
+  }
+
+  let outer = 0;
+
+  while (outer < 2) {
+    outer += 1;
+
+    for (inner : 2) {
+      if (inner == 0) {
+        continue;
+      }
+
+      @println("inner {}", inner);
+    } else {
+      @println("inner done for outer {}", outer);
+    }
+  } else {
+    @println("outer done");
+  }
+
+  let updated = 0;
+
+  while (updated < 4) : (updated += 1) {
+    if (updated == 1) {
+      continue;
+    }
+  } else {
+    @println("update loop done at {}", updated);
+  }
+}
