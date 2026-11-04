@@ -578,8 +578,13 @@ impl<'res> HirLowering<'res> {
             StatementKind::Break => HirStmtKind::Break,
             StatementKind::Continue => HirStmtKind::Continue,
 
-            StatementKind::While { condition, block } => HirStmtKind::While {
+            StatementKind::While {
+                condition,
+                update,
+                block,
+            } => HirStmtKind::While {
                 condition: Rc::new(self.lower_expr(condition)),
+                update: update.map(|update| Rc::new(self.lower_stmt(update))),
                 block: Rc::new(self.lower_stmt(block)),
             },
 

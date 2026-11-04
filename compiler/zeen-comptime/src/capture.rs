@@ -1157,17 +1157,31 @@ impl<'arena> Interp<'arena> {
                 }))
             }
 
-            StatementKind::While { condition, block } => {
+            StatementKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 let new_condition = self.capture_expr(module, condition)?;
+
+                let new_update = match update {
+                    Some(update) => Some(self.capture_statement(module, update)?),
+                    None => None,
+                };
+
                 let new_block = self.capture_statement(module, block)?;
 
-                if unchanged(condition, new_condition) && unchanged(block, new_block) {
+                if unchanged(condition, new_condition)
+                    && option_unchanged(update, new_update)
+                    && unchanged(block, new_block)
+                {
                     return Ok(stmt);
                 }
 
                 Ok(self.arena.alloc(Statement {
                     kind: StatementKind::While {
                         condition: new_condition,
+                        update: new_update,
                         block: new_block,
                     },
                     span: stmt.span,

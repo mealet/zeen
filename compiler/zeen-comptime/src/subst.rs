@@ -1689,8 +1689,17 @@ impl<'arena> Interp<'arena> {
                 })))
             }
 
-            StatementKind::While { condition, block } => {
+            StatementKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 let cond_new = self.substitute_expr(module, condition)?;
+
+                let update_new = match update {
+                    Some(update) => self.substitute_statement(module, update)?,
+                    None => None,
+                };
 
                 self.push_shadow();
                 let block_new = self.substitute_statement(module, block);
@@ -1698,10 +1707,17 @@ impl<'arena> Interp<'arena> {
 
                 match block_new {
                     Err(errors) => Err(errors),
-                    Ok(None) if cond_new.is_none() => Ok(None),
+
+                    Ok(new_block)
+                        if new_block.is_none() && cond_new.is_none() && update_new.is_none() =>
+                    {
+                        Ok(None)
+                    }
+
                     Ok(new_block) => Ok(Some(self.arena.alloc(Statement {
                         kind: StatementKind::While {
                             condition: cond_new.unwrap_or(condition),
+                            update: update_new.or(*update),
                             block: new_block.unwrap_or(block),
                         },
                         span: stmt.span,

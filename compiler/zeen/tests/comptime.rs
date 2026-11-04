@@ -447,6 +447,44 @@ fn main() {
 }
 
 #[test]
+fn while_update_runs_after_body_and_continue() {
+    let source = r#"comptime fn count() comptime_int {
+  let i = 0;
+  let sum = 0;
+
+  while (i < 6) : (i += 1) {
+    if (i == 2) {
+      continue;
+    }
+
+    if (i == 5) {
+      break;
+    }
+
+    sum += i;
+  }
+
+  return sum;
+}
+
+fn main() {
+  comptime {
+    @println("{}", count());
+  };
+}
+"#;
+
+    let result = compile("while_update", source);
+
+    assert!(result.success, "stderr: {}", result.stderr);
+    assert!(
+        result.stdout.contains("[comptime][main.zn:21] 8"),
+        "stdout: {}",
+        result.stdout
+    );
+}
+
+#[test]
 fn rejects_step_limit() {
     let source = r#"comptime fn spin() comptime_int {
   let i = 0;

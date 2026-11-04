@@ -51,6 +51,7 @@ pub enum StatementKind<'arena> {
 
     While {
         condition: &'arena Expression<'arena>,
+        update: Option<&'arena Statement<'arena>>,
         block: &'arena Statement<'arena>,
     },
 

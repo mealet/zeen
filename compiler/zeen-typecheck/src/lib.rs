@@ -2093,9 +2093,17 @@ impl<'res> TypeChecker<'res> {
                 self.check_not_const_target(object);
             }
 
-            HirStmtKind::While { condition, block } => {
+            HirStmtKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 let bool_ty = self.result.interner.builtin(BuiltinType::bool);
                 self.check_expr(condition, bool_ty, false);
+
+                if let Some(update) = update {
+                    self.check_stmt(update);
+                }
 
                 self.ctx.enter_loop();
                 self.check_stmt(block);

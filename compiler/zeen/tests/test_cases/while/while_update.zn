@@ -1,0 +1,57 @@
+fn bump(counter: *i32) void {
+  (*counter) += 1;
+}
+
+fn main() i32 {
+  let i: i32 = 0;
+  let sum: i32 = 0;
+
+  while (i < 6) : (i += 1) {
+    if (i == 2) {
+      continue;
+    }
+
+    if (i == 5) {
+      break;
+    }
+
+    sum += i;
+  }
+
+  @println("{} {}", i, sum);
+
+  let calls: i32 = 0;
+
+  while (calls < 3) : (calls = calls + 1) {
+    @println("tick {}", calls);
+  }
+
+  @println("{}", calls);
+
+  let count: i32 = 0;
+
+  while (count < 2) : (bump(&count)) {
+    @println("call {}", count);
+  }
+
+  @println("{}", count);
+
+  let outer: i32 = 0;
+  let inner_sum: i32 = 0;
+
+  while (outer < 3) : (outer += 1) {
+    let inner: i32 = 0;
+
+    while (inner < 3) : (inner += 1) {
+      if (inner == 1) {
+        continue;
+      }
+
+      inner_sum += 1;
+    }
+  }
+
+  @println("{} {}", outer, inner_sum);
+
+  return 0;
+}

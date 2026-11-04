@@ -270,8 +270,17 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
             }
 
-            StatementKind::While { condition, block } => {
+            StatementKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 self.expr_usage(condition, flags);
+
+                if let Some(update) = update {
+                    self.stmt_usage(update, flags);
+                }
+
                 self.stmt_usage(block, flags);
             }
 

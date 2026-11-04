@@ -329,17 +329,64 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
         let condition = expr_parser.parse_grouped()?;
 
+        let update = if self.p.eat(TokenKind::Colon) {
+            let _ = self.p.expect(TokenKind::OpenParen, "(")?;
+
+            let mut update_parser = StmtParser::new(self.p).no_semicolon();
+            let update = update_parser.parse_loop_update()?;
+
+            let _ = self.p.expect(TokenKind::CloseParen, ")")?;
+
+            Some(update)
+        } else {
+            None
+        };
+
         let mut stmt_parser = StmtParser::new(self.p).with_optional_semicolon(false);
         let block = stmt_parser.parse()?;
 
         let _ = self.p.eat(TokenKind::Semicolon);
 
         let stmt = self.p.arena.alloc(Statement {
-            kind: StatementKind::While { condition, block },
+            kind: StatementKind::While {
+                condition,
+                update,
+                block,
+            },
             span: while_kw.merge_span(block.span),
         });
 
         Some(stmt)
+    }
+
+    pub fn parse_loop_update(&mut self) -> Option<&'ctx Statement<'ctx>> {
+        match self.p.current().kind {
+            TokenKind::Keyword(
+                CompilerKeyword::Let
+                | CompilerKeyword::Const
+                | CompilerKeyword::Comptime
+                | CompilerKeyword::Return
+                | CompilerKeyword::Break
+                | CompilerKeyword::Continue
+                | CompilerKeyword::While
+                | CompilerKeyword::For
+                | CompilerKeyword::If
+                | CompilerKeyword::Switch
+                | CompilerKeyword::Fn
+                | CompilerKeyword::Public,
+            )
+            | TokenKind::OpenBrace => {
+                self.p.report(ParserError::UnsupportedAction {
+                    label: "loop update must be an assignment or an expression".into(),
+                    src: self.p.named_src(),
+                    span: self.p.current().span,
+                });
+
+                None
+            }
+
+            _ => self.parse_expr_or_assign(),
+        }
     }
 
     pub fn parse_for(&mut self) -> Option<&'ctx Statement<'ctx>> {
@@ -994,6 +1041,7 @@ mod tests {
             Statement {
                 kind: StatementKind::While {
                     condition: _,
+                    update: _,
                     block: Statement {
                         kind: StatementKind::Let { .. },
                         ..
@@ -1040,6 +1088,43 @@ mod tests {
     }
 
     #[test]
+    fn while_update() {
+        const SRC: &str = "while (i < 10) : (i += 1) { continue; }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert_matches!(
+            stmt_parser.parse().unwrap(),
+            Statement {
+                kind: StatementKind::While {
+                    condition: _,
+                    update: Some(Statement {
+                        kind: StatementKind::CompoundAssign { .. },
+                        ..
+                    }),
+                    block: Statement { .. },
+                },
+                ..
+            }
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn while_update_rejects_declaration() {
+        const SRC: &str = "while (i < 10) : (let j = 0) { continue; }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        assert!(stmt_parser.parse().is_none());
+        assert!(matches!(
+            stmt_parser.errors().first(),
+            Some(ParserError::UnsupportedAction { .. })
+        ));
+    }
+
+    #[test]
     fn while_block() {
         const SRC: &str = "while (1 == 1) { let a = 123; };";
 
@@ -1050,6 +1135,7 @@ mod tests {
             Statement {
                 kind: StatementKind::While {
                     condition: _,
+                    update: _,
                     block: Statement {
                         kind: StatementKind::Expr(..),
                         ..

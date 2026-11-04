@@ -129,8 +129,17 @@ impl<'a> Analyzer<'a> {
                 self.expr(value, &Fate::Escaping);
             }
 
-            HirStmtKind::While { condition, block } => {
+            HirStmtKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 self.expr(condition, &Fate::Discard);
+
+                if let Some(update) = update {
+                    self.stmt(update);
+                }
+
                 self.stmt(block);
             }
 

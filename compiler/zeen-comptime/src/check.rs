@@ -189,8 +189,17 @@ impl<'arena> Checker<'_> {
                 }
             }
 
-            StatementKind::While { condition, block } => {
+            StatementKind::While {
+                condition,
+                update,
+                block,
+            } => {
                 self.expression(condition, comptime);
+
+                if let Some(update) = update {
+                    self.statement(update, comptime);
+                }
+
                 self.statement(block, comptime);
             }
 
