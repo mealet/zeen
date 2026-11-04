@@ -3003,7 +3003,7 @@ mod tests {
     fn records_inferred_generics_at_call_sites() {
         let uri: Uri = "file:///tmp/zeen-lsp-analysis-generics.zn".parse().unwrap();
         let output = crate::diagnostics::check(&uri, GENERIC_CALL, &[]);
-        assert!(output.diagnostics.is_empty());
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
 
         let call_at = GENERIC_CALL.rfind("max(").unwrap();
         let key = (call_at, "max".len());
@@ -3019,7 +3019,7 @@ mod tests {
     fn records_comptime_names() {
         let uri: Uri = "file:///tmp/zeen-lsp-analysis-comptime.zn".parse().unwrap();
         let output = crate::diagnostics::check(&uri, COMPTIME_SOURCE, &[]);
-        assert!(output.diagnostics.is_empty());
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
 
         let occurrences = &output.analysis.occurrences;
         let matches = |name: &str, role: Role| {
@@ -3044,7 +3044,7 @@ mod tests {
             .parse()
             .unwrap();
         let output = crate::diagnostics::check(&uri, IMPLEMENT_SOURCE, &[]);
-        assert!(output.diagnostics.is_empty());
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
 
         let named: Vec<&Occurrence> = output
             .analysis
@@ -3080,7 +3080,7 @@ mod tests {
     fn records_parameter_types_for_unnamed_params() {
         let uri: Uri = "file:///tmp/zeen-lsp-analysis-unnamed.zn".parse().unwrap();
         let output = crate::diagnostics::check(&uri, UNNAMED_PARAM, &[]);
-        assert!(output.diagnostics.is_empty());
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
 
         let call = output
             .analysis

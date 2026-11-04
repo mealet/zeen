@@ -165,7 +165,7 @@ mod tests {
     fn sample_analysis(text: &str) -> crate::analysis::Analysis {
         let uri: Uri = "file:///tmp/zeen-lsp-codelens-probe.zn".parse().unwrap();
         let output = crate::diagnostics::check(&uri, text, &[]);
-        assert!(output.diagnostics.is_empty());
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
         output.analysis
     }
 

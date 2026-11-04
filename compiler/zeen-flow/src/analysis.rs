@@ -8,7 +8,7 @@ use zeen_ast::Source;
 use zeen_ast::expressions::UnaryOp;
 use zeen_mir::{
     BasicBlock, BlockId, CallTarget, LocalId, LocalKind, MirFunctionId, MirProgram, MirStatement,
-    Operand, Place, PlaceElem, Rvalue, Terminator, place_is_global,
+    Mutability, Operand, Place, PlaceElem, Rvalue, Terminator, place_is_global,
 };
 use zeen_resolve::{DefId, DefKind, Resolution, ResolutionResult};
 use zeen_typecheck::result::TypeCheckResult;
@@ -31,6 +31,7 @@ struct FunctionSnapshot {
 struct LocalInfo {
     ty: TypeId,
     kind: LocalKind,
+    mutability: Mutability,
     name: Option<SmolStr>,
     source: Option<Source>,
 }
@@ -143,6 +144,7 @@ impl<'ctx> DataFlow<'ctx> {
                     .map(|decl| LocalInfo {
                         ty: decl.ty,
                         kind: decl.kind,
+                        mutability: decl.mutability,
                         name: decl.name.map(|name| self.resolve_name(name)),
                         source: decl.source.clone(),
                     })
@@ -220,6 +222,7 @@ impl<'ctx> DataFlow<'ctx> {
         }
 
         self.report_unused();
+        self.report_unused_mut(function_id);
 
         self.insert_scope_drops(function_id);
         self.insert_drops(function_id);
@@ -762,6 +765,98 @@ impl<'ctx> DataFlow<'ctx> {
         }
     }
 
+    fn report_unused_mut(&mut self, function_id: MirFunctionId) {
+        let Some(source_def) = self
+            .program
+            .functions
+            .get(&function_id)
+            .map(|function| function.source_def)
+        else {
+            return;
+        };
+        if self.is_outside_root_module(source_def) {
+            return;
+        };
+
+        let Some(snapshot) = &self.snapshot else {
+            return;
+        };
+
+        let mut initialized: HashSet<LocalId> = HashSet::default();
+        let mut mutated: HashSet<LocalId> = HashSet::default();
+
+        for block in &snapshot.blocks {
+            for stmt in &block.statements {
+                let MirStatement::Assign {
+                    place,
+                    rvalue,
+                    source,
+                } = stmt
+                else {
+                    continue;
+                };
+
+                if let Rvalue::Ref {
+                    place: target,
+                    is_const: false,
+                } = rvalue
+                {
+                    mutated.insert(target.local);
+                }
+
+                let Some(info) = snapshot.locals.get(place.local.0 as usize) else {
+                    continue;
+                };
+                if info.kind != LocalKind::UserVariable || info.mutability != Mutability::Mut {
+                    continue;
+                }
+
+                let is_init = place.projection.is_empty()
+                    && source
+                        .as_ref()
+                        .zip(info.source.as_ref())
+                        .is_some_and(|(write, decl)| {
+                            write.span.offset() == decl.span.offset()
+                                && write.span.len() == decl.span.len()
+                        });
+
+                if is_init {
+                    initialized.insert(place.local);
+                } else {
+                    mutated.insert(place.local);
+                }
+            }
+        }
+
+        for (index, info) in snapshot.locals.iter().enumerate() {
+            let local = LocalId(index as u32);
+            if info.kind != LocalKind::UserVariable || info.mutability != Mutability::Mut {
+                continue;
+            }
+            if !self.read_locals.contains(&local) || !initialized.contains(&local) {
+                continue;
+            }
+            if mutated.contains(&local) {
+                continue;
+            }
+            let Some(name) = &info.name else {
+                continue;
+            };
+            if name.starts_with('_') {
+                continue;
+            }
+            let Some(src) = info.source.clone() else {
+                continue;
+            };
+
+            self.diagnostics.push(FlowError::UnusedMut {
+                name: name.clone(),
+                src: src.src(),
+                span: src.span,
+            });
+        }
+    }
+
     fn insert_drops(&mut self, function_id: MirFunctionId) {
         let exit_states = std::mem::take(&mut self.exit_states);
         if exit_states.is_empty() {
@@ -1270,6 +1365,7 @@ impl<'ctx> DataFlow<'ctx> {
                         .map(|decl| LocalInfo {
                             ty: decl.ty,
                             kind: decl.kind,
+                            mutability: decl.mutability,
                             name: decl.name.map(|name| self.resolve_name(name)),
                             source: decl.source.clone(),
                         })

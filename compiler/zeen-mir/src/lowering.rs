@@ -8659,6 +8659,7 @@ impl<'ctx> MirLowering<'ctx> {
                 name,
                 def_id,
                 value,
+                is_const,
                 ..
             } => {
                 let ty = self
@@ -8700,7 +8701,11 @@ impl<'ctx> MirLowering<'ctx> {
                 let local = fb.new_local(
                     ty,
                     LocalKind::UserVariable,
-                    Mutability::Mut,
+                    if *is_const {
+                        Mutability::Const
+                    } else {
+                        Mutability::Mut
+                    },
                     Some(*name),
                     Some(stmt.source.clone()),
                 );
