@@ -621,7 +621,14 @@ fn main() {
 }
 "#,
     );
-    assert!(result.warnings.is_empty());
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|e| matches!(e, FlowError::UnusedVariable { .. })),
+        "expected no unused warnings, got: {:?}",
+        result.warnings
+    );
 }
 
 #[test]
@@ -668,7 +675,14 @@ fn main() i32 {
 }
 "#,
     );
-    assert!(result.warnings.is_empty());
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|e| matches!(e, FlowError::UnusedVariable { .. })),
+        "expected no unused warnings, got: {:?}",
+        result.warnings
+    );
 }
 
 #[test]
@@ -688,8 +702,11 @@ fn main() {
 "#,
     );
     assert!(
-        result.warnings.is_empty(),
-        "expected no warnings, got: {:?}",
+        !result
+            .warnings
+            .iter()
+            .any(|e| matches!(e, FlowError::UnusedVariable { .. })),
+        "expected no unused warnings, got: {:?}",
         result.warnings
     );
 }
@@ -1207,8 +1224,11 @@ fn main() {
 "#,
     );
     assert!(
-        result.warnings.is_empty(),
-        "expected no warnings, got: {:?}",
+        !result
+            .warnings
+            .iter()
+            .any(|e| matches!(e, FlowError::UnusedVariable { .. })),
+        "expected no unused warnings, got: {:?}",
         result.warnings
     );
 }
@@ -2057,5 +2077,209 @@ fn main() i32 {
     return r;
 }
 "#,
+    );
+}
+
+fn unused_mut_names(result: &FlowResult) -> Vec<String> {
+    result
+        .warnings
+        .iter()
+        .filter_map(|warning| match warning {
+            FlowError::UnusedMut { name, .. } => Some(name.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn unused_mut_warns_on_read_only_let() {
+    let result = flow_ok(
+        r#"
+fn main() {
+    let x = 1;
+    @print("{}", x);
+}
+"#,
+    );
+
+    assert_eq!(unused_mut_names(&result), vec!["x".to_string()]);
+}
+
+#[test]
+fn unused_mut_skips_reassigned_let() {
+    let result = flow_ok(
+        r#"
+fn main() {
+    let x = 1;
+    x = 2;
+    @print("{}", x);
+}
+"#,
+    );
+
+    assert!(
+        unused_mut_names(&result).is_empty(),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn unused_mut_skips_compound_assignment() {
+    let result = flow_ok(
+        r#"
+fn main() {
+    let x = 1;
+    x += 2;
+    @print("{}", x);
+}
+"#,
+    );
+
+    assert!(
+        unused_mut_names(&result).is_empty(),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn unused_mut_skips_field_write() {
+    let result = flow_ok(
+        r#"
+struct Point { pub x: i32, pub y: i32 }
+fn main() {
+    let p = Point { .x = 1, .y = 2 };
+    p.x = 5;
+    @print("{}", p.x);
+}
+"#,
+    );
+
+    assert!(
+        unused_mut_names(&result).is_empty(),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn unused_mut_skips_mutating_method_call() {
+    let result = flow_ok(
+        r#"
+struct Counter { pub value: i32 }
+implement Counter {
+    pub fn bump(*self) void {
+        (*self).value += 1;
+    }
+}
+fn main() {
+    let counter = Counter { .value = 0 };
+    counter.bump();
+    @print("{}", counter.value);
+}
+"#,
+    );
+
+    assert!(
+        unused_mut_names(&result).is_empty(),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn unused_mut_skips_mutable_pointer_argument() {
+    let result = flow_ok(
+        r#"
+fn set(target: *i32) void {
+    *target = 5;
+}
+fn main() {
+    let value = 1;
+    set(&value);
+    @print("{}", value);
+}
+"#,
+    );
+
+    assert!(
+        unused_mut_names(&result).is_empty(),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn unused_mut_skips_const_local() {
+    let result = flow_ok(
+        r#"
+fn main() {
+    const x = 1;
+    @print("{}", x);
+}
+"#,
+    );
+
+    assert!(
+        unused_mut_names(&result).is_empty(),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn unused_mut_skips_underscore_name() {
+    let result = flow_ok(
+        r#"
+fn main() {
+    let _value = 1;
+    @print("{}", _value);
+}
+"#,
+    );
+
+    assert!(
+        unused_mut_names(&result).is_empty(),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn unused_mut_not_reported_for_unused_variable() {
+    let result = flow_ok("fn main() { let x = 1; }");
+
+    assert!(
+        unused_mut_names(&result).is_empty(),
+        "{:?}",
+        result.warnings
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, FlowError::UnusedVariable { .. })),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn unused_mut_skips_declaration_without_initializer() {
+    let result = flow_ok(
+        r#"
+fn main() {
+    let x: i32;
+    x = 1;
+    @print("{}", x);
+}
+"#,
+    );
+
+    assert!(
+        unused_mut_names(&result).is_empty(),
+        "{:?}",
+        result.warnings
     );
 }

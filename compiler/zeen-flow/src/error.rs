@@ -170,6 +170,21 @@ pub enum FlowError {
         #[label]
         span: SourceSpan,
     },
+
+    #[error("variable `{name}` is never mutated")]
+    #[diagnostic(
+        severity(Warning),
+        code(zeen::dataflow::unused_mut),
+        help("declare it with `const` instead of `let`")
+    )]
+    UnusedMut {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }
 
 impl FlowError {
@@ -186,6 +201,7 @@ impl FlowError {
             Self::UnusedFunction { src, .. } => Some(src),
             Self::UnreachableCode { src, .. } => Some(src),
             Self::UnusedConst { src, .. } => Some(src),
+            Self::UnusedMut { src, .. } => Some(src),
         }
     }
 }

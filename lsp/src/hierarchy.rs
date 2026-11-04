@@ -335,7 +335,7 @@ mod tests {
 
     fn analyze(uri: &Uri, text: &str) -> Analysis {
         let output = crate::diagnostics::check(uri, text, &[]);
-        assert!(output.diagnostics.is_empty());
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
         output.analysis
     }
 

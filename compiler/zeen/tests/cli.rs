@@ -204,3 +204,40 @@ fn check_rejects_invalid_program() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn unused_mut_warning_only_targets_root_module() {
+    let dir = std::env::temp_dir().join(format!("zeen_unused_mut_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let main_path = dir.join("main.zn");
+    let helper_path = dir.join("helper.zn");
+
+    std::fs::write(
+        &helper_path,
+        "pub fn helper() i32 {\n  let inner = 1;\n  return inner;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &main_path,
+        "use helper;\n\nfn main() {\n  let local = 1;\n  @println(\"{}\", local + helper());\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin(env!("CARGO_PKG_NAME"))
+        .unwrap()
+        .arg(&main_path)
+        .arg("--check")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(stderr.contains("zeen::dataflow::unused_mut"), "{stderr}");
+    assert!(stderr.contains("`local`"), "{stderr}");
+    assert!(!stderr.contains("`inner`"), "{stderr}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -36,7 +36,7 @@ pub struct Path {
 
   /// File name without directories, without trailing separators.
   pub fn basename(path: *[]const char) []const char {
-    let total = (*path).len;
+    const total = (*path).len;
     let end = total;
     while (end > 0 && Path.is_sep((*path)[end - 1])) {
       end -= 1;
@@ -52,7 +52,7 @@ pub struct Path {
 
   /// Directory part without the file name.
   pub fn dirname(path: *[]const char) []const char {
-    let total = (*path).len;
+    const total = (*path).len;
     let end = total;
     while (end > 0 && Path.is_sep((*path)[end - 1])) {
       end -= 1;
@@ -76,7 +76,7 @@ pub struct Path {
 
   /// Extension without the dot, `None` when missing.
   pub fn extension(path: *[]const char) Option[[]const char] {
-    let total = (*path).len;
+    const total = (*path).len;
 
     let end = total;
     while (end > 0 && Path.is_sep((*path)[end - 1])) {
@@ -105,7 +105,7 @@ pub struct Path {
     let out = String.from(a);
 
     if (out.len() > 0 && b.len > 0) {
-      let back = out.len() - 1;
+      const back = out.len() - 1;
 
       if (Path.is_sep(a[back])) {
         let start: usize = 0;
@@ -128,7 +128,7 @@ pub struct Path {
 
   /// Collapse duplicate separators, single dots and parent markers.
   pub fn normalize(path: []const char) String {
-    let rooted = Path.is_absolute(path);
+    const rooted = Path.is_absolute(path);
     let kept = List#[[]const char].new();
 
     let i: usize = 0;
@@ -137,13 +137,13 @@ pub struct Path {
         i += 1;
       }
 
-      let start = i;
+      const start = i;
       while (i < path.len && !Path.is_sep(path[i])) {
         i += 1;
       }
 
       if (start < i) {
-        let part = path[start..i];
+        const part = path[start..i];
         if (part == "..") {
           if (kept.len() > 0) {
             let _ = kept.pop();
@@ -167,7 +167,7 @@ pub struct Path {
       if (!first) {
         out.push(Path.sep());
       };
-      let part = kept.get_ptr(j).unwrap();
+      const part = kept.get_ptr(j).unwrap();
       out.push_str(*part);
       first = false;
       j += 1;

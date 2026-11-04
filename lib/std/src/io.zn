@@ -79,7 +79,7 @@ implement IoError {
   /// * IoErrorKind.InvalidData
   /// * IoErrorKind.Uncategorized
   pub fn from_errno(code: c_int) Self {
-    let kind = switch (code) {
+    const kind = switch (code) {
       ENOENT => IoErrorKind.NotFound,
       EACCES => IoErrorKind.PermissionDenied,
       EPERM => IoErrorKind.PermissionDenied,
@@ -116,7 +116,7 @@ implement IoError {
     @os[windows] {
       return win_error(GetLastError());
     } else {
-      let slot = __errno_location();
+      const slot = __errno_location();
       return Self.from_errno(*slot);
     }
   }
@@ -173,7 +173,7 @@ pub struct Stdin {
     @os[windows] {
       let ok = read_line_fgets(buf);
     } else {
-      let ok = read_line_getline(buf);
+      const ok = read_line_getline(buf);
     }
 
     ok
@@ -203,7 +203,7 @@ pub struct Stdin {
         take = need;
       };
 
-      let got = fread(@as(*void, &chunk[0]), 1, take, stdin);
+      const got = fread(@as(*void, &chunk[0]), 1, take, stdin);
 
       if (got == 0) {
         return false;
@@ -223,7 +223,7 @@ pub struct Stdin {
     let line: *char = @as(*char, nullptr);
     let cap: usize = 0;
 
-    let n = getline(@as(**char, &line), @as(*usize, &cap), stdin);
+    const n = getline(@as(**char, &line), @as(*usize, &cap), stdin);
 
     if (n < 0) {
       return false;

@@ -33,7 +33,7 @@ struct SpawnPacket[T] {
 } else {
   fn spawn_trampoline[T](arg: *void) *void {
     let packet = @as(*SpawnPacket[T], arg);
-    let out = (*packet).f();
+    const out = (*packet).f();
     *(*packet).slot = out;
     Allocator.dealloc(arg);
     return nullptr;
@@ -44,9 +44,9 @@ struct SpawnPacket[T] {
 pub struct Thread {
   /// Spawn a thread running `f`, move it there.
   pub fn spawn[T](f: FnOnce() T) JoinHandle[T] {
-    let slot = @as(*T, Allocator.alloc(@sizeof(T)));
-    let boxed = SpawnPacket#[T] { .f = f, .slot = slot };
-    let raw = Allocator.alloc(@sizeof(SpawnPacket[T]));
+    const slot = @as(*T, Allocator.alloc(@sizeof(T)));
+    const boxed = SpawnPacket#[T] { .f = f, .slot = slot };
+    const raw = Allocator.alloc(@sizeof(SpawnPacket[T]));
 
     *@as(*SpawnPacket[T], raw) = boxed;
 
@@ -67,7 +67,7 @@ pub struct Thread {
       return JoinHandle { .native = handle, .slot = slot, .done = false };
     } else {
       let tid: NativeThread = @uninit();
-      let rc = pthread_create(&tid, nullptr, spawn_trampoline#[T], raw);
+      const rc = pthread_create(&tid, nullptr, spawn_trampoline#[T], raw);
 
       if (rc != 0) {
         @panic("spawn failed");
@@ -106,7 +106,7 @@ implement[T] JoinHandle[T] {
 
     self.done = true;
 
-    let out = *self.slot;
+    const out = *self.slot;
     Allocator.dealloc(@as(*void, self.slot));
 
     return out;

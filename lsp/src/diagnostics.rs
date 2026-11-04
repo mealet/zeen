@@ -1030,7 +1030,7 @@ mod tests {
         let uri = Uri::from_str("file:///tmp/zeen-lsp-completion-parity.zn").unwrap();
 
         let full = check(&uri, text, &[]);
-        assert!(full.diagnostics.is_empty());
+        assert!(only_errors(&full.diagnostics).is_empty());
 
         let light = check_completion(&uri, text, &[]);
 

@@ -31,7 +31,7 @@ implement builtin u8 {
   }
 
   pub fn leading_zeros(self) u32 {
-    let v = @as(u8, self);
+    const v = @as(u8, self);
 
     if (v == 0) { return u8.bits(); };
     let mask: u8 = @as(u8, 1) << @as(u8, u8.bits() - 1);
@@ -60,33 +60,33 @@ implement builtin u8 {
   }
 
   pub fn leading_ones(self) u32 {
-    let inverted = ~self;
+    const inverted = ~self;
 
     return inverted.leading_zeros();
   }
 
   pub fn trailing_ones(self) u32 {
-    let inverted = ~self;
+    const inverted = ~self;
 
     return inverted.trailing_zeros();
   }
 
   pub fn rotate_left(self, n: u32) u8 {
-    let bits = u8.bits();
-    let shift = n % bits;
+    const bits = u8.bits();
+    const shift = n % bits;
 
     if (shift == 0) { return self; };
-    let v = @as(u8, self);
+    const v = @as(u8, self);
 
     return @as(u8, (v << @as(u8, shift)) | (v >> @as(u8, bits - shift)));
   }
 
   pub fn rotate_right(self, n: u32) u8 {
-    let bits = u8.bits();
-    let shift = n % bits;
+    const bits = u8.bits();
+    const shift = n % bits;
 
     if (shift == 0) { return self; };
-    let v = @as(u8, self);
+    const v = @as(u8, self);
 
     return @as(u8, (v >> @as(u8, shift)) | (v << @as(u8, bits - shift)));
   }
@@ -147,7 +147,7 @@ implement builtin u8 {
 
     while (e > 0) {
       if ((e & 1) == 1) {
-        let next = result.checked_mul(base);
+        const next = result.checked_mul(base);
 
         if (next.is_none()) { return Option.None; };
 
@@ -156,7 +156,7 @@ implement builtin u8 {
 
       e = e >> 1;
       if (e > 0) {
-        let squared = base.checked_mul(base);
+        const squared = base.checked_mul(base);
 
         if (squared.is_none()) { return Option.None; };
 
@@ -215,32 +215,32 @@ implement builtin u8 {
   }
 
   pub fn wrapping_shl(self, rhs: u32) u8 {
-    let shift = rhs % u8.bits();
+    const shift = rhs % u8.bits();
 
     return self << @as(u8, shift);
   }
 
   pub fn wrapping_shr(self, rhs: u32) u8 {
-    let shift = rhs % u8.bits();
+    const shift = rhs % u8.bits();
 
     return self >> @as(u8, shift);
   }
 
   pub fn overflowing_add(self, rhs: u8) Overflowing[u8] {
-    let sum = self + rhs;
+    const sum = self + rhs;
 
     return Overflowing { .value = sum, .overflowed = sum < self };
   }
 
   pub fn overflowing_sub(self, rhs: u8) Overflowing[u8] {
-    let difference = self - rhs;
+    const difference = self - rhs;
 
     return Overflowing { .value = difference, .overflowed = self < rhs };
   }
 
   pub fn overflowing_mul(self, rhs: u8) Overflowing[u8] {
-    let product = self * rhs;
-    let overflowed = rhs != 0 && self > u8.max_value() / rhs;
+    const product = self * rhs;
+    const overflowed = rhs != 0 && self > u8.max_value() / rhs;
 
     return Overflowing { .value = product, .overflowed = overflowed };
   }
@@ -253,14 +253,14 @@ implement builtin u8 {
 
     while (e > 0) {
       if ((e & 1) == 1) {
-        let next = result.overflowing_mul(base);
+        const next = result.overflowing_mul(base);
         result = next.value;
         overflowed = overflowed || next.overflowed;
       };
 
       e = e >> 1;
       if (e > 0) {
-        let squared = base.overflowing_mul(base);
+        const squared = base.overflowing_mul(base);
         base = squared.value;
         overflowed = overflowed || squared.overflowed;
       };
@@ -270,21 +270,21 @@ implement builtin u8 {
   }
 
   pub fn overflowing_shl(self, rhs: u32) Overflowing[u8] {
-    let shift = rhs % u8.bits();
-    let value = self << @as(u8, shift);
+    const shift = rhs % u8.bits();
+    const value = self << @as(u8, shift);
 
     return Overflowing { .value = value, .overflowed = rhs >= u8.bits() };
   }
 
   pub fn overflowing_shr(self, rhs: u32) Overflowing[u8] {
-    let shift = rhs % u8.bits();
-    let value = self >> @as(u8, shift);
+    const shift = rhs % u8.bits();
+    const value = self >> @as(u8, shift);
 
     return Overflowing { .value = value, .overflowed = rhs >= u8.bits() };
   }
 
   pub fn saturating_add(self, rhs: u8) u8 {
-    let sum = self.checked_add(rhs);
+    const sum = self.checked_add(rhs);
 
     if (sum.is_some()) { return sum.unwrap(); };
 
@@ -292,7 +292,7 @@ implement builtin u8 {
   }
 
   pub fn saturating_sub(self, rhs: u8) u8 {
-    let difference = self.checked_sub(rhs);
+    const difference = self.checked_sub(rhs);
 
     if (difference.is_some()) { return difference.unwrap(); };
 
@@ -300,7 +300,7 @@ implement builtin u8 {
   }
 
   pub fn saturating_mul(self, rhs: u8) u8 {
-    let product = self.checked_mul(rhs);
+    const product = self.checked_mul(rhs);
 
     if (product.is_some()) { return product.unwrap(); };
 
@@ -312,7 +312,7 @@ implement builtin u8 {
   }
 
   pub fn saturating_pow(self, exp: u32) u8 {
-    let powered = self.checked_pow(exp);
+    const powered = self.checked_pow(exp);
 
     if (powered.is_some()) { return powered.unwrap(); };
 
@@ -340,7 +340,7 @@ implement builtin u8 {
   }
 
   pub fn div_ceil(self, rhs: u8) u8 {
-    let quotient = self / rhs;
+    const quotient = self / rhs;
 
     if (self % rhs == 0) { return quotient; };
 
@@ -348,7 +348,7 @@ implement builtin u8 {
   }
 
   pub fn next_multiple_of(self, rhs: u8) u8 {
-    let remainder = self % rhs;
+    const remainder = self % rhs;
 
     if (remainder == 0) { return self; };
 
@@ -356,7 +356,7 @@ implement builtin u8 {
   }
 
   pub fn checked_next_multiple_of(self, rhs: u8) Option[u8] {
-    let remainder = self % rhs;
+    const remainder = self % rhs;
 
     if (remainder == 0) { return Option.Some(self); };
 
@@ -412,7 +412,7 @@ implement builtin u8 {
 
   pub fn checked_next_power_of_two(self) Option[u8] {
     if (self <= 1) { return Option.Some(@as(u8, 1)); };
-    let next = self.next_power_of_two();
+    const next = self.next_power_of_two();
 
     if (next == 0) { return Option.None; };
 
@@ -455,7 +455,7 @@ implement builtin u8 {
     if (self == 0) { @panic("ilog: argument must be positive"); };
     if (base < 2) { @panic("ilog: base must be at least 2"); };
     let value = @as(u64, self);
-    let step = @as(u64, base);
+    const step = @as(u64, base);
     let count: u32 = 0;
 
     while (value >= step) {
@@ -483,7 +483,7 @@ implement builtin u8 {
   }
 
   pub fn to_be_bytes(self) [1]u8 {
-    let v = @as(u8, self);
+    const v = @as(u8, self);
     let bytes: [1]u8 = {0; 1};
     let i: u32 = 0;
 
@@ -496,7 +496,7 @@ implement builtin u8 {
   }
 
   pub fn to_le_bytes(self) [1]u8 {
-    let v = @as(u8, self);
+    const v = @as(u8, self);
     let bytes: [1]u8 = {0; 1};
     let i: u32 = 0;
 

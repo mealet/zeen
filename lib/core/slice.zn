@@ -26,8 +26,8 @@ implement Copy : Range {}
 
 implement Iterator : Range {
   pub fn next(*self) Option[usize] {
-    let start = self.start.unwrap_or(0);
-    let done = self.end.is_some() && start >= self.end.unwrap_or(0);
+    const start = self.start.unwrap_or(0);
+    const done = self.end.is_some() && start >= self.end.unwrap_or(0);
 
     if (!done) {
       self.start = Option.Some(start + 1);

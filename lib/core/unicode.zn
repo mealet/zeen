@@ -73,7 +73,7 @@ implement Rune {
 
   /// Creates a rune from an ASCII byte
   pub fn from_ascii(byte: char) Option[Rune] {
-    let code = @as(u32, byte);
+    const code = @as(u32, byte);
 
     if (code > 0x7F) {
       return Option.None;
@@ -85,7 +85,7 @@ implement Rune {
   /// Decodes a single rune from the whole slice
   pub fn from_utf8(bytes: []const char) Option[Rune] {
     let index: usize = 0;
-    let decoded = Rune.decode(bytes, &index);
+    const decoded = Rune.decode(bytes, &index);
 
     if (decoded.is_none()) {
       return Option.None;
@@ -105,13 +105,13 @@ implement Rune {
 
   /// Decodes a rune from raw bytes and advances the index
   pub fn decode_ptr(ptr: [*]const char, len: usize, index: *usize) Option[Rune] {
-    let offset = *index;
+    const offset = *index;
 
     if (offset >= len) {
       return Option.None;
     };
 
-    let first = @as(u32, ptr[offset]);
+    const first = @as(u32, ptr[offset]);
 
     if (first < 0x80) {
       *index = offset + 1;
@@ -119,26 +119,26 @@ implement Rune {
       return Option.Some(Rune.from_u32_unchecked(first));
     };
 
-    let width = Rune.sequence_len(first);
+    const width = Rune.sequence_len(first);
 
     if (width == 0 || offset + width > len) {
       return Option.None;
     };
 
-    let second = @as(u32, ptr[offset + 1]);
+    const second = @as(u32, ptr[offset + 1]);
 
     if (second < 0x80 || second > 0xBF) {
       return Option.None;
     };
 
     if (width == 2) {
-      let value = ((first & 0x1F) << 6) | (second & 0x3F);
+      const value = ((first & 0x1F) << 6) | (second & 0x3F);
       *index = offset + 2;
 
       return Option.Some(Rune.from_u32_unchecked(value));
     };
 
-    let third = @as(u32, ptr[offset + 2]);
+    const third = @as(u32, ptr[offset + 2]);
 
     if (third < 0x80 || third > 0xBF) {
       return Option.None;
@@ -153,13 +153,13 @@ implement Rune {
         return Option.None;
       };
 
-      let value = ((first & 0x0F) << 12) | ((second & 0x3F) << 6) | (third & 0x3F);
+      const value = ((first & 0x0F) << 12) | ((second & 0x3F) << 6) | (third & 0x3F);
       *index = offset + 3;
 
       return Option.Some(Rune.from_u32_unchecked(value));
     };
 
-    let fourth = @as(u32, ptr[offset + 3]);
+    const fourth = @as(u32, ptr[offset + 3]);
 
     if (fourth < 0x80 || fourth > 0xBF) {
       return Option.None;
@@ -173,7 +173,7 @@ implement Rune {
       return Option.None;
     };
 
-    let value = ((first & 0x07) << 18) | ((second & 0x3F) << 12)
+    const value = ((first & 0x07) << 18) | ((second & 0x3F) << 12)
       | ((third & 0x3F) << 6) | (fourth & 0x3F);
     *index = offset + 4;
 
@@ -187,7 +187,7 @@ implement Rune {
 
   /// Decodes a rune from raw bytes and replaces invalid ones with `U+FFFD`
   pub fn decode_ptr_lossy(ptr: [*]const char, len: usize, index: *usize) Rune {
-    let decoded = Rune.decode_ptr(ptr, len, index);
+    const decoded = Rune.decode_ptr(ptr, len, index);
 
     if (decoded.is_some()) {
       return decoded.unwrap();
@@ -226,7 +226,7 @@ implement Rune {
     let steps: i32 = 0;
 
     while (steps < 3 && start > 0) {
-      let byte = @as(u32, ptr[start]);
+      const byte = @as(u32, ptr[start]);
 
       if (byte < 0x80 || byte > 0xBF) {
         break;
@@ -255,7 +255,7 @@ implement Rune {
 
   /// Returns the length of the UTF-8 encoding
   pub fn utf8_len(self) usize {
-    let code = self.valid();
+    const code = self.valid();
 
     if (code < 0x80) {
       return 1;
@@ -274,7 +274,7 @@ implement Rune {
 
   /// Encodes the rune as UTF-8 into the buffer
   pub fn encode_utf8(self, out: *[4]u8) usize {
-    let code = self.valid();
+    const code = self.valid();
 
     if (code < 0x80) {
       (*out)[0] = @as(u8, code);
@@ -316,7 +316,7 @@ implement Rune {
 
   /// Encodes the rune as UTF-16 into the buffer
   pub fn encode_utf16(self, out: *[2]u16) usize {
-    let code = self.valid();
+    const code = self.valid();
 
     if (code < 0x10000) {
       (*out)[0] = @as(u16, code);
@@ -324,7 +324,7 @@ implement Rune {
       return 1;
     };
 
-    let value = code - 0x10000;
+    const value = code - 0x10000;
 
     (*out)[0] = @as(u16, 0xD800 + (value >> 10));
     (*out)[1] = @as(u16, 0xDC00 + (value & 0x3FF));

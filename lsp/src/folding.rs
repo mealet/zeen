@@ -156,7 +156,7 @@ mod tests {
         let uri: tower_lsp_server::ls_types::Uri =
             "file:///tmp/zeen-lsp-folding-probe.zn".parse().unwrap();
         let output = crate::diagnostics::check(&uri, text, &[]);
-        assert!(output.diagnostics.is_empty());
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
         output.analysis
     }
 

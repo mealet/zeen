@@ -78,7 +78,7 @@ implement SocketAddr {
     let j = cut + 1;
 
     while (j < s.len) {
-      let d = @as(u32, s.ptr[j]);
+      const d = @as(u32, s.ptr[j]);
 
       if (d < @as(u32, '0') || d > @as(u32, '9')) {
         return Result.Err(IoError.new(IoErrorKind.InvalidInput, "bad port"));
@@ -245,7 +245,7 @@ fn write_u32[W: StrWriter](out: *W, value: u32) void {
   }
 } else {
   fn new_socket(kind: c_int) Result[usize, IoError] {
-    let fd = socket(AF_INET, kind, 0);
+    const fd = socket(AF_INET, kind, 0);
 
     if (fd < 0) {
       return Result.Err(IoError.last_os_error());
@@ -372,7 +372,7 @@ implement TcpListener {
     } else {
       let sa: c_SockAddrIn = @uninit();
       let len: c_socklen_t = @as(c_socklen_t, 16);
-      let peer = accept(@as(c_int, self.sock), @as(*c_SockAddr, &sa), &len);
+      const peer = accept(@as(c_int, self.sock), @as(*c_SockAddr, &sa), &len);
 
       if (peer < 0) {
         return Result.Err(IoError.last_os_error());
@@ -480,7 +480,7 @@ implement TcpStream {
       return Result.Ok(@as(usize, got));
     } else {
       let chunk: [256]char = @uninit();
-      let got = recv(@as(c_int, self.sock), @as(*void, &chunk[0]), 256, 0);
+      const got = recv(@as(c_int, self.sock), @as(*void, &chunk[0]), 256, 0);
 
       if (got < 0) {
         return Result.Err(IoError.last_os_error());
@@ -568,7 +568,7 @@ implement TcpStream {
 
       return Result.Ok(@as(usize, n));
     } else {
-      let n = send(@as(c_int, self.sock), @as([*]const void, buf.ptr), buf.len, 0);
+      const n = send(@as(c_int, self.sock), @as([*]const void, buf.ptr), buf.len, 0);
 
       if (n < 0) {
         return Result.Err(IoError.last_os_error());
@@ -736,7 +736,7 @@ implement UdpSocket {
     } else {
       let sa: c_SockAddrIn = @uninit();
       fill_v4(addr, &sa);
-      let n = sendto(
+      const n = sendto(
         @as(c_int, self.sock),
         @as([*]const void, buf.ptr),
         buf.len,
@@ -783,7 +783,7 @@ implement UdpSocket {
       let chunk: [2048]char = @uninit();
       let sa: c_SockAddrIn = @uninit();
       let len: c_socklen_t = @as(c_socklen_t, 16);
-      let got = recvfrom(
+      const got = recvfrom(
         @as(c_int, self.sock),
         @as(*void, &chunk[0]),
         2048,
