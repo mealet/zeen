@@ -1135,7 +1135,9 @@ pub enum TypeError {
     #[diagnostic(
         severity(Error),
         code(zeen::typechecker::try_return_type_mismatch),
-        help("the function must return the same enum, and `Result` error types must match exactly")
+        help(
+            "the function must return the same enum, and `Result` error types must match exactly"
+        )
     )]
     TryReturnTypeMismatch {
         ty: SmolStr,

@@ -4987,10 +4987,8 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        let failure_operand = Operand::Move(
-            Place::from_local(failure_local),
-            Some(expr.source.clone()),
-        );
+        let failure_operand =
+            Operand::Move(Place::from_local(failure_local), Some(expr.source.clone()));
         let failure_operand = self.normalize_return_operand(fb, failure_operand);
 
         fb.set_terminator(failure_bb, Terminator::Return(failure_operand));
