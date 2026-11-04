@@ -564,19 +564,8 @@ implement Response {
       self.body.len(),
     );
 
-    switch ((*stream).write_all(head.slice(..))) {
-      .Ok(_) => {},
-      .Err(e) => {
-        return Result.Err(e);
-      },
-    };
-
-    switch ((*stream).write_all(self.body.slice(..))) {
-      .Ok(_) => {},
-      .Err(e) => {
-        return Result.Err(e);
-      },
-    };
+    (*stream).write_all(head.slice(..))?;
+    (*stream).write_all(self.body.slice(..))?;
 
     return Result.Ok(.{});
   }

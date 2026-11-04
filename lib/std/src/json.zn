@@ -41,17 +41,13 @@ implement JsonValue {
     let parser = JsonParser { .text = text, .pos = 0 };
     parser.skip_ws();
 
-    const parsed = parser.parse_value(0);
-    if (parsed.is_err()) {
-      return Result.Err(parsed.unwrap_err());
-    };
-
+    const parsed = parser.parse_value(0)?;
     parser.skip_ws();
     if (parser.pos != text.len) {
       return Result.Err(JsonError { .kind = JsonErrorKind.TrailingData, .pos = parser.pos });
     };
 
-    return Result.Ok(parsed.unwrap());
+    return Result.Ok(parsed);
   }
 
   /// Render compact JSON text.
