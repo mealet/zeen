@@ -3567,4 +3567,98 @@ mod tests {
         assert!(names.contains(&"free"));
         assert!(names.contains(&"realloc"));
     }
+
+    #[test]
+    fn enum_variants_complete_after_type_name() {
+        let text =
+            "enum Msg {\n    quit,\n    step: i32,\n}\n\nfn main() {\n    let m = Msg.;\n}\n";
+        let dot = text.find("Msg.").unwrap() + "Msg".len();
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-enum.zn".parse().unwrap();
+
+        let repaired = repair_for_completion(text, dot + 1).unwrap();
+        let output = crate::diagnostics::check_completion(&uri, &repaired, &[]);
+        assert!(!output.analysis.occurrences.is_empty());
+
+        let items = dot_complete(text, &output.analysis, dot, ResolvePaths::default());
+
+        assert_eq!(labels(&items), vec!["quit", "step"]);
+    }
+
+    #[test]
+    fn core_enum_variants_complete_after_type_name() {
+        let uri: tower_lsp_server::ls_types::Uri = "file:///tmp/zeen-lsp-completion-core-enum.zn"
+            .parse()
+            .unwrap();
+
+        let option = "fn main() {\n    let o = Option.;\n}\n";
+        let dot = option.find("Option.").unwrap() + "Option".len();
+
+        let repaired = repair_for_completion(option, dot + 1).unwrap();
+        let output = crate::diagnostics::check_completion(&uri, &repaired, &[]);
+        assert!(!output.analysis.occurrences.is_empty());
+
+        let items = dot_complete(option, &output.analysis, dot, ResolvePaths::default());
+
+        assert_eq!(labels(&items), vec!["None", "Some"]);
+
+        let result = "fn main() {\n    let r = Result.;\n}\n";
+        let dot = result.find("Result.").unwrap() + "Result".len();
+
+        let repaired = repair_for_completion(result, dot + 1).unwrap();
+        let output = crate::diagnostics::check_completion(&uri, &repaired, &[]);
+        assert!(!output.analysis.occurrences.is_empty());
+
+        let items = dot_complete(result, &output.analysis, dot, ResolvePaths::default());
+
+        assert_eq!(labels(&items), vec!["Err", "Ok"]);
+    }
+
+    #[test]
+    fn enum_variant_prefix_filters_by_name() {
+        let text = "fn main() {\n    let o = Option.So;\n}\n";
+        let dot = text.find("Option.So").unwrap() + "Option".len();
+        let analysis = plain_analysis(text, dot);
+
+        let items = dot_complete(text, &analysis, dot, ResolvePaths::default());
+
+        assert_eq!(labels(&items), vec!["Some"]);
+    }
+
+    #[test]
+    fn imported_enum_variants_complete_after_type_name() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-enum-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lib.zn"),
+            "pub enum Color {\n    red,\n    green: i32,\n}\n",
+        )
+        .unwrap();
+
+        let text = "use lib;\n\nfn main() {\n    let c = Color.red;\n}\n";
+        std::fs::write(dir.join("main.zn"), text).unwrap();
+        let uri: tower_lsp_server::ls_types::Uri =
+            format!("file://{}/main.zn", dir.display()).parse().unwrap();
+        let output = crate::diagnostics::check(&uri, text, &[]);
+        let errors = crate::diagnostics::only_errors(&output.diagnostics);
+        assert!(errors.is_empty(), "sample must check cleanly: {:?}", errors);
+
+        let dot = text.find("Color.red").unwrap() + "Color".len();
+        let items = dot_complete(
+            text,
+            &output.analysis,
+            dot,
+            ResolvePaths {
+                dir: Some(&dir),
+                root: Some(&dir),
+                std: None,
+                packages: None,
+            },
+        );
+
+        assert_eq!(labels(&items), vec!["red"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

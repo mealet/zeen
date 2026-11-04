@@ -12,9 +12,9 @@ use zeen_ast::statements::{Statement, StatementKind};
 use zeen_ast::types::BuiltinShape;
 use zeen_ast::{Declaration, DeclarationKind};
 use zeen_hir::{
-    HirDecl, HirDeclKind, HirEnumVariantPayload, HirExpr, HirExprKind, HirFn, HirGenericParam,
-    HirId, HirModule, HirPattern, HirPatternBinding, HirStmt, HirStmtKind, HirTypeExpr,
-    HirTypeKind,
+    HirDecl, HirDeclKind, HirEnum, HirEnumVariant, HirEnumVariantPayload, HirExpr, HirExprKind,
+    HirFn, HirGenericParam, HirId, HirModule, HirPattern, HirPatternBinding, HirStmt, HirStmtKind,
+    HirTypeExpr, HirTypeKind,
 };
 use zeen_resolve::{DefId, DefKind, ResolutionResult};
 use zeen_typecheck::result::TypeCheckResult;
@@ -1256,21 +1256,63 @@ impl<'ctx> Walker<'ctx> {
         self.analysis.members.entry(owner).or_default().push(member);
     }
 
+    fn collect_enum_variants(&mut self, owner: DefId, enumeration: &HirEnum) {
+        for variant in &enumeration.variants {
+            self.collect_enum_variant(owner, variant);
+        }
+    }
+
+    fn collect_enum_variant(&mut self, owner: DefId, variant: &HirEnumVariant) {
+        self.analysis.member_owner.insert(variant.def_id, owner);
+
+        self.analysis
+            .members
+            .entry(owner)
+            .or_default()
+            .push(Member {
+                name: self.interner.resolve(&variant.name).to_string(),
+                kind: MemberKind::Variant,
+                def: variant.def_id,
+                signature: None,
+                is_static: true,
+                is_pub: true,
+                is_interface: false,
+                arity: None,
+            });
+
+        if let Some(HirEnumVariantPayload::Anonymous { fields, .. }) = &variant.payload {
+            for field in fields {
+                self.analysis
+                    .variant_fields
+                    .entry(variant.def_id)
+                    .or_default()
+                    .push(self.interner.resolve(&field.name).to_string());
+            }
+        }
+    }
+
     fn walk_cross_file(&mut self, decl: &HirDecl) {
         if self.file_matches(decl.source.src.name()) {
             return;
         }
 
-        let HirDeclKind::Interface(interface) = &decl.kind else {
-            return;
-        };
+        match &decl.kind {
+            HirDeclKind::Interface(interface) => {
+                let name = self.interner.resolve(&interface.name.0).to_string();
+                let source = decl.source.src.inner().as_str();
+                self.collect_interface(name, &interface.methods, source);
 
-        let name = self.interner.resolve(&interface.name.0).to_string();
-        let source = decl.source.src.inner().as_str();
-        self.collect_interface(name, &interface.methods, source);
+                for method in &interface.methods {
+                    self.collect_method(decl.def_id, method, true);
+                }
+            }
 
-        for method in &interface.methods {
-            self.collect_method(decl.def_id, method, true);
+            HirDeclKind::Enum(enumeration) => {
+                self.analysis.type_kinds.insert(decl.def_id, TypeKind::Enum);
+                self.collect_enum_variants(decl.def_id, enumeration);
+            }
+
+            _ => {}
         }
     }
 
@@ -1428,35 +1470,12 @@ impl<'ctx> Walker<'ctx> {
                         Some(variant.def_id),
                     );
 
-                    self.analysis
-                        .member_owner
-                        .insert(variant.def_id, decl.def_id);
-
-                    self.analysis
-                        .members
-                        .entry(decl.def_id)
-                        .or_default()
-                        .push(Member {
-                            name: self.interner.resolve(&variant.name).to_string(),
-                            kind: MemberKind::Variant,
-                            def: variant.def_id,
-                            signature: None,
-                            is_static: true,
-                            is_pub: true,
-                            is_interface: false,
-                            arity: None,
-                        });
+                    self.collect_enum_variant(decl.def_id, variant);
 
                     match &variant.payload {
                         Some(HirEnumVariantPayload::Single(ty)) => self.walk_type(ty),
                         Some(HirEnumVariantPayload::Anonymous { fields, .. }) => {
                             for field in fields {
-                                self.analysis
-                                    .variant_fields
-                                    .entry(variant.def_id)
-                                    .or_default()
-                                    .push(self.interner.resolve(&field.name).to_string());
-
                                 self.walk_type(&field.ty);
                             }
                         }
