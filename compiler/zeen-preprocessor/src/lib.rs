@@ -527,15 +527,17 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 value: value.map(|e| self.resolve_expr(e)),
             },
 
-            StatementKind::Break => StatementKind::Break,
-            StatementKind::Continue => StatementKind::Continue,
+            StatementKind::Break { label } => StatementKind::Break { label },
+            StatementKind::Continue { label } => StatementKind::Continue { label },
 
             StatementKind::While {
+                label,
                 condition,
                 update,
                 block,
                 else_block,
             } => StatementKind::While {
+                label,
                 condition: self.resolve_expr(condition),
                 update: update.map(|update| self.resolve_stmt(update)),
                 block: self.resolve_stmt(block),
@@ -543,11 +545,13 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
             },
 
             StatementKind::For {
+                label,
                 varname,
                 iterator,
                 block,
                 else_block,
             } => StatementKind::For {
+                label,
                 varname,
                 iterator: self.resolve_expr(iterator),
                 block: self.resolve_stmt(block),

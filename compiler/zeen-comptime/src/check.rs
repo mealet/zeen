@@ -190,6 +190,7 @@ impl<'arena> Checker<'_> {
             }
 
             StatementKind::While {
+                label: _,
                 condition,
                 update,
                 block,
@@ -238,7 +239,7 @@ impl<'arena> Checker<'_> {
                 }
             }
 
-            StatementKind::Break | StatementKind::Continue => {}
+            StatementKind::Break { .. } | StatementKind::Continue { .. } => {}
         }
     }
 

@@ -6,6 +6,7 @@ use crate::{
     type_parser::TypeParser,
 };
 
+use lasso::Spur;
 use smallvec::SmallVec;
 
 use zeen_ast::{
@@ -49,13 +50,18 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
             self.p.sync();
         }
 
-        match self.p.current().kind {
+        let kind = self.p.current().kind;
+
+        match kind {
             TokenKind::Keyword(CompilerKeyword::Let | CompilerKeyword::Const) => self.parse_let(),
             TokenKind::Keyword(CompilerKeyword::Return) => self.parse_return(),
             TokenKind::Keyword(CompilerKeyword::Break) => self.parse_break(),
             TokenKind::Keyword(CompilerKeyword::Continue) => self.parse_continue(),
-            TokenKind::Keyword(CompilerKeyword::While) => self.parse_while(),
-            TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(),
+            TokenKind::Keyword(CompilerKeyword::While) => self.parse_while(None),
+            TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(None),
+            TokenKind::Ident if self.p.peek_ahead_kind(0) == Some(TokenKind::Colon) => {
+                self.parse_labeled_loop()
+            }
             TokenKind::Keyword(CompilerKeyword::If) => self.parse_if(),
             TokenKind::Keyword(CompilerKeyword::Switch) => self.parse_switch(),
             TokenKind::Keyword(CompilerKeyword::Comptime) => {
@@ -291,36 +297,79 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
     }
 
     pub fn parse_break(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        let break_kw = self
-            .p
-            .expect(TokenKind::Keyword(CompilerKeyword::Break), "break")?;
-
-        self.expect_optional_semicolon()?;
-
-        let stmt = self.p.arena.alloc(Statement {
-            kind: StatementKind::Break,
-            span: break_kw.span,
-        });
-
-        Some(stmt)
+        self.parse_loop_control(CompilerKeyword::Break, "break")
     }
 
     pub fn parse_continue(&mut self) -> Option<&'ctx Statement<'ctx>> {
-        let break_kw = self
-            .p
-            .expect(TokenKind::Keyword(CompilerKeyword::Continue), "continue")?;
+        self.parse_loop_control(CompilerKeyword::Continue, "continue")
+    }
+
+    fn parse_loop_control(
+        &mut self,
+        keyword: CompilerKeyword,
+        name: &str,
+    ) -> Option<&'ctx Statement<'ctx>> {
+        let keyword_token = self.p.expect(TokenKind::Keyword(keyword), name)?;
+
+        let label = if self.p.eat(TokenKind::Colon) {
+            let label_token = self.p.expect(TokenKind::Ident, "label")?;
+            let label_span = label_token.span;
+            let label_slice =
+                self.p.src[label_span.offset()..label_span.offset() + label_span.len()].to_owned();
+
+            Some((self.p.get_or_intern(label_slice), label_span))
+        } else {
+            None
+        };
 
         self.expect_optional_semicolon()?;
 
-        let stmt = self.p.arena.alloc(Statement {
-            kind: StatementKind::Continue,
-            span: break_kw.span,
+        let label_name = label.map(|(label, _)| label);
+
+        let kind = match keyword {
+            CompilerKeyword::Break => StatementKind::Break { label: label_name },
+            _ => StatementKind::Continue { label: label_name },
+        };
+
+        let span = label.map_or(keyword_token.span, |(_, label_span)| {
+            keyword_token.merge_span(label_span)
         });
+
+        let stmt = self.p.arena.alloc(Statement { kind, span });
 
         Some(stmt)
     }
 
-    pub fn parse_while(&mut self) -> Option<&'ctx Statement<'ctx>> {
+    fn parse_labeled_loop(&mut self) -> Option<&'ctx Statement<'ctx>> {
+        let label_token = self.p.expect(TokenKind::Ident, "label")?;
+        let label_span = label_token.span;
+        let label_slice =
+            self.p.src[label_span.offset()..label_span.offset() + label_span.len()].to_owned();
+        let label = self.p.get_or_intern(label_slice);
+
+        let _ = self.p.expect(TokenKind::Colon, ":")?;
+
+        let stmt = match self.p.current().kind {
+            TokenKind::Keyword(CompilerKeyword::While) => self.parse_while(Some(label)),
+            TokenKind::Keyword(CompilerKeyword::For) => self.parse_for(Some(label)),
+            _ => {
+                self.p.report(ParserError::UnsupportedAction {
+                    label: "loop label must precede a `for` or `while` loop".into(),
+                    src: self.p.named_src(),
+                    span: self.p.current().span,
+                });
+
+                return None;
+            }
+        }?;
+
+        Some(self.p.arena.alloc(Statement {
+            kind: stmt.kind,
+            span: label_token.merge_span(stmt.span),
+        }))
+    }
+
+    pub fn parse_while(&mut self, label: Option<Spur>) -> Option<&'ctx Statement<'ctx>> {
         let while_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::While), "while")?;
@@ -353,6 +402,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
         let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::While {
+                label,
                 condition,
                 update,
                 block,
@@ -405,7 +455,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
         }
     }
 
-    pub fn parse_for(&mut self) -> Option<&'ctx Statement<'ctx>> {
+    pub fn parse_for(&mut self, label: Option<Spur>) -> Option<&'ctx Statement<'ctx>> {
         let for_kw = self
             .p
             .expect(TokenKind::Keyword(CompilerKeyword::For), "for")?;
@@ -438,6 +488,7 @@ impl<'tok, 'ctx, 'pr> StmtParser<'tok, 'ctx, 'pr> {
 
         let stmt = self.p.arena.alloc(Statement {
             kind: StatementKind::For {
+                label,
                 varname: (varname_id, varname_span),
                 iterator,
                 block,
@@ -1026,7 +1077,7 @@ mod tests {
         assert_matches!(
             stmt_parser.parse().unwrap(),
             Statement {
-                kind: StatementKind::Break,
+                kind: StatementKind::Break { .. },
                 ..
             }
         );
@@ -1043,12 +1094,103 @@ mod tests {
         assert_matches!(
             stmt_parser.parse().unwrap(),
             Statement {
-                kind: StatementKind::Continue,
+                kind: StatementKind::Continue { .. },
                 ..
             }
         );
 
         assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn labeled_break_stmt() {
+        const SRC: &str = "break :outer;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        let Statement {
+            kind: StatementKind::Break { label },
+            ..
+        } = stmt_parser.parse().unwrap()
+        else {
+            panic!("expected labeled break");
+        };
+
+        assert_eq!(
+            label.map(|label| rodeo.borrow().resolve(&label).to_string()),
+            Some("outer".to_string())
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn labeled_continue_stmt() {
+        const SRC: &str = "continue :outer;";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        let Statement {
+            kind: StatementKind::Continue { label },
+            ..
+        } = stmt_parser.parse().unwrap()
+        else {
+            panic!("expected labeled continue");
+        };
+
+        assert_eq!(
+            label.map(|label| rodeo.borrow().resolve(&label).to_string()),
+            Some("outer".to_string())
+        );
+
+        assert!(stmt_parser.parse().is_none());
+    }
+
+    #[test]
+    fn labeled_for_stmt() {
+        const SRC: &str = "outer: for (i : 0..3) { break :outer; }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        let Statement {
+            kind: StatementKind::For { label, block, .. },
+            ..
+        } = stmt_parser.parse().unwrap()
+        else {
+            panic!("expected labeled for");
+        };
+
+        assert_eq!(
+            label.map(|label| rodeo.borrow().resolve(&label).to_string()),
+            Some("outer".to_string())
+        );
+
+        assert_matches!(block.kind, StatementKind::Expr(_));
+    }
+
+    #[test]
+    fn labeled_while_stmt() {
+        const SRC: &str = "outer: while (i < 3) : (i += 1) { continue :outer; }";
+
+        make_stmt_parser!(SRC, tokens, bump, rodeo, parser, stmt_parser);
+
+        let Statement {
+            kind: StatementKind::While { label, update, .. },
+            ..
+        } = stmt_parser.parse().unwrap()
+        else {
+            panic!("expected labeled while");
+        };
+
+        assert_eq!(
+            label.map(|label| rodeo.borrow().resolve(&label).to_string()),
+            Some("outer".to_string())
+        );
+
+        assert_matches!(
+            update.map(|update| update.kind),
+            Some(StatementKind::CompoundAssign { .. })
+        );
     }
 
     #[test]
@@ -1061,6 +1203,7 @@ mod tests {
             stmt_parser.parse().unwrap(),
             Statement {
                 kind: StatementKind::While {
+                    label: _,
                     condition: _,
                     update: _,
                     block: Statement {
@@ -1119,6 +1262,7 @@ mod tests {
             stmt_parser.parse().unwrap(),
             Statement {
                 kind: StatementKind::While {
+                    label: _,
                     condition: _,
                     update: Some(Statement {
                         kind: StatementKind::CompoundAssign { .. },
@@ -1157,6 +1301,7 @@ mod tests {
             stmt_parser.parse().unwrap(),
             Statement {
                 kind: StatementKind::While {
+                    label: _,
                     condition: _,
                     update: _,
                     block: Statement { .. },
@@ -1182,6 +1327,7 @@ mod tests {
             stmt_parser.parse().unwrap(),
             Statement {
                 kind: StatementKind::For {
+                    label: _,
                     varname: _,
                     iterator: _,
                     block: Statement { .. },
@@ -1207,6 +1353,7 @@ mod tests {
             stmt_parser.parse().unwrap(),
             Statement {
                 kind: StatementKind::While {
+                    label: _,
                     condition: _,
                     update: _,
                     block: Statement {
@@ -1232,6 +1379,7 @@ mod tests {
             stmt_parser.parse().unwrap(),
             Statement {
                 kind: StatementKind::For {
+                    label: _,
                     varname: _,
                     iterator: Expression {
                         kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(123)),
@@ -1260,6 +1408,7 @@ mod tests {
             stmt_parser.parse().unwrap(),
             Statement {
                 kind: StatementKind::For {
+                    label: _,
                     varname: _,
                     iterator: Expression {
                         kind: ExpressionKind::Literal(zeen_ast::expressions::Literal::Int(123)),

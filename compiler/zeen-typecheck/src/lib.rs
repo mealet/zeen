@@ -1737,7 +1737,7 @@ impl<'res> TypeChecker<'res> {
             self_type,
             generic_bindings,
             generic_bounds,
-            loop_depth: 0,
+            loop_labels: Vec::new(),
         });
 
         match &body.kind {
@@ -2094,6 +2094,7 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirStmtKind::While {
+                label,
                 condition,
                 update,
                 block,
@@ -2106,7 +2107,8 @@ impl<'res> TypeChecker<'res> {
                     self.check_stmt(update);
                 }
 
-                self.ctx.enter_loop();
+                self.check_loop_label(*label, stmt);
+                self.ctx.enter_loop(*label);
                 self.check_stmt(block);
                 self.ctx.exit_loop();
 
@@ -2116,6 +2118,7 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirStmtKind::For {
+                label,
                 def_id,
                 varname: _,
                 iterator,
@@ -2161,7 +2164,8 @@ impl<'res> TypeChecker<'res> {
                 self.result.expr_types.insert(stmt.id, elem_ty);
                 self.result.def_types.insert(*def_id, elem_ty);
 
-                self.ctx.enter_loop();
+                self.check_loop_label(*label, stmt);
+                self.ctx.enter_loop(*label);
                 self.check_stmt(block);
                 self.ctx.exit_loop();
 
@@ -2170,21 +2174,11 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
-            HirStmtKind::Break => {
-                if !self.ctx.in_loop() {
-                    self.report(TypeError::BreakOutsideLoop {
-                        src: stmt.source.src(),
-                        span: stmt.source.span,
-                    });
-                }
+            HirStmtKind::Break { label } => {
+                self.check_loop_control(*label, stmt, true);
             }
-            HirStmtKind::Continue => {
-                if !self.ctx.in_loop() {
-                    self.report(TypeError::ContinueOutsideLoop {
-                        src: stmt.source.src(),
-                        span: stmt.source.span,
-                    });
-                }
+            HirStmtKind::Continue { label } => {
+                self.check_loop_control(*label, stmt, false);
             }
 
             HirStmtKind::Return { value } => {
@@ -2279,6 +2273,58 @@ impl<'res> TypeChecker<'res> {
             once,
             erased: false,
         })
+    }
+
+    fn check_loop_label(&mut self, label: Option<Spur>, stmt: &HirStmt) {
+        let Some(label) = label else {
+            return;
+        };
+
+        if !self.ctx.has_loop_label(label) {
+            return;
+        }
+
+        let name = self.interner.borrow().resolve(&label).to_string();
+
+        self.report(TypeError::DuplicateLoopLabel {
+            label: SmolStr::from(name),
+            src: stmt.source.src(),
+            span: stmt.source.span,
+        });
+    }
+
+    fn check_loop_control(&mut self, label: Option<Spur>, stmt: &HirStmt, is_break: bool) {
+        let Some(label) = label else {
+            if self.ctx.in_loop() {
+                return;
+            }
+
+            self.report(if is_break {
+                TypeError::BreakOutsideLoop {
+                    src: stmt.source.src(),
+                    span: stmt.source.span,
+                }
+            } else {
+                TypeError::ContinueOutsideLoop {
+                    src: stmt.source.src(),
+                    span: stmt.source.span,
+                }
+            });
+
+            return;
+        };
+
+        if self.ctx.has_loop_label(label) {
+            return;
+        }
+
+        let name = self.interner.borrow().resolve(&label).to_string();
+
+        self.report(TypeError::UnknownLoopLabel {
+            label: SmolStr::from(name),
+            src: stmt.source.src(),
+            span: stmt.source.span,
+        });
     }
 
     fn check_stmt_as_block_value(&mut self, stmt: &HirStmt, expected: Option<TypeId>) -> TypeId {
@@ -3028,7 +3074,9 @@ impl<'res> TypeChecker<'res> {
 
     fn stmt_diverges(&self, stmt: &HirStmt) -> bool {
         match &stmt.kind {
-            HirStmtKind::Return { .. } | HirStmtKind::Break | HirStmtKind::Continue => true,
+            HirStmtKind::Return { .. }
+            | HirStmtKind::Break { .. }
+            | HirStmtKind::Continue { .. } => true,
             HirStmtKind::Expr(e) => self.expr_diverges(e),
             _ => false,
         }

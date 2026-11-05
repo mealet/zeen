@@ -575,15 +575,17 @@ impl<'res> HirLowering<'res> {
                 value: value.map(|val| Rc::new(self.lower_expr(val))),
             },
 
-            StatementKind::Break => HirStmtKind::Break,
-            StatementKind::Continue => HirStmtKind::Continue,
+            StatementKind::Break { label } => HirStmtKind::Break { label },
+            StatementKind::Continue { label } => HirStmtKind::Continue { label },
 
             StatementKind::While {
+                label,
                 condition,
                 update,
                 block,
                 else_block,
             } => HirStmtKind::While {
+                label,
                 condition: Rc::new(self.lower_expr(condition)),
                 update: update.map(|update| Rc::new(self.lower_stmt(update))),
                 block: Rc::new(self.lower_stmt(block)),
@@ -591,6 +593,7 @@ impl<'res> HirLowering<'res> {
             },
 
             StatementKind::For {
+                label,
                 varname,
                 iterator,
                 block,
@@ -602,6 +605,7 @@ impl<'res> HirLowering<'res> {
                 };
 
                 HirStmtKind::For {
+                    label,
                     def_id,
                     varname,
                     iterator: Rc::new(self.lower_expr(iterator)),

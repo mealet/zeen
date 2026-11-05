@@ -130,6 +130,7 @@ impl<'a> Analyzer<'a> {
             }
 
             HirStmtKind::While {
+                label: _,
                 condition,
                 update,
                 block,
@@ -169,7 +170,7 @@ impl<'a> Analyzer<'a> {
 
             HirStmtKind::FnDecl(decl) => self.decl_fn(decl),
 
-            HirStmtKind::Break | HirStmtKind::Continue | HirStmtKind::Error => {}
+            HirStmtKind::Break { .. } | HirStmtKind::Continue { .. } | HirStmtKind::Error => {}
         }
     }
 

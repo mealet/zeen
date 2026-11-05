@@ -271,6 +271,7 @@ impl<'ctx> IncludeResolver<'ctx> {
             }
 
             StatementKind::While {
+                label: _,
                 condition,
                 update,
                 block,
@@ -318,7 +319,7 @@ impl<'ctx> IncludeResolver<'ctx> {
                 }
             }
 
-            StatementKind::Break | StatementKind::Continue => {}
+            StatementKind::Break { .. } | StatementKind::Continue { .. } => {}
         }
     }
 

@@ -183,6 +183,8 @@ pub enum Unwind<'arena> {
     Return(Value<'arena>),
     Break,
     Continue,
+    BreakTo(Spur),
+    ContinueTo(Spur),
 }
 
 pub struct ModuleScope<'arena> {
@@ -1139,8 +1141,7 @@ impl<'arena> Interp<'arena> {
                 Ok(Some(_)) => continue,
                 Ok(None) => continue,
                 Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                Err(Unwind::Break) => return Err(Unwind::Break),
-                Err(Unwind::Continue) => return Err(Unwind::Continue),
+                Err(unwind) => return Err(unwind),
             }
         }
 
@@ -1220,15 +1221,24 @@ impl<'arena> Interp<'arena> {
                 None => Err(Unwind::Return(Value::Bool(false))),
             },
 
-            StatementKind::Break => Err(Unwind::Break),
-            StatementKind::Continue => Err(Unwind::Continue),
+            StatementKind::Break { label } => match *label {
+                Some(label) => Err(Unwind::BreakTo(label)),
+                None => Err(Unwind::Break),
+            },
+
+            StatementKind::Continue { label } => match *label {
+                Some(label) => Err(Unwind::ContinueTo(label)),
+                None => Err(Unwind::Continue),
+            },
 
             StatementKind::While {
+                label,
                 condition,
                 update,
                 block,
                 else_block,
             } => {
+                let label = *label;
                 self.depth += 1;
                 if self.depth > DEPTH_LIMIT {
                     self.depth -= 1;
@@ -1265,21 +1275,33 @@ impl<'arena> Interp<'arena> {
 
                     match self.eval_statement(block) {
                         Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                        Err(Unwind::Break) => {
+                        Err(Unwind::BreakTo(other)) if Some(other) != label => {
+                            return Err(Unwind::BreakTo(other));
+                        }
+                        Err(Unwind::ContinueTo(other)) if Some(other) != label => {
+                            return Err(Unwind::ContinueTo(other));
+                        }
+                        Err(Unwind::Break | Unwind::BreakTo(_)) => {
                             broke = true;
                             break;
                         }
-                        Err(Unwind::Continue) | Ok(_) => {}
+                        Err(Unwind::Continue | Unwind::ContinueTo(_)) | Ok(_) => {}
                     }
 
                     if let Some(update) = update {
                         match self.eval_statement(update) {
                             Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                            Err(Unwind::Break) => {
+                            Err(Unwind::BreakTo(other)) if Some(other) != label => {
+                                return Err(Unwind::BreakTo(other));
+                            }
+                            Err(Unwind::ContinueTo(other)) if Some(other) != label => {
+                                return Err(Unwind::ContinueTo(other));
+                            }
+                            Err(Unwind::Break | Unwind::BreakTo(_)) => {
                                 broke = true;
                                 break;
                             }
-                            Err(Unwind::Continue) => continue,
+                            Err(Unwind::Continue | Unwind::ContinueTo(_)) => continue,
                             Ok(_) => {}
                         }
                     }
@@ -1298,24 +1320,25 @@ impl<'arena> Interp<'arena> {
             }
 
             StatementKind::For {
+                label,
                 varname,
                 iterator,
                 block,
                 else_block,
-            } => self.eval_for_statement(varname.0, iterator, block, *else_block, stmt.span),
+            } => {
+                self.eval_for_statement(varname.0, *label, iterator, block, *else_block, stmt.span)
+            }
 
             StatementKind::Expr(expr) => match self.eval_expr(expr) {
                 Ok(value) => Ok(Some(value)),
                 Err(Unwind::Return(v)) => Err(Unwind::Return(v)),
-                Err(Unwind::Break) => Err(Unwind::Break),
-                Err(Unwind::Continue) => Err(Unwind::Continue),
+                Err(unwind) => Err(unwind),
             },
 
             StatementKind::TrailingExpr(expr) => match self.eval_expr(expr) {
                 Ok(value) => Ok(Some(value)),
                 Err(Unwind::Return(v)) => Err(Unwind::Return(v)),
-                Err(Unwind::Break) => Err(Unwind::Break),
-                Err(Unwind::Continue) => Err(Unwind::Continue),
+                Err(unwind) => Err(unwind),
             },
 
             StatementKind::FnDecl(_) => {
@@ -1338,6 +1361,7 @@ impl<'arena> Interp<'arena> {
     fn eval_for_statement(
         &mut self,
         name: Spur,
+        label: Option<Spur>,
         iterator: &'arena Expression<'arena>,
         block: &'arena Statement<'arena>,
         else_block: Option<&'arena Statement<'arena>>,
@@ -1369,13 +1393,19 @@ impl<'arena> Interp<'arena> {
                     None => None,
                 };
 
-                self.run_for_range(name, start_value, end_value, *inclusive, block, span)
+                self.run_for_range(name, label, start_value, end_value, *inclusive, block, span)
             }
 
             _ => match self.eval_expr(iterator)? {
-                Value::Int(total) if total >= 0 => {
-                    self.run_for_range(name, None, Some(Value::Int(total)), false, block, span)
-                }
+                Value::Int(total) if total >= 0 => self.run_for_range(
+                    name,
+                    label,
+                    None,
+                    Some(Value::Int(total)),
+                    false,
+                    block,
+                    span,
+                ),
 
                 Value::Int(total) => {
                     self.errors.push(Error::TypeMismatch {
@@ -1387,11 +1417,11 @@ impl<'arena> Interp<'arena> {
                     Err(Unwind::Break)
                 }
 
-                Value::Array(items) => self.run_for_iteration(name, items, block),
+                Value::Array(items) => self.run_for_iteration(name, label, items, block),
 
                 Value::Str(text) => {
                     let chars: Vec<Value<'arena>> = text.chars().map(Value::Char).collect();
-                    self.run_for_iteration(name, chars, block)
+                    self.run_for_iteration(name, label, chars, block)
                 }
 
                 other => {
@@ -1417,9 +1447,11 @@ impl<'arena> Interp<'arena> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_for_range(
         &mut self,
         name: Spur,
+        label: Option<Spur>,
         start: Option<Value<'arena>>,
         end: Option<Value<'arena>>,
         inclusive: bool,
@@ -1454,7 +1486,7 @@ impl<'arena> Interp<'arena> {
         let end = if inclusive { end + 1 } else { end };
         let values: Vec<Value<'arena>> = (start..end).map(Value::Int).collect();
 
-        self.run_for_iteration(name, values, block)
+        self.run_for_iteration(name, label, values, block)
     }
 
     fn for_unsupported(&mut self, value: Value<'arena>, span: miette::SourceSpan) {
@@ -1472,6 +1504,7 @@ impl<'arena> Interp<'arena> {
     fn run_for_iteration(
         &mut self,
         name: Spur,
+        label: Option<Spur>,
         values: Vec<Value<'arena>>,
         block: &'arena Statement<'arena>,
     ) -> Result<bool, Unwind<'arena>> {
@@ -1484,8 +1517,14 @@ impl<'arena> Interp<'arena> {
 
             match self.eval_statement(block) {
                 Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                Err(Unwind::Break) => return Ok(false),
-                Err(Unwind::Continue) => continue,
+                Err(Unwind::BreakTo(other)) if Some(other) != label => {
+                    return Err(Unwind::BreakTo(other));
+                }
+                Err(Unwind::ContinueTo(other)) if Some(other) != label => {
+                    return Err(Unwind::ContinueTo(other));
+                }
+                Err(Unwind::Break | Unwind::BreakTo(_)) => return Ok(false),
+                Err(Unwind::Continue | Unwind::ContinueTo(_)) => continue,
                 Ok(_) => {}
             }
         }
@@ -2475,8 +2514,7 @@ impl<'arena> Interp<'arena> {
                 Some(else_statement) => match self.eval_statement(else_statement) {
                     Ok(value) => return Ok(value.unwrap_or(Value::Bool(false))),
                     Err(Unwind::Return(v)) => return Err(Unwind::Return(v)),
-                    Err(Unwind::Break) => return Err(Unwind::Break),
-                    Err(Unwind::Continue) => return Err(Unwind::Continue),
+                    Err(unwind) => return Err(unwind),
                 },
                 None => return Ok(Value::Bool(false)),
             };
@@ -2485,8 +2523,7 @@ impl<'arena> Interp<'arena> {
         match self.eval_statement(then_block) {
             Ok(value) => Ok(value.unwrap_or(Value::Bool(false))),
             Err(Unwind::Return(v)) => Err(Unwind::Return(v)),
-            Err(Unwind::Break) => Err(Unwind::Break),
-            Err(Unwind::Continue) => Err(Unwind::Continue),
+            Err(unwind) => Err(unwind),
         }
     }
 
@@ -2505,8 +2542,7 @@ impl<'arena> Interp<'arena> {
 
         let result = match (outcome, trailing) {
             (Err(Unwind::Return(v)), _) => Err(Unwind::Return(v)),
-            (Err(Unwind::Break), _) => Err(Unwind::Break),
-            (Err(Unwind::Continue), _) => Err(Unwind::Continue),
+            (Err(unwind), _) => Err(unwind),
             (Ok(_), Some(trailing_expr)) => self.eval_expr(trailing_expr),
             (Ok(Some(value)), None) => Ok(value),
             (Ok(None), None) => Ok(Value::Bool(false)),

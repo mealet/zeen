@@ -1476,7 +1476,12 @@ impl<'arena> Interp<'arena> {
 
                         self.value_to_expr(module, value, expr.span)
                     }
-                    Err(Unwind::Break | Unwind::Continue) => Err(self.errors.clone()),
+                    Err(
+                        Unwind::Break
+                        | Unwind::Continue
+                        | Unwind::BreakTo(_)
+                        | Unwind::ContinueTo(_),
+                    ) => Err(self.errors.clone()),
                     Err(Unwind::Return(_)) => {
                         self.errors.push(Error::Unsupported {
                             message: "`return` is not allowed inside a comptime block".into(),
@@ -1698,6 +1703,7 @@ impl<'arena> Interp<'arena> {
             }
 
             StatementKind::While {
+                label,
                 condition,
                 update,
                 block,
@@ -1733,6 +1739,7 @@ impl<'arena> Interp<'arena> {
 
                     Ok(new_block) => Ok(Some(self.arena.alloc(Statement {
                         kind: StatementKind::While {
+                            label: *label,
                             condition: cond_new.unwrap_or(condition),
                             update: update_new.or(*update),
                             block: new_block.unwrap_or(block),
@@ -1744,6 +1751,7 @@ impl<'arena> Interp<'arena> {
             }
 
             StatementKind::For {
+                label,
                 varname,
                 iterator,
                 block,
@@ -1766,6 +1774,7 @@ impl<'arena> Interp<'arena> {
                     Ok(None) if iter_new.is_none() && else_new.is_none() => Ok(None),
                     Ok(new_block) => Ok(Some(self.arena.alloc(Statement {
                         kind: StatementKind::For {
+                            label: *label,
                             varname: *varname,
                             iterator: iter_new.unwrap_or(iterator),
                             block: new_block.unwrap_or(block),
@@ -1804,7 +1813,7 @@ impl<'arena> Interp<'arena> {
                 })
             }),
 
-            StatementKind::Break | StatementKind::Continue => Ok(None),
+            StatementKind::Break { .. } | StatementKind::Continue { .. } => Ok(None),
 
             other => {
                 let _ = other;
