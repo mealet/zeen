@@ -3701,4 +3701,170 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+    const DEFAULT_IFACE_SAMPLE: &str = "interface Shape {\n    fn area(*const self) i32;\n\n    fn name(*const self) []const char {\n        return \"shape\";\n    }\n}\n\nstruct Square {\n    side: i32,\n}\n\nimplement Shape : Square {\n    fn area(*const self) i32 {\n        return self.side * self.side;\n    }\n}\n\nfn main() {\n    let s = Square { .side = 3 };\n    s.\n}\n";
+
+    fn dangling_analysis(text: &str, dot: usize) -> crate::analysis::Analysis {
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let repaired = repair_for_completion(text, dot + 1).unwrap();
+        let output = crate::diagnostics::check(&uri, &repaired, &[]);
+
+        assert!(
+            !output.analysis.occurrences.is_empty(),
+            "repaired text must analyze"
+        );
+
+        output.analysis
+    }
+
+    #[test]
+    fn interface_defaults_complete_on_local_value() {
+        let dot = DEFAULT_IFACE_SAMPLE.find("s.").unwrap() + 1;
+        let analysis = dangling_analysis(DEFAULT_IFACE_SAMPLE, dot);
+        let items = dot_complete(
+            DEFAULT_IFACE_SAMPLE,
+            &analysis,
+            dot,
+            ResolvePaths::default(),
+        );
+        let names = labels(&items);
+
+        assert!(
+            names.contains(&"name()"),
+            "default must complete: {names:?}"
+        );
+        assert!(
+            names.contains(&"area()"),
+            "declared must complete: {names:?}"
+        );
+        assert!(
+            !names.contains(&"side"),
+            "private field stays hidden: {names:?}"
+        );
+    }
+
+    #[test]
+    fn private_fields_complete_in_named_init() {
+        let text =
+            "struct Rect {\n    w: i32,\n    h: i32,\n}\n\nfn main() {\n    let a = Rect { .\n}\n";
+        let anchor = "Rect { .";
+        let offset = text.find(anchor).unwrap() + anchor.len();
+
+        assert!(struct_init_field_position(text, offset));
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let repaired = repair_for_completion_semi(text, offset, 1, true).unwrap();
+        let output = crate::diagnostics::check(&uri, &repaired, &[]);
+        let items = struct_init_complete(text, &output.analysis, offset, ResolvePaths::default());
+
+        assert_eq!(labels(&items), vec!["h", "w"]);
+    }
+
+    #[test]
+    fn private_fields_complete_in_short_init() {
+        let text = "struct Rect {\n    w: i32,\n    h: i32,\n}\n\nfn main() {\n    let a: Rect = .{ .\n}\n";
+        let anchor = ".{ .";
+        let offset = text.find(anchor).unwrap() + anchor.len();
+
+        assert!(struct_init_field_position(text, offset));
+
+        let uri: tower_lsp_server::ls_types::Uri =
+            "file:///tmp/zeen-lsp-completion-probe.zn".parse().unwrap();
+        let repaired = repair_for_completion_semi(text, offset, 1, true).unwrap();
+        let output = crate::diagnostics::check(&uri, &repaired, &[]);
+        let items = struct_init_complete(text, &output.analysis, offset, ResolvePaths::default());
+
+        assert_eq!(labels(&items), vec!["h", "w"]);
+    }
+
+    const DEFAULT_IFACE_LIB: &str = "pub interface Shape {\n    pub fn area(*const self) i32;\n\n    pub fn name(*const self) []const char {\n        return \"shape\";\n    }\n}\n";
+
+    #[test]
+    fn imported_interface_defaults_complete_on_local_impl() {
+        let dir = std::env::temp_dir().join(format!("zeen-lsp-iface-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.zn"), DEFAULT_IFACE_LIB).unwrap();
+
+        let text = "use lib;\n\nstruct Local {\n    w: i32,\n}\n\nimplement Shape : Local {\n    pub fn area(*const self) i32 {\n        return self.w;\n    }\n}\n\nfn main() {\n    let s = Local { .w = 3 };\n    s.\n}\n";
+        std::fs::write(dir.join("main.zn"), text).unwrap();
+        let uri: tower_lsp_server::ls_types::Uri =
+            format!("file://{}/main.zn", dir.display()).parse().unwrap();
+        let dot = text.find("s.").unwrap() + 1;
+
+        let repaired = repair_for_completion(text, dot + 1).unwrap();
+        let output = crate::diagnostics::check(&uri, &repaired, &[]);
+        let items = dot_complete(
+            text,
+            &output.analysis,
+            dot,
+            ResolvePaths {
+                dir: Some(&dir),
+                root: Some(&dir),
+                std: None,
+                packages: None,
+            },
+        );
+        let names = labels(&items);
+
+        assert!(
+            names.contains(&"name()"),
+            "default must complete: {names:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn imported_implement_defaults_complete() {
+        let dir =
+            std::env::temp_dir().join(format!("zeen-lsp-iface-import-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lib.zn"),
+            format!(
+                "{DEFAULT_IFACE_LIB}\npub struct Rect {{\n    pub w: i32,\n}}\n\nimplement Shape : Rect {{\n    pub fn area(*const self) i32 {{\n        return self.w;\n    }}\n}}\n"
+            ),
+        )
+        .unwrap();
+
+        let text = "use lib;\n\nfn main() {\n    let r = Rect { .w = 1 };\n    r.\n}\n";
+        std::fs::write(dir.join("main.zn"), text).unwrap();
+        let uri: tower_lsp_server::ls_types::Uri =
+            format!("file://{}/main.zn", dir.display()).parse().unwrap();
+        let dot = text.find("r.").unwrap() + 1;
+
+        let repaired = repair_for_completion(text, dot + 1).unwrap();
+        let output = crate::diagnostics::check(&uri, &repaired, &[]);
+        let items = dot_complete(
+            text,
+            &output.analysis,
+            dot,
+            ResolvePaths {
+                dir: Some(&dir),
+                root: Some(&dir),
+                std: None,
+                packages: None,
+            },
+        );
+        let names = labels(&items);
+
+        assert!(
+            names.contains(&"name()"),
+            "default must complete: {names:?}"
+        );
+        assert!(
+            names.contains(&"area()"),
+            "override must complete: {names:?}"
+        );
+        assert_eq!(
+            names.iter().filter(|name| **name == "area()").count(),
+            1,
+            "no duplicates: {names:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
