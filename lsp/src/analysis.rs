@@ -124,6 +124,7 @@ pub struct Analysis {
     pub(crate) raw_exprs: Vec<RawExpr>,
     pub implements: Vec<(DefId, DefId)>,
     pub interfaces: HashMap<String, Vec<Member>>,
+    pub interface_def_name: HashMap<DefId, String>,
     pub generic_bounds: HashMap<DefId, Vec<DefId>>,
     pub builtin_targets: Vec<BuiltinTarget>,
 }
@@ -1300,6 +1301,9 @@ impl<'ctx> Walker<'ctx> {
             HirDeclKind::Interface(interface) => {
                 let name = self.interner.resolve(&interface.name.0).to_string();
                 let source = decl.source.src.inner().as_str();
+                self.analysis
+                    .interface_def_name
+                    .insert(decl.def_id, name.clone());
                 self.collect_interface(name, &interface.methods, source);
 
                 for method in &interface.methods {
@@ -1310,6 +1314,12 @@ impl<'ctx> Walker<'ctx> {
             HirDeclKind::Enum(enumeration) => {
                 self.analysis.type_kinds.insert(decl.def_id, TypeKind::Enum);
                 self.collect_enum_variants(decl.def_id, enumeration);
+            }
+
+            HirDeclKind::Implement(implement) => {
+                if let (Some(interface), Some(object)) = (implement.interface, implement.object) {
+                    self.analysis.implements.push((interface, object));
+                }
             }
 
             _ => {}
@@ -1413,6 +1423,9 @@ impl<'ctx> Walker<'ctx> {
 
                 let name = self.interner.resolve(&interface.name.0).to_string();
                 let text = self.text;
+                self.analysis
+                    .interface_def_name
+                    .insert(decl.def_id, name.clone());
                 self.collect_interface(name, &interface.methods, text);
 
                 for method in &interface.methods {

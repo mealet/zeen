@@ -1021,6 +1021,51 @@ fn push_type_members(
                 });
             }
         }
+
+        for (iface_def, object_def) in &analysis.implements {
+            if *object_def != def {
+                continue;
+            }
+            let Some(iface_name) = analysis.interface_def_name.get(iface_def) else {
+                continue;
+            };
+            let Some(iface_methods) = analysis.interfaces.get(iface_name) else {
+                continue;
+            };
+            let same_file = analysis
+                .def_spans
+                .get(iface_def)
+                .is_some_and(|(_, _, file)| file.is_none());
+            for member in iface_methods {
+                if seen.contains(&member.name) {
+                    continue;
+                }
+                if !member.name.starts_with(filter) {
+                    continue;
+                }
+                if !member.is_pub && !allow_private && !same_file {
+                    continue;
+                }
+                if !keep_local_member(member, static_context) {
+                    continue;
+                }
+                seen.insert(member.name.clone());
+                let rank = member_rank(
+                    member.kind == MemberKind::Variant
+                        || (member.kind == MemberKind::Method && member.is_static),
+                    static_context,
+                );
+                items.push(CompletionItem {
+                    label: member_label(&member.name, member.arity),
+                    kind: Some(member_completion_kind(member)),
+                    detail: member.signature.clone(),
+                    filter_text: Some(member.name.clone()),
+                    insert_text: Some(member.name.clone()),
+                    sort_text: Some(format!("{rank}_{}", member.name)),
+                    ..Default::default()
+                });
+            }
+        }
     }
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
@@ -1532,12 +1577,10 @@ pub fn struct_init_complete(
     if let Some(def) = find_type_def(analysis, text, &type_name)
         && let Some(members) = analysis.members.get(&def)
     {
-        let allow_private = scope_covers(analysis, def, offset);
         let mut local: Vec<&Member> = members
             .iter()
             .filter(|member| {
                 member.kind == MemberKind::Field
-                    && (member.is_pub || allow_private)
                     && !used.contains(&member.name)
                     && member.name.starts_with(&filter)
             })
