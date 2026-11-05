@@ -116,7 +116,7 @@ fn collect_from_stmt(stmt: &HirStmt, map: &mut HashMap<DefId, Rc<HirFn>>) {
 
         HirStmtKind::Expr(expr) => collect_from_expr(expr, map),
 
-        HirStmtKind::Break | HirStmtKind::Continue | HirStmtKind::Error => {}
+        HirStmtKind::Break { .. } | HirStmtKind::Continue { .. } | HirStmtKind::Error => {}
     }
 }
 

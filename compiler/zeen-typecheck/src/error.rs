@@ -352,6 +352,28 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    #[error("unknown loop label `{label}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::unknown_loop_label))]
+    UnknownLoopLabel {
+        label: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("no enclosing loop carries this label")]
+        span: SourceSpan,
+    },
+
+    #[error("duplicate loop label `{label}`")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::duplicate_loop_label))]
+    DuplicateLoopLabel {
+        label: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("an enclosing loop already carries this label")]
+        span: SourceSpan,
+    },
+
     #[error("type `{child_type}` is not indexable")]
     #[diagnostic(severity(Error), code(zeen::typechecker::not_indexable))]
     NotIndexable {

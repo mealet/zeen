@@ -1731,9 +1731,10 @@ impl<'ctx> Walker<'ctx> {
                 }
             }
 
-            HirStmtKind::Break | HirStmtKind::Continue | HirStmtKind::Error => {}
+            HirStmtKind::Break { .. } | HirStmtKind::Continue { .. } | HirStmtKind::Error => {}
 
             HirStmtKind::While {
+                label: _,
                 condition,
                 update,
                 block,
@@ -1753,6 +1754,7 @@ impl<'ctx> Walker<'ctx> {
             }
 
             HirStmtKind::For {
+                label: _,
                 def_id,
                 varname,
                 iterator,
@@ -2493,9 +2495,10 @@ fn walk_syntax_stmt(
             }
         }
 
-        StatementKind::Break | StatementKind::Continue => {}
+        StatementKind::Break { .. } | StatementKind::Continue { .. } => {}
 
         StatementKind::While {
+            label: _,
             condition,
             update,
             block,
@@ -2515,6 +2518,7 @@ fn walk_syntax_stmt(
         }
 
         StatementKind::For {
+            label: _,
             varname,
             iterator,
             block,

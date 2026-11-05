@@ -224,6 +224,7 @@ impl MonoCache {
 }
 
 struct LoopTargets {
+    label: Option<Spur>,
     break_target: BlockId,
     continue_target: BlockId,
 }
@@ -315,6 +316,18 @@ impl FnBuilder {
         if self.block_is_open(block) {
             self.set_terminator(block, Terminator::Goto(join));
         }
+    }
+
+    fn loop_target(&self, label: Option<Spur>) -> &LoopTargets {
+        match label {
+            Some(label) => self
+                .loop_stack
+                .iter()
+                .rev()
+                .find(|target| target.label == Some(label)),
+            None => self.loop_stack.last(),
+        }
+        .expect("loop target must exist after type checking")
     }
 
     fn block_is_open(&self, block: BlockId) -> bool {
@@ -752,6 +765,7 @@ impl<'ctx> MirLowering<'ctx> {
                 }
             }
             HirStmtKind::While {
+                label: _,
                 condition,
                 update,
                 block,
@@ -783,8 +797,8 @@ impl<'ctx> MirLowering<'ctx> {
                 }
             }
             HirStmtKind::Expr(expr) => self.collect_global_expr_deps(expr, out),
-            HirStmtKind::Break
-            | HirStmtKind::Continue
+            HirStmtKind::Break { .. }
+            | HirStmtKind::Continue { .. }
             | HirStmtKind::FnDecl(_)
             | HirStmtKind::Error => {}
         }
@@ -8964,6 +8978,7 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirStmtKind::While {
+                label,
                 condition,
                 update,
                 block: body,
@@ -8990,6 +9005,7 @@ impl<'ctx> MirLowering<'ctx> {
                 let update_bb = update.as_ref().map(|_| fb.new_block());
 
                 fb.loop_stack.push(LoopTargets {
+                    label: *label,
                     break_target: exit_bb,
                     continue_target: update_bb.unwrap_or(header),
                 });
@@ -9016,11 +9032,12 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirStmtKind::For {
+                label,
                 def_id,
+                varname: _,
                 iterator,
                 block: body,
                 else_block,
-                ..
             } => {
                 let (block, iter_ty) = {
                     let ty = self.expr_type(fb, iterator);
@@ -9031,20 +9048,21 @@ impl<'ctx> MirLowering<'ctx> {
                 let natural_bb = else_block.as_ref().map_or(exit_bb, |_| fb.new_block());
 
                 match self.typecheck.interner.get(iter_ty).clone() {
-                    Type::Builtin(b) if builtin_is_integer(b) => {
-                        self.lower_for_range(fb, def_id, iterator, body, block, exit_bb, natural_bb)
-                    }
+                    Type::Builtin(b) if builtin_is_integer(b) => self.lower_for_range(
+                        fb, *label, def_id, iterator, body, block, exit_bb, natural_bb,
+                    ),
 
-                    Type::IntLiteral => {
-                        self.lower_for_range(fb, def_id, iterator, body, block, exit_bb, natural_bb)
-                    }
+                    Type::IntLiteral => self.lower_for_range(
+                        fb, *label, def_id, iterator, body, block, exit_bb, natural_bb,
+                    ),
 
                     Type::Array { .. } | Type::Slice { .. } => self.lower_for_iterable(
-                        fb, def_id, iterator, iter_ty, body, block, exit_bb, natural_bb,
+                        fb, *label, def_id, iterator, iter_ty, body, block, exit_bb, natural_bb,
                     ),
 
                     Type::Struct { .. } => self.lower_for_iterator(
-                        fb, def_id, iterator, iter_ty, body, block, exit_bb, natural_bb, stmt.id,
+                        fb, *label, def_id, iterator, iter_ty, body, block, exit_bb, natural_bb,
+                        stmt.id,
                     ),
 
                     _ => panic!("non-iterable type passed Typechecker: {:?}", iter_ty),
@@ -9099,22 +9117,14 @@ impl<'ctx> MirLowering<'ctx> {
                 block
             }
 
-            HirStmtKind::Break => {
-                let target = fb
-                    .loop_stack
-                    .last()
-                    .expect("break outside loop not covered")
-                    .break_target;
+            HirStmtKind::Break { label } => {
+                let target = fb.loop_target(*label).break_target;
                 fb.set_terminator(block, Terminator::Goto(target));
                 block
             }
 
-            HirStmtKind::Continue => {
-                let target = fb
-                    .loop_stack
-                    .last()
-                    .expect("continue outside loop not covered")
-                    .continue_target;
+            HirStmtKind::Continue { label } => {
+                let target = fb.loop_target(*label).continue_target;
                 fb.set_terminator(block, Terminator::Goto(target));
                 block
             }
@@ -9163,6 +9173,7 @@ impl<'ctx> MirLowering<'ctx> {
     fn lower_for_range(
         &mut self,
         fb: &mut FnBuilder,
+        label: Option<Spur>,
         def_id: &DefId,
         iterator: &HirExpr,
         body: &HirStmt,
@@ -9251,6 +9262,7 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         fb.loop_stack.push(LoopTargets {
+            label,
             break_target: exit_bb,
             continue_target: continue_bb,
         });
@@ -9288,6 +9300,7 @@ impl<'ctx> MirLowering<'ctx> {
     fn lower_for_iterable(
         &mut self,
         fb: &mut FnBuilder,
+        label: Option<Spur>,
         def_id: &DefId,
         iterator: &HirExpr,
         iter_ty: TypeId,
@@ -9412,6 +9425,7 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         fb.loop_stack.push(LoopTargets {
+            label,
             break_target: exit_bb,
             continue_target: continue_bb,
         });
@@ -9454,6 +9468,7 @@ impl<'ctx> MirLowering<'ctx> {
     fn lower_for_iterator(
         &mut self,
         fb: &mut FnBuilder,
+        label: Option<Spur>,
         def_id: &DefId,
         iterator: &HirExpr,
         iter_ty: TypeId,
@@ -9592,6 +9607,7 @@ impl<'ctx> MirLowering<'ctx> {
         );
 
         fb.loop_stack.push(LoopTargets {
+            label,
             break_target: exit_bb,
             continue_target: header,
         });

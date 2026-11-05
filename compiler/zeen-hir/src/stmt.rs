@@ -39,10 +39,16 @@ pub enum HirStmtKind {
         value: Option<Rc<HirExpr>>,
     },
 
-    Break,
-    Continue,
+    Break {
+        label: Option<Spur>,
+    },
+
+    Continue {
+        label: Option<Spur>,
+    },
 
     While {
+        label: Option<Spur>,
         condition: Rc<HirExpr>,
         update: Option<Rc<HirStmt>>,
         block: Rc<HirStmt>,
@@ -50,6 +56,7 @@ pub enum HirStmtKind {
     },
 
     For {
+        label: Option<Spur>,
         def_id: DefId,
         varname: (Spur, SourceSpan),
         iterator: Rc<HirExpr>,

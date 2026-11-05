@@ -1222,6 +1222,7 @@ impl<'ctx> NameResolver {
             }
 
             StatementKind::While {
+                label: _,
                 condition,
                 update,
                 block,
@@ -1258,7 +1259,7 @@ impl<'ctx> NameResolver {
 
             StatementKind::Expr(expr) => self.collect_global_deps(expr, out),
 
-            StatementKind::Break | StatementKind::Continue => {}
+            StatementKind::Break { .. } | StatementKind::Continue { .. } => {}
             StatementKind::TrailingExpr(_) => panic!("that was not supposed to happen"),
 
             StatementKind::ConditionalBlock(_) => {}
@@ -1723,10 +1724,11 @@ impl<'ctx> NameResolver {
                 }
             }
 
-            StatementKind::Break => {}
-            StatementKind::Continue => {}
+            StatementKind::Break { .. } => {}
+            StatementKind::Continue { .. } => {}
 
             StatementKind::While {
+                label: _,
                 condition,
                 update,
                 block,
@@ -1750,6 +1752,7 @@ impl<'ctx> NameResolver {
             }
 
             StatementKind::For {
+                label: _,
                 varname,
                 iterator,
                 block,

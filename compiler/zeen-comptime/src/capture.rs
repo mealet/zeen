@@ -1171,6 +1171,7 @@ impl<'arena> Interp<'arena> {
             }
 
             StatementKind::While {
+                label,
                 condition,
                 update,
                 block,
@@ -1200,6 +1201,7 @@ impl<'arena> Interp<'arena> {
 
                 Ok(self.arena.alloc(Statement {
                     kind: StatementKind::While {
+                        label,
                         condition: new_condition,
                         update: new_update,
                         block: new_block,
@@ -1210,6 +1212,7 @@ impl<'arena> Interp<'arena> {
             }
 
             StatementKind::For {
+                label,
                 varname,
                 iterator,
                 block,
@@ -1232,6 +1235,7 @@ impl<'arena> Interp<'arena> {
 
                 Ok(self.arena.alloc(Statement {
                     kind: StatementKind::For {
+                        label,
                         varname,
                         iterator: new_iterator,
                         block: new_block,
@@ -1280,7 +1284,7 @@ impl<'arena> Interp<'arena> {
                 }))
             }
 
-            StatementKind::Break | StatementKind::Continue => Ok(stmt),
+            StatementKind::Break { .. } | StatementKind::Continue { .. } => Ok(stmt),
 
             StatementKind::ConditionalBlock(_) => {
                 unreachable!("conditional statements are expanded before comptime")

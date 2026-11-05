@@ -1,3 +1,4 @@
+use lasso::Spur;
 use rustc_hash::FxHashMap as HashMap;
 use std::{cell::RefCell, rc::Rc};
 
@@ -12,7 +13,7 @@ pub struct FnCtx {
     pub struct_def: Option<DefId>,
     pub generic_bindings: HashMap<DefId, TypeId>,
     pub generic_bounds: HashMap<DefId, Vec<DefId>>,
-    pub loop_depth: u32,
+    pub loop_labels: Vec<Option<Spur>>,
 }
 
 #[derive(Default)]
@@ -50,15 +51,23 @@ impl TypeCheckCtx {
     }
 
     pub fn in_loop(&self) -> bool {
-        self.stack.last().is_some_and(|ctx| ctx.loop_depth > 0)
+        self.stack
+            .last()
+            .is_some_and(|ctx| !ctx.loop_labels.is_empty())
     }
 
-    pub fn enter_loop(&mut self) {
-        self.current_mut().loop_depth += 1;
+    pub fn enter_loop(&mut self, label: Option<Spur>) {
+        self.current_mut().loop_labels.push(label);
     }
 
     pub fn exit_loop(&mut self) {
-        self.current_mut().loop_depth -= 1;
+        self.current_mut().loop_labels.pop();
+    }
+
+    pub fn has_loop_label(&self, label: Spur) -> bool {
+        self.stack
+            .last()
+            .is_some_and(|ctx| ctx.loop_labels.contains(&Some(label)))
     }
 
     pub fn generic_binding(&self, def_id: DefId) -> Option<TypeId> {
@@ -125,7 +134,7 @@ mod tests {
             struct_def: None,
             generic_bindings: HashMap::default(),
             generic_bounds: HashMap::default(),
-            loop_depth: 0,
+            loop_labels: Vec::new(),
         }
     }
 
@@ -185,10 +194,10 @@ mod tests {
         ctx.push_fn(fn_ctx(TypeId(0)));
         assert!(!ctx.in_loop());
 
-        ctx.enter_loop();
+        ctx.enter_loop(None);
         assert!(ctx.in_loop());
 
-        ctx.enter_loop();
+        ctx.enter_loop(None);
         ctx.exit_loop();
         assert!(ctx.in_loop());
 

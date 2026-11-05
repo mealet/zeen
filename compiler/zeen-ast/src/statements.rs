@@ -46,10 +46,16 @@ pub enum StatementKind<'arena> {
         value: Option<&'arena Expression<'arena>>,
     },
 
-    Break,
-    Continue,
+    Break {
+        label: Option<Spur>,
+    },
+
+    Continue {
+        label: Option<Spur>,
+    },
 
     While {
+        label: Option<Spur>,
         condition: &'arena Expression<'arena>,
         update: Option<&'arena Statement<'arena>>,
         block: &'arena Statement<'arena>,
@@ -57,6 +63,7 @@ pub enum StatementKind<'arena> {
     },
 
     For {
+        label: Option<Spur>,
         varname: (Spur, SourceSpan),
         iterator: &'arena Expression<'arena>,
         block: &'arena Statement<'arena>,
