@@ -1,0 +1,79 @@
+interface Shape {
+  pub fn area(*const self) i32;
+
+  pub fn name(*const self) []const char {
+    return "shape";
+  }
+
+  pub fn double_area(*const self) i32 {
+    return self.area() * 2;
+  }
+}
+
+interface Sized {
+  pub fn size(*const self) usize {
+    return @sizeof(Self);
+  }
+}
+
+interface Factory {
+  pub fn make(value: i32) Self;
+
+  pub fn make_default() Self {
+    return Self.make(9);
+  }
+}
+
+struct Square {
+  pub side: i32,
+}
+
+struct Rect {
+  pub width: i32,
+  pub height: i32,
+}
+
+struct Pair[T] {
+  pub first: T,
+  pub second: T,
+}
+
+struct Box {
+  pub value: i32,
+}
+
+implement Shape : Square {
+  pub fn area(*const self) i32 {
+    return self.side * self.side;
+  }
+
+  pub fn name(*const self) []const char {
+    return "square";
+  }
+}
+
+implement Shape : Rect {
+  pub fn area(*const self) i32 {
+    return self.width * self.height;
+  }
+}
+
+implement[U] Sized : Pair[U] {}
+
+implement Factory : Box {
+  pub fn make(value: i32) Self {
+    return Box { .value = value };
+  }
+}
+
+fn main() {
+  const square: Square = .{ .side = 3 };
+  const rect: Rect = .{ .width = 4, .height = 5 };
+  const pair: Pair[i32] = .{ .first = 1, .second = 2 };
+  const made: Box = Box.make_default();
+
+  @println("{} {} {}", square.name(), square.area(), square.double_area());
+  @println("{} {} {}", rect.name(), rect.area(), rect.double_area());
+  @println("{}", pair.size());
+  @println("{} {}", made.value, Box.make_default().value);
+}
