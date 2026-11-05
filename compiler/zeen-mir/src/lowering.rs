@@ -8054,7 +8054,7 @@ impl<'ctx> MirLowering<'ctx> {
             },
         );
 
-        let block = self.emit_sink_literal(fb, sink, "[", block, source);
+        let block = self.emit_sink_literal(fb, sink, "{", block, source);
         let header = fb.new_block();
         fb.set_terminator(block, Terminator::Goto(header));
 
@@ -8139,7 +8139,7 @@ impl<'ctx> MirLowering<'ctx> {
         let separator_end = self.emit_sink_literal(fb, sink, ", ", separator, source);
         fb.set_terminator(separator_end, Terminator::Goto(header));
 
-        self.emit_sink_literal(fb, sink, "]", done, source)
+        self.emit_sink_literal(fb, sink, "}", done, source)
     }
 
     fn emit_debug_element(

@@ -297,9 +297,9 @@ fn dbg_macro_prints_containers() -> anyhow::Result<()> {
     let _ = fs::remove_file(&binary_path);
     assert_eq!(
         normalize_output(&String::from_utf8_lossy(&debug_output.stdout)),
-        "[dbg_container.zn:6]> `a` = [1, 2, 3, 4]\n\
-         [dbg_container.zn:7]> `s` = [1, 2, 3, 4]\n\
-         [dbg_container.zn:8]> `p` = [1, 2, 3, 4]\n\
+        "[dbg_container.zn:6]> `a` = {1, 2, 3, 4}\n\
+         [dbg_container.zn:7]> `s` = {1, 2, 3, 4}\n\
+         [dbg_container.zn:8]> `p` = {1, 2, 3, 4}\n\
          [dbg_container.zn:9]> `3` = 3\n"
     );
 
