@@ -1,0 +1,62 @@
+name: Standard Library Check
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  std-check:
+    name: Standard Library Check
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      with:
+        toolchain: stable
+
+    - name: Install LLVM and Clang
+      uses: ZhongRuoyu/setup-llvm@7c7b10581c91652ab125ad911df7765c112f94bc
+      with:
+        llvm-version: 22
+
+    - name: Cache Rust
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        key: std-check
+
+    - name: Build Zeen
+      working-directory: ./compiler
+      run: cargo build --release -p zeen
+
+    - name: Install Zeen and Zora
+      run: |
+        mkdir -p "$GITHUB_WORKSPACE/dist/bin"
+        cp compiler/target/release/zeen "$GITHUB_WORKSPACE/dist/bin/zeen"
+        echo "$GITHUB_WORKSPACE/dist/bin" >> "$GITHUB_PATH"
+        cargo install --git https://github.com/mealet/zora --locked --root "$GITHUB_WORKSPACE/dist" --force zora
+
+    - name: Verify Tools
+      run: |
+        zeen --version
+        zora --version
+
+    - name: Check Standard Library
+      working-directory: ./lib/std
+      env:
+        ZEEN_STD: ${{ github.workspace }}/lib/std
+      run: zora check --all
