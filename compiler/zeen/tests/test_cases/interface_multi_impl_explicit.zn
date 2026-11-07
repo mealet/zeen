@@ -1,0 +1,27 @@
+interface[T] Convert {
+  pub fn convert(*const self, value: T) T;
+}
+
+struct Value {
+  pub value: i32,
+}
+
+implement Convert[i32] : Value {
+  fn convert(*const self, value: i32) i32 {
+    return value + self.value;
+  }
+}
+
+implement Convert[f64] : Value {
+  fn convert(*const self, value: f64) f64 {
+    return value + @as(f64, self.value);
+  }
+}
+
+fn main() {
+  const value: Value = .{ .value = 7 };
+  const as_int: i32 = value.convert(1);
+  const as_float: f64 = value.convert(1.5);
+
+  @println("{} {}", as_int, as_float);
+}

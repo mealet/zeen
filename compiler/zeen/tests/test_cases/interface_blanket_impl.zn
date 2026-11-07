@@ -1,0 +1,19 @@
+interface[T] Echo {
+  pub fn echo(*self, value: T) T;
+}
+
+struct Buffer {
+  pub count: i32,
+}
+
+implement[T] Echo[T] : Buffer {
+  pub fn echo(*self, value: T) T {
+    return value;
+  }
+}
+
+fn main() {
+  const buffer = Buffer { .count = 3 };
+
+  @println("{}", buffer.echo(9));
+}
