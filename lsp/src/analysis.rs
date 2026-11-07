@@ -1027,6 +1027,7 @@ impl<'ctx> Walker<'ctx> {
             | DefKind::GenericParam
             | DefKind::Builtin(_)
             | DefKind::BuiltinShape(_)
+            | DefKind::AssociatedType { .. }
             | DefKind::InterfaceSelfPlaceholder => Role::Type,
 
             DefKind::EnumVariant => Role::EnumMember,
@@ -2105,6 +2106,10 @@ impl<'ctx> Walker<'ctx> {
                 );
             }
 
+            HirTypeKind::Associated { base, .. } => {
+                self.walk_type(base);
+            }
+
             HirTypeKind::Named {
                 def_id,
                 generic_args,
@@ -2349,9 +2354,25 @@ fn walk_syntax_decl(
         }
 
         DeclarationKind::StructDecl { name, methods, .. }
-        | DeclarationKind::ComptimeStruct { name, methods, .. }
-        | DeclarationKind::InterfaceDecl { name, methods, .. } => {
+        | DeclarationKind::ComptimeStruct { name, methods, .. } => {
             push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type, None);
+
+            for method in *methods {
+                walk_syntax_decl(method, true, text, occurrences);
+            }
+        }
+
+        DeclarationKind::InterfaceDecl {
+            name,
+            aliases,
+            methods,
+            ..
+        } => {
+            push_syntax(occurrences, name.1.offset(), name.1.len(), Role::Type, None);
+
+            for alias in *aliases {
+                walk_syntax_decl(alias, false, text, occurrences);
+            }
 
             for method in *methods {
                 walk_syntax_decl(method, true, text, occurrences);
@@ -2381,7 +2402,13 @@ fn walk_syntax_decl(
             }
         }
 
-        DeclarationKind::ImplementDecl { methods, .. } => {
+        DeclarationKind::ImplementDecl {
+            aliases, methods, ..
+        } => {
+            for alias in *aliases {
+                walk_syntax_decl(alias, false, text, occurrences);
+            }
+
             for method in *methods {
                 walk_syntax_decl(method, true, text, occurrences);
             }
@@ -2467,6 +2494,7 @@ fn walk_syntax_decl(
         DeclarationKind::Use { .. }
         | DeclarationKind::ExternLink { .. }
         | DeclarationKind::ExternInclude { .. }
+        | DeclarationKind::AssociatedType(_)
         | DeclarationKind::ConditionalBlock(_) => {}
     }
 }

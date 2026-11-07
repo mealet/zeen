@@ -791,6 +791,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             Type::Fn { .. } => self.context.ptr_type(AddressSpace::default()).into(),
 
+            Type::Associated { .. } => {
+                unreachable!("associated types must be normalized before codegen")
+            }
+
             Type::Void | Type::Never => self.context.void_type().into(),
             Type::Error => self.context.i32_type().into(),
         }
@@ -2122,6 +2126,10 @@ impl<'ctx, 'prog> CodeGen<'ctx, 'prog> {
 
             Type::Array { element, len } => {
                 Shape::Array(Box::new(self.layout_shape(element)), len.unwrap_or(0))
+            }
+
+            Type::Associated { .. } => {
+                unreachable!("associated types must be normalized before codegen")
             }
 
             Type::Void => Shape::Void,
