@@ -6,7 +6,8 @@ use miette::SourceSpan;
 use smallvec::SmallVec;
 
 use zeen_ast::declarations::{
-    AliasDecl, EnumVariant, EnumVariantPayload, FnParam, GenericType, StructField,
+    AliasDecl, AssociatedTypeDecl, EnumVariant, EnumVariantPayload, FnParam, GenericType,
+    StructField, WhereClause, WhereClauseKind,
 };
 use zeen_ast::expressions::Literal;
 use zeen_ast::{
@@ -123,6 +124,7 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 generics,
                 params,
                 return_type,
+                where_clauses,
                 body,
                 is_pub,
                 is_extern,
@@ -131,6 +133,7 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 generics: self.resolve_generics(generics),
                 params: self.resolve_params(params),
                 return_type: return_type.map(|ty| self.resolve_type(ty)),
+                where_clauses: self.resolve_where_clauses(where_clauses),
                 body: body.map(|s| self.resolve_stmt(s)),
                 is_pub,
                 is_extern,
@@ -154,27 +157,37 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 name,
                 is_pub,
                 generics,
+                aliases,
                 methods,
             } => DeclarationKind::InterfaceDecl {
                 name,
                 is_pub,
                 generics: self.resolve_generics(generics),
+                aliases: self.resolve_nested_decls(aliases),
                 methods: self.resolve_nested_decls(methods),
             },
 
             DeclarationKind::ImplementDecl {
                 interface,
+                interface_args,
                 builtin,
                 object,
                 generics,
+                where_clauses,
+                aliases,
                 methods,
             } => {
                 let object = self.resolve_object_generics(object);
+                let interface_args = self.resolve_type_slice(interface_args);
+
                 DeclarationKind::ImplementDecl {
                     interface,
+                    interface_args,
                     builtin,
                     object,
                     generics: self.resolve_generics(generics),
+                    where_clauses: self.resolve_where_clauses(where_clauses),
+                    aliases: self.resolve_nested_decls(aliases),
                     methods: self.resolve_nested_decls(methods),
                 }
             }
@@ -223,6 +236,14 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 generics: self.resolve_generics(alias.generics),
                 ty: self.resolve_type(alias.ty),
             }),
+
+            DeclarationKind::AssociatedType(associated) => {
+                DeclarationKind::AssociatedType(AssociatedTypeDecl {
+                    name: associated.name,
+                    bounds: associated.bounds,
+                    default: associated.default.map(|ty| self.resolve_type(ty)),
+                })
+            }
 
             DeclarationKind::ComptimeConst {
                 name,
@@ -336,6 +357,33 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
         (name, span, self.alloc_slice(&slots))
     }
 
+    fn resolve_where_clauses(
+        &mut self,
+        clauses: Option<&'a [WhereClause<'a>]>,
+    ) -> Option<&'a [WhereClause<'a>]> {
+        clauses.map(|clauses| {
+            let fixed: SmallVec<[WhereClause<'a>; 4]> = clauses
+                .iter()
+                .map(|clause| {
+                    let kind = match clause.kind {
+                        WhereClauseKind::Bound { bounds } => WhereClauseKind::Bound { bounds },
+                        WhereClauseKind::Equality { ty } => WhereClauseKind::Equality {
+                            ty: self.resolve_type(ty),
+                        },
+                    };
+
+                    WhereClause {
+                        ty: self.resolve_type(clause.ty),
+                        kind,
+                        span: clause.span,
+                    }
+                })
+                .collect();
+
+            self.alloc_slice(&fixed)
+        })
+    }
+
     fn resolve_type(&mut self, ty: &'a TypeExpr<'a>) -> &'a TypeExpr<'a> {
         let kind = self.resolve_type_kind(ty);
         if kind == ty.kind {
@@ -362,6 +410,11 @@ impl<'a, 'b> Preprocessor<'a, 'b> {
                 });
                 TypeKind::Named { name, generic_args }
             }
+
+            TypeKind::Associated { base, name } => TypeKind::Associated {
+                base: self.resolve_type(base),
+                name,
+            },
 
             TypeKind::Const(inner) => TypeKind::Const(self.resolve_type(inner)),
             TypeKind::TypeOf(expr) => TypeKind::TypeOf(self.resolve_expr(expr)),

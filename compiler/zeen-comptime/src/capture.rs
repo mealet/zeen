@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use zeen_ast::{
     Declaration, DeclarationKind, Expression, ExpressionKind, Statement, StatementKind, TypeExpr,
     TypeKind,
-    declarations::{EnumVariantPayload, FnParam, StructField},
+    declarations::{
+        AssociatedTypeDecl, EnumVariantPayload, FnParam, StructField, WhereClause, WhereClauseKind,
+    },
     expressions::{Arm, FieldInit},
 };
 
@@ -477,6 +479,22 @@ impl<'arena> Interp<'arena> {
                 }))
             }
 
+            TypeKind::Associated { base, name } => {
+                let new_base = self.capture_type(module, base)?;
+
+                if unchanged(base, new_base) {
+                    return Ok(ty);
+                }
+
+                Ok(self.arena.alloc(TypeExpr {
+                    kind: TypeKind::Associated {
+                        base: new_base,
+                        name,
+                    },
+                    span: ty.span,
+                }))
+            }
+
             TypeKind::TypeOf(expr) => {
                 let new_expr = self.capture_expr(module, expr)?;
 
@@ -596,6 +614,7 @@ impl<'arena> Interp<'arena> {
                 generics,
                 params,
                 return_type,
+                where_clauses,
                 body,
                 is_pub,
                 is_extern,
@@ -606,6 +625,8 @@ impl<'arena> Interp<'arena> {
                     Some(ty) => Some(self.capture_type(module, ty)?),
                     None => None,
                 };
+                let (new_where, where_changed) =
+                    self.capture_where_clauses(module, where_clauses)?;
                 let new_body = match body {
                     Some(body) => Some(self.capture_statement(module, body)?),
                     None => None,
@@ -614,6 +635,7 @@ impl<'arena> Interp<'arena> {
                 if !name_changed
                     && unchanged(params, new_params)
                     && option_unchanged(return_type, new_return)
+                    && !where_changed
                     && option_unchanged(body, new_body)
                 {
                     return Ok(decl);
@@ -625,6 +647,7 @@ impl<'arena> Interp<'arena> {
                         generics,
                         params: new_params,
                         return_type: new_return,
+                        where_clauses: new_where,
                         body: new_body,
                         is_pub,
                         is_extern,
@@ -889,16 +912,38 @@ impl<'arena> Interp<'arena> {
                 }))
             }
 
+            DeclarationKind::AssociatedType(associated) => {
+                let new_default = match associated.default {
+                    Some(ty) => Some(self.capture_type(module, ty)?),
+                    None => None,
+                };
+
+                if option_unchanged(associated.default, new_default) {
+                    return Ok(decl);
+                }
+
+                Ok(self.arena.alloc(Declaration {
+                    kind: DeclarationKind::AssociatedType(AssociatedTypeDecl {
+                        name: associated.name,
+                        bounds: associated.bounds,
+                        default: new_default,
+                    }),
+                    source: decl.source.clone(),
+                }))
+            }
+
             DeclarationKind::InterfaceDecl {
                 name,
                 is_pub,
                 generics,
+                aliases,
                 methods,
             } => {
                 let (name, name_changed) = self.capture_decl_name(module, name)?;
+                let (new_aliases, aliases_changed) = self.capture_decl_list(module, aliases)?;
                 let (new_methods, methods_changed) = self.capture_decl_list(module, methods)?;
 
-                if !name_changed && !methods_changed {
+                if !name_changed && !aliases_changed && !methods_changed {
                     return Ok(decl);
                 }
 
@@ -907,6 +952,7 @@ impl<'arena> Interp<'arena> {
                         name,
                         is_pub,
                         generics,
+                        aliases: new_aliases,
                         methods: new_methods,
                     },
                     source: decl.source.clone(),
@@ -915,23 +961,35 @@ impl<'arena> Interp<'arena> {
 
             DeclarationKind::ImplementDecl {
                 interface,
+                interface_args,
                 builtin,
                 object,
                 generics,
+                where_clauses,
+                aliases,
                 methods,
             } => {
+                let (new_interface_args, interface_args_changed) =
+                    self.capture_type_list(module, interface_args)?;
+                let (new_where, where_changed) =
+                    self.capture_where_clauses(module, where_clauses)?;
+                let (new_aliases, aliases_changed) = self.capture_decl_list(module, aliases)?;
                 let (new_methods, methods_changed) = self.capture_decl_list(module, methods)?;
 
-                if !methods_changed {
+                if !interface_args_changed && !where_changed && !aliases_changed && !methods_changed
+                {
                     return Ok(decl);
                 }
 
                 Ok(self.arena.alloc(Declaration {
                     kind: DeclarationKind::ImplementDecl {
                         interface,
+                        interface_args: new_interface_args,
                         builtin,
                         object,
                         generics,
+                        where_clauses: new_where,
+                        aliases: new_aliases,
                         methods: new_methods,
                     },
                     source: decl.source.clone(),
@@ -1368,6 +1426,56 @@ impl<'arena> Interp<'arena> {
         }
 
         Ok((self.arena.alloc_slice_copy(&rebuilt), true))
+    }
+
+    fn capture_where_clauses(
+        &mut self,
+        module: &PathBuf,
+        clauses: Option<&'arena [WhereClause<'arena>]>,
+    ) -> Result<(Option<&'arena [WhereClause<'arena>]>, bool), ()> {
+        let Some(clauses) = clauses else {
+            return Ok((None, false));
+        };
+
+        let mut rebuilt: Vec<WhereClause<'arena>> = Vec::with_capacity(clauses.len());
+        let mut changed = false;
+
+        for clause in clauses.iter() {
+            let ty = self.capture_type(module, clause.ty)?;
+
+            let kind = match clause.kind {
+                WhereClauseKind::Bound { bounds } => WhereClauseKind::Bound { bounds },
+                WhereClauseKind::Equality { ty: eq } => WhereClauseKind::Equality {
+                    ty: self.capture_type(module, eq)?,
+                },
+            };
+
+            let ty_changed = !std::ptr::eq(clause.ty, ty);
+            let kind_changed = match (clause.kind, kind) {
+                (WhereClauseKind::Bound { .. }, WhereClauseKind::Bound { .. }) => false,
+                (WhereClauseKind::Equality { ty: a }, WhereClauseKind::Equality { ty: b }) => {
+                    !std::ptr::eq(a, b)
+                }
+                _ => true,
+            };
+
+            if !ty_changed && !kind_changed {
+                rebuilt.push(*clause);
+            } else {
+                changed = true;
+                rebuilt.push(WhereClause {
+                    ty,
+                    kind,
+                    span: clause.span,
+                });
+            }
+        }
+
+        if !changed {
+            return Ok((Some(clauses), false));
+        }
+
+        Ok((Some(self.arena.alloc_slice_copy(&rebuilt)), true))
     }
 
     fn capture_params(
