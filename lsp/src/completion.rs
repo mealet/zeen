@@ -3301,6 +3301,111 @@ mod tests {
         assert!(insert.starts_with("fn drop("), "got {insert:?}");
     }
 
+    const ASSOCIATED_IMPLEMENT: &str = "interface Labeled {\n    alias Tag = i32;\n    alias Name = i32;\n\n    pub fn label(*self) Tag;\n}\n\nstruct Point {\n    value: i32,\n}\n\nimplement Labeled : Point {\n    fn label(*self) Tag {\n        return self.value;\n    }\n}\n";
+
+    #[test]
+    fn implement_block_suggests_associated_types() {
+        let analysis = loose_analysis(ASSOCIATED_IMPLEMENT);
+        let typing = ASSOCIATED_IMPLEMENT.replacen("    fn label", "    alias \n    fn label", 1);
+        let offset = typing.rfind("    alias ").unwrap() + "    alias ".len();
+        let items = implement_complete(&typing, &analysis, offset);
+        let mut names = labels(&items);
+        names.sort();
+
+        assert_eq!(names, vec!["Name", "Tag"]);
+
+        let tag = items.iter().find(|item| item.label == "Tag").unwrap();
+        assert_eq!(tag.insert_text.as_deref(), Some("Tag = $0;"));
+        assert_eq!(tag.kind, Some(CompletionItemKind::TYPE_PARAMETER));
+    }
+
+    #[test]
+    fn implement_block_filters_associated_types_by_prefix() {
+        let analysis = loose_analysis(ASSOCIATED_IMPLEMENT);
+        let typing = ASSOCIATED_IMPLEMENT.replacen("    fn label", "    alias T\n    fn label", 1);
+        let offset = typing.rfind("    alias T").unwrap() + "    alias T".len();
+        let items = implement_complete(&typing, &analysis, offset);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["Tag"]);
+    }
+
+    #[test]
+    fn implement_block_keeps_alias_keyword_completion() {
+        let analysis = loose_analysis(ASSOCIATED_IMPLEMENT);
+        let typing = ASSOCIATED_IMPLEMENT.replacen("    fn label", "    alias\n    fn label", 1);
+        let offset = typing.rfind("    alias").unwrap() + "    alias".len();
+        let items = implement_complete(&typing, &analysis, offset);
+
+        assert!(items.is_empty(), "{:?}", labels(&items));
+    }
+
+    #[test]
+    fn implement_block_hides_bound_associated_types() {
+        let analysis = loose_analysis(ASSOCIATED_IMPLEMENT);
+        let typing = ASSOCIATED_IMPLEMENT.replacen(
+            "    fn label",
+            "    alias Tag = i32;\n    alias \n    fn label",
+            1,
+        );
+        let offset = typing.rfind("    alias Tag = i32;\n    alias ").unwrap()
+            + "    alias Tag = i32;\n    alias ".len();
+        let items = implement_complete(&typing, &analysis, offset);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["Name"]);
+    }
+
+    const CONVERT_INTERFACE: &str = "interface[T] Convert {\n    fn convert(value: T) Self;\n}\n\nstruct Meters {\n    value: f64,\n}\n\nimplement Convert[i32] : Meters {\n    fn convert(value: i32) Self {\n        return Meters { .value = @as(f64, value) };\n    }\n}\n";
+
+    #[test]
+    fn implement_header_suggests_interface_argument_types() {
+        let analysis = loose_analysis(CONVERT_INTERFACE);
+        let typing = &CONVERT_INTERFACE[..CONVERT_INTERFACE.find("i32] : Meters").unwrap()];
+        let items =
+            implement_header_complete(typing, &analysis, typing.len(), ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"i32"), "{names:?}");
+        assert!(names.contains(&"Meters"), "{names:?}");
+        assert!(!names.contains(&"fn"), "{names:?}");
+        assert!(!names.contains(&"let"), "{names:?}");
+    }
+
+    #[test]
+    fn implement_header_filters_interface_argument_types() {
+        let analysis = loose_analysis(CONVERT_INTERFACE);
+        let mut typing =
+            CONVERT_INTERFACE[..CONVERT_INTERFACE.find("i32] : Meters").unwrap()].to_string();
+        typing.push_str("Me");
+        let items =
+            implement_header_complete(&typing, &analysis, typing.len(), ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["Meters"]);
+    }
+
+    #[test]
+    fn implement_header_stops_after_interface_arity() {
+        let analysis = loose_analysis(CONVERT_INTERFACE);
+        let mut typing =
+            CONVERT_INTERFACE[..CONVERT_INTERFACE.find("i32] : Meters").unwrap()].to_string();
+        typing.push_str("i32, ");
+        let items =
+            implement_header_complete(&typing, &analysis, typing.len(), ResolvePaths::default());
+
+        assert!(items.is_empty(), "{:?}", labels(&items));
+    }
+
+    #[test]
+    fn implement_header_ignores_generic_type_arguments() {
+        let text = "struct List[T] {\n    value: T,\n}\n\nfn take(value: List[";
+        let analysis = loose_analysis(text);
+        let items = implement_header_complete(text, &analysis, text.len(), ResolvePaths::default());
+
+        assert!(items.is_empty(), "{:?}", labels(&items));
+    }
+
     #[test]
     fn general_completion_includes_core_members() {
         let text = "fn main() {\n    \n}\n";
