@@ -1761,9 +1761,292 @@ impl<'ctx> MirLowering<'ctx> {
 
     fn substitute_fn_type(&mut self, fb: &FnBuilder, ty: TypeId) -> TypeId {
         if fb.bindings.is_empty() {
-            ty
+            self.normalize_associated_type(ty)
         } else {
-            zeen_types::substitute_generics(&mut self.typecheck.interner, ty, &fb.bindings)
+            self.substitute(ty, &fb.bindings)
+        }
+    }
+
+    fn substitute(&mut self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> TypeId {
+        let substituted =
+            zeen_types::substitute_generics(&mut self.typecheck.interner, ty, bindings);
+
+        self.normalize_associated_type(substituted)
+    }
+
+    fn normalize_associated_type(&mut self, ty: TypeId) -> TypeId {
+        match self.typecheck.interner.get(ty).clone() {
+            Type::Associated { base, def } => match self.associated_binding_for(base, def) {
+                Some(bound) => self.normalize_associated_type(bound),
+                None => ty,
+            },
+
+            Type::Pointer { inner, is_const } => {
+                let new_inner = self.normalize_associated_type(inner);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.typecheck.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::ManyPointer { inner, is_const } => {
+                let new_inner = self.normalize_associated_type(inner);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.typecheck.interner.intern(Type::ManyPointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Array { element, len } => {
+                let new_element = self.normalize_associated_type(element);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.typecheck.interner.intern(Type::Array {
+                        element: new_element,
+                        len,
+                    })
+                }
+            }
+
+            Type::Slice { element, is_const } => {
+                let new_element = self.normalize_associated_type(element);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.typecheck.interner.intern(Type::Slice {
+                        element: new_element,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|&arg| self.normalize_associated_type(arg))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.typecheck.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|&arg| self.normalize_associated_type(arg))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.typecheck.interner.intern(Type::Enum {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Fn { params, ret } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|&param| self.normalize_associated_type(param))
+                    .collect();
+                let new_ret = self.normalize_associated_type(ret);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.typecheck.interner.intern(Type::Fn {
+                        params: new_params,
+                        ret: new_ret,
+                    })
+                }
+            }
+
+            Type::FatFn {
+                params,
+                ret,
+                once,
+                erased,
+            } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|&param| self.normalize_associated_type(param))
+                    .collect();
+                let new_ret = self.normalize_associated_type(ret);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.typecheck.interner.intern(Type::FatFn {
+                        params: new_params,
+                        ret: new_ret,
+                        once,
+                        erased,
+                    })
+                }
+            }
+
+            _ => ty,
+        }
+    }
+
+    fn associated_binding_for(&mut self, base: TypeId, def: DefId) -> Option<TypeId> {
+        match self.typecheck.interner.get(base).clone() {
+            Type::GenericParam(g) => self
+                .typecheck
+                .generic_assoc_bindings
+                .get(&(g, def))
+                .copied(),
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            }
+            | Type::Enum {
+                def_id,
+                generic_args,
+            } => self.concrete_associated_binding(def_id, &generic_args, def),
+
+            Type::Builtin(builtin) => {
+                self.concrete_associated_binding(zeen_resolve::builtin_def_id(builtin), &[], def)
+            }
+
+            _ => None,
+        }
+    }
+
+    fn concrete_associated_binding(
+        &mut self,
+        object_def: DefId,
+        object_args: &[TypeId],
+        def: DefId,
+    ) -> Option<TypeId> {
+        let entries = self
+            .typecheck
+            .impl_registry
+            .iter()
+            .filter(|((object, _), _)| *object == object_def)
+            .flat_map(|(_, entries)| entries.iter())
+            .filter(|entry| entry.assoc_bindings.contains_key(&def))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for entry in entries {
+            let mut unify: HashMap<DefId, TypeId> = HashMap::default();
+
+            if !self.unify_object_args(&entry.object_args, object_args, &mut unify) {
+                continue;
+            }
+
+            let bound = *entry.assoc_bindings.get(&def)?;
+
+            return Some(self.substitute(bound, &unify));
+        }
+
+        None
+    }
+
+    fn unify_object_args(
+        &mut self,
+        pattern: &[TypeId],
+        concrete: &[TypeId],
+        unify: &mut HashMap<DefId, TypeId>,
+    ) -> bool {
+        if pattern.len() != concrete.len() {
+            return false;
+        }
+
+        pattern
+            .iter()
+            .zip(concrete.iter())
+            .all(|(&pattern, &concrete)| self.unify_type(pattern, concrete, unify))
+    }
+
+    fn unify_type(
+        &mut self,
+        pattern: TypeId,
+        concrete: TypeId,
+        unify: &mut HashMap<DefId, TypeId>,
+    ) -> bool {
+        match self.typecheck.interner.get(pattern).clone() {
+            Type::GenericParam(g) => match unify.get(&g).copied() {
+                Some(existing) => existing == concrete,
+                None => {
+                    unify.insert(g, concrete);
+
+                    true
+                }
+            },
+
+            Type::Pointer {
+                inner: pattern_inner,
+                is_const: pattern_const,
+            } => match self.typecheck.interner.get(concrete).clone() {
+                Type::Pointer {
+                    inner: concrete_inner,
+                    is_const: concrete_const,
+                } => {
+                    pattern_const == concrete_const
+                        && self.unify_type(pattern_inner, concrete_inner, unify)
+                }
+                _ => false,
+            },
+
+            Type::Struct {
+                def_id: pattern_def,
+                generic_args: pattern_args,
+            } => match self.typecheck.interner.get(concrete).clone() {
+                Type::Struct {
+                    def_id: concrete_def,
+                    generic_args: concrete_args,
+                } => {
+                    pattern_def == concrete_def
+                        && self.unify_object_args(&pattern_args, &concrete_args, unify)
+                }
+                _ => false,
+            },
+
+            Type::Enum {
+                def_id: pattern_def,
+                generic_args: pattern_args,
+            } => match self.typecheck.interner.get(concrete).clone() {
+                Type::Enum {
+                    def_id: concrete_def,
+                    generic_args: concrete_args,
+                } => {
+                    pattern_def == concrete_def
+                        && self.unify_object_args(&pattern_args, &concrete_args, unify)
+                }
+                _ => false,
+            },
+
+            _ => pattern == concrete,
         }
     }
 
@@ -1801,7 +2084,7 @@ impl<'ctx> MirLowering<'ctx> {
             merged.insert(def, bound);
         }
 
-        zeen_types::substitute_generics(&mut self.typecheck.interner, ty, &merged)
+        self.substitute(ty, &merged)
     }
 
     fn struct_info(&self, def_id: DefId) -> Option<&zeen_types::StructTypeInfo> {
@@ -1962,13 +2245,13 @@ impl<'ctx> MirLowering<'ctx> {
         let fields: Vec<StructFieldLayout> = info
             .fields
             .iter()
-            .map(|f| StructFieldLayout {
-                def_id: f.field_def,
-                ty: zeen_types::substitute_generics(
-                    &mut self.typecheck.interner,
-                    f.field_ty,
-                    &bindings,
-                ),
+            .map(|f| {
+                let ty = self.substitute(f.field_ty, &bindings);
+
+                StructFieldLayout {
+                    def_id: f.field_def,
+                    ty,
+                }
             })
             .collect();
 
@@ -2013,11 +2296,7 @@ impl<'ctx> MirLowering<'ctx> {
             .iter()
             .map(|variant| {
                 let payload = variant.payload.as_ref().map(|payload| match payload {
-                    VariantPayload::Single(ty) => zeen_types::substitute_generics(
-                        &mut self.typecheck.interner,
-                        *ty,
-                        &bindings,
-                    ),
+                    VariantPayload::Single(ty) => self.substitute(*ty, &bindings),
                     VariantPayload::Struct(payload_ty) => {
                         let payload_def = self.payload_struct_def(*payload_ty);
                         let concrete = self.typecheck.interner.intern(Type::Struct {
@@ -2302,7 +2581,7 @@ impl<'ctx> MirLowering<'ctx> {
         let payload_ty = match &payload {
             VariantPayload::Single(ty) => {
                 let bindings = self.bindings_from(enum_def, enum_generic_args);
-                zeen_types::substitute_generics(&mut self.typecheck.interner, *ty, &bindings)
+                self.substitute(*ty, &bindings)
             }
             VariantPayload::Struct(payload_ty) => {
                 match self.typecheck.interner.get(*payload_ty).clone() {
@@ -2583,9 +2862,9 @@ impl<'ctx> MirLowering<'ctx> {
             .iter()
             .map(|&raw| {
                 if bindings.is_empty() {
-                    raw
+                    self.normalize_associated_type(raw)
                 } else {
-                    zeen_types::substitute_generics(&mut self.typecheck.interner, raw, bindings)
+                    self.substitute(raw, bindings)
                 }
             })
             .collect();
@@ -5819,7 +6098,7 @@ impl<'ctx> MirLowering<'ctx> {
         match &payload {
             VariantPayload::Single(ty) => {
                 let bindings = self.bindings_from(enum_def, &generic_args);
-                zeen_types::substitute_generics(&mut self.typecheck.interner, *ty, &bindings)
+                self.substitute(*ty, &bindings)
             }
             VariantPayload::Struct(payload_ty) => {
                 match self.typecheck.interner.get(*payload_ty).clone() {
@@ -5872,7 +6151,7 @@ impl<'ctx> MirLowering<'ctx> {
             .iter()
             .find(|f| f.field_def == field_def)
             .expect("field must be present in struct");
-        zeen_types::substitute_generics(&mut self.typecheck.interner, field.field_ty, &bindings)
+        self.substitute(field.field_ty, &bindings)
     }
 
     fn index_elem_ty(&self, ty: TypeId) -> TypeId {
@@ -8740,7 +9019,7 @@ impl<'ctx> MirLowering<'ctx> {
             })
             .unwrap_or_default();
 
-        let ret_ty = zeen_types::substitute_generics(&mut self.typecheck.interner, ret, &bindings);
+        let ret_ty = self.substitute(ret, &bindings);
 
         let is_pointer = matches!(
             self.typecheck.interner.get(ret_ty),
@@ -10011,17 +10290,17 @@ impl<'ctx> MirLowering<'ctx> {
             _ => HashMap::default(),
         };
 
-        let bindings = match owner_struct
-            .and_then(|owner| self.typecheck.default_method_bindings.get(&(def_id, owner)))
-        {
+        let bindings = match owner_struct.and_then(|owner| {
+            self.typecheck
+                .default_method_bindings
+                .get(&(def_id, owner))
+                .cloned()
+        }) {
             Some(default_bindings) => {
                 let mut bindings = bindings;
-                for (&def, &ty) in default_bindings {
-                    let ty = zeen_types::substitute_generics(
-                        &mut self.typecheck.interner,
-                        ty,
-                        &bindings,
-                    );
+                for (def, ty) in default_bindings {
+                    let ty = self.substitute(ty, &bindings);
+
                     bindings.insert(def, ty);
                 }
                 bindings
@@ -10041,8 +10320,7 @@ impl<'ctx> MirLowering<'ctx> {
             _ => unreachable!(),
         };
 
-        let ret_ty =
-            zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ret_ty, &bindings);
+        let ret_ty = self.substitute(raw_ret_ty, &bindings);
 
         let ret_ty = if matches!(
             self.typecheck.interner.get(ret_ty),
@@ -10054,7 +10332,7 @@ impl<'ctx> MirLowering<'ctx> {
                 .get(&def_id)
                 .copied()
                 .unwrap_or(ret_ty);
-            zeen_types::substitute_generics(&mut self.typecheck.interner, finalized, &bindings)
+            self.substitute(finalized, &bindings)
         } else {
             ret_ty
         };
@@ -10101,8 +10379,7 @@ impl<'ctx> MirLowering<'ctx> {
                 .get(&param_def)
                 .copied()
                 .expect("param must have a type after Typecheck");
-            let concrete_ty =
-                zeen_types::substitute_generics(&mut self.typecheck.interner, raw_ty, &bindings);
+            let concrete_ty = self.substitute(raw_ty, &bindings);
 
             let param_is_fat_bound = matches!(
                 self.typecheck.interner.get(concrete_ty),
