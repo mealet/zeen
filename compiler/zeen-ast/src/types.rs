@@ -29,6 +29,11 @@ pub enum TypeKind<'arena> {
         generic_args: Option<&'arena [&'arena TypeExpr<'arena>]>,
     },
 
+    Associated {
+        base: &'arena TypeExpr<'arena>,
+        name: (Spur, SourceSpan),
+    },
+
     Const(&'arena TypeExpr<'arena>),
 
     /// `typeof <expr>` - infers the type of an expression without evaluating it.

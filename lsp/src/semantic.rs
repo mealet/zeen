@@ -387,4 +387,40 @@ mod tests {
 
         assert_eq!(call_token.3, method_type);
     }
+
+    const ASSOCIATED_TYPE_SAMPLE: &str = "interface Source {\n    alias Item;\n\n    pub fn read(*self) Item;\n}\n\nstruct Number {\n    value: i32,\n}\n\nimplement Source : Number {\n    alias Item = i32;\n\n    fn read(*self) Item {\n        return self.value;\n    }\n}\n\nfn read_item[S: Source](source: *S) S.Item {\n    return source.read();\n}\n\nfn main() {\n    let number = Number { .value = 3 };\n    let value: i32 = read_item(&number);\n    @println(\"{}\", value);\n}\n";
+
+    #[test]
+    fn associated_types_use_type_tokens() {
+        let uri: Uri = "file:///tmp/zeen-lsp-semantic-associated.zn"
+            .parse()
+            .unwrap();
+        let output = crate::diagnostics::check(&uri, ASSOCIATED_TYPE_SAMPLE, &[]);
+        assert!(crate::diagnostics::only_errors(&output.diagnostics).is_empty());
+
+        let tokens = decoded(
+            ASSOCIATED_TYPE_SAMPLE,
+            &tokens_for(ASSOCIATED_TYPE_SAMPLE, &output.analysis),
+        );
+        let type_token = TokenType::Type as u32;
+
+        let interface_decl = ASSOCIATED_TYPE_SAMPLE.find("alias Item;").unwrap() + "alias ".len();
+        let implement_decl = ASSOCIATED_TYPE_SAMPLE
+            .match_indices("alias Item")
+            .nth(1)
+            .unwrap()
+            .0
+            + "alias ".len();
+        let projection = ASSOCIATED_TYPE_SAMPLE.find("S.Item").unwrap() + "S.".len();
+
+        for offset in [interface_decl, implement_decl, projection] {
+            let (line, start) = offset_position(ASSOCIATED_TYPE_SAMPLE, offset);
+            let token = tokens
+                .iter()
+                .find(|token| token.0 == line && token.1 == start)
+                .unwrap();
+
+            assert_eq!(token.3, type_token, "offset {offset}");
+        }
+    }
 }

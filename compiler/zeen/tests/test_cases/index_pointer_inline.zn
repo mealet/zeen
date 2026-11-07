@@ -12,12 +12,16 @@ implement[T] Holder[T] {
 }
 
 implement[T] Index : Holder[T] {
+  alias Output = *T;
+
   fn index(*const self, index: usize) *T {
     &self.value
   }
 }
 
 implement[T] IndexPtr : Holder[T] {
+  alias Output = T;
+
   fn index_ptr(*self, index: usize) *T {
     &self.value
   }

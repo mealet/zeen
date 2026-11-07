@@ -15,6 +15,13 @@ pub mod expressions;
 pub mod statements;
 pub mod type_parser;
 
+pub(crate) fn merge_spans(a: miette::SourceSpan, b: miette::SourceSpan) -> miette::SourceSpan {
+    let start = a.offset().min(b.offset());
+    let end = (a.offset() + a.len()).max(b.offset() + b.len());
+
+    miette::SourceSpan::new(start.into(), end - start)
+}
+
 pub struct Parser<'tok, 'ctx> {
     src: Arc<String>,
     filename: Rc<String>,

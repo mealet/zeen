@@ -29,6 +29,8 @@ pub struct TypeCheckResult {
     pub builtin_shape_generics: HashMap<DefId, Vec<DefId>>,
 
     pub interface_registry: HashMap<String, DefId>,
+    pub interface_assoc_types: HashMap<DefId, Vec<DefId>>,
+    pub generic_assoc_bindings: HashMap<(DefId, DefId), TypeId>,
     pub enum_variants: HashMap<DefId, Vec<DefId>>,
     pub method_owner: HashMap<DefId, DefId>,
     pub const_bindings: HashMap<DefId, bool>,
@@ -52,10 +54,12 @@ pub struct TypeCheckResult {
 pub struct ImplEntry {
     pub methods: Vec<DefId>,
     pub object_args: Vec<TypeId>,
+    pub interface_args: Vec<TypeId>,
     pub is_specialized: bool,
     pub generic_bounds: Vec<(DefId, Vec<DefId>)>,
     pub generic_bindings: Vec<(DefId, DefId)>,
     pub generics: Vec<DefId>,
+    pub assoc_bindings: HashMap<DefId, TypeId>,
 }
 
 impl TypeCheckResult {
@@ -252,6 +256,8 @@ pub struct CallResolution {
     pub fn_def: DefId,
     pub generic_args: Vec<TypeId>,
     pub owner: Option<DefId>,
+    pub interface_args: Option<Vec<TypeId>>,
+    pub bindings: Option<HashMap<DefId, TypeId>>,
 }
 
 #[derive(Debug, Clone)]

@@ -619,7 +619,12 @@ impl<'ctx> NameResolver {
                 self.table.declare_type(name.0, def_id);
             }
 
-            DeclarationKind::InterfaceDecl { name, is_pub, .. } => {
+            DeclarationKind::InterfaceDecl {
+                name,
+                is_pub,
+                aliases,
+                ..
+            } => {
                 let _name_resolved = self.interner_resolve(&name.0);
 
                 let def_id = self.define_at(
@@ -646,6 +651,31 @@ impl<'ctx> NameResolver {
                 self.result
                     .interface_self_placeholders
                     .insert(def_id, self_placeholder);
+
+                let mut assoc_types = Vec::with_capacity(aliases.len());
+
+                for alias in aliases {
+                    let DeclarationKind::AssociatedType(associated) = alias.kind else {
+                        continue;
+                    };
+
+                    let assoc_id = self.define_at(
+                        NodeKey::from_decl(alias),
+                        DefInfo {
+                            name: associated.name.0,
+                            kind: DefKind::AssociatedType { interface: def_id },
+                            span: (associated.name.1, alias.source.src()).into(),
+                            decl: Some(NodeKey::from_decl(alias)),
+                            is_pub,
+                        },
+                    );
+
+                    assoc_types.push(assoc_id);
+                }
+
+                self.result
+                    .interface_assoc_types
+                    .insert(def_id, assoc_types);
             }
 
             DeclarationKind::EnumDecl {
@@ -780,6 +810,7 @@ impl<'ctx> NameResolver {
 
             DeclarationKind::ExternLink { .. } => {}
             DeclarationKind::ImplementDecl { .. } => {}
+            DeclarationKind::AssociatedType(_) => {}
             DeclarationKind::Use { .. } => {}
             DeclarationKind::ConditionalBlock(_) => {}
 
@@ -893,7 +924,10 @@ impl<'ctx> NameResolver {
             }
 
             DeclarationKind::InterfaceDecl {
-                generics, methods, ..
+                generics,
+                aliases,
+                methods,
+                ..
             } => {
                 let iface_def = self
                     .result
@@ -907,22 +941,60 @@ impl<'ctx> NameResolver {
                 self.table.push(ScopeKind::Block);
                 self.declare_generics(generics, &decl.source.src);
 
+                let assoc_ids = self
+                    .result
+                    .interface_assoc_types
+                    .get(&iface_def)
+                    .cloned()
+                    .unwrap_or_default();
+
+                for (alias, assoc_id) in aliases.iter().zip(assoc_ids.iter()) {
+                    let DeclarationKind::AssociatedType(associated) = alias.kind else {
+                        continue;
+                    };
+
+                    self.table.declare_type(associated.name.0, *assoc_id);
+                }
+
+                self.table.push(ScopeKind::InterfaceMethod {
+                    self_placeholder,
+                    self_param: None,
+                });
+
+                for alias in aliases {
+                    let DeclarationKind::AssociatedType(associated) = alias.kind else {
+                        continue;
+                    };
+
+                    if let Some(default) = associated.default {
+                        self.resolve_type(default);
+                    }
+                }
+
                 for method in methods {
                     self.resolve_interface_method(method, self_placeholder);
                 }
 
                 self.table.pop();
+                self.table.pop();
             }
 
             DeclarationKind::ImplementDecl {
                 interface,
+                interface_args,
                 builtin,
                 object,
                 methods,
                 generics,
+                where_clauses,
+                aliases,
             } => {
                 self.table.push(ScopeKind::Block);
                 self.declare_generics(generics, &decl.source.src);
+
+                for arg in interface_args {
+                    self.resolve_type(arg);
+                }
 
                 let implement_generic_names: HashSet<Spur> = generics
                     .map(|gs| gs.iter().map(|g| g.name.0).collect())
@@ -1004,6 +1076,76 @@ impl<'ctx> NameResolver {
                     }
                 }
 
+                let assoc_ids = interface_def
+                    .and_then(|iface| self.result.interface_assoc_types.get(&iface).cloned())
+                    .unwrap_or_default();
+
+                for assoc_id in &assoc_ids {
+                    let Some(info) = self.result.defs.get(assoc_id) else {
+                        continue;
+                    };
+
+                    if implement_generic_names.contains(&info.name) {
+                        continue;
+                    }
+
+                    self.table.declare_type(info.name, *assoc_id);
+                }
+
+                for alias in aliases {
+                    let DeclarationKind::AssociatedType(associated) = alias.kind else {
+                        continue;
+                    };
+
+                    let matching = assoc_ids.iter().copied().find(|id| {
+                        self.result
+                            .defs
+                            .get(id)
+                            .map(|info| info.name == associated.name.0)
+                            .unwrap_or(false)
+                    });
+
+                    if let Some(assoc_id) = matching {
+                        self.table.declare_type(associated.name.0, assoc_id);
+                        self.result
+                            .binding_sites
+                            .insert(NodeKey::from_decl(alias), assoc_id);
+                    }
+                }
+
+                if let Some(self_def) = object_def {
+                    self.table.push(ScopeKind::Method {
+                        self_def,
+                        self_param: None,
+                    });
+
+                    for alias in aliases {
+                        let DeclarationKind::AssociatedType(associated) = alias.kind else {
+                            continue;
+                        };
+
+                        if let Some(default) = associated.default {
+                            self.resolve_type(default);
+                        }
+                    }
+
+                    self.table.pop();
+                } else {
+                    for alias in aliases {
+                        let DeclarationKind::AssociatedType(associated) = alias.kind else {
+                            continue;
+                        };
+
+                        if let Some(default) = associated.default {
+                            self.resolve_type(default);
+                        }
+                    }
+                }
+
+                if let Some(clauses) = where_clauses {
+                    self.resolve_where_clauses(clauses);
+                }
+
                 let mut methods_ids = Vec::new();
 
                 if let Some(self_def) = object_def {
@@ -1057,6 +1199,7 @@ impl<'ctx> NameResolver {
             }
 
             DeclarationKind::ExternLink { .. } | DeclarationKind::ExternInclude { .. } => {}
+            DeclarationKind::AssociatedType(_) => {}
             DeclarationKind::Use { .. } => {}
             DeclarationKind::ConditionalBlock(_) => {}
         }
@@ -1350,6 +1493,7 @@ impl<'ctx> NameResolver {
             generics,
             params,
             return_type,
+            where_clauses,
             body,
             ..
         } = decl.kind
@@ -1359,6 +1503,10 @@ impl<'ctx> NameResolver {
 
         self.table.push(ScopeKind::Function);
         self.declare_generics(generics, &decl.source.src);
+
+        if let Some(clauses) = where_clauses {
+            self.resolve_where_clauses(clauses);
+        }
 
         for param in params {
             self.resolve_type(param.ty);
@@ -1396,6 +1544,7 @@ impl<'ctx> NameResolver {
             generics,
             params,
             return_type,
+            where_clauses,
             body,
             is_pub,
             ..
@@ -1469,6 +1618,10 @@ impl<'ctx> NameResolver {
         let prev_fn = self.current_fn_def;
         self.current_fn_def = Some(method_id);
 
+        if let Some(clauses) = where_clauses {
+            self.resolve_where_clauses(clauses);
+        }
+
         if let Some(body) = body {
             self.resolve_stmt(body);
         }
@@ -1539,6 +1692,7 @@ impl<'ctx> NameResolver {
             generics,
             params,
             return_type,
+            where_clauses,
             body,
             is_pub,
             ..
@@ -1607,6 +1761,10 @@ impl<'ctx> NameResolver {
 
         if let Some(ret) = return_type {
             self.resolve_type(ret);
+        }
+
+        if let Some(clauses) = where_clauses {
+            self.resolve_where_clauses(clauses);
         }
 
         if let Some(body) = body {
@@ -2309,6 +2467,19 @@ impl<'ctx> NameResolver {
 
     // --> Types
 
+    fn resolve_where_clauses(
+        &mut self,
+        clauses: &'ctx [zeen_ast::declarations::WhereClause<'ctx>],
+    ) {
+        for clause in clauses {
+            self.resolve_type(clause.ty);
+
+            if let zeen_ast::declarations::WhereClauseKind::Equality { ty } = clause.kind {
+                self.resolve_type(ty);
+            }
+        }
+    }
+
     fn resolve_type(&mut self, ty: &'ctx TypeExpr<'ctx>) {
         match ty.kind {
             TypeKind::Builtin(_) | TypeKind::VaArgs => {}
@@ -2387,6 +2558,10 @@ impl<'ctx> NameResolver {
             | TypeKind::SinglePointer(inner)
             | TypeKind::ManyPointer(inner) => {
                 self.resolve_type(inner);
+            }
+
+            TypeKind::Associated { base, .. } => {
+                self.resolve_type(base);
             }
 
             TypeKind::TypeOf(expr) => {

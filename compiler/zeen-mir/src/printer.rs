@@ -587,6 +587,10 @@ impl<'a> MirPrinter<'a> {
             Type::GenericParam(def_id) => self.resolve_def_name(def_id),
             Type::InterfaceSelfPlaceholder(_) => "Self".to_string(),
 
+            Type::Associated { base, def } => {
+                format!("{}.{}", self.display_type(base), self.resolve_def_name(def))
+            }
+
             Type::Void => "void".to_string(),
             Type::Never => "never".to_string(),
             Type::Error => "<error>".to_string(),

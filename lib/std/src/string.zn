@@ -829,6 +829,8 @@ implement Hash : String {
 }
 
 implement Index : String {
+  alias Output = char;
+
   fn index(*const self, index: usize) char {
     const opt = self.get(index);
 
@@ -841,6 +843,8 @@ implement Index : String {
 }
 
 implement IndexPtr : String {
+  alias Output = char;
+
   fn index_ptr(*self, index: usize) *char {
     const opt = self.get_ptr(index);
 

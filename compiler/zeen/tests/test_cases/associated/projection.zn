@@ -1,0 +1,24 @@
+interface Source {
+    alias Item;
+
+    pub fn read(*self) Item;
+}
+
+struct Celsius {
+    degrees: i32,
+}
+
+implement Source : Celsius {
+    alias Item = i32;
+
+    fn read(*self) Self.Item {
+        return self.degrees;
+    }
+}
+
+fn main() {
+    let celsius = Celsius { .degrees = 12 };
+    const projected: Celsius.Item = celsius.read();
+
+    @println("{}", projected);
+}

@@ -33,8 +33,9 @@ pub struct HirModule {
 // =========| Public Exports |=========
 
 pub use decl::{
-    HirAlias, HirDecl, HirDeclKind, HirEnum, HirEnumVariant, HirEnumVariantPayload, HirField,
-    HirFn, HirGenericParam, HirImplement, HirInterface, HirParam, HirStruct,
+    HirAlias, HirAssociatedType, HirDecl, HirDeclKind, HirEnum, HirEnumVariant,
+    HirEnumVariantPayload, HirField, HirFn, HirGenericParam, HirImplement, HirInterface, HirParam,
+    HirStruct, HirWhereClause, HirWhereClauseKind,
 };
 
 pub use expr::{
@@ -175,6 +176,8 @@ impl<'res> HirLowering<'res> {
         let kind = match decl.kind {
             DeclarationKind::FnDecl { .. } => HirDeclKind::Fn(Rc::new(self.lower_fn(decl, None))),
 
+            DeclarationKind::AssociatedType(_) => return None,
+
             DeclarationKind::ComptimeConst { .. }
             | DeclarationKind::ComptimeFn { .. }
             | DeclarationKind::ComptimeBlock(_)
@@ -219,8 +222,14 @@ impl<'res> HirLowering<'res> {
                 name,
                 is_pub,
                 generics,
+                aliases,
                 methods,
             } => {
+                let hir_aliases: Vec<Rc<HirAssociatedType>> = aliases
+                    .iter()
+                    .filter_map(|alias| self.lower_associated_type(alias))
+                    .collect();
+
                 let hir_methods: Vec<Rc<HirDecl>> = methods
                     .iter()
                     .filter_map(|method| self.lower_decl_as_method(method, None))
@@ -230,16 +239,20 @@ impl<'res> HirLowering<'res> {
                     name,
                     is_pub,
                     generics: self.lower_generics(generics),
+                    aliases: hir_aliases,
                     methods: hir_methods,
                 }))
             }
 
             DeclarationKind::ImplementDecl {
                 interface: _,
+                interface_args,
                 builtin: _,
                 object,
                 methods,
                 generics,
+                where_clauses,
+                aliases,
             } => {
                 let (interface_def, object_def) = match self
                     .resolution
@@ -262,6 +275,18 @@ impl<'res> HirLowering<'res> {
                 };
 
                 let hir_generics = self.lower_generics(generics);
+
+                let hir_interface_args: Vec<Rc<HirTypeExpr>> = interface_args
+                    .iter()
+                    .map(|arg| Rc::new(self.lower_type(arg)))
+                    .collect();
+
+                let hir_where_clauses = self.lower_where_clauses(where_clauses);
+
+                let hir_aliases: Vec<Rc<HirAssociatedType>> = aliases
+                    .iter()
+                    .filter_map(|alias| self.lower_associated_type(alias))
+                    .collect();
 
                 let object_bindings: Vec<DefId> = object
                     .2
@@ -303,10 +328,13 @@ impl<'res> HirLowering<'res> {
                 HirDeclKind::Implement(Rc::new(HirImplement {
                     generics: hir_generics,
                     interface: interface_def,
+                    interface_args: hir_interface_args,
                     object: object_def.copied(),
+                    where_clauses: hir_where_clauses,
                     object_generics_bindings: object_bindings,
                     object_generic_types,
                     object_bindings_span,
+                    aliases: hir_aliases,
                     methods: hir_methods,
                 }))
             }
@@ -452,6 +480,7 @@ impl<'res> HirLowering<'res> {
             generics,
             params,
             return_type,
+            where_clauses,
             body,
             is_pub,
             is_extern,
@@ -484,6 +513,7 @@ impl<'res> HirLowering<'res> {
             generics: self.lower_generics(generics),
             params: hir_params,
             return_type: return_type.map(|ty| Rc::new(self.lower_type(ty))),
+            where_clauses: self.lower_where_clauses(where_clauses),
             body: body.map(|stmt| Rc::new(self.lower_stmt(stmt))),
             is_pub,
             is_extern,
@@ -531,6 +561,70 @@ impl<'res> HirLowering<'res> {
                     def_id,
                     name: gtype.name,
                     bounds,
+                }
+            })
+            .collect()
+    }
+
+    fn lower_associated_type(&mut self, decl: &Declaration<'_>) -> Option<Rc<HirAssociatedType>> {
+        let DeclarationKind::AssociatedType(associated) = decl.kind else {
+            return None;
+        };
+
+        let def_id = self.def_id_of_decl(decl).unwrap_or(DefId(u32::MAX));
+
+        let bounds = associated
+            .bounds
+            .map(|bounds| {
+                bounds
+                    .iter()
+                    .filter_map(|(name, _)| self.lookup_type_def_by_name(*name))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Some(Rc::new(HirAssociatedType {
+            def_id,
+            name: associated.name,
+            bounds,
+            default: associated.default.map(|ty| Rc::new(self.lower_type(ty))),
+        }))
+    }
+
+    fn lower_where_clauses(
+        &mut self,
+        clauses: Option<&[zeen_ast::declarations::WhereClause<'_>]>,
+    ) -> Vec<HirWhereClause> {
+        let Some(clauses) = clauses else {
+            return Vec::new();
+        };
+
+        clauses
+            .iter()
+            .map(|clause| {
+                let ty = Rc::new(self.lower_type(clause.ty));
+
+                let kind = match clause.kind {
+                    zeen_ast::declarations::WhereClauseKind::Bound { bounds } => {
+                        HirWhereClauseKind::Bound {
+                            bounds: bounds
+                                .iter()
+                                .filter_map(|(name, _)| self.lookup_type_def_by_name(*name))
+                                .collect(),
+                        }
+                    }
+
+                    zeen_ast::declarations::WhereClauseKind::Equality { ty: eq } => {
+                        HirWhereClauseKind::Equality {
+                            ty: Rc::new(self.lower_type(eq)),
+                        }
+                    }
+                };
+
+                HirWhereClause {
+                    ty,
+                    kind,
+                    span: clause.span,
                 }
             })
             .collect()
@@ -992,6 +1086,7 @@ impl<'res> HirLowering<'res> {
                     generics: Vec::new(),
                     params: hir_params,
                     return_type: return_type.map(|ty| Rc::new(self.lower_type(ty))),
+                    where_clauses: Vec::new(),
                     body: Some(Rc::new(self.lower_stmt(body))),
                     is_pub: false,
                     is_extern: false,
@@ -1064,6 +1159,11 @@ impl<'res> HirLowering<'res> {
                     _ => HirTypeKind::Error,
                 }
             }
+
+            TypeKind::Associated { base, name } => HirTypeKind::Associated {
+                base: Rc::new(self.lower_type(base)),
+                name,
+            },
 
             TypeKind::Named { generic_args, .. } => {
                 let def_id = match self.resolution.resolution_of_type(ty) {
@@ -1512,6 +1612,50 @@ mod tests {
         assert!(implement.interface.is_some());
         assert!(implement.object.is_some());
         assert_eq!(implement.methods.len(), 1);
+    }
+
+    #[test]
+    fn interface_lowers_associated_types() {
+        let fx =
+            lower_ok("interface Source { alias Item: Copy = i32; fn read(*const self) Item; }");
+        let source = fx.interface_decl("Source");
+
+        assert_eq!(source.aliases.len(), 1);
+
+        let item = &source.aliases[0];
+
+        assert_eq!(fx.name(item.name.0), "Item");
+        assert_eq!(item.bounds.len(), 1);
+        assert!(matches!(
+            item.default.as_ref().map(|ty| &ty.kind),
+            Some(HirTypeKind::Builtin(BuiltinType::i32))
+        ));
+    }
+
+    #[test]
+    fn implement_lowers_associated_aliases() {
+        let fx = lower_ok(
+            "interface Source { alias Item; fn read(*const self) Item; } \
+             struct Celsius { degrees: i32 } \
+             implement Source : Celsius { \
+                 alias Item = i32; \
+                 fn read(*const self) Item { return self.degrees; } \
+             }",
+        );
+
+        let implement = fx
+            .module
+            .decls
+            .iter()
+            .find_map(|decl| match &decl.kind {
+                HirDeclKind::Implement(imp) if !imp.aliases.is_empty() => Some(imp.clone()),
+                _ => None,
+            })
+            .expect("implement with an associated alias");
+
+        assert_eq!(implement.aliases.len(), 1);
+        assert_eq!(fx.name(implement.aliases[0].name.0), "Item");
+        assert!(implement.aliases[0].default.is_some());
     }
 
     #[test]

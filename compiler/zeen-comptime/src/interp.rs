@@ -107,6 +107,7 @@ enum TypeKey {
     SelfAlias,
     VaArgs,
     Named(Spur, Option<Vec<TypeKey>>),
+    Associated(Box<TypeKey>, Spur),
     Const(Box<TypeKey>),
     TypeOf(usize),
     Splice(usize),
@@ -129,6 +130,9 @@ fn type_key(ty: &TypeExpr<'_>) -> TypeKey {
             generic_args.map(|args| args.iter().map(|arg| type_key(arg)).collect()),
         ),
         TypeKind::Const(inner) => TypeKey::Const(Box::new(type_key(inner))),
+        TypeKind::Associated { base, name } => {
+            TypeKey::Associated(Box::new(type_key(base)), name.0)
+        }
         TypeKind::TypeOf(expr) => TypeKey::TypeOf(*expr as *const Expression<'_> as usize),
         TypeKind::Splice(expr) => TypeKey::Splice(*expr as *const Expression<'_> as usize),
         TypeKind::ComptimeCall(expr) => {
@@ -3512,6 +3516,7 @@ impl<'arena> Interp<'arena> {
             DeclarationKind::FnDecl { .. } => "fn",
             DeclarationKind::ComptimeFn { .. } => "comptime_fn",
             DeclarationKind::Alias { .. } => "alias",
+            DeclarationKind::AssociatedType { .. } => "associated_type",
             DeclarationKind::GlobalVar { .. } => "global_var",
             DeclarationKind::ExternVar { .. } => "extern_var",
             DeclarationKind::ImplementDecl { .. } => "implement",

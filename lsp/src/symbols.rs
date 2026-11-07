@@ -54,6 +54,7 @@ pub fn document_symbols(text: &str, analysis: &Analysis) -> Vec<DocumentSymbol> 
                 ),
                 MemberKind::Field => (SymbolKind::FIELD, member.signature.clone()),
                 MemberKind::Variant => (SymbolKind::ENUM_MEMBER, None),
+                MemberKind::AssociatedType => (SymbolKind::TYPE_PARAMETER, None),
             };
 
             owned.push(DocumentSymbol {

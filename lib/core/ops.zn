@@ -31,88 +31,122 @@ pub interface Eq {
 }
 
 /// `+` operator
-pub interface Add {
-  fn add(self, other: Self) Self;
+pub interface[Rhs] Add {
+  alias Output = Self;
+
+  fn add(self, other: Rhs) Output;
 }
 
 /// `-` operator
-pub interface Sub {
-  fn sub(self, other: Self) Self;
+pub interface[Rhs] Sub {
+  alias Output = Self;
+
+  fn sub(self, other: Rhs) Output;
 }
 
 /// `*` operator
-pub interface Mul {
-  fn mul(self, other: Self) Self;
+pub interface[Rhs] Mul {
+  alias Output = Self;
+
+  fn mul(self, other: Rhs) Output;
 }
 
 /// `/` operator
-pub interface Div {
-  fn div(self, other: Self) Self;
+pub interface[Rhs] Div {
+  alias Output = Self;
+
+  fn div(self, other: Rhs) Output;
 }
 
 /// `%` operator
-pub interface Mod {
-  fn mod(self, other: Self) Self;
+pub interface[Rhs] Mod {
+  alias Output = Self;
+
+  fn mod(self, other: Rhs) Output;
 }
 
 /// `&` operator
-pub interface BitAnd {
-  fn bit_and(self, other: Self) Self;
+pub interface[Rhs] BitAnd {
+  alias Output = Self;
+
+  fn bit_and(self, other: Rhs) Output;
 }
 
 /// `|` operator
-pub interface BitOr {
-  fn bit_or(self, other: Self) Self;
+pub interface[Rhs] BitOr {
+  alias Output = Self;
+
+  fn bit_or(self, other: Rhs) Output;
 }
 
 /// `^` operator
-pub interface BitXor {
-  fn bit_xor(self, other: Self) Self;
+pub interface[Rhs] BitXor {
+  alias Output = Self;
+
+  fn bit_xor(self, other: Rhs) Output;
 }
 
 /// `<<` operator
-pub interface BitShl {
-  fn bit_shl(self, other: Self) Self;
+pub interface[Rhs] BitShl {
+  alias Output = Self;
+
+  fn bit_shl(self, other: Rhs) Output;
 }
 
 /// `>>` operator
-pub interface BitShr {
-  fn bit_shr(self, other: Self) Self;
+pub interface[Rhs] BitShr {
+  alias Output = Self;
+
+  fn bit_shr(self, other: Rhs) Output;
 }
 
 /// `~` operator
 pub interface BitNot {
-  fn bit_not(self) Self;
+  alias Output = Self;
+
+  fn bit_not(self) Output;
 }
 
 /// `-` operator
 pub interface Neg {
-  fn neg(self) Self;
+  alias Output = Self;
+
+  fn neg(self) Output;
 }
 
 /// `!` operator
 pub interface Not {
-  fn not(self) Self;
+  alias Output = Self;
+
+  fn not(self) Output;
 }
 
 /// Dereference operator (`*expr`).
-pub interface[T] Deref {
-  fn deref(*const self) T;
+pub interface Deref {
+  alias Target;
+
+  fn deref(*const self) Target;
 }
 
 /// Dereference operator with pointer access (example: `*lvalue = rvalue`, uses DerefPtr for lvalue).
-pub interface[T] DerefPtr {
-  fn deref_ptr(*self) *T;
+pub interface DerefPtr {
+  alias Target;
+
+  fn deref_ptr(*self) *Target;
 }
 
 /// Index operation (`expr[index] -> T`)
-pub interface[T] Index {
-  fn index(*const self, index: usize) T;
+pub interface Index {
+  alias Output;
+
+  fn index(*const self, index: usize) Output;
 }
 
 /// Index operation with pointer access (`lvalue[index] = rvalue`)
-pub interface[T] IndexPtr {
-  fn index_ptr(*self, index: usize) *T;
+pub interface IndexPtr {
+  alias Output;
+
+  fn index_ptr(*self, index: usize) *Output;
 }
 
 /// Hash value generation for hash based collections.

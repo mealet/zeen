@@ -38,6 +38,7 @@ fn type_needs_drop_impl(
         | Type::Pointer { .. }
         | Type::ManyPointer { .. }
         | Type::Fn { .. }
+        | Type::Associated { .. }
         | Type::Void
         | Type::Never
         | Type::Error => false,

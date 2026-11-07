@@ -114,6 +114,7 @@ pub enum DefKind {
     Enum,
     EnumVariant,
     TypeAlias,
+    AssociatedType { interface: DefId },
     Variable { is_const: bool },
     Param,
     Field,
@@ -140,6 +141,7 @@ pub struct ResolutionResult {
     pub binding_sites: HashMap<NodeKey, DefId>,
     pub implement_names: HashMap<NodeKey, (Option<Resolution>, Resolution)>,
     pub interface_self_placeholders: HashMap<DefId, DefId>,
+    pub interface_assoc_types: HashMap<DefId, Vec<DefId>>,
 
     pub arm_const_values: HashMap<(NodeKey, usize), Literal>,
     pub arm_const_defs: Vec<DefId>,

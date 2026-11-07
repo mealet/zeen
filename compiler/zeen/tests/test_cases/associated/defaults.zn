@@ -1,0 +1,22 @@
+interface Ratio {
+    alias Scale = i32;
+    alias Value = Scale;
+
+    pub fn value(*self) Value;
+}
+
+struct Reading {
+    raw: i32,
+}
+
+implement Ratio : Reading {
+    fn value(*self) Value {
+        return self.raw;
+    }
+}
+
+fn main() {
+    let reading = Reading { .raw = 9 };
+
+    @println("{}", reading.value());
+}

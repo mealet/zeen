@@ -1772,22 +1772,33 @@ impl LanguageServer for Backend {
                 items
             }
         } else {
-            let implement_items =
-                completion::implement_complete(&document.text, &document.analysis, offset);
+            let header_items = completion::implement_header_complete(
+                &document.text,
+                &document.analysis,
+                offset,
+                paths,
+            );
 
-            if !implement_items.is_empty() {
-                implement_items
-            } else if document.analysis.occurrences.is_empty() {
-                self.retry_with_repaired(
-                    &uri,
-                    &document.text,
-                    offset,
-                    paths,
-                    CompletionBranch::Plain,
-                )
-                .await
+            if !header_items.is_empty() {
+                header_items
             } else {
-                completion::complete(&document.text, &document.analysis, offset, paths)
+                let implement_items =
+                    completion::implement_complete(&document.text, &document.analysis, offset);
+
+                if !implement_items.is_empty() {
+                    implement_items
+                } else if document.analysis.occurrences.is_empty() {
+                    self.retry_with_repaired(
+                        &uri,
+                        &document.text,
+                        offset,
+                        paths,
+                        CompletionBranch::Plain,
+                    )
+                    .await
+                } else {
+                    completion::complete(&document.text, &document.analysis, offset, paths)
+                }
             }
         };
 

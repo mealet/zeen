@@ -1,0 +1,37 @@
+interface[T] Boxed {
+  pub fn wrap(*const self, value: T) T {
+    return value;
+  }
+
+  pub fn twice(*const self, value: T) T {
+    const first: T = self.wrap(value);
+    return self.wrap(first);
+  }
+}
+
+struct Counter {
+  pub count: i32,
+}
+
+struct Label {
+  pub size: i32,
+}
+
+struct Holder[T] {
+  pub inner: T,
+}
+
+implement Boxed[i32] : Counter {}
+
+implement Boxed[char] : Label {}
+
+implement[T] Boxed[T] : Holder[T] {}
+
+fn main() {
+  const counter: Counter = .{ .count = 0 };
+  const label: Label = .{ .size = 0 };
+  const holder: Holder[i32] = .{ .inner = 0 };
+
+  @println("{} {} {}", counter.wrap(42), counter.twice(7), label.wrap('z'));
+  @println("{} {} {}", holder.wrap(5), holder.twice(11), counter.wrap(1));
+}

@@ -1,0 +1,93 @@
+struct Counter {
+    current: i32,
+    limit: i32,
+}
+
+implement Iterator : Counter {
+    alias Item = i32;
+
+    fn next(*self) Option[Item] {
+        if (self.current >= self.limit) {
+            return Option.None;
+        }
+
+        self.current += 1;
+
+        return Option.Some(self.current);
+    }
+}
+
+struct Repeater[T] {
+    value: T,
+    remaining: i32,
+}
+
+implement[T] Iterator : Repeater[T] {
+    alias Item = T;
+
+    fn next(*self) Option[Item] {
+        if (self.remaining <= 0) {
+            return Option.None;
+        }
+
+        self.remaining -= 1;
+
+        return Option.Some(self.value);
+    }
+}
+
+fn first[I: Iterator](iter: *I) Option[I.Item] {
+    return iter.next();
+}
+
+fn sum[I: Iterator](iter: *I) i32
+where I.Item = i32 {
+    let total: i32 = 0;
+
+    while (true) {
+        switch (iter.next()) {
+            .Some(value) => {
+                total += value;
+            }
+
+            .None => {
+                break;
+            }
+        }
+    }
+
+    return total;
+}
+
+fn main() {
+    const counter = Counter { .current = 0, .limit = 4 };
+    let total: i32 = 0;
+
+    for (value : counter) {
+        total += value;
+    }
+
+    @println("loop {}", total);
+
+    const repeater = Repeater { .value = 7, .remaining = 3 };
+
+    for (value : repeater) {
+        @println("repeater {}", value);
+    }
+
+    const countdown = Counter { .current = 0, .limit = 3 };
+
+    switch (first(&countdown)) {
+        .Some(value) => {
+            @println("first {}", value);
+        }
+
+        .None => {
+            @println("empty");
+        }
+    }
+
+    const other = Counter { .current = 0, .limit = 3 };
+
+    @println("sum {}", sum(&other));
+}

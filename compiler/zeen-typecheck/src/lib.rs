@@ -25,7 +25,10 @@ use zeen_ast::{
 use zeen_driver::{CompilationContext, CompilationOutput};
 use zeen_hir::{
     HirId, HirModule,
-    decl::{HirDecl, HirDeclKind, HirEnumVariantPayload, HirFn},
+    decl::{
+        HirAssociatedType, HirDecl, HirDeclKind, HirEnumVariantPayload, HirFn, HirWhereClause,
+        HirWhereClauseKind,
+    },
     expr::{
         HirExpr, HirExprKind, HirFieldInit, HirMacroKind, HirPattern, HirPatternBinding,
         HirSwitchArm,
@@ -70,6 +73,12 @@ pub struct TypeChecker<'res> {
     interface_methods: HashMap<DefId, Vec<DefId>>,
     interface_generics: HashMap<DefId, Vec<DefId>>,
     interface_methods_with_body: HashSet<DefId>,
+    interface_assoc_types: HashMap<DefId, Vec<DefId>>,
+    assoc_type_defaults: HashMap<DefId, Rc<HirTypeExpr>>,
+    assoc_type_bounds: HashMap<DefId, Vec<DefId>>,
+    generic_assoc_bindings: HashMap<(DefId, DefId), TypeId>,
+    generic_assoc_bounds: HashMap<(DefId, DefId), Vec<DefId>>,
+    current_self_ty: Option<TypeId>,
 
     struct_generics: HashMap<DefId, Vec<DefId>>,
     struct_methods: HashMap<DefId, HashMap<Spur, Vec<DefId>>>,
@@ -87,6 +96,8 @@ pub struct TypeChecker<'res> {
     type_names_as_values: HashMap<HirId, (DefId, Source)>,
 
     pending_impl_checks: Vec<PendingImplCheck>,
+
+    pending_assoc_checks: Vec<PendingAssocCheck>,
 
     range_def: OnceCell<Option<DefId>>,
 }
@@ -124,7 +135,15 @@ struct PendingImplCheck {
     object_def: DefId,
     imp_generics: Vec<DefId>,
     object_args: Vec<TypeId>,
+    interface_args: Vec<TypeId>,
     is_specialized: bool,
+    source: Source,
+}
+
+struct PendingAssocCheck {
+    assoc: DefId,
+    bound_ty: TypeId,
+    span: SourceSpan,
     source: Source,
 }
 
@@ -138,6 +157,8 @@ struct MethodSignatureEntry {
     span: SourceSpan,
 }
 
+type CandidateRank = (u8, bool, bool, bool, usize, DefId, Option<ImplEntry>);
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum MethodOwnerKey {
     Def(DefId),
@@ -147,6 +168,7 @@ enum MethodOwnerKey {
 struct ImplSigCtx<'a> {
     imp_generics: &'a [DefId],
     object_args: &'a [TypeId],
+    interface_args: &'a [TypeId],
     is_specialized: bool,
 }
 
@@ -213,6 +235,12 @@ impl<'res> TypeChecker<'res> {
             interface_methods: HashMap::default(),
             interface_generics: HashMap::default(),
             interface_methods_with_body: HashSet::default(),
+            interface_assoc_types: HashMap::default(),
+            assoc_type_defaults: HashMap::default(),
+            assoc_type_bounds: HashMap::default(),
+            generic_assoc_bindings: HashMap::default(),
+            generic_assoc_bounds: HashMap::default(),
+            current_self_ty: None,
             struct_generics: HashMap::default(),
             struct_methods: HashMap::default(),
             enum_variants: HashMap::default(),
@@ -225,6 +253,7 @@ impl<'res> TypeChecker<'res> {
             speculating: false,
             type_names_as_values: HashMap::default(),
             pending_impl_checks: Vec::new(),
+            pending_assoc_checks: Vec::new(),
             range_def: OnceCell::new(),
         }
     }
@@ -243,6 +272,7 @@ impl<'res> TypeChecker<'res> {
         self.result.struct_generics = self.struct_generics;
         self.result.enum_variants = self.enum_variants;
         self.result.enum_generics = self.enum_generics;
+        self.result.generic_assoc_bindings = self.generic_assoc_bindings;
         self.result.interface_registry = self.interface_registry.into_name_map();
 
         (self.result, self.errors)
@@ -316,6 +346,29 @@ impl<'res> TypeChecker<'res> {
                         .insert(generic.def_id, generic.bounds.clone());
                 }
             }
+
+            if let HirDeclKind::Interface(i) = &decl.kind {
+                self.interface_generics
+                    .insert(decl.def_id, i.generics.iter().map(|g| g.def_id).collect());
+
+                let assoc_ids: Vec<DefId> = i.aliases.iter().map(|a| a.def_id).collect();
+
+                self.interface_assoc_types
+                    .insert(decl.def_id, assoc_ids.clone());
+                self.result
+                    .interface_assoc_types
+                    .insert(decl.def_id, assoc_ids);
+
+                for alias in &i.aliases {
+                    if let Some(default) = &alias.default {
+                        self.assoc_type_defaults
+                            .insert(alias.def_id, Rc::clone(default));
+                    }
+
+                    self.assoc_type_bounds
+                        .insert(alias.def_id, alias.bounds.clone());
+                }
+            }
         }
 
         for decl in &module.decls {
@@ -328,6 +381,7 @@ impl<'res> TypeChecker<'res> {
             let sig_ctx = ImplSigCtx {
                 imp_generics: &pending.imp_generics,
                 object_args: &pending.object_args,
+                interface_args: &pending.interface_args,
                 is_specialized: pending.is_specialized,
             };
 
@@ -337,6 +391,17 @@ impl<'res> TypeChecker<'res> {
                 pending.object_def,
                 &sig_ctx,
                 &((pending.source.span, pending.source.src()).into()),
+            );
+        }
+
+        let pending_assoc_checks = std::mem::take(&mut self.pending_assoc_checks);
+
+        for pending in pending_assoc_checks {
+            self.check_associated_type_bounds(
+                pending.assoc,
+                pending.bound_ty,
+                pending.span,
+                &pending.source,
             );
         }
 
@@ -398,6 +463,7 @@ impl<'res> TypeChecker<'res> {
 
                 for field in &s.fields {
                     let (ty, is_const) = self.lower_hir_type_with_const(&field.ty);
+                    let ty = self.normalize_associated(ty);
 
                     self.result.def_types.insert(field.def_id, ty);
                     self.result.const_bindings.insert(field.def_id, is_const);
@@ -451,9 +517,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Interface(i) => {
-                self.interface_generics
-                    .insert(decl.def_id, i.generics.iter().map(|g| g.def_id).collect());
-
                 self.interface_methods
                     .insert(decl.def_id, i.methods.iter().map(|m| m.def_id).collect());
 
@@ -620,6 +683,8 @@ impl<'res> TypeChecker<'res> {
                 .or_insert_with(|| bounds.clone());
         }
 
+        self.register_where_clauses(&hir_fn.where_clauses);
+
         let self_mode = hir_fn
             .params
             .first()
@@ -653,6 +718,7 @@ impl<'res> TypeChecker<'res> {
                 }
 
                 let (ty, is_const) = self.lower_hir_type_with_const(&param.ty);
+                let ty = self.normalize_associated(ty);
 
                 let effective_const = if idx == 0 {
                     match self_mode {
@@ -715,26 +781,13 @@ impl<'res> TypeChecker<'res> {
                 .insert(object_def, imp.generics.iter().map(|g| g.def_id).collect());
         }
 
-        for method in &imp.methods {
-            self.declare_signature(method);
-
-            if let (HirDeclKind::Fn(f), Some(object_def)) = (&method.kind, imp.object) {
-                self.result.method_owner.insert(method.def_id, object_def);
-                self.struct_methods
-                    .entry(object_def)
-                    .or_default()
-                    .entry(f.name.0)
-                    .or_default()
-                    .push(method.def_id);
-
-                if let Some(iface_def) = imp.interface {
-                    self.method_owning_interface
-                        .insert(method.def_id, iface_def);
-                }
+        let Some(object_def) = imp.object else {
+            for method in &imp.methods {
+                self.declare_signature(method);
             }
-        }
 
-        let Some(object_def) = imp.object else { return };
+            return;
+        };
 
         if !matches!(
             self.def_kind(object_def),
@@ -787,7 +840,33 @@ impl<'res> TypeChecker<'res> {
             .map(|shape| !shape.has_params())
             .unwrap_or(is_specialized);
 
-        if shape.is_none() && imp.object_generic_types.len() != struct_generics.len() {
+        let interface_args: Vec<TypeId> = imp
+            .interface_args
+            .iter()
+            .map(|arg| self.lower_hir_type(arg))
+            .collect();
+
+        if let Some(iface_def) = imp.interface {
+            let generic_count = self
+                .interface_generics
+                .get(&iface_def)
+                .map(|generics| generics.len())
+                .unwrap_or(0);
+
+            if !interface_args.is_empty() && interface_args.len() != generic_count {
+                self.report(TypeError::GenericArgCountMismatch {
+                    name: self.def_name(iface_def).unwrap_or_default().into(),
+                    expected: generic_count,
+                    found: interface_args.len(),
+                    src: source.src(),
+                    span: imp.object_bindings_span,
+                });
+            }
+        }
+
+        let args_valid = shape.is_some() || imp.object_generic_types.len() == struct_generics.len();
+
+        if !args_valid {
             let name_id = self
                 .resolution
                 .defs
@@ -819,6 +898,7 @@ impl<'res> TypeChecker<'res> {
             let entry = ImplEntry {
                 methods: imp.methods.iter().map(|m| m.def_id).collect(),
                 object_args: object_args.clone(),
+                interface_args: interface_args.clone(),
                 is_specialized,
                 generic_bounds: imp
                     .generics
@@ -827,17 +907,17 @@ impl<'res> TypeChecker<'res> {
                     .collect(),
                 generic_bindings,
                 generics: imp.generics.iter().map(|g| g.def_id).collect(),
+                assoc_bindings: HashMap::default(),
             };
 
             if let Some(iface_def) = imp.interface {
+                let key = self.impl_duplicate_key(&entry);
                 let is_duplicate = self
                     .result
                     .impl_registry
                     .get(&(object_def, iface_def))
                     .is_some_and(|existing| {
-                        existing.iter().any(|e| {
-                            e.object_args == object_args && e.is_specialized == is_specialized
-                        })
+                        existing.iter().any(|e| self.impl_duplicate_key(e) == key)
                     });
 
                 if is_duplicate {
@@ -860,14 +940,13 @@ impl<'res> TypeChecker<'res> {
                         src: source.src(),
                         span: imp.object_bindings_span,
                     });
-                    return;
+                } else {
+                    self.result
+                        .impl_registry
+                        .entry((object_def, iface_def))
+                        .or_default()
+                        .push(entry);
                 }
-
-                self.result
-                    .impl_registry
-                    .entry((object_def, iface_def))
-                    .or_default()
-                    .push(entry);
             } else {
                 self.result
                     .inherent_impls
@@ -875,6 +954,45 @@ impl<'res> TypeChecker<'res> {
                     .or_default()
                     .push(entry);
             }
+
+            let impl_self_ty = self.method_self_type(object_def, &object_args);
+
+            let previous_self_ty = self.current_self_ty;
+            self.current_self_ty = Some(impl_self_ty);
+
+            if let Some(iface_def) = imp.interface {
+                self.bind_implement_associated_types(
+                    iface_def,
+                    object_def,
+                    impl_self_ty,
+                    &object_args,
+                    &interface_args,
+                    is_specialized,
+                    &imp.aliases,
+                    &source,
+                );
+            }
+
+            for method in &imp.methods {
+                self.declare_signature(method);
+
+                if let HirDeclKind::Fn(f) = &method.kind {
+                    self.result.method_owner.insert(method.def_id, object_def);
+                    self.struct_methods
+                        .entry(object_def)
+                        .or_default()
+                        .entry(f.name.0)
+                        .or_default()
+                        .push(method.def_id);
+
+                    if let Some(iface_def) = imp.interface {
+                        self.method_owning_interface
+                            .insert(method.def_id, iface_def);
+                    }
+                }
+            }
+
+            self.current_self_ty = previous_self_ty;
         }
 
         self.substitute_impl_self_types(imp, object_def, &object_args);
@@ -910,6 +1028,7 @@ impl<'res> TypeChecker<'res> {
             object_def,
             imp_generics: imp.generics.iter().map(|g| g.def_id).collect(),
             object_args,
+            interface_args,
             is_specialized,
             source,
         });
@@ -943,9 +1062,14 @@ impl<'res> TypeChecker<'res> {
 
             let params: Vec<TypeId> = params
                 .iter()
-                .map(|&param| self.substitute_generics(param, &bindings))
+                .map(|&param| {
+                    let param = self.substitute_generics(param, &bindings);
+
+                    self.normalize_associated(param)
+                })
                 .collect();
             let ret = self.substitute_generics(ret, &bindings);
+            let ret = self.normalize_associated(ret);
 
             let Some(sig) = self.fn_sigs.get_mut(&method.def_id) else {
                 continue;
@@ -1013,7 +1137,9 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {
-        self.lower_hir_type_with_const(ty).0
+        let lowered = self.lower_hir_type_with_const(ty).0;
+
+        self.normalize_associated(lowered)
     }
 
     fn lower_hir_type_with_const(&mut self, ty: &HirTypeExpr) -> (TypeId, bool) {
@@ -1160,6 +1286,10 @@ impl<'res> TypeChecker<'res> {
                         .intern(Type::InterfaceSelfPlaceholder(*def_id)),
 
                     _ => {
+                        if let Some(self_ty) = self.current_self_ty {
+                            return self_ty;
+                        }
+
                         if let Some(DefKind::Builtin(builtin)) = self.def_kind(*def_id) {
                             return self.result.interner.builtin(*builtin);
                         }
@@ -1191,6 +1321,18 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirTypeKind::VaArgs => self.result.interner.void(),
+
+            HirTypeKind::Associated { base, name } => {
+                let base_ty = self.lower_hir_type(base);
+
+                match self.resolve_associated_def(base_ty, name.0, &ty.source) {
+                    Some(def) => self
+                        .result
+                        .interner
+                        .intern(Type::Associated { base: base_ty, def }),
+                    None => self.result.interner.error(),
+                }
+            }
 
             HirTypeKind::Named {
                 def_id,
@@ -1238,6 +1380,29 @@ impl<'res> TypeChecker<'res> {
                     }
 
                     Some(DefKind::TypeAlias) => self.lower_alias_ref(*def_id, args, ty),
+
+                    Some(DefKind::AssociatedType { interface }) => {
+                        let base = match self.current_self_ty {
+                            Some(self_ty) => self_ty,
+
+                            None => {
+                                let placeholder = self
+                                    .resolution
+                                    .interface_self_placeholders
+                                    .get(interface)
+                                    .copied()
+                                    .unwrap_or(*def_id);
+
+                                self.result
+                                    .interner
+                                    .intern(Type::InterfaceSelfPlaceholder(placeholder))
+                            }
+                        };
+
+                        self.result
+                            .interner
+                            .intern(Type::Associated { base, def: *def_id })
+                    }
 
                     _ => {
                         let struct_generics = self
@@ -1634,23 +1799,9 @@ impl<'res> TypeChecker<'res> {
             )
         };
 
-        let self_type = struct_def.map(|sd| {
-            let self_mode_ty =
-                |base_ty: TypeId, interner: &mut zeen_types::TypeInterner| match self_mode {
-                    Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_ty,
-                    Some(SelfMode::RefMut) => interner.intern(Type::Pointer {
-                        inner: base_ty,
-                        is_const: false,
-                    }),
-                    Some(SelfMode::RefConst) => interner.intern(Type::Pointer {
-                        inner: base_ty,
-                        is_const: true,
-                    }),
-                };
-
+        let self_base_ty = struct_def.map(|sd| {
             if let Some(DefKind::Builtin(builtin)) = self.def_kind(sd) {
-                let base_ty = self.result.interner.builtin(*builtin);
-                return self_mode_ty(base_ty, &mut self.result.interner);
+                return self.result.interner.builtin(*builtin);
             }
 
             let shape = match self.def_kind(sd) {
@@ -1660,9 +1811,8 @@ impl<'res> TypeChecker<'res> {
 
             if let Some(shape) = shape {
                 let generics = self.type_member_generics(sd);
-                let base_ty = self.builtin_shape_type(&shape, &generics);
 
-                return self_mode_ty(base_ty, &mut self.result.interner);
+                return self.builtin_shape_type(&shape, &generics);
             }
 
             let is_enum = matches!(self.def_kind(sd), Some(DefKind::Enum));
@@ -1683,7 +1833,7 @@ impl<'res> TypeChecker<'res> {
                     .collect()
             };
 
-            let base_ty = if is_enum {
+            if is_enum {
                 self.result.interner.intern(Type::Enum {
                     def_id: sd,
                     generic_args,
@@ -1693,9 +1843,19 @@ impl<'res> TypeChecker<'res> {
                     def_id: sd,
                     generic_args,
                 })
-            };
+            }
+        });
 
-            self_mode_ty(base_ty, &mut self.result.interner)
+        let self_type = self_base_ty.map(|base_ty| match self_mode {
+            Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_ty,
+            Some(SelfMode::RefMut) => self.result.interner.intern(Type::Pointer {
+                inner: base_ty,
+                is_const: false,
+            }),
+            Some(SelfMode::RefConst) => self.result.interner.intern(Type::Pointer {
+                inner: base_ty,
+                is_const: true,
+            }),
         });
         let mut generic_bindings = HashMap::default();
         let mut generic_bounds = HashMap::default();
@@ -1738,6 +1898,9 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
+        let previous_self_ty = self.current_self_ty;
+        self.current_self_ty = self_base_ty;
+
         self.ctx.push_fn(FnCtx {
             fn_def: def_id,
             return_type: sig_ret,
@@ -1775,6 +1938,8 @@ impl<'res> TypeChecker<'res> {
         };
 
         self.ctx.pop_fn();
+
+        self.current_self_ty = previous_self_ty;
 
         self.bodies_in_progress.remove(&def_id);
         self.bodies_checked.insert(def_id);
@@ -2038,9 +2203,11 @@ impl<'res> TypeChecker<'res> {
                 value,
                 is_const,
             } => {
-                let declared = explicit_type
-                    .as_ref()
-                    .map(|t| self.lower_hir_type_with_const(t));
+                let declared = explicit_type.as_ref().map(|t| {
+                    let (ty, is_const) = self.lower_hir_type_with_const(t);
+
+                    (self.normalize_associated(ty), is_const)
+                });
 
                 let declared_ty = declared.map(|(ty, _)| ty);
                 let _declared_const = declared.map(|(_, c)| c).unwrap_or(false);
@@ -2721,6 +2888,9 @@ impl<'res> TypeChecker<'res> {
                                 .intern(Type::Slice { element, is_const }),
                             None => element,
                         },
+                        Type::GenericParam(g) if range_index.is_none() => {
+                            self.check_slice_access_on_generic(g, inner, expr)
+                        }
                         _ => {
                             self.report(TypeError::NotIndexable {
                                 child_type: self.display_type(obj_ty).into(),
@@ -2750,52 +2920,7 @@ impl<'res> TypeChecker<'res> {
                     },
                     Type::Error => self.result.interner.error(),
                     Type::GenericParam(g) if range_index.is_none() => {
-                        let (iface_name, method_name) = if self.expect_assign_interface {
-                            ("IndexPtr", "index_ptr")
-                        } else {
-                            ("Index", "index")
-                        };
-
-                        let Some(iface_def) = self.interface_registry.get(iface_name) else {
-                            self.report(TypeError::InterfaceNotAvailable {
-                                name: iface_name.into(),
-                                src: object.source.src(),
-                                span: object.source.span,
-                            });
-                            return self.result.interner.error();
-                        };
-
-                        if !self.ctx.generic_bounds(g).contains(&iface_def) {
-                            self.report(TypeError::GenericMissingBound {
-                                generic: self.def_name(g).unwrap_or_default().into(),
-                                bound: iface_name.into(),
-                                src: object.source.src(),
-                                span: object.source.span,
-                            });
-                            return self.result.interner.error();
-                        }
-
-                        let Some(method_def) =
-                            self.interface_methods.get(&iface_def).and_then(|methods| {
-                                methods
-                                    .iter()
-                                    .copied()
-                                    .find(|&m| self.def_name(m).as_deref() == Some(method_name))
-                            })
-                        else {
-                            return self.result.interner.error();
-                        };
-
-                        self.result.operator_resolutions.insert(
-                            expr.id,
-                            OperatorResolution {
-                                method_def,
-                                generic_args: vec![obj_ty],
-                                ordering_cmp: None,
-                            },
-                        );
-
-                        self.fn_sigs[&method_def].ret
+                        self.check_slice_access_on_generic(g, obj_ty, expr)
                     }
                     Type::GenericParam(_) if range_index.is_some() => {
                         self.report(TypeError::NotIndexable {
@@ -5363,6 +5488,8 @@ impl<'res> TypeChecker<'res> {
                 fn_def: def_id,
                 generic_args: resolved_generic_args,
                 owner: None,
+                interface_args: None,
+                bindings: None,
             },
         );
 
@@ -5423,6 +5550,23 @@ impl<'res> TypeChecker<'res> {
         });
     }
 
+    fn is_bound_method_receiver(&self, ty: TypeId) -> bool {
+        match self.result.interner.get(ty).clone() {
+            Type::Pointer { inner, .. } => self.is_bound_method_receiver(inner),
+
+            Type::GenericParam(_) => true,
+
+            Type::Associated { base, .. } => {
+                matches!(
+                    self.result.interner.get(base),
+                    Type::GenericParam(_) | Type::InterfaceSelfPlaceholder(_)
+                )
+            }
+
+            _ => false,
+        }
+    }
+
     fn try_check_generic_bound_method_call(
         &mut self,
         call_id: HirId,
@@ -5442,11 +5586,28 @@ impl<'res> TypeChecker<'res> {
                 _ => (obj_ty, false, false),
             };
 
-        let Type::GenericParam(g) = self.result.interner.get(recv_ty).clone() else {
-            return None;
+        let bounds = match self.result.interner.get(recv_ty).clone() {
+            Type::GenericParam(g) => self.ctx.generic_bounds(g).to_vec(),
+
+            Type::Associated { base, def } => {
+                let mut bounds = self
+                    .assoc_type_bounds
+                    .get(&def)
+                    .cloned()
+                    .unwrap_or_default();
+
+                if let Type::GenericParam(g) = self.result.interner.get(base).clone()
+                    && let Some(extra) = self.generic_assoc_bounds.get(&(g, def))
+                {
+                    bounds.extend(extra.iter().copied());
+                }
+
+                bounds
+            }
+
+            _ => return None,
         };
 
-        let bounds = self.ctx.generic_bounds(g).to_vec();
         let method_name = self.interner.borrow().resolve(&field_name).to_string();
 
         let mut candidate: Option<DefId> = None;
@@ -5533,11 +5694,15 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def,
                 generic_args: resolved_generic_args,
                 owner: None,
+                interface_args: None,
+                bindings: None,
             },
         );
 
         let ret = self.substitute_generics(sig_ret, &bindings);
-        Some(self.substitute_self(ret, recv_ty))
+        let ret = self.substitute_self(ret, recv_ty);
+
+        Some(self.normalize_associated(ret))
     }
 
     fn interface_self_placeholder_owner(&self, ty: TypeId) -> Option<(DefId, DefId)> {
@@ -5655,11 +5820,15 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def,
                 generic_args: resolved_generic_args,
                 owner: None,
+                interface_args: None,
+                bindings: None,
             },
         );
 
         let ret = self.substitute_generics(sig_ret, &bindings);
-        Some(self.substitute_self(ret, recv_ty))
+        let ret = self.substitute_self(ret, recv_ty);
+
+        Some(self.normalize_associated(ret))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5748,10 +5917,14 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def,
                 generic_args: resolved_generic_args,
                 owner: None,
+                interface_args: None,
+                bindings: None,
             },
         );
 
-        Some(self.substitute_generics(sig_ret, &bindings))
+        let ret = self.substitute_generics(sig_ret, &bindings);
+
+        Some(self.normalize_associated(ret))
     }
 
     fn check_builtin_interface_method(
@@ -5809,10 +5982,14 @@ impl<'res> TypeChecker<'res> {
                             fn_def: method_def,
                             generic_args: resolved_generic_args,
                             owner: Some(zeen_resolve::builtin_def_id(builtin_ty)),
+                            interface_args: None,
+                            bindings: None,
                         },
                     );
                     let ret = self.substitute_generics(sig_ret, &bindings);
-                    return Some(self.substitute_self(ret, recv_ty));
+                    let ret = self.substitute_self(ret, recv_ty);
+
+                    return Some(self.normalize_associated(ret));
                 }
             }
         }
@@ -5929,20 +6106,7 @@ impl<'res> TypeChecker<'res> {
         let mut obj_ty = self.synth_expr(object);
         self.type_names_as_values.remove(&object.id);
 
-        if matches!(self.result.interner.get(obj_ty), Type::GenericParam(_)) {
-            return self.try_check_generic_bound_method_call(
-                call_id,
-                object,
-                field,
-                args,
-                explicit_generic_args,
-                source,
-            );
-        }
-
-        if let Type::Pointer { inner, .. } = self.result.interner.get(obj_ty).clone()
-            && matches!(self.result.interner.get(inner), Type::GenericParam(_))
-        {
+        if self.is_bound_method_receiver(obj_ty) {
             return self.try_check_generic_bound_method_call(
                 call_id,
                 object,
@@ -6109,17 +6273,51 @@ impl<'res> TypeChecker<'res> {
             return None;
         }
 
-        let method_def_id = {
+        let (method_def_id, selected_entry) = {
             if let Some(method) = preselected_method {
-                method
+                (method, self.method_impl_entry(struct_def, method))
             } else {
-                if !self.struct_methods.contains_key(&struct_def) {
-                    return None;
-                }
+                let candidates = self
+                    .struct_methods
+                    .get(&struct_def)
+                    .and_then(|methods| methods.get(&field_name))
+                    .cloned();
 
-                let Some(method_def_id) =
-                    self.select_method_candidate(struct_def, field_name, &struct_generic_args)
-                else {
+                let candidates = candidates?;
+
+                let needs_selection = candidates.len() > 1
+                    || candidates.iter().any(|&method| {
+                        self.method_iface_def(method)
+                            .and_then(|iface_def| {
+                                self.result.impl_registry.get(&(struct_def, iface_def))
+                            })
+                            .is_some_and(|entries| {
+                                entries
+                                    .iter()
+                                    .filter(|entry| entry.methods.contains(&method))
+                                    .count()
+                                    > 1
+                            })
+                    });
+
+                let picked = if needs_selection {
+                    self.pick_instance_candidate(
+                        struct_def,
+                        &candidates,
+                        &struct_generic_args,
+                        args,
+                        explicit_generic_args,
+                        expected,
+                        &source,
+                    )
+                } else {
+                    candidates.first().and_then(|&method| {
+                        self.method_candidate_rank(struct_def, method, &struct_generic_args)
+                            .map(|_| (method, self.method_impl_entry(struct_def, method)))
+                    })
+                };
+
+                let Some(picked) = picked else {
                     let field = self.interner.borrow().resolve(&field_name).into();
                     self.report(TypeError::UnknownField {
                         struct_name: self.display_type(obj_ty).into(),
@@ -6130,7 +6328,7 @@ impl<'res> TypeChecker<'res> {
                     return Some(self.result.interner.error());
                 };
 
-                method_def_id
+                picked
             }
         };
         let (self_mode, raw_params, raw_ret, sig_generics) = {
@@ -6208,20 +6406,14 @@ impl<'res> TypeChecker<'res> {
             _ => {}
         }
 
-        let type_generics = self.type_member_generics(struct_def);
-        let mut bindings: HashMap<DefId, TypeId> = type_generics
-            .iter()
-            .copied()
-            .zip(struct_generic_args.iter().copied())
-            .collect();
+        let iface_def = self.method_iface_def(method_def_id);
 
-        if let Some(entry) = self.method_impl_entry(struct_def, method_def_id) {
-            for (imp_g, struct_g) in &entry.generic_bindings {
-                if let Some(&concrete) = bindings.get(struct_g) {
-                    bindings.insert(*imp_g, concrete);
-                }
-            }
-        }
+        let mut bindings = self.impl_method_bindings(
+            struct_def,
+            &struct_generic_args,
+            selected_entry.as_ref(),
+            iface_def,
+        );
 
         for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
             let ty = self.lower_hir_type(explicit);
@@ -6238,6 +6430,10 @@ impl<'res> TypeChecker<'res> {
             self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
         }
 
+        if let Some(expected) = expected {
+            self.seed_inference_bindings(sig_ret, expected, &mut bindings);
+        }
+
         for g in &sig_generics {
             if !bindings.contains_key(g) {
                 let interner = self.interner.borrow();
@@ -6251,6 +6447,24 @@ impl<'res> TypeChecker<'res> {
                 });
 
                 bindings.insert(*g, self.result.interner.error());
+            }
+        }
+
+        if let Some(entry) = &selected_entry {
+            for g in &entry.generics {
+                if !bindings.contains_key(g) {
+                    let interner = self.interner.borrow();
+                    let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                    drop(interner);
+
+                    self.report(TypeError::CannotInferGeneric {
+                        generic_name,
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    bindings.insert(*g, self.result.interner.error());
+                }
             }
         }
 
@@ -6289,14 +6503,73 @@ impl<'res> TypeChecker<'res> {
 
         self.check_impl_entry_bounds(struct_def, method_def_id, &bindings, &source);
 
-        let mut monomorphized_args: Vec<TypeId> = struct_generic_args;
+        let interface_args = iface_def.map(|iface_def| {
+            let iface_generics = self
+                .interface_generics
+                .get(&iface_def)
+                .cloned()
+                .unwrap_or_default();
+
+            iface_generics
+                .iter()
+                .map(|g| {
+                    let ty = bindings
+                        .get(g)
+                        .copied()
+                        .unwrap_or_else(|| self.result.interner.intern(Type::GenericParam(*g)));
+
+                    self.substitute_generics(ty, &bindings)
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let mut monomorphized_args: Vec<TypeId> = struct_generic_args.clone();
         monomorphized_args.extend(resolved_generic_args);
 
-        let owner = self
-            .result
-            .interface_method_owners
-            .contains_key(&method_def_id)
-            .then_some(struct_def);
+        let call_bindings = if iface_def.is_some() {
+            let mut call_bindings = bindings.clone();
+
+            if let Some(iface_def) = iface_def
+                && let Some(&placeholder) =
+                    self.resolution.interface_self_placeholders.get(&iface_def)
+            {
+                let self_ty = self.method_self_type(struct_def, &struct_generic_args);
+                call_bindings.insert(placeholder, self_ty);
+            }
+
+            for _ in 0..2 {
+                let snapshot = call_bindings.clone();
+                let current: Vec<(DefId, TypeId)> = call_bindings
+                    .iter()
+                    .map(|(&key, &value)| (key, value))
+                    .collect();
+
+                for (key, value) in current {
+                    let resolved = self.substitute_generics(value, &snapshot);
+                    call_bindings.insert(key, resolved);
+                }
+            }
+
+            if let Some(entry) = &selected_entry {
+                for g in &entry.generics {
+                    let value = call_bindings
+                        .get(g)
+                        .copied()
+                        .unwrap_or_else(|| self.result.interner.error());
+                    monomorphized_args.push(value);
+                }
+            }
+
+            if let Some(interface_args) = &interface_args {
+                monomorphized_args.extend(interface_args.iter().copied());
+            }
+
+            Some(call_bindings)
+        } else {
+            None
+        };
+
+        let owner = iface_def.map(|_| struct_def);
 
         self.result.call_resolutions.insert(
             call_id,
@@ -6304,10 +6577,14 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def_id,
                 generic_args: monomorphized_args,
                 owner,
+                interface_args,
+                bindings: call_bindings,
             },
         );
 
-        Some(self.substitute_generics(sig_ret, &bindings))
+        let ret = self.substitute_generics(sig_ret, &bindings);
+
+        Some(self.normalize_associated(ret))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -7217,10 +7494,14 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def_id,
                 generic_args: monomorphized_args,
                 owner,
+                interface_args: None,
+                bindings: None,
             },
         );
 
-        Some(self.substitute_generics(sig_ret, &bindings))
+        let ret = self.substitute_generics(sig_ret, &bindings);
+
+        Some(self.normalize_associated(ret))
     }
 
     fn check_call_via_fn_type(
@@ -7720,13 +8001,37 @@ impl<'res> TypeChecker<'res> {
                 .is_some(),
 
             Type::GenericParam(g) => {
-                let cur = self.ctx.current();
+                if self.generic_param_satisfies_interface(g, iface_def) {
+                    return true;
+                }
+
+                let Some(cur) = self.ctx.try_current() else {
+                    return false;
+                };
 
                 let Some(bounds) = cur.generic_bounds.get(&g) else {
                     return false;
                 };
 
                 bounds.contains(&iface_def)
+            }
+
+            Type::Associated { base, def } => {
+                if self
+                    .assoc_type_bounds
+                    .get(&def)
+                    .is_some_and(|bounds| bounds.contains(&iface_def))
+                {
+                    return true;
+                }
+
+                match self.result.interner.get(base).clone() {
+                    Type::GenericParam(g) => self
+                        .generic_assoc_bounds
+                        .get(&(g, def))
+                        .is_some_and(|bounds| bounds.contains(&iface_def)),
+                    _ => false,
+                }
             }
 
             Type::ManyPointer { inner, .. } => {
@@ -7768,7 +8073,9 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn substitute_generics(&mut self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> TypeId {
-        zeen_types::substitute_generics(&mut self.result.interner, ty, bindings)
+        let substituted = zeen_types::substitute_generics(&mut self.result.interner, ty, bindings);
+
+        self.normalize_associated(substituted)
     }
 
     fn substitute_self(&mut self, ty: TypeId, self_ty: TypeId) -> TypeId {
@@ -7814,13 +8121,25 @@ impl<'res> TypeChecker<'res> {
             Type::Struct {
                 def_id,
                 generic_args,
+            }
+            | Type::Enum {
+                def_id,
+                generic_args,
             } => {
+                let is_enum = matches!(self.result.interner.get(ty), Type::Enum { .. });
+
                 let new_args: Vec<TypeId> = generic_args
                     .iter()
                     .map(|a| self.substitute_self(*a, self_ty))
                     .collect();
+
                 if new_args == generic_args {
                     ty
+                } else if is_enum {
+                    self.result.interner.intern(Type::Enum {
+                        def_id,
+                        generic_args: new_args,
+                    })
                 } else {
                     self.result.interner.intern(Type::Struct {
                         def_id,
@@ -7845,7 +8164,959 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
+            Type::Associated { base, def } => {
+                let new_base = self.substitute_self(base, self_ty);
+                if new_base == base {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Associated {
+                        base: new_base,
+                        def,
+                    })
+                }
+            }
+
             _ => ty,
+        }
+    }
+
+    fn assoc_def_by_name(&self, iface: DefId, name: Spur) -> Option<DefId> {
+        self.interface_assoc_types
+            .get(&iface)?
+            .iter()
+            .copied()
+            .find(|def| {
+                self.resolution
+                    .defs
+                    .get(def)
+                    .is_some_and(|info| info.name == name)
+            })
+    }
+
+    fn interface_of_placeholder(&self, placeholder: DefId) -> Option<DefId> {
+        self.resolution
+            .interface_self_placeholders
+            .iter()
+            .find(|(_, value)| **value == placeholder)
+            .map(|(key, _)| *key)
+    }
+
+    fn concrete_assoc_defs(&self, def_id: DefId, args: &[TypeId], name: Spur) -> Vec<DefId> {
+        let mut found = Vec::new();
+
+        for ((object, iface), entries) in &self.result.impl_registry {
+            if *object != def_id {
+                continue;
+            }
+
+            let mut unify = HashMap::default();
+
+            if !entries
+                .iter()
+                .any(|entry| self.unify_impl_args(&entry.object_args, args, &mut unify))
+            {
+                continue;
+            }
+
+            if let Some(def) = self.assoc_def_by_name(*iface, name) {
+                found.push(def);
+            }
+        }
+
+        found
+    }
+
+    fn unify_impl_args(
+        &self,
+        pattern: &[TypeId],
+        concrete: &[TypeId],
+        unify: &mut HashMap<DefId, TypeId>,
+    ) -> bool {
+        if pattern.len() != concrete.len() {
+            return false;
+        }
+
+        pattern
+            .iter()
+            .zip(concrete.iter())
+            .all(|(&pattern, &concrete)| self.unify_impl_type(pattern, concrete, unify))
+    }
+
+    fn impl_entry_bounds_hold(&self, entry: &ImplEntry, unify: &HashMap<DefId, TypeId>) -> bool {
+        entry.generic_bounds.iter().all(|(imp_g, ifaces)| {
+            let Some(&concrete) = unify.get(imp_g) else {
+                return true;
+            };
+
+            ifaces
+                .iter()
+                .all(|&iface| self.type_satisfies_interface(concrete, iface))
+        })
+    }
+
+    fn unify_impl_type(
+        &self,
+        pattern: TypeId,
+        concrete: TypeId,
+        unify: &mut HashMap<DefId, TypeId>,
+    ) -> bool {
+        match self.result.interner.get(pattern).clone() {
+            Type::GenericParam(g) => match unify.get(&g).copied() {
+                Some(existing) => existing == concrete,
+                None => {
+                    unify.insert(g, concrete);
+
+                    true
+                }
+            },
+
+            Type::Pointer {
+                inner: pattern_inner,
+                is_const: pattern_const,
+            } => match self.result.interner.get(concrete).clone() {
+                Type::Pointer {
+                    inner: concrete_inner,
+                    is_const: concrete_const,
+                } => {
+                    pattern_const == concrete_const
+                        && self.unify_impl_type(pattern_inner, concrete_inner, unify)
+                }
+                _ => false,
+            },
+
+            Type::Struct {
+                def_id: pattern_def,
+                generic_args: pattern_args,
+            } => match self.result.interner.get(concrete).clone() {
+                Type::Struct {
+                    def_id: concrete_def,
+                    generic_args: concrete_args,
+                } => {
+                    pattern_def == concrete_def
+                        && self.unify_impl_args(&pattern_args, &concrete_args, unify)
+                }
+                _ => false,
+            },
+
+            Type::Enum {
+                def_id: pattern_def,
+                generic_args: pattern_args,
+            } => match self.result.interner.get(concrete).clone() {
+                Type::Enum {
+                    def_id: concrete_def,
+                    generic_args: concrete_args,
+                } => {
+                    pattern_def == concrete_def
+                        && self.unify_impl_args(&pattern_args, &concrete_args, unify)
+                }
+                _ => false,
+            },
+
+            _ => pattern == concrete,
+        }
+    }
+
+    fn resolve_associated_def(
+        &mut self,
+        base: TypeId,
+        name: Spur,
+        source: &Source,
+    ) -> Option<DefId> {
+        let found: Vec<DefId> = match self.result.interner.get(base).clone() {
+            Type::GenericParam(g) => self
+                .all_generic_bounds
+                .get(&g)
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|iface| self.assoc_def_by_name(*iface, name))
+                .collect(),
+
+            Type::InterfaceSelfPlaceholder(p) => self
+                .interface_of_placeholder(p)
+                .and_then(|iface| self.assoc_def_by_name(iface, name))
+                .into_iter()
+                .collect(),
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            }
+            | Type::Enum {
+                def_id,
+                generic_args,
+            } => self.concrete_assoc_defs(def_id, &generic_args, name),
+
+            Type::Builtin(builtin) => {
+                self.concrete_assoc_defs(zeen_resolve::builtin_def_id(builtin), &[], name)
+            }
+
+            _ => Vec::new(),
+        };
+
+        let unique: Vec<DefId> = found.iter().copied().fold(Vec::new(), |mut acc, def| {
+            if !acc.contains(&def) {
+                acc.push(def);
+            }
+
+            acc
+        });
+
+        let name_str = self.interner.borrow().resolve(&name).into();
+
+        match unique.len() {
+            1 => Some(unique[0]),
+
+            0 => {
+                self.report(TypeError::UnknownAssociatedType {
+                    name: name_str,
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                None
+            }
+
+            _ => {
+                self.report(TypeError::AmbiguousAssociatedType {
+                    base: self.display_type(base).into(),
+                    name: name_str,
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                None
+            }
+        }
+    }
+
+    fn normalize_associated(&mut self, ty: TypeId) -> TypeId {
+        let mut visited = HashSet::default();
+
+        self.normalize_associated_inner(ty, &mut visited)
+    }
+
+    fn normalize_associated_inner(
+        &mut self,
+        ty: TypeId,
+        visited: &mut HashSet<(TypeId, DefId)>,
+    ) -> TypeId {
+        match self.result.interner.get(ty).clone() {
+            Type::Associated { base, def } => {
+                if !visited.insert((base, def)) {
+                    return ty;
+                }
+
+                let expanded = match self.associated_binding(base, def) {
+                    Some(bound) => self.normalize_associated_inner(bound, visited),
+                    None => ty,
+                };
+
+                visited.remove(&(base, def));
+
+                expanded
+            }
+
+            Type::Pointer { inner, is_const } => {
+                let new_inner = self.normalize_associated_inner(inner, visited);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::ManyPointer { inner, is_const } => {
+                let new_inner = self.normalize_associated_inner(inner, visited);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::ManyPointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Array { element, len } => {
+                let new_element = self.normalize_associated_inner(element, visited);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Array {
+                        element: new_element,
+                        len,
+                    })
+                }
+            }
+
+            Type::Slice { element, is_const } => {
+                let new_element = self.normalize_associated_inner(element, visited);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Slice {
+                        element: new_element,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|arg| self.normalize_associated_inner(*arg, visited))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|arg| self.normalize_associated_inner(*arg, visited))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Enum {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Fn { params, ret } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|param| self.normalize_associated_inner(*param, visited))
+                    .collect();
+                let new_ret = self.normalize_associated_inner(ret, visited);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Fn {
+                        params: new_params,
+                        ret: new_ret,
+                    })
+                }
+            }
+
+            Type::FatFn {
+                params,
+                ret,
+                once,
+                erased,
+            } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|param| self.normalize_associated_inner(*param, visited))
+                    .collect();
+                let new_ret = self.normalize_associated_inner(ret, visited);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::FatFn {
+                        params: new_params,
+                        ret: new_ret,
+                        once,
+                        erased,
+                    })
+                }
+            }
+
+            _ => ty,
+        }
+    }
+
+    fn associated_binding(&mut self, base: TypeId, def: DefId) -> Option<TypeId> {
+        match self.result.interner.get(base).clone() {
+            Type::GenericParam(g) => self.generic_assoc_bindings.get(&(g, def)).copied(),
+
+            Type::InterfaceSelfPlaceholder(_) => {
+                let default = self.assoc_type_defaults.get(&def).cloned()?;
+                let lowered = self.lower_hir_type_with_const(&default).0;
+
+                Some(self.substitute_self(lowered, base))
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            }
+            | Type::Enum {
+                def_id,
+                generic_args,
+            } => self.concrete_assoc_binding(def_id, &generic_args, def),
+
+            Type::Builtin(builtin) => {
+                self.concrete_assoc_binding(zeen_resolve::builtin_def_id(builtin), &[], def)
+            }
+
+            Type::Slice { .. } | Type::ManyPointer { .. } | Type::Array { .. } => {
+                self.builtin_shape_assoc_binding(base, def)
+            }
+
+            _ => None,
+        }
+    }
+
+    fn builtin_shape_assoc_binding(&mut self, base: TypeId, def: DefId) -> Option<TypeId> {
+        let Some(DefKind::AssociatedType { interface }) =
+            self.resolution.defs.get(&def).map(|info| info.kind.clone())
+        else {
+            return None;
+        };
+
+        let mut owners: Vec<DefId> = self.result.builtin_shapes.keys().copied().collect();
+        owners.sort();
+
+        let mut found: Option<(TypeId, HashMap<DefId, TypeId>)> = None;
+
+        for owner in owners {
+            let Some(entries) = self.result.impl_registry.get(&(owner, interface)) else {
+                continue;
+            };
+
+            let shape = self.result.builtin_shapes[&owner].clone();
+            let generics = self.type_member_generics(owner);
+            let mut matched: HashMap<DefId, TypeId> = HashMap::default();
+
+            if !self.match_builtin_shape(&shape, base, &generics, &mut matched) {
+                continue;
+            }
+
+            let bound = entries
+                .iter()
+                .find_map(|entry| entry.assoc_bindings.get(&def).copied());
+
+            if let Some(bound) = bound {
+                found = Some((bound, matched));
+
+                break;
+            }
+        }
+
+        let (bound, matched) = found?;
+
+        Some(zeen_types::substitute_generics(
+            &mut self.result.interner,
+            bound,
+            &matched,
+        ))
+    }
+
+    fn concrete_assoc_binding(
+        &mut self,
+        def_id: DefId,
+        args: &[TypeId],
+        def: DefId,
+    ) -> Option<TypeId> {
+        let bound = {
+            let mut found = None;
+
+            for ((object, _), entries) in &self.result.impl_registry {
+                if *object != def_id {
+                    continue;
+                }
+
+                for entry in entries {
+                    let mut unify = HashMap::default();
+
+                    if self.unify_impl_args(&entry.object_args, args, &mut unify)
+                        && self.impl_entry_bounds_hold(entry, &unify)
+                        && let Some(bound) = entry.assoc_bindings.get(&def)
+                    {
+                        found = Some((*bound, unify));
+
+                        break;
+                    }
+                }
+
+                if found.is_some() {
+                    break;
+                }
+            }
+
+            found
+        };
+
+        let (bound, unify) = bound?;
+
+        Some(zeen_types::substitute_generics(
+            &mut self.result.interner,
+            bound,
+            &unify,
+        ))
+    }
+
+    fn register_where_clauses(&mut self, clauses: &[HirWhereClause]) {
+        for clause in clauses {
+            let subject = self.lower_hir_type_with_const(&clause.ty).0;
+
+            match &clause.kind {
+                HirWhereClauseKind::Bound { bounds } => {
+                    match self.result.interner.get(subject).clone() {
+                        Type::GenericParam(g) => {
+                            self.all_generic_bounds
+                                .entry(g)
+                                .or_default()
+                                .extend(bounds.iter().copied());
+                        }
+
+                        Type::Associated { base, def } => {
+                            if let Type::GenericParam(g) = self.result.interner.get(base).clone() {
+                                self.generic_assoc_bounds
+                                    .entry((g, def))
+                                    .or_default()
+                                    .extend(bounds.iter().copied());
+                            }
+                        }
+
+                        _ => {}
+                    }
+                }
+
+                HirWhereClauseKind::Equality { ty } => {
+                    let eq_ty = self.lower_hir_type(ty);
+
+                    if let Type::Associated { base, def } =
+                        self.result.interner.get(subject).clone()
+                        && let Type::GenericParam(g) = self.result.interner.get(base).clone()
+                    {
+                        self.generic_assoc_bindings.insert((g, def), eq_ty);
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bind_implement_associated_types(
+        &mut self,
+        iface_def: DefId,
+        object_def: DefId,
+        self_ty: TypeId,
+        object_args: &[TypeId],
+        interface_args: &[TypeId],
+        is_specialized: bool,
+        aliases: &[Rc<HirAssociatedType>],
+        source: &Source,
+    ) {
+        let assoc_ids = self
+            .interface_assoc_types
+            .get(&iface_def)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut raw: HashMap<DefId, TypeId> = HashMap::default();
+        let mut spans: HashMap<DefId, SourceSpan> = HashMap::default();
+
+        for alias in aliases {
+            if !assoc_ids.contains(&alias.def_id) {
+                let name: SmolStr = self.interner.borrow().resolve(&alias.name.0).into();
+
+                self.report(TypeError::UnknownAssociatedType {
+                    name,
+                    src: source.src(),
+                    span: alias.name.1,
+                });
+
+                continue;
+            }
+
+            let Some(default) = &alias.default else {
+                continue;
+            };
+
+            if raw.contains_key(&alias.def_id) {
+                let name: SmolStr = self.interner.borrow().resolve(&alias.name.0).into();
+
+                self.report(TypeError::DuplicateAssociatedType {
+                    name,
+                    src: source.src(),
+                    span: alias.name.1,
+                });
+
+                continue;
+            }
+
+            let lowered = self.lower_hir_type(default);
+            raw.insert(alias.def_id, self.substitute_self(lowered, self_ty));
+            spans.insert(alias.def_id, alias.name.1);
+        }
+
+        for assoc in &assoc_ids {
+            if raw.contains_key(assoc) {
+                continue;
+            }
+
+            let Some(default) = self.assoc_type_defaults.get(assoc).cloned() else {
+                self.report(TypeError::MissingAssociatedType {
+                    interface: self.def_name(iface_def).unwrap_or_default().into(),
+                    name: self.def_name(*assoc).unwrap_or_default().into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                continue;
+            };
+
+            let lowered = self.lower_hir_type(&default);
+            raw.insert(*assoc, self.substitute_self(lowered, self_ty));
+            spans.insert(*assoc, source.span);
+        }
+
+        let edges = self.assoc_reference_edges(&assoc_ids, &raw, self_ty);
+        let mut cycle_state: HashMap<DefId, u8> = HashMap::default();
+
+        for assoc in &assoc_ids {
+            self.detect_associated_type_cycle(*assoc, &edges, &mut cycle_state, &spans, source);
+        }
+
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+        let mut resolving: HashSet<DefId> = HashSet::default();
+
+        for assoc in &assoc_ids {
+            let Some(&ty) = raw.get(assoc) else {
+                continue;
+            };
+
+            let resolved = self.resolve_assoc_siblings(ty, self_ty, &raw, &mut resolving);
+            let normalized = self.normalize_associated(resolved);
+
+            bindings.insert(*assoc, normalized);
+
+            if self
+                .assoc_type_bounds
+                .get(assoc)
+                .is_some_and(|bounds| !bounds.is_empty())
+            {
+                self.pending_assoc_checks.push(PendingAssocCheck {
+                    assoc: *assoc,
+                    bound_ty: normalized,
+                    span: spans.get(assoc).copied().unwrap_or(source.span),
+                    source: source.clone(),
+                });
+            }
+        }
+
+        if let Some(entries) = self.result.impl_registry.get_mut(&(object_def, iface_def))
+            && let Some(entry) = entries.iter_mut().find(|entry| {
+                entry.object_args.as_slice() == object_args
+                    && entry.interface_args.as_slice() == interface_args
+                    && entry.is_specialized == is_specialized
+            })
+        {
+            entry.assoc_bindings = bindings;
+        }
+    }
+
+    fn assoc_reference_edges(
+        &self,
+        assoc_ids: &[DefId],
+        raw: &HashMap<DefId, TypeId>,
+        self_ty: TypeId,
+    ) -> HashMap<DefId, Vec<DefId>> {
+        let mut edges: HashMap<DefId, Vec<DefId>> = HashMap::default();
+
+        for assoc in assoc_ids {
+            let Some(&ty) = raw.get(assoc) else {
+                continue;
+            };
+
+            let mut refs = Vec::new();
+
+            self.collect_sibling_refs(ty, self_ty, assoc_ids, &mut refs);
+            edges.insert(*assoc, refs);
+        }
+
+        edges
+    }
+
+    fn collect_sibling_refs(
+        &self,
+        ty: TypeId,
+        self_ty: TypeId,
+        assoc_ids: &[DefId],
+        out: &mut Vec<DefId>,
+    ) {
+        match self.result.interner.get(ty).clone() {
+            Type::Associated { base, def } => {
+                if base == self_ty && assoc_ids.contains(&def) && !out.contains(&def) {
+                    out.push(def);
+                }
+            }
+
+            Type::Pointer { inner, .. }
+            | Type::ManyPointer { inner, .. }
+            | Type::Slice { element: inner, .. }
+            | Type::Array { element: inner, .. } => {
+                self.collect_sibling_refs(inner, self_ty, assoc_ids, out);
+            }
+
+            Type::Struct { generic_args, .. } | Type::Enum { generic_args, .. } => {
+                for arg in generic_args {
+                    self.collect_sibling_refs(arg, self_ty, assoc_ids, out);
+                }
+            }
+
+            Type::Fn { params, ret } | Type::FatFn { params, ret, .. } => {
+                for param in params {
+                    self.collect_sibling_refs(param, self_ty, assoc_ids, out);
+                }
+
+                self.collect_sibling_refs(ret, self_ty, assoc_ids, out);
+            }
+
+            _ => {}
+        }
+    }
+
+    fn detect_associated_type_cycle(
+        &mut self,
+        assoc: DefId,
+        edges: &HashMap<DefId, Vec<DefId>>,
+        state: &mut HashMap<DefId, u8>,
+        spans: &HashMap<DefId, SourceSpan>,
+        source: &Source,
+    ) {
+        match state.get(&assoc).copied() {
+            Some(1) => {
+                let name: SmolStr = self.def_name(assoc).unwrap_or_default().into();
+
+                self.report(TypeError::AssociatedTypeCycle {
+                    name,
+                    src: source.src(),
+                    span: spans.get(&assoc).copied().unwrap_or(source.span),
+                });
+
+                state.insert(assoc, 2);
+
+                return;
+            }
+
+            Some(2) => return,
+
+            _ => {}
+        }
+
+        state.insert(assoc, 1);
+
+        for next in edges.get(&assoc).cloned().unwrap_or_default() {
+            self.detect_associated_type_cycle(next, edges, state, spans, source);
+        }
+
+        state.insert(assoc, 2);
+    }
+
+    fn resolve_assoc_siblings(
+        &mut self,
+        ty: TypeId,
+        self_ty: TypeId,
+        raw: &HashMap<DefId, TypeId>,
+        resolving: &mut HashSet<DefId>,
+    ) -> TypeId {
+        match self.result.interner.get(ty).clone() {
+            Type::Associated { base, def } if base == self_ty => {
+                let Some(&target) = raw.get(&def) else {
+                    return ty;
+                };
+
+                if !resolving.insert(def) {
+                    return ty;
+                }
+
+                let resolved = self.resolve_assoc_siblings(target, self_ty, raw, resolving);
+
+                resolving.remove(&def);
+
+                resolved
+            }
+
+            Type::Pointer { inner, is_const } => {
+                let new_inner = self.resolve_assoc_siblings(inner, self_ty, raw, resolving);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::ManyPointer { inner, is_const } => {
+                let new_inner = self.resolve_assoc_siblings(inner, self_ty, raw, resolving);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::ManyPointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Array { element, len } => {
+                let new_element = self.resolve_assoc_siblings(element, self_ty, raw, resolving);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Array {
+                        element: new_element,
+                        len,
+                    })
+                }
+            }
+
+            Type::Slice { element, is_const } => {
+                let new_element = self.resolve_assoc_siblings(element, self_ty, raw, resolving);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Slice {
+                        element: new_element,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|arg| self.resolve_assoc_siblings(*arg, self_ty, raw, resolving))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|arg| self.resolve_assoc_siblings(*arg, self_ty, raw, resolving))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Enum {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Fn { params, ret } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|param| self.resolve_assoc_siblings(*param, self_ty, raw, resolving))
+                    .collect();
+                let new_ret = self.resolve_assoc_siblings(ret, self_ty, raw, resolving);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Fn {
+                        params: new_params,
+                        ret: new_ret,
+                    })
+                }
+            }
+
+            Type::FatFn {
+                params,
+                ret,
+                once,
+                erased,
+            } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|param| self.resolve_assoc_siblings(*param, self_ty, raw, resolving))
+                    .collect();
+                let new_ret = self.resolve_assoc_siblings(ret, self_ty, raw, resolving);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::FatFn {
+                        params: new_params,
+                        ret: new_ret,
+                        once,
+                        erased,
+                    })
+                }
+            }
+
+            _ => ty,
+        }
+    }
+
+    fn check_associated_type_bounds(
+        &mut self,
+        assoc: DefId,
+        bound_ty: TypeId,
+        span: SourceSpan,
+        source: &Source,
+    ) {
+        let bounds = self
+            .assoc_type_bounds
+            .get(&assoc)
+            .cloned()
+            .unwrap_or_default();
+
+        for bound in bounds {
+            if self.type_satisfies_interface(bound_ty, bound) {
+                continue;
+            }
+
+            self.report(TypeError::AssociatedTypeBoundNotSatisfied {
+                name: self.def_name(assoc).unwrap_or_default().into(),
+                ty: self.display_type(bound_ty).into(),
+                bound: self.def_name(bound).unwrap_or_default().into(),
+                src: source.src(),
+                span,
+            });
         }
     }
 
@@ -7964,7 +9235,7 @@ impl<'res> TypeChecker<'res> {
         source: &Source,
     ) -> Option<DefId> {
         let type_generics = self.type_member_generics(struct_def);
-        let mut best: Option<(u8, DefId)> = None;
+        let mut best: Option<(u8, bool, DefId)> = None;
 
         self.speculating = true;
 
@@ -8026,14 +9297,25 @@ impl<'res> TypeChecker<'res> {
                 continue;
             };
 
-            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
-                best = Some((rank, candidate));
+            let args_fit = sig_params.iter().zip(args.iter()).all(|(&param_ty, arg)| {
+                let Some(&arg_ty) = self.result.expr_types.get(&arg.id) else {
+                    return true;
+                };
+                let param_ty = self.substitute_generics(param_ty, &bindings);
+
+                try_coerce(&mut self.result.interner, arg_ty, param_ty).is_ok()
+            });
+
+            if best
+                .is_none_or(|(best_rank, best_fit, _)| (rank, !args_fit) < (best_rank, !best_fit))
+            {
+                best = Some((rank, args_fit, candidate));
             }
         }
 
         self.speculating = false;
 
-        best.map(|(_, method)| method)
+        best.map(|(_, _, method)| method)
     }
 
     fn method_impl_entry(&self, object: DefId, method: DefId) -> Option<ImplEntry> {
@@ -8055,6 +9337,102 @@ impl<'res> TypeChecker<'res> {
             .iter()
             .find(|e| e.methods.contains(&method))
             .cloned()
+    }
+
+    fn method_iface_def(&self, method: DefId) -> Option<DefId> {
+        self.method_owning_interface
+            .get(&method)
+            .or_else(|| self.result.interface_method_owners.get(&method))
+            .copied()
+    }
+
+    fn impl_method_bindings(
+        &self,
+        struct_def: DefId,
+        struct_args: &[TypeId],
+        entry: Option<&ImplEntry>,
+        iface_def: Option<DefId>,
+    ) -> HashMap<DefId, TypeId> {
+        let type_generics = self.type_member_generics(struct_def);
+        let mut bindings: HashMap<DefId, TypeId> = type_generics
+            .iter()
+            .copied()
+            .zip(struct_args.iter().copied())
+            .collect();
+
+        let Some(entry) = entry else {
+            return bindings;
+        };
+
+        if entry.is_specialized && entry.object_args.as_slice() == struct_args {
+            for (generic, arg) in type_generics.iter().zip(entry.object_args.iter()) {
+                bindings.insert(*generic, *arg);
+            }
+        }
+
+        for (imp_g, struct_g) in &entry.generic_bindings {
+            if let Some(&concrete) = bindings.get(struct_g) {
+                bindings.insert(*imp_g, concrete);
+            }
+        }
+
+        if let Some(iface_def) = iface_def {
+            let iface_generics = self
+                .interface_generics
+                .get(&iface_def)
+                .cloned()
+                .unwrap_or_default();
+
+            for (iface_g, iface_arg) in iface_generics.iter().zip(entry.interface_args.iter()) {
+                let resolved = self.resolve_binding(*iface_arg, &bindings);
+                bindings.insert(*iface_g, resolved);
+            }
+        }
+
+        bindings
+    }
+
+    fn resolve_binding(&self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> TypeId {
+        let mut current = ty;
+        let mut seen: HashSet<DefId> = HashSet::default();
+
+        while let Type::GenericParam(generic) = self.result.interner.get(current) {
+            if !seen.insert(*generic) {
+                break;
+            }
+
+            match bindings.get(generic).copied() {
+                Some(next) if next != current => current = next,
+                _ => break,
+            }
+        }
+
+        current
+    }
+
+    fn method_entries_for(&self, struct_def: DefId, method: DefId) -> Vec<Option<ImplEntry>> {
+        let Some(iface_def) = self.method_iface_def(method) else {
+            return vec![self.method_impl_entry(struct_def, method)];
+        };
+
+        let matched: Vec<ImplEntry> = self
+            .result
+            .impl_registry
+            .get(&(struct_def, iface_def))
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|entry| entry.methods.contains(&method))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if matched.is_empty() {
+            vec![self.method_impl_entry(struct_def, method)]
+        } else {
+            matched.into_iter().map(Some).collect()
+        }
     }
 
     fn match_builtin_shape(
@@ -8206,36 +9584,24 @@ impl<'res> TypeChecker<'res> {
         if bounds_hold { 1 } else { 4 }
     }
 
-    fn select_method_candidate(
-        &self,
-        object: DefId,
-        name: Spur,
-        struct_args: &[TypeId],
-    ) -> Option<DefId> {
-        let candidates = self.struct_methods.get(&object)?.get(&name)?;
-
-        let mut best: Option<(u8, DefId)> = None;
-
-        for &candidate in candidates {
-            let Some(rank) = self.method_candidate_rank(object, candidate, struct_args) else {
-                continue;
-            };
-
-            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
-                best = Some((rank, candidate));
-            }
-        }
-
-        best.map(|(_, method)| method)
-    }
-
     fn method_candidate_rank(
         &self,
         object: DefId,
         method: DefId,
         struct_args: &[TypeId],
     ) -> Option<u8> {
-        let Some(entry) = self.method_impl_entry(object, method) else {
+        let entry = self.method_impl_entry(object, method);
+
+        self.method_entry_rank(object, entry.as_ref(), struct_args)
+    }
+
+    fn method_entry_rank(
+        &self,
+        object: DefId,
+        entry: Option<&ImplEntry>,
+        struct_args: &[TypeId],
+    ) -> Option<u8> {
+        let Some(entry) = entry else {
             return Some(3);
         };
 
@@ -8280,21 +9646,138 @@ impl<'res> TypeChecker<'res> {
         Some(if bounds_hold { 1 } else { 4 })
     }
 
-    fn impl_entry_signature(&self, entry: &ImplEntry) -> (Vec<String>, Vec<String>) {
-        let generic_slot = |generic: DefId| {
-            entry
-                .generics
-                .iter()
-                .position(|g| *g == generic)
-                .map(|index| format!("#{index}"))
-                .unwrap_or_default()
-        };
+    #[allow(clippy::too_many_arguments)]
+    fn pick_instance_candidate(
+        &mut self,
+        struct_def: DefId,
+        candidates: &[DefId],
+        struct_args: &[TypeId],
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        expected: Option<TypeId>,
+        source: &Source,
+    ) -> Option<(DefId, Option<ImplEntry>)> {
+        let mut pairs: Vec<(DefId, Option<DefId>, Option<ImplEntry>)> = Vec::new();
 
+        for &method in candidates {
+            let iface_def = self.method_iface_def(method);
+
+            for entry in self.method_entries_for(struct_def, method) {
+                pairs.push((method, iface_def, entry));
+            }
+        }
+
+        if pairs.len() == 1 {
+            let (method, _, entry) = pairs.pop()?;
+
+            return Some((method, entry));
+        }
+
+        let self_ty = self.method_self_type(struct_def, struct_args);
+
+        let mut best: Option<CandidateRank> = None;
+
+        self.speculating = true;
+
+        for (index, (method, iface_def, entry)) in pairs.into_iter().enumerate() {
+            let sig = &self.fn_sigs[&method];
+            let raw_params = sig.params.clone();
+            let raw_ret = sig.ret;
+            let sig_generics = sig.generics.clone();
+            let has_self = sig.self_mode.is_some();
+
+            let sig_params: Vec<TypeId> = raw_params
+                .iter()
+                .map(|&param| self.substitute_self(param, self_ty))
+                .collect();
+            let sig_ret = self.substitute_self(raw_ret, self_ty);
+
+            let user_params = if has_self {
+                &sig_params[1..]
+            } else {
+                &sig_params[..]
+            };
+
+            let mut bindings =
+                self.impl_method_bindings(struct_def, struct_args, entry.as_ref(), iface_def);
+
+            for (generic, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
+                let ty = self.lower_hir_type(explicit);
+                bindings.insert(*generic, ty);
+            }
+
+            for (param_ty, arg) in user_params.iter().zip(args.iter()) {
+                self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+            }
+
+            if let Some(expected) = expected {
+                self.seed_inference_bindings(sig_ret, expected, &mut bindings);
+            }
+
+            let args_fit = user_params.iter().zip(args.iter()).all(|(&param_ty, arg)| {
+                let Some(&arg_ty) = self.result.expr_types.get(&arg.id) else {
+                    return true;
+                };
+                let param_ty = self.substitute_generics(param_ty, &bindings);
+
+                try_coerce(&mut self.result.interner, arg_ty, param_ty).is_ok()
+            });
+
+            let ret_fit = expected.is_none_or(|expected| {
+                let ret = self.substitute_generics(sig_ret, &bindings);
+
+                try_coerce(&mut self.result.interner, ret, expected).is_ok()
+            });
+
+            let Some(rank) = self.method_entry_rank(struct_def, entry.as_ref(), struct_args) else {
+                continue;
+            };
+
+            let generic_iface_args = entry.as_ref().is_some_and(|entry| {
+                entry
+                    .interface_args
+                    .iter()
+                    .any(|arg| matches!(self.result.interner.get(*arg), Type::GenericParam(_)))
+            });
+
+            let key = (rank, !args_fit, !ret_fit, generic_iface_args, index);
+
+            if best
+                .as_ref()
+                .is_none_or(|current| key < (current.0, current.1, current.2, current.3, current.4))
+            {
+                best = Some((
+                    rank,
+                    !args_fit,
+                    !ret_fit,
+                    generic_iface_args,
+                    index,
+                    method,
+                    entry,
+                ));
+            }
+        }
+
+        self.speculating = false;
+
+        best.map(|(_, _, _, _, _, method, entry)| (method, entry))
+    }
+
+    fn impl_generic_slot(entry: &ImplEntry, generic: DefId) -> String {
+        entry
+            .generics
+            .iter()
+            .position(|g| *g == generic)
+            .map(|index| format!("#{index}"))
+            .unwrap_or_default()
+    }
+
+    fn impl_entry_signature(&self, entry: &ImplEntry) -> (Vec<String>, Vec<String>) {
         let args: Vec<String> = entry
             .object_args
             .iter()
             .map(|&arg| match self.result.interner.get(arg) {
-                Type::GenericParam(g) => generic_slot(*g),
+                Type::GenericParam(g) => Self::impl_generic_slot(entry, *g),
                 _ => self.display_type(arg),
             })
             .collect();
@@ -8303,7 +9786,7 @@ impl<'res> TypeChecker<'res> {
             .generic_bounds
             .iter()
             .flat_map(|(generic, ifaces)| {
-                let slot = generic_slot(*generic);
+                let slot = Self::impl_generic_slot(entry, *generic);
 
                 ifaces.iter().map(move |&iface_def| {
                     let name = self.def_name(iface_def).unwrap_or_default();
@@ -8315,6 +9798,21 @@ impl<'res> TypeChecker<'res> {
         bounds.sort();
 
         (args, bounds)
+    }
+
+    fn impl_duplicate_key(&self, entry: &ImplEntry) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let (args, bounds) = self.impl_entry_signature(entry);
+
+        let interface_args: Vec<String> = entry
+            .interface_args
+            .iter()
+            .map(|&arg| match self.result.interner.get(arg) {
+                Type::GenericParam(g) => Self::impl_generic_slot(entry, *g),
+                _ => self.display_type(arg),
+            })
+            .collect();
+
+        (args, interface_args, bounds)
     }
 
     fn check_duplicate_methods(&mut self, module: &HirModule) {
@@ -8461,6 +9959,94 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn select_interface_method(
+        &mut self,
+        object: DefId,
+        iface_def: DefId,
+        struct_args: &[TypeId],
+        method_name: &str,
+        explicit_args: &[TypeId],
+    ) -> Option<DefId> {
+        let entries = self.result.impl_registry.get(&(object, iface_def))?.clone();
+
+        let mut candidates: Vec<(u8, DefId)> = Vec::new();
+
+        for entry in &entries {
+            let Some(&method) = entry
+                .methods
+                .iter()
+                .find(|&&def| self.def_name(def).as_deref() == Some(method_name))
+            else {
+                continue;
+            };
+
+            let Some(rank) = self.method_candidate_rank(object, method, struct_args) else {
+                continue;
+            };
+
+            candidates.push((rank, method));
+        }
+
+        candidates.sort_by_key(|(rank, _)| *rank);
+
+        candidates
+            .into_iter()
+            .map(|(_, method)| method)
+            .find(|&method| self.method_args_match(object, struct_args, method, explicit_args))
+    }
+
+    fn method_args_match(
+        &mut self,
+        object: DefId,
+        struct_args: &[TypeId],
+        method: DefId,
+        args: &[TypeId],
+    ) -> bool {
+        let sig = &self.fn_sigs[&method];
+        let raw_params: Vec<TypeId> = match sig.self_mode {
+            Some(_) => sig.params[1..].to_vec(),
+            None => sig.params.clone(),
+        };
+
+        if raw_params.len() != args.len() {
+            return false;
+        }
+
+        let entry = self.method_impl_entry(object, method);
+        let owner_generics = self.type_member_generics(object);
+
+        let mut bindings: HashMap<DefId, TypeId> = owner_generics
+            .iter()
+            .copied()
+            .zip(struct_args.iter().copied())
+            .collect();
+
+        if let Some(entry) = &entry {
+            if entry.is_specialized {
+                for (generic, arg) in owner_generics.iter().zip(entry.object_args.iter()) {
+                    bindings.insert(*generic, *arg);
+                }
+            }
+
+            for (imp_g, struct_g) in &entry.generic_bindings {
+                if let Some(&concrete) = bindings.get(struct_g) {
+                    bindings.insert(*imp_g, concrete);
+                }
+            }
+        }
+
+        raw_params.iter().zip(args.iter()).all(|(&param, &arg)| {
+            let expected = self.substitute_generics(param, &bindings);
+
+            let auto_addr = match self.result.interner.get(expected) {
+                Type::Pointer { inner, .. } => arg == *inner,
+                _ => false,
+            };
+
+            auto_addr || try_coerce(&mut self.result.interner, arg, expected).is_ok()
+        })
+    }
+
     fn call_interface_method(
         &mut self,
         struct_def: DefId,
@@ -8480,25 +10066,38 @@ impl<'res> TypeChecker<'res> {
             return None;
         };
 
-        let Some(entry) = self.applicable_impl(struct_def, iface_def, struct_generic_args) else {
-            let struct_ty = self.result.interner.intern(Type::Struct {
-                def_id: struct_def,
-                generic_args: struct_generic_args.to_vec(),
-            });
+        let method_def_id = match self.select_interface_method(
+            struct_def,
+            iface_def,
+            struct_generic_args,
+            method_name,
+            explicit_args,
+        ) {
+            Some(method) => method,
+            None => {
+                let Some(entry) = self.applicable_impl(struct_def, iface_def, struct_generic_args)
+                else {
+                    let struct_ty = self.result.interner.intern(Type::Struct {
+                        def_id: struct_def,
+                        generic_args: struct_generic_args.to_vec(),
+                    });
 
-            self.report(TypeError::InterfaceNotImplemented {
-                name: iface_name.into(),
-                ty_name: self.display_type(struct_ty).into(),
-                src: source.src(),
-                span: source.span,
-            });
-            return None;
+                    self.report(TypeError::InterfaceNotImplemented {
+                        name: iface_name.into(),
+                        ty_name: self.display_type(struct_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return None;
+                };
+
+                entry
+                    .methods
+                    .iter()
+                    .copied()
+                    .find(|&def_id| self.def_name(def_id).as_deref() == Some(method_name))?
+            }
         };
-
-        let &method_def_id = entry
-            .methods
-            .iter()
-            .find(|&&def_id| self.def_name(def_id).as_deref() == Some(method_name))?;
 
         let sig = &self.fn_sigs[&method_def_id];
         let self_mode = sig.self_mode;
@@ -8551,7 +10150,9 @@ impl<'res> TypeChecker<'res> {
             .zip(struct_generic_args.iter().copied())
             .collect();
 
-        for (imp_g, struct_g) in &entry.generic_bindings {
+        let entry = self.method_impl_entry(struct_def, method_def_id);
+
+        for (imp_g, struct_g) in entry.iter().flat_map(|entry| &entry.generic_bindings) {
             if let Some(&concrete) = bindings.get(struct_g) {
                 bindings.insert(*imp_g, concrete);
             }
@@ -8672,6 +10273,10 @@ impl<'res> TypeChecker<'res> {
 
         let mut generic_subst: HashMap<DefId, TypeId> = HashMap::default();
 
+        for (iface_g, arg) in iface_generics.iter().zip(sig_ctx.interface_args.iter()) {
+            generic_subst.insert(*iface_g, *arg);
+        }
+
         let struct_generics: Vec<DefId> = match self.result.interner.get(self_struct_ty) {
             Type::Struct { def_id, .. } => self
                 .struct_generics
@@ -8732,7 +10337,12 @@ impl<'res> TypeChecker<'res> {
             .iter()
             .map(|&p| self.substitute_generics(p, &impl_subst))
             .collect();
+        let impl_params: Vec<TypeId> = impl_params
+            .iter()
+            .map(|&p| self.normalize_associated(p))
+            .collect();
         let impl_ret = self.substitute_generics(impl_ret_raw, &impl_subst);
+        let impl_ret = self.normalize_associated(impl_ret);
 
         let mut all_iface_generics = iface_generics.clone();
         all_iface_generics.extend(iface_method_generics.iter().copied());
@@ -8755,7 +10365,13 @@ impl<'res> TypeChecker<'res> {
         let mut instantiation_params: HashSet<DefId> = HashSet::default();
         instantiation_params.extend(struct_generics.iter().copied());
         instantiation_params.extend(sig_ctx.imp_generics.iter().copied());
-        for (iface_g, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
+        for (idx, (iface_g, struct_arg)) in
+            iface_generics.iter().zip(struct_args.iter()).enumerate()
+        {
+            if idx < sig_ctx.interface_args.len() {
+                continue;
+            }
+
             let inferred_varies = match generic_subst.get(iface_g) {
                 Some(&bound) => self.type_mentions_any(bound, &instantiation_params),
                 None => false,
@@ -8772,8 +10388,13 @@ impl<'res> TypeChecker<'res> {
                 self.substitute_generics(p, &generic_subst)
             })
             .collect();
+        let iface_params: Vec<TypeId> = iface_params
+            .iter()
+            .map(|&p| self.normalize_associated(p))
+            .collect();
 
         let iface_ret = self.substitute_generics(iface_ret_raw, &generic_subst);
+        let iface_ret = self.normalize_associated(iface_ret);
 
         let params_match = iface_params.len() == impl_params.len()
             && iface_params
@@ -8908,15 +10529,14 @@ impl<'res> TypeChecker<'res> {
                 .unwrap_or_default()
         };
 
-        let self_generic_args: Vec<TypeId> =
-            if sig_ctx.is_specialized && sig_ctx.object_args.len() == owner_generics.len() {
-                sig_ctx.object_args.to_vec()
-            } else {
-                owner_generics
-                    .iter()
-                    .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
-                    .collect()
-            };
+        let self_generic_args: Vec<TypeId> = if sig_ctx.object_args.len() == owner_generics.len() {
+            sig_ctx.object_args.to_vec()
+        } else {
+            owner_generics
+                .iter()
+                .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
+                .collect()
+        };
 
         let builtin_self = match self.def_kind(object_def).cloned() {
             Some(DefKind::Builtin(builtin)) => Some(self.result.interner.builtin(builtin)),
@@ -8988,6 +10608,7 @@ impl<'res> TypeChecker<'res> {
                         .and_then(|candidates| {
                             candidates.iter().copied().find(|candidate| {
                                 !self.method_owning_interface.contains_key(candidate)
+                                    && !self.result.interface_method_owners.contains_key(candidate)
                             })
                         })
                 });
@@ -9074,14 +10695,9 @@ impl<'res> TypeChecker<'res> {
             .cloned()
             .unwrap_or_default();
 
-        let struct_args: Vec<TypeId> = match self.result.interner.get(self_ty).clone() {
-            Type::Struct { generic_args, .. } | Type::Enum { generic_args, .. } => generic_args,
-            _ => Vec::new(),
-        };
-
         let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
-        for (iface_generic, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
-            bindings.insert(*iface_generic, *struct_arg);
+        for (iface_generic, iface_arg) in iface_generics.iter().zip(sig_ctx.interface_args.iter()) {
+            bindings.insert(*iface_generic, *iface_arg);
         }
 
         if let Some(&placeholder) = self.resolution.interface_self_placeholders.get(&iface_def) {
@@ -9109,6 +10725,7 @@ impl<'res> TypeChecker<'res> {
         let Some(entry) = entries.iter_mut().find(|entry| {
             entry.is_specialized == sig_ctx.is_specialized
                 && entry.object_args.as_slice() == sig_ctx.object_args
+                && entry.interface_args.as_slice() == sig_ctx.interface_args
         }) else {
             return;
         };
@@ -9627,7 +11244,10 @@ impl<'res> TypeChecker<'res> {
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
             self.result.interner.builtin(BuiltinType::bool)
         } else {
-            lhs
+            let raw = self.fn_sigs[&method_def].ret;
+            let ret = self.substitute_self(raw, lhs);
+
+            self.normalize_associated(ret)
         }
     }
 
@@ -9747,7 +11367,10 @@ impl<'res> TypeChecker<'res> {
                     },
                 );
 
-                operand
+                let raw = self.fn_sigs[&method_def].ret;
+                let ret = self.substitute_self(raw, operand);
+
+                self.normalize_associated(ret)
             }
 
             Type::Pointer { inner, .. } if matches!(op, UnaryOp::Deref) => inner,
@@ -9848,6 +11471,61 @@ impl<'res> TypeChecker<'res> {
             }
             None => self.result.interner.error(),
         }
+    }
+
+    fn check_slice_access_on_generic(
+        &mut self,
+        g: DefId,
+        generic_ty: TypeId,
+        expr: &HirExpr,
+    ) -> TypeId {
+        let (iface_name, method_name) = if self.expect_assign_interface {
+            ("IndexPtr", "index_ptr")
+        } else {
+            ("Index", "index")
+        };
+
+        let Some(iface_def) = self.interface_registry.get(iface_name) else {
+            self.report(TypeError::InterfaceNotAvailable {
+                name: iface_name.into(),
+                src: expr.source.src(),
+                span: expr.source.span,
+            });
+            return self.result.interner.error();
+        };
+
+        if !self.ctx.generic_bounds(g).contains(&iface_def) {
+            self.report(TypeError::GenericMissingBound {
+                generic: self.def_name(g).unwrap_or_default().into(),
+                bound: iface_name.into(),
+                src: expr.source.src(),
+                span: expr.source.span,
+            });
+            return self.result.interner.error();
+        }
+
+        let Some(method_def) = self.interface_methods.get(&iface_def).and_then(|methods| {
+            methods
+                .iter()
+                .copied()
+                .find(|&m| self.def_name(m).as_deref() == Some(method_name))
+        }) else {
+            return self.result.interner.error();
+        };
+
+        self.result.operator_resolutions.insert(
+            expr.id,
+            OperatorResolution {
+                method_def,
+                generic_args: vec![generic_ty],
+                ordering_cmp: None,
+            },
+        );
+
+        let raw = self.fn_sigs[&method_def].ret;
+        let ret = self.substitute_self(raw, generic_ty);
+
+        self.normalize_associated(ret)
     }
 
     fn check_slice_access_on_struct(
@@ -14769,5 +16447,516 @@ mod tests {
         assert_eq!(result.fn_item_monos.len(), 1);
         let args = result.fn_item_monos.values().next().expect("one entry");
         assert_eq!(args.len(), 1);
+    }
+
+    #[test]
+    fn associated_type_projection_through_bound() {
+        typecheck(
+            r#"
+            interface Source {
+                alias Item;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Number {
+                value: i32,
+            }
+
+            implement Source : Number {
+                alias Item = i32;
+
+                fn read(*self) Item {
+                    return self.value;
+                }
+            }
+
+            fn read_item[S: Source](source: *S) S.Item {
+                return source.read();
+            }
+
+            fn main() {
+                let number = Number { .value = 3 };
+                let item: i32 = read_item(&number);
+            }
+            "#,
+        )
+        .expect("projection through a bound must typecheck");
+    }
+
+    #[test]
+    fn generic_index_through_pointer_to_generic_param() {
+        typecheck_full(
+            r#"
+            struct Buffer[T] {
+                items: [*]T,
+            }
+
+            implement[T] Index : Buffer[T] {
+                alias Output = T;
+
+                fn index(*const self, index: usize) Output {
+                    return self.items[index];
+                }
+            }
+
+            fn second[B: Index](buffer: *const B) B.Output {
+                return buffer[1];
+            }
+
+            fn main() {
+                const numbers = {10, 20, 30};
+                const buffer = Buffer { .items = @as([*]i32, &numbers[0]) };
+                let value: i32 = second(&buffer);
+            }
+            "#,
+        )
+        .expect("generic indexing through a pointer to a generic parameter must typecheck");
+    }
+
+    #[test]
+    fn associated_type_default_used_by_implement() {
+        typecheck(
+            r#"
+            interface Source {
+                alias Item = i32;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Number {
+                value: i32,
+            }
+
+            implement Source : Number {
+                fn read(*self) Item {
+                    return self.value;
+                }
+            }
+
+            fn main() {
+                let number = Number { .value = 7 };
+                let item: i32 = number.read();
+            }
+            "#,
+        )
+        .expect("interface default must satisfy an implement without a binding");
+    }
+
+    #[test]
+    fn associated_type_where_equality_unlocks_operation() {
+        typecheck(
+            r#"
+            interface Source {
+                alias Item;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Number {
+                value: i32,
+            }
+
+            implement Source : Number {
+                alias Item = i32;
+
+                fn read(*self) Item {
+                    return self.value;
+                }
+            }
+
+            fn doubled[S: Source](source: *S) i32 where S.Item = i32 {
+                return source.read() + source.read();
+            }
+
+            fn main() {
+                let number = Number { .value = 2 };
+                let value = doubled(&number);
+            }
+            "#,
+        )
+        .expect("where equality must bind the projection");
+    }
+
+    #[test]
+    fn associated_type_without_where_equality_fails() {
+        let errors = typecheck(
+            r#"
+            interface Source {
+                alias Item;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Number {
+                value: i32,
+            }
+
+            implement Source : Number {
+                alias Item = i32;
+
+                fn read(*self) Item {
+                    return self.value;
+                }
+            }
+
+            fn doubled[S: Source](source: *S) i32 {
+                return source.read() + source.read();
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("unbound projection arithmetic must fail");
+
+        assert!(
+            !errors.is_empty(),
+            "expected at least one error for unbound projection"
+        );
+    }
+
+    #[test]
+    fn associated_type_where_bound_allows_interface_call() {
+        typecheck(
+            r#"
+            interface Marker {
+                pub fn mark(*self) i32;
+            }
+
+            interface Source {
+                alias Item;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Tagged {
+                value: i32,
+            }
+
+            struct Holder {
+                value: i32,
+            }
+
+            implement Marker : Tagged {
+                fn mark(*self) i32 {
+                    return self.value;
+                }
+            }
+
+            implement Source : Holder {
+                alias Item = Tagged;
+
+                fn read(*self) Item {
+                    return Tagged { .value = self.value };
+                }
+            }
+
+            fn marked[S: Source](source: *S) i32 where S.Item: Marker {
+                return source.read().mark();
+            }
+
+            fn main() {
+                let holder = Holder { .value = 5 };
+                let value = marked(&holder);
+            }
+            "#,
+        )
+        .expect("where bound must allow interface calls on the projection");
+    }
+
+    #[test]
+    fn associated_type_bound_not_satisfied_is_reported() {
+        let errors = typecheck(
+            r#"
+            interface Marker {
+                pub fn mark(*self) i32;
+            }
+
+            interface Source {
+                alias Item: Marker;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Plain {
+                value: i32,
+            }
+
+            implement Source : Plain {
+                alias Item = Plain;
+
+                fn read(*self) Item {
+                    return Plain { .value = self.value };
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("alias bound violation must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AssociatedTypeBoundNotSatisfied { .. })),
+            "expected AssociatedTypeBoundNotSatisfied, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn associated_type_default_bound_is_checked() {
+        typecheck(
+            r#"
+            interface Marker {
+                pub fn mark(*self) i32;
+            }
+
+            interface Source {
+                alias Item: Marker = Tagged;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Tagged {
+                value: i32,
+            }
+
+            struct Holder {
+                value: i32,
+            }
+
+            implement Marker : Tagged {
+                fn mark(*self) i32 {
+                    return self.value;
+                }
+            }
+
+            implement Source : Holder {
+                fn read(*self) Item {
+                    return Tagged { .value = self.value };
+                }
+            }
+
+            fn main() {
+                let holder = Holder { .value = 1 };
+                let value = holder.read().mark();
+            }
+            "#,
+        )
+        .expect("default bound satisfied by the default type");
+    }
+
+    #[test]
+    fn associated_type_sibling_binding_is_resolved() {
+        typecheck(
+            r#"
+            interface Pair {
+                alias Left;
+                alias Right = Left;
+
+                pub fn right(*self) Right;
+            }
+
+            struct Node {
+                value: i32,
+            }
+
+            implement Pair : Node {
+                alias Left = i32;
+
+                fn right(*self) Right {
+                    return self.value;
+                }
+            }
+
+            fn main() {
+                let node = Node { .value = 4 };
+                let value: i32 = node.right();
+            }
+            "#,
+        )
+        .expect("alias referencing another alias must resolve");
+    }
+
+    #[test]
+    fn associated_type_cycle_is_reported() {
+        let errors = typecheck(
+            r#"
+            interface Chain {
+                alias Left = Right;
+                alias Right = Left;
+
+                pub fn value(*self) Left;
+            }
+
+            struct Node {
+                value: i32,
+            }
+
+            implement Chain : Node {
+                fn value(*self) Left {
+                    return self.value;
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("cyclic defaults must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AssociatedTypeCycle { .. })),
+            "expected AssociatedTypeCycle, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn specialized_impls_dispatch_by_interface_args() {
+        typecheck(
+            r#"
+            interface[T] From {
+                pub fn from(value: T) Self;
+            }
+
+            struct Meters {
+                value: f64,
+            }
+
+            implement From[i32] : Meters {
+                fn from(value: i32) Self {
+                    return Meters { .value = @as(f64, value) };
+                }
+            }
+
+            implement From[f64] : Meters {
+                fn from(value: f64) Self {
+                    return Meters { .value = value };
+                }
+            }
+
+            fn main() {
+                let whole = Meters.from(2);
+                let precise = Meters.from(1.5);
+            }
+            "#,
+        )
+        .expect("two implementations with different interface args must coexist");
+    }
+
+    #[test]
+    fn duplicate_generic_impls_are_reported() {
+        let errors = typecheck(
+            r#"
+            interface[T] From {
+                pub fn from(value: T) Self;
+            }
+
+            struct Wrapper[T] {
+                value: T,
+            }
+
+            implement[T] From[T] : Wrapper[T] {
+                fn from(value: T) Self {
+                    return Wrapper { .value = value };
+                }
+            }
+
+            implement[U] From[U] : Wrapper[U] {
+                fn from(value: U) Self {
+                    return Wrapper { .value = value };
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("duplicate generic implementations must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::DuplicateImpl { .. })),
+            "expected DuplicateImpl, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn heterogeneous_operator_impls_dispatch_by_rhs() {
+        typecheck_full(
+            r#"
+            struct Vector {
+                x: f64,
+                y: f64,
+            }
+
+            implement Copy : Vector {}
+
+            implement Add[i32] : Vector {
+                alias Output = Vector;
+
+                fn add(self, other: i32) Vector {
+                    return Vector {
+                        .x = self.x + @as(f64, other),
+                        .y = self.y + @as(f64, other),
+                    };
+                }
+            }
+
+            implement Add[f64] : Vector {
+                alias Output = Vector;
+
+                fn add(self, other: f64) Vector {
+                    return Vector {
+                        .x = self.x + other,
+                        .y = self.y + other,
+                    };
+                }
+            }
+
+            fn main() {
+                let base = Vector { .x = 1.0, .y = 2.0 };
+                let whole = base + 3;
+                let precise = base + 0.5;
+            }
+            "#,
+        )
+        .expect("operator implementations must dispatch by the right hand side type");
+    }
+
+    #[test]
+    fn concrete_impl_wins_over_generic_impl() {
+        typecheck(
+            r#"
+            interface Marker {
+                pub fn show(*self) i32;
+            }
+
+            struct Wrapper[T] {
+                value: T,
+            }
+
+            implement[T] Marker : Wrapper[T] {
+                fn show(*self) i32 {
+                    return 1;
+                }
+            }
+
+            implement Marker : Wrapper[i32] {
+                fn show(*self) i32 {
+                    return 2;
+                }
+            }
+
+            fn main() {
+                let ints = Wrapper { .value = 5 };
+                let floats = Wrapper { .value = 1.5 };
+                let a = ints.show();
+                let b = floats.show();
+            }
+            "#,
+        )
+        .expect("concrete implementation must be preferred over generic one");
     }
 }

@@ -304,7 +304,7 @@ fn for_loop_over_rvalue_slice_materializes_iterator() {
 fn for_loop_over_iterator_struct_monomorphizes_next() {
     let mir = compile_mir_ok(
         "struct Counter { n: i32 } \
-         implement Iterator : Counter { fn next(*self) Option[i32] { \
+         implement Iterator : Counter { alias Item = i32; fn next(*self) Option[Item] { \
             if (self.n < 5) { self.n = self.n + 1; return Option.Some(self.n); }; \
             Option.None \
          } } \
@@ -324,7 +324,7 @@ fn for_loop_over_iterator_struct_monomorphizes_next() {
 fn for_loop_over_generic_iterator_struct_monomorphizes_next() {
     let mir = compile_mir_ok(
         "struct Repeat[T] { value: T, remaining: i32 } \
-         implement[T] Iterator : Repeat[T] { fn next(*self) Option[T] { \
+         implement[T] Iterator : Repeat[T] { alias Item = T; fn next(*self) Option[Item] { \
             if (self.remaining > 0) { self.remaining = self.remaining - 1; \
                 return Option.Some(self.value); }; \
             Option.None \
@@ -2185,5 +2185,51 @@ fn logical_or_short_circuits_through_branch() {
     assert!(
         switches >= 2,
         "expected SwitchInt for `||` and for `if`, got {switches}"
+    );
+}
+
+#[test]
+fn default_interface_method_binds_interface_generic_args() {
+    let printed = print_mir_ok(
+        "interface[T] Sink { \
+             pub fn push(*const self, value: T) T { return value; } \
+         } \
+         struct Counter { pub count: i32 } \
+         implement Sink[i32] : Counter {} \
+         fn main() { \
+             let counter: Counter = .{ .count = 0 }; \
+             @println(\"{}\", counter.push(42)); \
+         }",
+    );
+
+    assert!(
+        printed.contains("fn Counter.push(%0: *const Counter, %1: i32) i32"),
+        "{printed}"
+    );
+    assert!(!printed.contains("GenericParam"), "{printed}");
+}
+
+#[test]
+fn associated_type_projection_lowers_to_concrete() {
+    let printed = print_mir_ok(
+        "interface Source { \
+             alias Item; \
+             pub fn read(*const self) Item; \
+         } \
+         struct Celsius { pub degrees: i32 } \
+         implement Source : Celsius { \
+             alias Item = i32; \
+             fn read(*const self) Item { return self.degrees; } \
+         } \
+         fn read_item[S: Source](source: *const S) S.Item { return source.read(); } \
+         fn main() { \
+             let celsius: Celsius = .{ .degrees = 21 }; \
+             @println(\"{}\", read_item(&celsius)); \
+         }",
+    );
+
+    assert!(
+        printed.contains("fn read_item[Celsius](%0: *const Celsius) i32"),
+        "{printed}"
     );
 }

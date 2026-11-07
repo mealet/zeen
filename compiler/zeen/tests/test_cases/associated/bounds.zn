@@ -1,0 +1,37 @@
+interface Marker {
+    pub fn mark(*self) i32;
+}
+
+interface Step {
+    alias Next: Marker;
+
+    pub fn step(*self) Next;
+}
+
+struct Token {
+    value: i32,
+}
+
+struct Holder {
+    value: i32,
+}
+
+implement Marker : Token {
+    fn mark(*self) i32 {
+        return self.value;
+    }
+}
+
+implement Step : Holder {
+    alias Next = Token;
+
+    fn step(*self) Next {
+        return Token { .value = self.value };
+    }
+}
+
+fn main() {
+    let holder = Holder { .value = 15 };
+
+    @println("{}", holder.step().mark());
+}

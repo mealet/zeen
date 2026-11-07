@@ -79,6 +79,11 @@ pub enum Type {
     GenericParam(DefId),
     InterfaceSelfPlaceholder(DefId),
 
+    Associated {
+        base: TypeId,
+        def: DefId,
+    },
+
     Void,
     Never,
     Error,
@@ -208,6 +213,23 @@ impl Type {
             }
 
             Type::InterfaceSelfPlaceholder(_) => "Self".into(),
+
+            Type::Associated { base, def } => {
+                let name = resolution_result
+                    .defs
+                    .get(def)
+                    .map(|info| {
+                        Rc::clone(&interner)
+                            .borrow()
+                            .resolve(&info.name)
+                            .to_string()
+                    })
+                    .unwrap_or("undefined".to_string());
+
+                let base_name = type_interner.display_type(*base, interner, resolution_result);
+
+                format!("{}.{}", base_name, name)
+            }
 
             Type::Void => "void".into(),
             Type::Never => "never".into(),
@@ -515,6 +537,18 @@ pub fn substitute_generics(
 
         Type::InterfaceSelfPlaceholder(placeholder) => {
             bindings.get(&placeholder).copied().unwrap_or(ty)
+        }
+
+        Type::Associated { base, def } => {
+            let new_base = substitute_generics(interner, base, bindings);
+            if new_base == base {
+                ty
+            } else {
+                interner.intern(Type::Associated {
+                    base: new_base,
+                    def,
+                })
+            }
         }
 
         Type::Pointer { inner, is_const } => {
@@ -1366,6 +1400,60 @@ mod tests {
                 def_id: DefId(41),
                 generic_args: vec![i32],
             }
+        );
+    }
+    #[test]
+    fn substitute_generics_rewrites_associated_base() {
+        let mut interner = TypeInterner::new();
+        let generic = DefId(50);
+        let assoc = DefId(51);
+        let base = interner.intern(Type::GenericParam(generic));
+        let associated = interner.intern(Type::Associated { base, def: assoc });
+        let i32_ty = interner.intern(Type::Builtin(BuiltinType::i32));
+
+        let bindings: HashMap<DefId, TypeId> = [(generic, i32_ty)].into_iter().collect();
+        let substituted = substitute_generics(&mut interner, associated, &bindings);
+
+        assert_eq!(
+            interner.get(substituted).clone(),
+            Type::Associated {
+                base: i32_ty,
+                def: assoc,
+            }
+        );
+    }
+
+    #[test]
+    fn associated_type_display() {
+        let mut interner = TypeInterner::new();
+        let mut resolution = ResolutionResult::default();
+        let mut rodeo = Rodeo::default();
+
+        let generic = DefId(52);
+        let assoc = DefId(53);
+        let iface = DefId(54);
+
+        insert_def(
+            &mut resolution,
+            &mut rodeo,
+            generic,
+            "I",
+            DefKind::GenericParam,
+        );
+        insert_def(
+            &mut resolution,
+            &mut rodeo,
+            assoc,
+            "Item",
+            DefKind::AssociatedType { interface: iface },
+        );
+
+        let base = interner.intern(Type::GenericParam(generic));
+        let associated = interner.intern(Type::Associated { base, def: assoc });
+
+        assert_eq!(
+            interner.display_type(associated, Rc::new(RefCell::new(rodeo)), &resolution),
+            "I.Item"
         );
     }
 }

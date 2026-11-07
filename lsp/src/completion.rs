@@ -7,7 +7,7 @@ use zeen_ast::types::BuiltinShape;
 use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
-use crate::analysis::{Analysis, BuiltinTarget, Member, MemberKind, Role};
+use crate::analysis::{Analysis, BuiltinTarget, Member, MemberKind, Role, TypeKind};
 use crate::modules::{ModuleKind, ModuleMember};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -474,6 +474,267 @@ fn implemented_methods(text: &str, body_start: usize) -> Vec<String> {
     names
 }
 
+fn alias_decl_prefix(text: &str, offset: usize) -> Option<&str> {
+    let offset = offset.min(text.len());
+    let line_start = text[..offset]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let line = text.get(line_start..offset)?;
+    let rest = line.trim_start().strip_prefix("alias")?;
+
+    if !rest.starts_with([' ', '\t']) {
+        return None;
+    }
+
+    let rest = rest.trim_start();
+
+    if rest.is_empty() {
+        return Some("");
+    }
+
+    rest.bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        .then_some(rest)
+}
+
+fn implemented_aliases(text: &str, body_start: usize, limit: usize) -> Vec<String> {
+    let Some(body) = text.get(body_start..limit.min(text.len())) else {
+        return Vec::new();
+    };
+
+    let mut names = Vec::new();
+
+    for line in body.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("alias") else {
+            continue;
+        };
+
+        if !rest.starts_with([' ', '\t']) {
+            continue;
+        }
+
+        let name: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+            .collect();
+
+        if !name.is_empty() {
+            names.push(name);
+        }
+    }
+
+    names
+}
+
+fn implement_header_name(header: &str) -> Option<&str> {
+    let rest = header.trim_start().strip_prefix("implement")?;
+
+    if !rest.is_empty() && !rest.starts_with([' ', '\t', '[']) {
+        return None;
+    }
+
+    let rest = rest.trim_start();
+    let rest = match rest.strip_prefix('[') {
+        Some(after) => after.get(after.find(']')? + 1..)?.trim_start(),
+        None => rest,
+    };
+
+    let end = rest
+        .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .unwrap_or(rest.len());
+    let name = &rest[..end];
+
+    if name.is_empty() || !rest[end..].trim_start().is_empty() {
+        return None;
+    }
+
+    Some(name)
+}
+
+fn implement_header_args(text: &str, offset: usize) -> Option<(String, usize)> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut bracket = None;
+
+    for index in (0..offset).rev() {
+        match bytes[index] {
+            b']' => depth += 1,
+            b'[' => {
+                if depth == 0 {
+                    bracket = Some(index);
+                    break;
+                }
+
+                depth -= 1;
+            }
+            b'{' | b'}' | b';' => return None,
+            _ => {}
+        }
+    }
+
+    let bracket = bracket?;
+    let before = text.get(..bracket)?;
+    let start = before.rfind("implement")?;
+
+    if start > 0 {
+        let previous = before.as_bytes()[start - 1];
+
+        if previous.is_ascii_alphanumeric() || previous == b'_' {
+            return None;
+        }
+    }
+
+    let name = implement_header_name(&before[start..])?;
+
+    let mut arg_index = 0usize;
+    let mut depth = 0usize;
+
+    for byte in bytes[bracket + 1..offset].iter().copied() {
+        match byte {
+            b'[' | b'(' => depth += 1,
+            b']' | b')' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => arg_index += 1,
+            _ => {}
+        }
+    }
+
+    Some((name.to_string(), arg_index))
+}
+
+fn type_module_kind(kind: &ModuleKind) -> bool {
+    matches!(
+        kind,
+        ModuleKind::Struct | ModuleKind::Enum | ModuleKind::Interface | ModuleKind::Alias
+    )
+}
+
+fn push_type_item(
+    name: &str,
+    kind: CompletionItemKind,
+    detail: Option<String>,
+    prefix: &str,
+    seen: &mut HashSet<String>,
+    items: &mut Vec<CompletionItem>,
+) {
+    if !name.starts_with(prefix) || !seen.insert(name.to_string()) {
+        return;
+    }
+
+    items.push(CompletionItem {
+        label: name.to_string(),
+        kind: Some(kind),
+        detail,
+        ..Default::default()
+    });
+}
+
+fn type_completion_items(
+    text: &str,
+    analysis: &Analysis,
+    prefix: &str,
+    paths: ResolvePaths<'_>,
+) -> Vec<CompletionItem> {
+    let mut seen = HashSet::new();
+    let mut items = Vec::new();
+
+    for builtin in CompilerType::all_names() {
+        push_type_item(
+            &builtin,
+            CompletionItemKind::STRUCT,
+            None,
+            prefix,
+            &mut seen,
+            &mut items,
+        );
+    }
+
+    for occurrence in &analysis.occurrences {
+        if occurrence.role != Role::Type {
+            continue;
+        }
+
+        let Some(name) = text.get(occurrence.offset..occurrence.offset + occurrence.len) else {
+            continue;
+        };
+
+        let kind = occurrence
+            .def
+            .and_then(|def| analysis.type_kinds.get(&def))
+            .map(|kind| match kind {
+                TypeKind::Struct | TypeKind::Alias => CompletionItemKind::STRUCT,
+                TypeKind::Enum => CompletionItemKind::ENUM,
+                TypeKind::Interface => CompletionItemKind::INTERFACE,
+            })
+            .unwrap_or(CompletionItemKind::STRUCT);
+
+        push_type_item(name, kind, None, prefix, &mut seen, &mut items);
+    }
+
+    for member in crate::modules::core_members() {
+        if !type_module_kind(&member.kind) {
+            continue;
+        }
+
+        push_type_item(
+            &member.name,
+            module_kind(&member.kind),
+            Some(member.module.clone()),
+            prefix,
+            &mut seen,
+            &mut items,
+        );
+    }
+
+    if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
+        for import in crate::modules::imports_for(text, paths.std) {
+            for member in
+                crate::modules::members_of_use(dir, root, paths.std, paths.packages(), &import)
+            {
+                if !type_module_kind(&member.kind) {
+                    continue;
+                }
+
+                push_type_item(
+                    &member.name,
+                    module_kind(&member.kind),
+                    Some(member.module.clone()),
+                    prefix,
+                    &mut seen,
+                    &mut items,
+                );
+            }
+        }
+    }
+
+    items
+}
+
+pub fn implement_header_complete(
+    text: &str,
+    analysis: &Analysis,
+    offset: usize,
+    paths: ResolvePaths<'_>,
+) -> Vec<CompletionItem> {
+    let Some((interface, arg_index)) = implement_header_args(text, offset) else {
+        return Vec::new();
+    };
+
+    let arity = analysis
+        .interface_arity
+        .get(&interface)
+        .copied()
+        .unwrap_or(0);
+
+    if arg_index >= arity {
+        return Vec::new();
+    }
+
+    type_completion_items(text, analysis, ident_prefix(text, offset), paths)
+}
+
 pub fn implement_complete(text: &str, analysis: &Analysis, offset: usize) -> Vec<CompletionItem> {
     let frames = scan_frames(text, offset);
     let Some(index) = frames
@@ -494,6 +755,41 @@ pub fn implement_complete(text: &str, analysis: &Analysis, offset: usize) -> Vec
     let Some(members) = analysis.interfaces.get(interface) else {
         return Vec::new();
     };
+
+    let line_start = text[..offset.min(text.len())]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+
+    if let Some(alias_prefix) = alias_decl_prefix(text, offset) {
+        let bound = implemented_aliases(text, frames[index].body_start, line_start);
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut items = Vec::new();
+
+        for member in members {
+            if member.kind != MemberKind::AssociatedType {
+                continue;
+            }
+
+            if bound.iter().any(|name| name == &member.name)
+                || !member.name.starts_with(alias_prefix)
+                || !seen.insert(member.name.clone())
+            {
+                continue;
+            }
+
+            items.push(CompletionItem {
+                label: member.name.clone(),
+                kind: Some(CompletionItemKind::TYPE_PARAMETER),
+                detail: Some(format!("alias {}", member.name)),
+                insert_text: Some(format!("{} = $0;", member.name)),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                ..Default::default()
+            });
+        }
+
+        return items;
+    }
 
     let implemented = implemented_methods(text, frames[index].body_start);
     let typed = ident_prefix(text, offset);
@@ -691,6 +987,7 @@ fn member_completion_kind(member: &Member) -> CompletionItemKind {
         MemberKind::Method => CompletionItemKind::METHOD,
         MemberKind::Field => CompletionItemKind::FIELD,
         MemberKind::Variant => CompletionItemKind::ENUM_MEMBER,
+        MemberKind::AssociatedType => CompletionItemKind::TYPE_PARAMETER,
     }
 }
 
@@ -709,9 +1006,11 @@ fn keep_local_member(member: &Member, static_context: Option<bool>) -> bool {
         (Some(true), MemberKind::Method) => member.is_static,
         (Some(true), MemberKind::Variant) => true,
         (Some(true), MemberKind::Field) => false,
+        (Some(true), MemberKind::AssociatedType) => true,
         (Some(false), MemberKind::Method) => !member.is_static,
         (Some(false), MemberKind::Field) => true,
         (Some(false), MemberKind::Variant) => false,
+        (Some(false), MemberKind::AssociatedType) => false,
         (None, _) => true,
     }
 }
@@ -769,6 +1068,32 @@ pub fn dot_complete(
     let mut static_context: Option<bool> = None;
     let mut type_name: Option<String> = None;
     let mut raw_type: Option<String> = None;
+
+    if receiver_name == "Self"
+        && start < dot_offset
+        && let Some(def) = analysis.at(start).and_then(|receiver| receiver.def)
+    {
+        let def = analysis
+            .interface_self_owners
+            .get(&def)
+            .copied()
+            .unwrap_or(def);
+
+        let mut items = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        push_owner_members(
+            analysis,
+            def,
+            Some(true),
+            dot_offset,
+            &filter,
+            &mut items,
+            &mut seen,
+        );
+
+        return items;
+    }
 
     if crate::builtin::is_scalar_type_name(receiver_name) {
         static_context = Some(true);
@@ -980,92 +1305,7 @@ fn push_type_members(
     seen: &mut std::collections::HashSet<String>,
 ) {
     if let Some(def) = find_type_def(analysis, text, lookup) {
-        let mut owners = vec![def];
-
-        if let Some(bounds) = analysis.generic_bounds.get(&def) {
-            owners.extend(bounds.iter().copied());
-        }
-
-        let allow_private = owners
-            .iter()
-            .any(|owner| scope_covers(analysis, *owner, cursor));
-        let mut local: Vec<&Member> = Vec::new();
-
-        for owner in &owners {
-            if let Some(members) = analysis.members.get(owner) {
-                local.extend(members.iter().filter(|member| {
-                    (member.is_pub || member.is_interface || allow_private)
-                        && keep_local_member(member, static_context)
-                        && member.name.starts_with(filter)
-                }));
-            }
-        }
-
-        local.sort_by(|a, b| a.name.cmp(&b.name));
-
-        for member in local {
-            if seen.insert(member.name.clone()) {
-                let rank = member_rank(
-                    member.kind == MemberKind::Variant
-                        || (member.kind == MemberKind::Method && member.is_static),
-                    static_context,
-                );
-                items.push(CompletionItem {
-                    label: member_label(&member.name, member.arity),
-                    kind: Some(member_completion_kind(member)),
-                    detail: member.signature.clone(),
-                    filter_text: Some(member.name.clone()),
-                    insert_text: Some(member.name.clone()),
-                    sort_text: Some(format!("{rank}_{}", member.name)),
-                    ..Default::default()
-                });
-            }
-        }
-
-        for (iface_def, object_def) in &analysis.implements {
-            if *object_def != def {
-                continue;
-            }
-            let Some(iface_name) = analysis.interface_def_name.get(iface_def) else {
-                continue;
-            };
-            let Some(iface_methods) = analysis.interfaces.get(iface_name) else {
-                continue;
-            };
-            let same_file = analysis
-                .def_spans
-                .get(iface_def)
-                .is_some_and(|(_, _, file)| file.is_none());
-            for member in iface_methods {
-                if seen.contains(&member.name) {
-                    continue;
-                }
-                if !member.name.starts_with(filter) {
-                    continue;
-                }
-                if !member.is_pub && !allow_private && !same_file {
-                    continue;
-                }
-                if !keep_local_member(member, static_context) {
-                    continue;
-                }
-                seen.insert(member.name.clone());
-                let rank = member_rank(
-                    member.kind == MemberKind::Variant
-                        || (member.kind == MemberKind::Method && member.is_static),
-                    static_context,
-                );
-                items.push(CompletionItem {
-                    label: member_label(&member.name, member.arity),
-                    kind: Some(member_completion_kind(member)),
-                    detail: member.signature.clone(),
-                    filter_text: Some(member.name.clone()),
-                    insert_text: Some(member.name.clone()),
-                    sort_text: Some(format!("{rank}_{}", member.name)),
-                    ..Default::default()
-                });
-            }
-        }
+        push_owner_members(analysis, def, static_context, cursor, filter, items, seen);
     }
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
@@ -1102,6 +1342,102 @@ fn push_type_members(
             }
         }
     }
+}
+
+fn push_owner_members(
+    analysis: &Analysis,
+    def: zeen_resolve::DefId,
+    static_context: Option<bool>,
+    cursor: usize,
+    filter: &str,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let mut owners = vec![def];
+
+    if let Some(bounds) = analysis.generic_bounds.get(&def) {
+        owners.extend(bounds.iter().copied());
+    }
+
+    let allow_private = owners
+        .iter()
+        .any(|owner| scope_covers(analysis, *owner, cursor));
+    let mut local: Vec<&Member> = Vec::new();
+
+    for owner in &owners {
+        if let Some(members) = analysis.members.get(owner) {
+            local.extend(members.iter().filter(|member| {
+                (member.is_pub || member.is_interface || allow_private)
+                    && keep_local_member(member, static_context)
+                    && member.name.starts_with(filter)
+            }));
+        }
+    }
+
+    local.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for member in local {
+        push_member_item(member, static_context, items, seen);
+    }
+
+    for (iface_def, object_def) in &analysis.implements {
+        if *object_def != def {
+            continue;
+        }
+        let Some(iface_name) = analysis.interface_def_name.get(iface_def) else {
+            continue;
+        };
+        let Some(iface_methods) = analysis.interfaces.get(iface_name) else {
+            continue;
+        };
+        let same_file = analysis
+            .def_spans
+            .get(iface_def)
+            .is_some_and(|(_, _, file)| file.is_none());
+        for member in iface_methods {
+            if seen.contains(&member.name) {
+                continue;
+            }
+            if !member.name.starts_with(filter) {
+                continue;
+            }
+            if !member.is_pub && !allow_private && !same_file {
+                continue;
+            }
+            if !keep_local_member(member, static_context) {
+                continue;
+            }
+            push_member_item(member, static_context, items, seen);
+        }
+    }
+}
+
+fn push_member_item(
+    member: &Member,
+    static_context: Option<bool>,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if !seen.insert(member.name.clone()) {
+        return;
+    }
+
+    let rank = member_rank(
+        member.kind == MemberKind::Variant
+            || member.kind == MemberKind::AssociatedType
+            || (member.kind == MemberKind::Method && member.is_static),
+        static_context,
+    );
+
+    items.push(CompletionItem {
+        label: member_label(&member.name, member.arity),
+        kind: Some(member_completion_kind(member)),
+        detail: member.signature.clone(),
+        filter_text: Some(member.name.clone()),
+        insert_text: Some(member.name.clone()),
+        sort_text: Some(format!("{rank}_{}", member.name)),
+        ..Default::default()
+    });
 }
 
 fn push_builtin_target_members(
@@ -2965,6 +3301,111 @@ mod tests {
         assert!(insert.starts_with("fn drop("), "got {insert:?}");
     }
 
+    const ASSOCIATED_IMPLEMENT: &str = "interface Labeled {\n    alias Tag = i32;\n    alias Name = i32;\n\n    pub fn label(*self) Tag;\n}\n\nstruct Point {\n    value: i32,\n}\n\nimplement Labeled : Point {\n    fn label(*self) Tag {\n        return self.value;\n    }\n}\n";
+
+    #[test]
+    fn implement_block_suggests_associated_types() {
+        let analysis = loose_analysis(ASSOCIATED_IMPLEMENT);
+        let typing = ASSOCIATED_IMPLEMENT.replacen("    fn label", "    alias \n    fn label", 1);
+        let offset = typing.rfind("    alias ").unwrap() + "    alias ".len();
+        let items = implement_complete(&typing, &analysis, offset);
+        let mut names = labels(&items);
+        names.sort();
+
+        assert_eq!(names, vec!["Name", "Tag"]);
+
+        let tag = items.iter().find(|item| item.label == "Tag").unwrap();
+        assert_eq!(tag.insert_text.as_deref(), Some("Tag = $0;"));
+        assert_eq!(tag.kind, Some(CompletionItemKind::TYPE_PARAMETER));
+    }
+
+    #[test]
+    fn implement_block_filters_associated_types_by_prefix() {
+        let analysis = loose_analysis(ASSOCIATED_IMPLEMENT);
+        let typing = ASSOCIATED_IMPLEMENT.replacen("    fn label", "    alias T\n    fn label", 1);
+        let offset = typing.rfind("    alias T").unwrap() + "    alias T".len();
+        let items = implement_complete(&typing, &analysis, offset);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["Tag"]);
+    }
+
+    #[test]
+    fn implement_block_keeps_alias_keyword_completion() {
+        let analysis = loose_analysis(ASSOCIATED_IMPLEMENT);
+        let typing = ASSOCIATED_IMPLEMENT.replacen("    fn label", "    alias\n    fn label", 1);
+        let offset = typing.rfind("    alias").unwrap() + "    alias".len();
+        let items = implement_complete(&typing, &analysis, offset);
+
+        assert!(items.is_empty(), "{:?}", labels(&items));
+    }
+
+    #[test]
+    fn implement_block_hides_bound_associated_types() {
+        let analysis = loose_analysis(ASSOCIATED_IMPLEMENT);
+        let typing = ASSOCIATED_IMPLEMENT.replacen(
+            "    fn label",
+            "    alias Tag = i32;\n    alias \n    fn label",
+            1,
+        );
+        let offset = typing.rfind("    alias Tag = i32;\n    alias ").unwrap()
+            + "    alias Tag = i32;\n    alias ".len();
+        let items = implement_complete(&typing, &analysis, offset);
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["Name"]);
+    }
+
+    const CONVERT_INTERFACE: &str = "interface[T] Convert {\n    fn convert(value: T) Self;\n}\n\nstruct Meters {\n    value: f64,\n}\n\nimplement Convert[i32] : Meters {\n    fn convert(value: i32) Self {\n        return Meters { .value = @as(f64, value) };\n    }\n}\n";
+
+    #[test]
+    fn implement_header_suggests_interface_argument_types() {
+        let analysis = loose_analysis(CONVERT_INTERFACE);
+        let typing = &CONVERT_INTERFACE[..CONVERT_INTERFACE.find("i32] : Meters").unwrap()];
+        let items =
+            implement_header_complete(typing, &analysis, typing.len(), ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"i32"), "{names:?}");
+        assert!(names.contains(&"Meters"), "{names:?}");
+        assert!(!names.contains(&"fn"), "{names:?}");
+        assert!(!names.contains(&"let"), "{names:?}");
+    }
+
+    #[test]
+    fn implement_header_filters_interface_argument_types() {
+        let analysis = loose_analysis(CONVERT_INTERFACE);
+        let mut typing =
+            CONVERT_INTERFACE[..CONVERT_INTERFACE.find("i32] : Meters").unwrap()].to_string();
+        typing.push_str("Me");
+        let items =
+            implement_header_complete(&typing, &analysis, typing.len(), ResolvePaths::default());
+        let names = labels(&items);
+
+        assert_eq!(names, vec!["Meters"]);
+    }
+
+    #[test]
+    fn implement_header_stops_after_interface_arity() {
+        let analysis = loose_analysis(CONVERT_INTERFACE);
+        let mut typing =
+            CONVERT_INTERFACE[..CONVERT_INTERFACE.find("i32] : Meters").unwrap()].to_string();
+        typing.push_str("i32, ");
+        let items =
+            implement_header_complete(&typing, &analysis, typing.len(), ResolvePaths::default());
+
+        assert!(items.is_empty(), "{:?}", labels(&items));
+    }
+
+    #[test]
+    fn implement_header_ignores_generic_type_arguments() {
+        let text = "struct List[T] {\n    value: T,\n}\n\nfn take(value: List[";
+        let analysis = loose_analysis(text);
+        let items = implement_header_complete(text, &analysis, text.len(), ResolvePaths::default());
+
+        assert!(items.is_empty(), "{:?}", labels(&items));
+    }
+
     #[test]
     fn general_completion_includes_core_members() {
         let text = "fn main() {\n    \n}\n";
@@ -3093,6 +3534,43 @@ mod tests {
         let names = labels(&items);
 
         assert!(names.contains(&"kind()"));
+    }
+
+    const ASSOCIATED_TYPE_SAMPLE: &str = "interface Source {\n    alias Item;\n\n    pub fn read(*self) Item;\n}\n\nstruct Number {\n    value: i32,\n}\n\nimplement Source : Number {\n    alias Item = i32;\n\n    fn read(*self) Item {\n        return self.value;\n    }\n}\n\nfn read_item[S: Source](source: *S) S.Item {\n    return source.read();\n}\n\nfn take_number(value: Number.Item) i32 {\n    return value;\n}\n\nfn main() {\n    let number = Number { .value = 3 };\n    let value: i32 = read_item(&number);\n    @println(\"{}\", take_number(value));\n}\n";
+
+    #[test]
+    fn generic_projection_completes_associated_types() {
+        let analysis = sample_analysis(ASSOCIATED_TYPE_SAMPLE);
+        let probe = ASSOCIATED_TYPE_SAMPLE.replacen("S.Item {", "S.        {", 1);
+        let dot = probe.find("S.        {").unwrap() + 1;
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"Item"), "{names:?}");
+    }
+
+    #[test]
+    fn concrete_projection_completes_associated_types() {
+        let analysis = sample_analysis(ASSOCIATED_TYPE_SAMPLE);
+        let probe = ASSOCIATED_TYPE_SAMPLE.replacen("Number.Item)", "Number.        )", 1);
+        let dot = probe.find("Number.        )").unwrap() + "Number".len();
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"Item"), "{names:?}");
+    }
+
+    #[test]
+    fn self_projection_completes_associated_types() {
+        let probe_sample =
+            ASSOCIATED_TYPE_SAMPLE.replacen("fn read(*self) Item", "fn read(*self) Self.Item", 1);
+        let analysis = sample_analysis(&probe_sample);
+        let probe = probe_sample.replacen("Self.Item", "Self.        ", 1);
+        let dot = probe.find("Self.        ").unwrap() + "Self".len();
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"Item"), "{names:?}");
     }
 
     #[test]

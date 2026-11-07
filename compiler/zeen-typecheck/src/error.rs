@@ -1170,4 +1170,92 @@ pub enum TypeError {
         #[label]
         span: SourceSpan,
     },
+    #[error("associated type `{name}` is not declared by any interface bound in scope")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::unknown_associated_type),
+        help("add the interface that declares it as a bound")
+    )]
+    UnknownAssociatedType {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("associated type `{name}` of interface `{interface}` has no binding")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::missing_associated_type),
+        help("add `alias {name} = Type;` to the implement block")
+    )]
+    MissingAssociatedType {
+        interface: SmolStr,
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("associated type `{name}` is ambiguous for `{base}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::ambiguous_associated_type),
+        help("the type has several implementations that declare this associated type")
+    )]
+    AmbiguousAssociatedType {
+        base: SmolStr,
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("associated type `{name}` is declared twice in one implement block")]
+    #[diagnostic(severity(Error), code(zeen::typechecker::duplicate_associated_type))]
+    DuplicateAssociatedType {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("associated type `{name}` defaults form a cycle")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::associated_type_cycle),
+        help("give one of the aliases a concrete type")
+    )]
+    AssociatedTypeCycle {
+        name: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
+
+    #[error("associated type `{name}` is bound to `{ty}`, which does not implement `{bound}`")]
+    #[diagnostic(
+        severity(Error),
+        code(zeen::typechecker::associated_type_bound_not_satisfied)
+    )]
+    AssociatedTypeBoundNotSatisfied {
+        name: SmolStr,
+        ty: SmolStr,
+        bound: SmolStr,
+
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label]
+        span: SourceSpan,
+    },
 }

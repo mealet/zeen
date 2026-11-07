@@ -626,4 +626,24 @@ mod tests {
         assert_eq!(uri, fixture.uris[0]);
         assert!(line[range.start.character as usize..].starts_with("show"));
     }
+
+    const ASSOCIATED_TYPE_SAMPLE: &str = "interface Source {\n    alias Item;\n\n    pub fn read(*self) Item;\n}\n\nstruct Number {\n    value: i32,\n}\n\nimplement Source : Number {\n    alias Item = i32;\n\n    fn read(*self) Item {\n        return self.value;\n    }\n}\n\nfn read_item[S: Source](source: *S) S.Item {\n    return source.read();\n}\n\nfn take_number(value: Number.Item) i32 {\n    return value;\n}\n\nfn main() {\n    let number = Number { .value = 3 };\n    let value: i32 = read_item(&number);\n    @println(\"{}\", take_number(value));\n}\n";
+
+    #[test]
+    fn renames_associated_type_everywhere() {
+        let fixture = Fixture::check(&[("main", ASSOCIATED_TYPE_SAMPLE)]);
+        let docs = fixture.docs();
+        let offset = fixture.offset(0, "S.Item") + "S.".len();
+        let edits = rename_edits(&docs, &fixture.uris[0], offset, "Entry");
+
+        let result = applied(&fixture.texts[0], &edits[&fixture.uris[0]]);
+
+        assert!(result.contains("alias Entry;"), "{result}");
+        assert!(result.contains("alias Entry = i32;"), "{result}");
+        assert!(result.contains("pub fn read(*self) Entry;"), "{result}");
+        assert!(result.contains("fn read(*self) Entry {"), "{result}");
+        assert!(result.contains("S.Entry"), "{result}");
+        assert!(result.contains("Number.Entry"), "{result}");
+        assert!(!result.contains("Item"), "{result}");
+    }
 }

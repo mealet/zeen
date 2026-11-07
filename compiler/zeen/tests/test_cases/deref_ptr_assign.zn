@@ -7,12 +7,16 @@ struct Ref[T] {
 }
 
 implement[T] Deref : Ref[T] {
+  alias Target = T;
+
   fn deref(*const self) T {
     *self.inner
   }
 }
 
 implement[T] DerefPtr : Ref[T] {
+  alias Target = T;
+
   fn deref_ptr(*self) *T {
     self.inner
   }

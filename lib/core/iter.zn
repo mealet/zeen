@@ -1,16 +1,22 @@
 // @zeen-core
 
 /// Main Iterator interface
-interface[T] Iterator {
-  pub fn next(*self) Option[T];
+interface Iterator {
+  alias Item;
+
+  pub fn next(*self) Option[Item];
 }
 
 /// Returns struct that implements `Iterator` with pointer access
 interface PtrIterator {
-  pub fn iter[I: Iterator](*self) I;
+  alias Iter: Iterator;
+
+  pub fn iter(*self) Iter;
 }
 
 /// Converter from ownership `self` to struct with `Iterator` implementation
 interface OwnedIterator {
-  pub fn into_iter[I: Iterator](self) I;
+  alias Iter: Iterator;
+
+  pub fn into_iter(self) Iter;
 }

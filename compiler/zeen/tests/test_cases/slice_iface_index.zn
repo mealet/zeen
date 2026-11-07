@@ -7,12 +7,16 @@ struct Ref[T] {
 }
 
 implement[T] Index : Ref[T] {
+  alias Output = T;
+
   fn index(*const self, index: usize) T {
     *(self.inner + index)
   }
 }
 
 implement[T] IndexPtr : Ref[T] {
+  alias Output = T;
+
   fn index_ptr(*self, index: usize) *T {
     (self.inner + index)
   }

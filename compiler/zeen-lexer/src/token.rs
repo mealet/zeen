@@ -204,6 +204,7 @@ pub enum CompilerKeyword {
     Implement,
     Builtin,
     Type,
+    Where,
 
     TypeOf,
 
@@ -245,6 +246,7 @@ impl CompilerKeyword {
             "implement" => Some(CompilerKeyword::Implement),
             "builtin" => Some(CompilerKeyword::Builtin),
             "type" => Some(CompilerKeyword::Type),
+            "where" => Some(CompilerKeyword::Where),
 
             "typeof" => Some(CompilerKeyword::TypeOf),
 
@@ -288,6 +290,7 @@ impl CompilerKeyword {
             CompilerKeyword::Implement => "implement",
             CompilerKeyword::Builtin => "builtin",
             CompilerKeyword::Type => "type",
+            CompilerKeyword::Where => "where",
 
             CompilerKeyword::TypeOf => "typeof",
 

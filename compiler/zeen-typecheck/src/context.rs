@@ -44,6 +44,10 @@ impl TypeCheckCtx {
             .expect("Current context called outside of any function body")
     }
 
+    pub fn try_current(&self) -> Option<&FnCtx> {
+        self.stack.last()
+    }
+
     pub fn current_mut(&mut self) -> &mut FnCtx {
         self.stack
             .last_mut()

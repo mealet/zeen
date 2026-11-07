@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use zeen_ast::{
     Declaration, DeclarationKind, Expression, ExpressionKind, Statement, StatementKind, TypeExpr,
     TypeKind,
-    declarations::{AliasDecl, FnParam, GenericType},
+    declarations::{AliasDecl, FnParam, GenericType, WhereClause, WhereClauseKind},
     expressions::{Arm, BinaryOp, FieldInit, Literal, Pattern},
 };
 
@@ -79,6 +79,7 @@ impl<'arena> Interp<'arena> {
                 generics,
                 params,
                 return_type,
+                where_clauses,
                 body,
                 is_pub,
                 is_extern,
@@ -89,6 +90,7 @@ impl<'arena> Interp<'arena> {
                 *generics,
                 params,
                 *return_type,
+                *where_clauses,
                 *body,
                 *is_pub,
                 *is_extern,
@@ -323,9 +325,12 @@ impl<'arena> Interp<'arena> {
 
             DeclarationKind::ImplementDecl {
                 interface,
+                interface_args,
                 builtin,
                 object,
                 generics,
+                where_clauses,
+                aliases,
                 methods,
             } => {
                 self.push_shadow();
@@ -338,6 +343,8 @@ impl<'arena> Interp<'arena> {
                 let (object_name, object_span, object_args) = object;
                 let mut new_object_args: Vec<&'arena TypeExpr<'arena>> =
                     Vec::with_capacity(object_args.len());
+                let mut new_interface_args: Vec<&'arena TypeExpr<'arena>> =
+                    Vec::with_capacity(interface_args.len());
                 let mut changed = false;
 
                 for slot in object_args.iter() {
@@ -346,6 +353,49 @@ impl<'arena> Interp<'arena> {
                         Ok(Some(new_slot)) => {
                             changed = true;
                             new_object_args.push(new_slot);
+                        }
+                        Err(errors) => {
+                            self.pop_shadow();
+                            return Err(errors);
+                        }
+                    }
+                }
+
+                for slot in interface_args.iter() {
+                    match self.substitute_type(module, slot) {
+                        Ok(None) => new_interface_args.push(*slot),
+                        Ok(Some(new_slot)) => {
+                            changed = true;
+                            new_interface_args.push(new_slot);
+                        }
+                        Err(errors) => {
+                            self.pop_shadow();
+                            return Err(errors);
+                        }
+                    }
+                }
+
+                let new_where = match self.substitute_where_clauses(module, *where_clauses) {
+                    Ok((clauses, where_changed)) => {
+                        if where_changed {
+                            changed = true;
+                        }
+                        clauses
+                    }
+                    Err(errors) => {
+                        self.pop_shadow();
+                        return Err(errors);
+                    }
+                };
+
+                let mut new_aliases: Vec<&'arena Declaration<'arena>> =
+                    Vec::with_capacity(aliases.len());
+                for alias in aliases.iter() {
+                    match self.substitute_decl(module, alias) {
+                        Ok(None) => new_aliases.push(*alias),
+                        Ok(Some(new_alias)) => {
+                            changed = true;
+                            new_aliases.push(new_alias);
                         }
                         Err(errors) => {
                             self.pop_shadow();
@@ -376,6 +426,7 @@ impl<'arena> Interp<'arena> {
                     Ok(Some(self.arena.alloc(Declaration {
                         kind: DeclarationKind::ImplementDecl {
                             interface: *interface,
+                            interface_args: self.arena.alloc_slice_copy(&new_interface_args),
                             builtin: *builtin,
                             object: (
                                 *object_name,
@@ -383,6 +434,8 @@ impl<'arena> Interp<'arena> {
                                 self.arena.alloc_slice_copy(&new_object_args),
                             ),
                             generics: *generics,
+                            where_clauses: new_where,
+                            aliases: self.arena.alloc_slice_copy(&new_aliases),
                             methods: self.arena.alloc_slice_copy(&new_methods),
                         },
                         source: decl.source.clone(),
@@ -426,6 +479,7 @@ impl<'arena> Interp<'arena> {
         generics: Option<&'arena [GenericType<'arena>]>,
         params: &'arena [FnParam<'arena>],
         return_type: Option<&'arena TypeExpr<'arena>>,
+        where_clauses: Option<&'arena [WhereClause<'arena>]>,
         body: Option<&'arena Statement<'arena>>,
         is_pub: bool,
         is_extern: bool,
@@ -495,6 +549,19 @@ impl<'arena> Interp<'arena> {
             None => None,
         };
 
+        let new_where = match self.substitute_where_clauses(module, where_clauses) {
+            Ok((clauses, where_changed)) => {
+                if where_changed {
+                    changed = true;
+                }
+                clauses
+            }
+            Err(errors) => {
+                self.pop_shadow();
+                return Err(errors);
+            }
+        };
+
         self.pop_shadow();
 
         if !changed {
@@ -507,12 +574,63 @@ impl<'arena> Interp<'arena> {
                 generics,
                 params: self.arena.alloc_slice_copy(&new_params),
                 return_type: new_return,
+                where_clauses: new_where,
                 body: new_body,
                 is_pub,
                 is_extern,
             },
             source: decl.source.clone(),
         })))
+    }
+
+    fn substitute_where_clauses(
+        &mut self,
+        module: &PathBuf,
+        clauses: Option<&'arena [WhereClause<'arena>]>,
+    ) -> Result<(Option<&'arena [WhereClause<'arena>]>, bool), Vec<Error>> {
+        let Some(clauses) = clauses else {
+            return Ok((None, false));
+        };
+
+        let mut rebuilt: Vec<WhereClause<'arena>> = Vec::with_capacity(clauses.len());
+        let mut changed = false;
+
+        for clause in clauses.iter() {
+            let ty = match self.substitute_type(module, clause.ty)? {
+                None => clause.ty,
+                Some(ty) => {
+                    changed = true;
+                    ty
+                }
+            };
+
+            let kind = match clause.kind {
+                WhereClauseKind::Bound { bounds } => WhereClauseKind::Bound { bounds },
+                WhereClauseKind::Equality { ty: eq } => {
+                    let eq = match self.substitute_type(module, eq)? {
+                        None => eq,
+                        Some(eq) => {
+                            changed = true;
+                            eq
+                        }
+                    };
+
+                    WhereClauseKind::Equality { ty: eq }
+                }
+            };
+
+            rebuilt.push(WhereClause {
+                ty,
+                kind,
+                span: clause.span,
+            });
+        }
+
+        if !changed {
+            return Ok((Some(clauses), false));
+        }
+
+        Ok((Some(self.arena.alloc_slice_copy(&rebuilt)), true))
     }
 
     fn substitute_type(

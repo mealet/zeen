@@ -1,0 +1,57 @@
+interface Source {
+    alias Item;
+
+    pub fn read(*self) Item;
+}
+
+interface Marker {
+    pub fn mark(*self) i32;
+}
+
+struct Tagged {
+    value: i32,
+}
+
+struct Number {
+    value: i32,
+}
+
+implement Marker : Tagged {
+    fn mark(*self) i32 {
+        return self.value;
+    }
+}
+
+implement Source : Tagged {
+    alias Item = Tagged;
+
+    fn read(*self) Item {
+        return Tagged { .value = self.value };
+    }
+}
+
+implement Source : Number {
+    alias Item = i32;
+
+    fn read(*self) Item {
+        return self.value;
+    }
+}
+
+fn marked[S: Source](source: *S) i32
+where S.Item: Marker {
+    return source.read().mark();
+}
+
+fn doubled[S: Source](source: *S) i32
+where S.Item = i32 {
+    return source.read() + source.read();
+}
+
+fn main() {
+    let tagged = Tagged { .value = 4 };
+    let number = Number { .value = 6 };
+
+    @println("{}", marked(&tagged));
+    @println("{}", doubled(&number));
+}

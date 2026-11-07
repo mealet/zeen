@@ -3,6 +3,8 @@ struct Counter {
 }
 
 implement Iterator : Counter {
+  alias Item = i32;
+
   fn next(*self) Option[i32] {
     if (self.n < 5) {
       self.n = self.n + 1;
