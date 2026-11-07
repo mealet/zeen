@@ -379,12 +379,32 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
 
         let _ = self.p.advance();
 
-        let expr = self.p.arena.alloc(TypeExpr {
+        let base = self.p.arena.alloc(TypeExpr {
             kind: TypeKind::SelfAlias,
             span: kw_span,
         });
 
-        Some(expr)
+        if self.p.eat(TokenKind::Dot) {
+            let field_token = self.p.expect(TokenKind::Ident, "associated type name")?;
+            let field_slice = self.p.src
+                [field_token.span.offset()..field_token.span.offset() + field_token.span.len()]
+                .to_owned();
+
+            let field_id = self.p.get_or_intern(field_slice);
+            let span = crate::merge_spans(kw_span, field_token.span);
+
+            let expr = self.p.arena.alloc(TypeExpr {
+                kind: TypeKind::Associated {
+                    base,
+                    name: (field_id, field_token.span),
+                },
+                span,
+            });
+
+            return Some(expr);
+        }
+
+        Some(base)
     }
 
     fn parse_comptime_call(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {
@@ -448,7 +468,7 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
             generic_args = Some(args_slice);
         }
 
-        let expr = self.p.arena.alloc(TypeExpr {
+        let base = self.p.arena.alloc(TypeExpr {
             kind: TypeKind::Named {
                 name: name_id,
                 generic_args,
@@ -456,7 +476,27 @@ impl<'tok, 'ctx, 'pr> TypeParser<'tok, 'ctx, 'pr> {
             span,
         });
 
-        Some(expr)
+        if self.p.eat(TokenKind::Dot) {
+            let field_token = self.p.expect(TokenKind::Ident, "associated type name")?;
+            let field_slice = self.p.src
+                [field_token.span.offset()..field_token.span.offset() + field_token.span.len()]
+                .to_owned();
+
+            let field_id = self.p.get_or_intern(field_slice);
+            let span = crate::merge_spans(span, field_token.span);
+
+            let expr = self.p.arena.alloc(TypeExpr {
+                kind: TypeKind::Associated {
+                    base,
+                    name: (field_id, field_token.span),
+                },
+                span,
+            });
+
+            return Some(expr);
+        }
+
+        Some(base)
     }
 
     fn parse_const_type(&mut self) -> Option<&'ctx TypeExpr<'ctx>> {

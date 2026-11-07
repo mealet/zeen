@@ -350,11 +350,14 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         if !(self.p.at(TokenKind::OpenBrace)
             || self.p.at(TokenKind::CloseBrace)
             || self.p.at(TokenKind::Semicolon)
+            || self.p.at(TokenKind::Keyword(CompilerKeyword::Where))
             || self.p.at(TokenKind::Eof))
         {
             let mut type_parser = TypeParser::new(self.p).no_typeof();
             return_type = Some(type_parser.parse()?);
         }
+
+        let where_clauses = self.parse_where_clauses()?;
 
         let body: Option<&'ctx Statement<'ctx>> = if self.p.at(TokenKind::OpenBrace) {
             let open = self.p.expect(TokenKind::OpenBrace, "{")?;
@@ -431,10 +434,165 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 generics,
                 params,
                 return_type,
+                where_clauses,
                 body,
                 is_pub: is_pub.0,
                 is_extern: is_extern.0,
             },
+            source: (span, self.p.named_src()).into(),
+        });
+
+        Some(decl)
+    }
+
+    fn parse_where_clauses(&mut self) -> Option<Option<&'ctx [declarations::WhereClause<'ctx>]>> {
+        if !self.p.eat(TokenKind::Keyword(CompilerKeyword::Where)) {
+            return Some(None);
+        }
+
+        let mut clauses: SmallVec<[declarations::WhereClause<'ctx>; 4]> = SmallVec::new();
+
+        loop {
+            if matches!(
+                self.p.current().kind,
+                TokenKind::OpenBrace | TokenKind::Semicolon | TokenKind::Eof
+            ) {
+                break;
+            }
+
+            let start = self.p.current().span;
+
+            let ty = {
+                let mut type_parser = TypeParser::new(self.p).no_typeof();
+                type_parser.parse()?
+            };
+
+            let (kind, end) = if self.p.eat(TokenKind::Eq) {
+                let eq_ty = {
+                    let mut type_parser = TypeParser::new(self.p).no_typeof();
+                    type_parser.parse()?
+                };
+
+                (
+                    declarations::WhereClauseKind::Equality { ty: eq_ty },
+                    eq_ty.span,
+                )
+            } else {
+                let _ = self.p.expect(TokenKind::Colon, ":")?;
+
+                let mut bounds_buffer: SmallVec<[(Spur, miette::SourceSpan); 4]> = SmallVec::new();
+                let mut end = ty.span;
+
+                while !matches!(
+                    self.p.current().kind,
+                    TokenKind::Comma | TokenKind::OpenBrace | TokenKind::Semicolon | TokenKind::Eof
+                ) {
+                    let interface_token = self.p.expect(TokenKind::Ident, "interface name")?;
+                    let interface_slice = self.p.src[interface_token.span.offset()
+                        ..interface_token.span.offset() + interface_token.span.len()]
+                        .to_owned();
+
+                    let interface_id = self.p.get_or_intern(interface_slice);
+                    bounds_buffer.push((interface_id, interface_token.span));
+                    end = interface_token.span;
+
+                    let _ = self.p.eat(TokenKind::Plus);
+                }
+
+                let bounds = self.p.arena.alloc_slice_copy(&bounds_buffer);
+
+                (declarations::WhereClauseKind::Bound { bounds }, end)
+            };
+
+            clauses.push(declarations::WhereClause {
+                ty,
+                kind,
+                span: crate::merge_spans(start, end),
+            });
+
+            if !self.p.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+
+        Some(Some(self.p.arena.alloc_slice_copy(&clauses)))
+    }
+
+    fn parse_associated_type(&mut self, require_default: bool) -> Option<&'ctx Declaration<'ctx>> {
+        let alias_kw = self
+            .p
+            .expect(TokenKind::Keyword(CompilerKeyword::Alias), "alias")?;
+
+        let name = self.parse_decl_name()?;
+
+        if self.p.at(TokenKind::OpenBracket) {
+            self.p.report(ParserError::UnsupportedAction {
+                label: SmolStr::from("generic associated types are not supported"),
+                src: self.p.named_src(),
+                span: self.p.current().span,
+            });
+
+            return None;
+        }
+
+        let mut bounds: Option<&'ctx [(Spur, miette::SourceSpan)]> = None;
+        let mut end = name.1;
+
+        if self.p.eat(TokenKind::Colon) {
+            let mut bounds_buffer: SmallVec<[(Spur, miette::SourceSpan); 4]> = SmallVec::new();
+
+            while !matches!(
+                self.p.current().kind,
+                TokenKind::Comma
+                    | TokenKind::Eq
+                    | TokenKind::Semicolon
+                    | TokenKind::OpenBrace
+                    | TokenKind::Eof
+            ) {
+                let interface_token = self.p.expect(TokenKind::Ident, "interface name")?;
+                let interface_slice = self.p.src[interface_token.span.offset()
+                    ..interface_token.span.offset() + interface_token.span.len()]
+                    .to_owned();
+
+                let interface_id = self.p.get_or_intern(interface_slice);
+                bounds_buffer.push((interface_id, interface_token.span));
+                end = interface_token.span;
+
+                let _ = self.p.eat(TokenKind::Plus);
+            }
+
+            bounds = Some(self.p.arena.alloc_slice_copy(&bounds_buffer));
+        }
+
+        let default = if self.p.eat(TokenKind::Eq) {
+            let mut type_parser = TypeParser::new(self.p).no_typeof();
+            let ty = type_parser.parse()?;
+            end = ty.span;
+
+            Some(ty)
+        } else {
+            if require_default {
+                self.p.report(ParserError::SyntaxError {
+                    label: "associated type binding requires a type".into(),
+                    help: Some("consider using syntax: `alias Name = Type;`".into()),
+                    src: self.p.named_src(),
+                    span: name.1,
+                });
+            }
+
+            None
+        };
+
+        let _ = self.p.eat(TokenKind::Semicolon);
+
+        let span = alias_kw.merge_span(end);
+
+        let decl = self.p.arena.alloc(Declaration {
+            kind: DeclarationKind::AssociatedType(declarations::AssociatedTypeDecl {
+                name,
+                bounds,
+                default,
+            }),
             source: (span, self.p.named_src()).into(),
         });
 
@@ -1017,12 +1175,28 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
         let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
 
+        let mut aliases: SmallVec<[&'ctx Declaration<'ctx>; 8]> = SmallVec::new();
         let mut methods: SmallVec<[&'ctx Declaration<'ctx>; 8]> = SmallVec::new();
 
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
             let span_start = self.p.current().span;
             let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
             let is_extern = IsExtern(false);
+
+            if self.p.at(TokenKind::Keyword(CompilerKeyword::Alias)) {
+                if is_pub.0 {
+                    self.p.report(ParserError::UnsupportedAction {
+                        label: SmolStr::from("associated types inherit the interface visibility"),
+                        src: self.p.named_src(),
+                        span: span_start,
+                    });
+                }
+
+                let decl = self.parse_associated_type(false)?;
+                aliases.push(decl);
+
+                continue;
+            }
 
             let decl = self.parse_fn(span_start, is_pub, is_extern, AllowBare(true))?;
 
@@ -1035,6 +1209,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let span = close_brace.merge_span(start_span);
 
         let _ = self.p.eat(TokenKind::Comma);
+        let aliases = self.p.arena.alloc_slice_copy(&aliases);
         let methods = self.p.arena.alloc_slice_copy(&methods);
 
         let decl = self.p.arena.alloc(Declaration {
@@ -1043,6 +1218,7 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                 is_pub: is_pub.0,
 
                 generics,
+                aliases,
                 methods,
             },
             source: (span, self.p.named_src()).into(),
@@ -1069,9 +1245,11 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
             None
         };
 
-        let (interface, builtin_target, object_name, object_span) =
+        let (interface, interface_args, builtin_target, object_name, object_span, object_slots) =
             if let Some((shape, name, span)) = builtin_target {
-                (None, Some((shape, name, span)), name, span)
+                let empty: &'ctx [&'ctx TypeExpr<'ctx>] = &[];
+
+                (None, empty, Some((shape, name, span)), name, span, empty)
             } else {
                 let first_token = self.p.expect(TokenKind::Ident, "identifier")?;
                 let first_span = first_token.span;
@@ -1081,11 +1259,21 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
 
                 let first = (self.p.get_or_intern(first_slice), first_span);
 
+                let first_args = self.parse_optional_type_args()?;
+
                 if self.p.eat(TokenKind::Colon) {
                     if self.p.at(TokenKind::Keyword(CompilerKeyword::Builtin)) {
                         let (shape, name, span) = self.parse_builtin_implement_target(generics)?;
+                        let empty: &'ctx [&'ctx TypeExpr<'ctx>] = &[];
 
-                        (Some(first), Some((shape, name, span)), name, span)
+                        (
+                            Some(first),
+                            first_args,
+                            Some((shape, name, span)),
+                            name,
+                            span,
+                            empty,
+                        )
                     } else {
                         let object_token = self.p.expect(TokenKind::Ident, "identifier")?;
                         let object_span = object_token.span;
@@ -1093,48 +1281,52 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
                             [object_span.offset()..object_span.offset() + object_span.len()]
                             .to_owned();
 
+                        let object_slots = self.parse_optional_type_args()?;
+
                         (
                             Some(first),
+                            first_args,
                             None,
                             self.p.get_or_intern(object_slice),
                             object_span,
+                            object_slots,
                         )
                     }
                 } else {
-                    (None, None, first.0, first_span)
+                    let empty: &'ctx [&'ctx TypeExpr<'ctx>] = &[];
+
+                    (None, empty, None, first.0, first_span, first_args)
                 }
             };
 
-        let mut generic_bindings: Vec<&'ctx TypeExpr<'ctx>> = Vec::new();
+        let where_clauses = self.parse_where_clauses()?;
 
-        if self.p.eat(TokenKind::OpenBracket) {
-            while !(self.p.at(TokenKind::CloseBracket) || self.p.at(TokenKind::Eof)) {
-                let mut type_parser = TypeParser::new(self.p);
-
-                let Some(ty) = type_parser.parse() else {
-                    break;
-                };
-
-                generic_bindings.push(ty);
-
-                let _ = self.p.eat(TokenKind::Comma);
-            }
-
-            let _ = self.p.expect(TokenKind::CloseBracket, "]");
-        }
-
-        let generics_arena: &_ = self.p.arena.alloc_slice_copy(&generic_bindings);
-
-        let object = (object_name, object_span, generics_arena);
+        let object = (object_name, object_span, object_slots);
 
         let _ = self.p.expect(TokenKind::OpenBrace, "{")?;
 
+        let mut aliases: SmallVec<[&'ctx Declaration<'ctx>; 8]> = SmallVec::new();
         let mut methods: SmallVec<[&'ctx Declaration<'ctx>; 8]> = SmallVec::new();
 
         while !(self.p.at(TokenKind::CloseBrace) || self.p.at(TokenKind::Eof)) {
             let span_start = self.p.current().span;
             let is_pub = IsPub(self.p.eat(TokenKind::Keyword(CompilerKeyword::Public)));
             let is_extern = IsExtern(false);
+
+            if self.p.at(TokenKind::Keyword(CompilerKeyword::Alias)) {
+                if is_pub.0 {
+                    self.p.report(ParserError::UnsupportedAction {
+                        label: SmolStr::from("associated type bindings carry no visibility"),
+                        src: self.p.named_src(),
+                        span: span_start,
+                    });
+                }
+
+                let decl = self.parse_associated_type(true)?;
+                aliases.push(decl);
+
+                continue;
+            }
 
             let decl = self.parse_fn(span_start, is_pub, is_extern, AllowBare(false))?;
 
@@ -1147,20 +1339,49 @@ impl<'tok, 'ctx, 'pr> DeclParser<'tok, 'ctx, 'pr> {
         let span = close_brace.merge_span(start_span);
 
         let _ = self.p.eat(TokenKind::Comma);
+        let aliases = self.p.arena.alloc_slice_copy(&aliases);
         let methods = self.p.arena.alloc_slice_copy(&methods);
 
         let decl = self.p.arena.alloc(Declaration {
             kind: DeclarationKind::ImplementDecl {
                 interface,
+                interface_args,
                 builtin: builtin_target.map(|(shape, _, _)| shape),
                 object,
                 generics,
+                where_clauses,
+                aliases,
                 methods,
             },
             source: (span, self.p.named_src()).into(),
         });
 
         Some(decl)
+    }
+
+    fn parse_optional_type_args(&mut self) -> Option<&'ctx [&'ctx TypeExpr<'ctx>]> {
+        if !self.p.at(TokenKind::OpenBracket) {
+            let empty: &'ctx [&'ctx TypeExpr<'ctx>] = &[];
+
+            return Some(empty);
+        }
+
+        let _ = self.p.expect(TokenKind::OpenBracket, "[")?;
+
+        let mut buffer: SmallVec<[&'ctx TypeExpr<'ctx>; 8]> = SmallVec::new();
+
+        while !(self.p.at(TokenKind::CloseBracket) || self.p.at(TokenKind::Eof)) {
+            let mut type_parser = TypeParser::new(self.p);
+            let ty = type_parser.parse()?;
+
+            buffer.push(ty);
+
+            let _ = self.p.eat(TokenKind::Comma);
+        }
+
+        let _ = self.p.expect(TokenKind::CloseBracket, "]")?;
+
+        Some(self.p.arena.alloc_slice_copy(&buffer))
     }
 
     fn parse_builtin_implement_target(
@@ -1472,6 +1693,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::FnDecl {
+                    where_clauses: None,
                     name: _,
                     generics: None,
                     params: [],
@@ -1527,6 +1749,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::FnDecl {
+                    where_clauses: None,
                     name: _,
                     generics: None,
                     params: [],
@@ -1550,6 +1773,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::FnDecl {
+                    where_clauses: None,
                     name: _,
                     generics: None,
                     params: [],
@@ -1573,6 +1797,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::FnDecl {
+                    where_clauses: None,
                     name: _,
                     generics: None,
                     params: [],
@@ -1596,6 +1821,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::FnDecl {
+                    where_clauses: None,
                     name: _,
                     generics: None,
                     params: [],
@@ -1622,6 +1848,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::FnDecl {
+                    where_clauses: None,
                     name: _,
                     generics: None,
                     params: [
@@ -1665,6 +1892,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::FnDecl {
+                    where_clauses: None,
                     name: _,
                     generics: None,
                     params: [
@@ -1708,6 +1936,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::FnDecl {
+                    where_clauses: None,
                     name: _,
                     generics: Some([
                         declarations::GenericType {
@@ -2369,6 +2598,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::InterfaceDecl {
+                    aliases: [],
                     name: _,
                     is_pub: false,
 
@@ -2390,6 +2620,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::InterfaceDecl {
+                    aliases: [],
                     name: _,
                     is_pub: true,
 
@@ -2411,6 +2642,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::InterfaceDecl {
+                    aliases: [],
                     name: _,
                     is_pub: false,
 
@@ -2444,6 +2676,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::InterfaceDecl {
+                    aliases: [],
                     name: _,
                     is_pub: false,
 
@@ -2477,6 +2710,7 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::InterfaceDecl {
+                    aliases: [],
                     name: _,
                     is_pub: false,
 
@@ -2517,6 +2751,9 @@ mod tests {
             parser.parse_program(),
             Ok([Declaration {
                 kind: DeclarationKind::ImplementDecl {
+                    interface_args: [],
+                    where_clauses: None,
+                    aliases: [],
                     interface: _,
                     builtin: _,
                     object: _,
