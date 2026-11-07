@@ -3135,6 +3135,43 @@ mod tests {
         assert!(names.contains(&"kind()"));
     }
 
+    const ASSOCIATED_TYPE_SAMPLE: &str = "interface Source {\n    alias Item;\n\n    pub fn read(*self) Item;\n}\n\nstruct Number {\n    value: i32,\n}\n\nimplement Source : Number {\n    alias Item = i32;\n\n    fn read(*self) Item {\n        return self.value;\n    }\n}\n\nfn read_item[S: Source](source: *S) S.Item {\n    return source.read();\n}\n\nfn take_number(value: Number.Item) i32 {\n    return value;\n}\n\nfn main() {\n    let number = Number { .value = 3 };\n    let value: i32 = read_item(&number);\n    @println(\"{}\", take_number(value));\n}\n";
+
+    #[test]
+    fn generic_projection_completes_associated_types() {
+        let analysis = sample_analysis(ASSOCIATED_TYPE_SAMPLE);
+        let probe = ASSOCIATED_TYPE_SAMPLE.replacen("S.Item {", "S.        {", 1);
+        let dot = probe.find("S.        {").unwrap() + 1;
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"Item"), "{names:?}");
+    }
+
+    #[test]
+    fn concrete_projection_completes_associated_types() {
+        let analysis = sample_analysis(ASSOCIATED_TYPE_SAMPLE);
+        let probe = ASSOCIATED_TYPE_SAMPLE.replacen("Number.Item)", "Number.        )", 1);
+        let dot = probe.find("Number.        )").unwrap() + "Number".len();
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"Item"), "{names:?}");
+    }
+
+    #[test]
+    fn self_projection_completes_associated_types() {
+        let probe_sample =
+            ASSOCIATED_TYPE_SAMPLE.replacen("fn read(*self) Item", "fn read(*self) Self.Item", 1);
+        let analysis = sample_analysis(&probe_sample);
+        let probe = probe_sample.replacen("Self.Item", "Self.        ", 1);
+        let dot = probe.find("Self.        ").unwrap() + "Self".len();
+        let items = dot_complete(&probe, &analysis, dot, ResolvePaths::default());
+        let names = labels(&items);
+
+        assert!(names.contains(&"Item"), "{names:?}");
+    }
+
     #[test]
     fn imported_impl_methods_ignore_privacy() {
         let dir = import_project("implprivacy");

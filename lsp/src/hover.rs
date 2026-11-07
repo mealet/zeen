@@ -1136,6 +1136,26 @@ mod tests {
         assert!(markdown.contains("```zeen\npub x: i32\n```"), "{markdown}");
     }
 
+    const ASSOCIATED_TYPE_SAMPLE: &str = "interface Source {\n    alias Item;\n\n    pub fn read(*self) Item;\n}\n\nstruct Number {\n    value: i32,\n}\n\nimplement Source : Number {\n    alias Item = i32;\n\n    fn read(*self) Item {\n        return self.value;\n    }\n}\n\nfn read_item[S: Source](source: *S) S.Item {\n    return source.read();\n}\n\nfn main() {\n    let number = Number { .value = 3 };\n    let value: i32 = read_item(&number);\n    @println(\"{}\", value);\n}\n";
+
+    #[test]
+    fn associated_type_projection_shows_location() {
+        let markdown = hovering(ASSOCIATED_TYPE_SAMPLE, "Item {");
+
+        assert!(markdown.contains("```zeen\nItem\n```"), "{markdown}");
+        assert!(
+            markdown.contains("defined at hover-probe.zn:2"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn associated_type_declaration_shows_member() {
+        let markdown = hovering(ASSOCIATED_TYPE_SAMPLE, "Item;");
+
+        assert!(markdown.contains("```zeen\nItem\n```"), "{markdown}");
+    }
+
     const COMPTIME_SAMPLE: &str = "comptime LIMIT = 3;\n\ncomptime fn doubled(n: comptime_int) comptime_int {\n    return n * 2;\n}\n\nfn main() {\n    let value = comptime {\n        let local = doubled(LIMIT);\n        local\n    };\n\n    @println(\"{}\", value);\n}\n";
 
     #[test]
