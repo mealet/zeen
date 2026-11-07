@@ -3848,7 +3848,10 @@ impl<'ctx> MirLowering<'ctx> {
             }
 
             HirExprKind::SliceAccess { object, index } => {
-                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                if let Some(mut op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned()
+                {
+                    self.resolve_generic_interface_impl(&mut op_res, object, fb);
+
                     let (block, index_operand) = self.lower_expr_to_operand(fb, index, block);
                     let index_ty = self.expr_type(fb, index);
                     let result_ty = self.expr_type(fb, expr);
@@ -5987,7 +5990,10 @@ impl<'ctx> MirLowering<'ctx> {
                     return (block, Place::from_local(temp));
                 }
 
-                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                if let Some(mut op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned()
+                {
+                    self.resolve_generic_interface_impl(&mut op_res, object, fb);
+
                     let result_ty = self.expr_type(fb, expr);
                     let (call_ty, unwrap) = self.operator_place_target(fb, &op_res, result_ty);
 
@@ -6065,7 +6071,10 @@ impl<'ctx> MirLowering<'ctx> {
                 expr: inner,
                 op: UnaryOp::Deref,
             } => {
-                if let Some(op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned() {
+                if let Some(mut op_res) = self.typecheck.operator_resolutions.get(&expr.id).cloned()
+                {
+                    self.resolve_generic_interface_impl(&mut op_res, inner, fb);
+
                     let result_ty = self.expr_type(fb, expr);
                     let (call_ty, unwrap) = self.operator_place_target(fb, &op_res, result_ty);
 
@@ -8931,6 +8940,11 @@ impl<'ctx> MirLowering<'ctx> {
         fb: &FnBuilder,
     ) -> bool {
         let recv_ty = self.expr_type(fb, receiver_expr);
+        let recv_ty = match self.typecheck.interner.get(recv_ty).clone() {
+            Type::Pointer { inner, .. } | Type::ManyPointer { inner, .. } => inner,
+            _ => recv_ty,
+        };
+
         let Type::Struct {
             def_id,
             generic_args,
