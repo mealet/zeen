@@ -691,6 +691,7 @@ fn member_completion_kind(member: &Member) -> CompletionItemKind {
         MemberKind::Method => CompletionItemKind::METHOD,
         MemberKind::Field => CompletionItemKind::FIELD,
         MemberKind::Variant => CompletionItemKind::ENUM_MEMBER,
+        MemberKind::AssociatedType => CompletionItemKind::TYPE_PARAMETER,
     }
 }
 
@@ -709,9 +710,11 @@ fn keep_local_member(member: &Member, static_context: Option<bool>) -> bool {
         (Some(true), MemberKind::Method) => member.is_static,
         (Some(true), MemberKind::Variant) => true,
         (Some(true), MemberKind::Field) => false,
+        (Some(true), MemberKind::AssociatedType) => true,
         (Some(false), MemberKind::Method) => !member.is_static,
         (Some(false), MemberKind::Field) => true,
         (Some(false), MemberKind::Variant) => false,
+        (Some(false), MemberKind::AssociatedType) => false,
         (None, _) => true,
     }
 }
@@ -769,6 +772,32 @@ pub fn dot_complete(
     let mut static_context: Option<bool> = None;
     let mut type_name: Option<String> = None;
     let mut raw_type: Option<String> = None;
+
+    if receiver_name == "Self"
+        && start < dot_offset
+        && let Some(def) = analysis.at(start).and_then(|receiver| receiver.def)
+    {
+        let def = analysis
+            .interface_self_owners
+            .get(&def)
+            .copied()
+            .unwrap_or(def);
+
+        let mut items = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        push_owner_members(
+            analysis,
+            def,
+            Some(true),
+            dot_offset,
+            &filter,
+            &mut items,
+            &mut seen,
+        );
+
+        return items;
+    }
 
     if crate::builtin::is_scalar_type_name(receiver_name) {
         static_context = Some(true);
@@ -980,92 +1009,7 @@ fn push_type_members(
     seen: &mut std::collections::HashSet<String>,
 ) {
     if let Some(def) = find_type_def(analysis, text, lookup) {
-        let mut owners = vec![def];
-
-        if let Some(bounds) = analysis.generic_bounds.get(&def) {
-            owners.extend(bounds.iter().copied());
-        }
-
-        let allow_private = owners
-            .iter()
-            .any(|owner| scope_covers(analysis, *owner, cursor));
-        let mut local: Vec<&Member> = Vec::new();
-
-        for owner in &owners {
-            if let Some(members) = analysis.members.get(owner) {
-                local.extend(members.iter().filter(|member| {
-                    (member.is_pub || member.is_interface || allow_private)
-                        && keep_local_member(member, static_context)
-                        && member.name.starts_with(filter)
-                }));
-            }
-        }
-
-        local.sort_by(|a, b| a.name.cmp(&b.name));
-
-        for member in local {
-            if seen.insert(member.name.clone()) {
-                let rank = member_rank(
-                    member.kind == MemberKind::Variant
-                        || (member.kind == MemberKind::Method && member.is_static),
-                    static_context,
-                );
-                items.push(CompletionItem {
-                    label: member_label(&member.name, member.arity),
-                    kind: Some(member_completion_kind(member)),
-                    detail: member.signature.clone(),
-                    filter_text: Some(member.name.clone()),
-                    insert_text: Some(member.name.clone()),
-                    sort_text: Some(format!("{rank}_{}", member.name)),
-                    ..Default::default()
-                });
-            }
-        }
-
-        for (iface_def, object_def) in &analysis.implements {
-            if *object_def != def {
-                continue;
-            }
-            let Some(iface_name) = analysis.interface_def_name.get(iface_def) else {
-                continue;
-            };
-            let Some(iface_methods) = analysis.interfaces.get(iface_name) else {
-                continue;
-            };
-            let same_file = analysis
-                .def_spans
-                .get(iface_def)
-                .is_some_and(|(_, _, file)| file.is_none());
-            for member in iface_methods {
-                if seen.contains(&member.name) {
-                    continue;
-                }
-                if !member.name.starts_with(filter) {
-                    continue;
-                }
-                if !member.is_pub && !allow_private && !same_file {
-                    continue;
-                }
-                if !keep_local_member(member, static_context) {
-                    continue;
-                }
-                seen.insert(member.name.clone());
-                let rank = member_rank(
-                    member.kind == MemberKind::Variant
-                        || (member.kind == MemberKind::Method && member.is_static),
-                    static_context,
-                );
-                items.push(CompletionItem {
-                    label: member_label(&member.name, member.arity),
-                    kind: Some(member_completion_kind(member)),
-                    detail: member.signature.clone(),
-                    filter_text: Some(member.name.clone()),
-                    insert_text: Some(member.name.clone()),
-                    sort_text: Some(format!("{rank}_{}", member.name)),
-                    ..Default::default()
-                });
-            }
-        }
+        push_owner_members(analysis, def, static_context, cursor, filter, items, seen);
     }
 
     if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
@@ -1102,6 +1046,102 @@ fn push_type_members(
             }
         }
     }
+}
+
+fn push_owner_members(
+    analysis: &Analysis,
+    def: zeen_resolve::DefId,
+    static_context: Option<bool>,
+    cursor: usize,
+    filter: &str,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let mut owners = vec![def];
+
+    if let Some(bounds) = analysis.generic_bounds.get(&def) {
+        owners.extend(bounds.iter().copied());
+    }
+
+    let allow_private = owners
+        .iter()
+        .any(|owner| scope_covers(analysis, *owner, cursor));
+    let mut local: Vec<&Member> = Vec::new();
+
+    for owner in &owners {
+        if let Some(members) = analysis.members.get(owner) {
+            local.extend(members.iter().filter(|member| {
+                (member.is_pub || member.is_interface || allow_private)
+                    && keep_local_member(member, static_context)
+                    && member.name.starts_with(filter)
+            }));
+        }
+    }
+
+    local.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for member in local {
+        push_member_item(member, static_context, items, seen);
+    }
+
+    for (iface_def, object_def) in &analysis.implements {
+        if *object_def != def {
+            continue;
+        }
+        let Some(iface_name) = analysis.interface_def_name.get(iface_def) else {
+            continue;
+        };
+        let Some(iface_methods) = analysis.interfaces.get(iface_name) else {
+            continue;
+        };
+        let same_file = analysis
+            .def_spans
+            .get(iface_def)
+            .is_some_and(|(_, _, file)| file.is_none());
+        for member in iface_methods {
+            if seen.contains(&member.name) {
+                continue;
+            }
+            if !member.name.starts_with(filter) {
+                continue;
+            }
+            if !member.is_pub && !allow_private && !same_file {
+                continue;
+            }
+            if !keep_local_member(member, static_context) {
+                continue;
+            }
+            push_member_item(member, static_context, items, seen);
+        }
+    }
+}
+
+fn push_member_item(
+    member: &Member,
+    static_context: Option<bool>,
+    items: &mut Vec<CompletionItem>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if !seen.insert(member.name.clone()) {
+        return;
+    }
+
+    let rank = member_rank(
+        member.kind == MemberKind::Variant
+            || member.kind == MemberKind::AssociatedType
+            || (member.kind == MemberKind::Method && member.is_static),
+        static_context,
+    );
+
+    items.push(CompletionItem {
+        label: member_label(&member.name, member.arity),
+        kind: Some(member_completion_kind(member)),
+        detail: member.signature.clone(),
+        filter_text: Some(member.name.clone()),
+        insert_text: Some(member.name.clone()),
+        sort_text: Some(format!("{rank}_{}", member.name)),
+        ..Default::default()
+    });
 }
 
 fn push_builtin_target_members(

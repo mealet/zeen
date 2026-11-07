@@ -125,6 +125,7 @@ pub struct Analysis {
     pub implements: Vec<(DefId, DefId)>,
     pub interfaces: HashMap<String, Vec<Member>>,
     pub interface_def_name: HashMap<DefId, String>,
+    pub interface_self_owners: HashMap<DefId, DefId>,
     pub generic_bounds: HashMap<DefId, Vec<DefId>>,
     pub builtin_targets: Vec<BuiltinTarget>,
 }
@@ -168,6 +169,7 @@ pub enum MemberKind {
     Method,
     Field,
     Variant,
+    AssociatedType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,6 +272,13 @@ impl Analysis {
             block_ends: Vec::new(),
             local_scopes: HashMap::new(),
         };
+
+        for (interface, placeholder) in &resolution.interface_self_placeholders {
+            walker
+                .analysis
+                .interface_self_owners
+                .insert(*placeholder, *interface);
+        }
 
         for decl in &module.decls {
             walker.walk_cross_file(decl);
@@ -1230,7 +1239,32 @@ impl<'ctx> Walker<'ctx> {
         })
     }
 
-    fn collect_interface(&mut self, name: String, methods: &[Rc<HirDecl>], source: &str) {
+    fn collect_interface(
+        &mut self,
+        name: String,
+        aliases: &[Rc<zeen_hir::HirAssociatedType>],
+        methods: &[Rc<HirDecl>],
+        source: &str,
+    ) {
+        for alias in aliases {
+            let member = Member {
+                name: self.interner.resolve(&alias.name.0).to_string(),
+                kind: MemberKind::AssociatedType,
+                def: alias.def_id,
+                signature: None,
+                is_static: true,
+                is_pub: true,
+                is_interface: true,
+                arity: None,
+            };
+
+            self.analysis
+                .interfaces
+                .entry(name.clone())
+                .or_default()
+                .push(member);
+        }
+
         for method in methods {
             let HirDeclKind::Fn(func) = &method.kind else {
                 continue;
@@ -1305,7 +1339,11 @@ impl<'ctx> Walker<'ctx> {
                 self.analysis
                     .interface_def_name
                     .insert(decl.def_id, name.clone());
-                self.collect_interface(name, &interface.methods, source);
+                self.collect_interface(name, &interface.aliases, &interface.methods, source);
+
+                for alias in &interface.aliases {
+                    self.collect_associated_member(decl.def_id, alias);
+                }
 
                 for method in &interface.methods {
                     self.collect_method(decl.def_id, method, true);
@@ -1422,12 +1460,17 @@ impl<'ctx> Walker<'ctx> {
                     self.walk_generic(generic);
                 }
 
+                for alias in &interface.aliases {
+                    self.walk_associated_type(alias);
+                    self.collect_associated_member(decl.def_id, alias);
+                }
+
                 let name = self.interner.resolve(&interface.name.0).to_string();
                 let text = self.text;
                 self.analysis
                     .interface_def_name
                     .insert(decl.def_id, name.clone());
-                self.collect_interface(name, &interface.methods, text);
+                self.collect_interface(name, &interface.aliases, &interface.methods, text);
 
                 for method in &interface.methods {
                     self.collect_method(decl.def_id, method, true);
@@ -1448,6 +1491,16 @@ impl<'ctx> Walker<'ctx> {
                 for ty in &implement.object_generic_types {
                     self.walk_type(ty);
                 }
+
+                for ty in &implement.interface_args {
+                    self.walk_type(ty);
+                }
+
+                for alias in &implement.aliases {
+                    self.walk_associated_type(alias);
+                }
+
+                self.walk_where_clauses(&implement.where_clauses);
 
                 for method in &implement.methods {
                     if let Some(owner) = implement.object {
@@ -1675,6 +1728,8 @@ impl<'ctx> Walker<'ctx> {
             self.walk_type(ret);
         }
 
+        self.walk_where_clauses(&func.where_clauses);
+
         if let Some(body) = &func.body {
             self.walk_stmt(body);
         }
@@ -1693,6 +1748,138 @@ impl<'ctx> Walker<'ctx> {
                 .generic_bounds
                 .insert(generic.def_id, generic.bounds.clone());
         }
+    }
+
+    fn walk_associated_type(&mut self, alias: &zeen_hir::HirAssociatedType) {
+        self.emit_target(
+            alias.name.1.offset(),
+            alias.name.1.len(),
+            Role::Type,
+            alias.def_id,
+            None,
+        );
+
+        if let Some(default) = &alias.default {
+            self.walk_type(default);
+        }
+    }
+
+    fn collect_associated_member(&mut self, owner: DefId, alias: &zeen_hir::HirAssociatedType) {
+        let name = self.interner.resolve(&alias.name.0).to_string();
+
+        self.analysis.member_owner.insert(alias.def_id, owner);
+
+        self.analysis
+            .members
+            .entry(owner)
+            .or_default()
+            .push(Member {
+                name,
+                kind: MemberKind::AssociatedType,
+                def: alias.def_id,
+                signature: None,
+                is_static: true,
+                is_pub: true,
+                is_interface: true,
+                arity: None,
+            });
+    }
+
+    fn walk_where_clauses(&mut self, clauses: &[zeen_hir::HirWhereClause]) {
+        for clause in clauses {
+            self.walk_type(&clause.ty);
+
+            if let zeen_hir::HirWhereClauseKind::Equality { ty } = &clause.kind {
+                self.walk_type(ty);
+            }
+        }
+    }
+
+    fn interface_assoc_def(&self, interface: DefId, name: Spur) -> Option<DefId> {
+        self.resolution
+            .interface_assoc_types
+            .get(&interface)?
+            .iter()
+            .copied()
+            .find(|def| {
+                self.resolution
+                    .defs
+                    .get(def)
+                    .is_some_and(|info| info.name == name)
+            })
+    }
+
+    fn object_interfaces(&self, object: DefId) -> Vec<DefId> {
+        let mut interfaces: Vec<DefId> = self
+            .resolution
+            .impls
+            .keys()
+            .filter(|(candidate, _)| *candidate == object)
+            .map(|(_, interface)| *interface)
+            .collect();
+
+        interfaces.sort_unstable();
+        interfaces.dedup();
+
+        interfaces
+    }
+
+    fn projection_interfaces(&self, base: &HirTypeExpr) -> Vec<DefId> {
+        let def = match &base.kind {
+            HirTypeKind::Named { def_id, .. } => *def_id,
+            HirTypeKind::SelfType(def) | HirTypeKind::SelfAlias(def) => *def,
+            _ => return Vec::new(),
+        };
+
+        match self.resolution.defs.get(&def).map(|info| info.kind.clone()) {
+            Some(DefKind::Interface) => vec![def],
+
+            Some(DefKind::GenericParam) => self
+                .analysis
+                .generic_bounds
+                .get(&def)
+                .cloned()
+                .unwrap_or_default(),
+
+            Some(DefKind::InterfaceSelfPlaceholder) => self
+                .resolution
+                .interface_self_placeholders
+                .iter()
+                .find(|(_, placeholder)| **placeholder == def)
+                .map(|(interface, _)| vec![*interface])
+                .unwrap_or_default(),
+
+            _ => self.object_interfaces(def),
+        }
+    }
+
+    fn projection_def(&self, base: &HirTypeExpr, name: Spur) -> Option<DefId> {
+        for interface in self.projection_interfaces(base) {
+            if let Some(def) = self.interface_assoc_def(interface, name) {
+                return Some(def);
+            }
+        }
+
+        let mut matches = self
+            .resolution
+            .interface_assoc_types
+            .values()
+            .flatten()
+            .copied()
+            .filter(|def| {
+                self.resolution
+                    .defs
+                    .get(def)
+                    .is_some_and(|info| info.name == name)
+            });
+
+        let first = matches.next()?;
+
+        if matches.next().is_some() {
+            return None;
+        }
+
+        Some(first)
     }
 
     fn walk_stmt(&mut self, stmt: &HirStmt) {
@@ -2106,8 +2293,12 @@ impl<'ctx> Walker<'ctx> {
                 );
             }
 
-            HirTypeKind::Associated { base, .. } => {
+            HirTypeKind::Associated { base, name } => {
                 self.walk_type(base);
+
+                if let Some(def) = self.projection_def(base, name.0) {
+                    self.emit_ref(name.1.offset(), name.1.len(), def, Some(ty.id));
+                }
             }
 
             HirTypeKind::Named {
@@ -2491,10 +2682,19 @@ fn walk_syntax_decl(
             }
         }
 
+        DeclarationKind::AssociatedType(alias) => {
+            push_syntax(
+                occurrences,
+                alias.name.1.offset(),
+                alias.name.1.len(),
+                Role::Type,
+                None,
+            );
+        }
+
         DeclarationKind::Use { .. }
         | DeclarationKind::ExternLink { .. }
         | DeclarationKind::ExternInclude { .. }
-        | DeclarationKind::AssociatedType(_)
         | DeclarationKind::ConditionalBlock(_) => {}
     }
 }
