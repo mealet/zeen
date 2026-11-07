@@ -2100,6 +2100,17 @@ impl<'ctx> MirLowering<'ctx> {
         }
     }
 
+    fn substitute_call_bindings(
+        &mut self,
+        fb: &FnBuilder,
+        bindings: HashMap<DefId, TypeId>,
+    ) -> HashMap<DefId, TypeId> {
+        bindings
+            .into_iter()
+            .map(|(def, ty)| (def, self.substitute_fn_type(fb, ty)))
+            .collect()
+    }
+
     fn substitute_generic_args(&mut self, fb: &FnBuilder, args: &[TypeId]) -> Vec<TypeId> {
         args.iter()
             .map(|&t| self.substitute_fn_type(fb, t))
@@ -4424,15 +4435,17 @@ impl<'ctx> MirLowering<'ctx> {
 
                 let fn_def = resolution.fn_def;
                 let resolution_owner = resolution.owner;
+                let raw_bindings = resolution.bindings.clone();
+                let resolution_interface_args = resolution.interface_args.clone();
                 let raw_args = resolution.generic_args.clone();
+                let resolution_bindings =
+                    raw_bindings.map(|bindings| self.substitute_call_bindings(fb, bindings));
                 let generic_args = self.substitute_generic_args(fb, &raw_args);
 
                 let mut dispatch_owner: Option<DefId> = None;
 
-                let (fn_def, generic_args) = if self
-                    .typecheck
-                    .interface_method_owners
-                    .contains_key(&fn_def)
+                let (fn_def, generic_args) = if resolution_interface_args.is_none()
+                    && self.typecheck.interface_method_owners.contains_key(&fn_def)
                 {
                     match &callee.kind {
                         HirExprKind::FieldAccess { object, .. }
@@ -4558,10 +4571,16 @@ impl<'ctx> MirLowering<'ctx> {
                     Type::Fn { params, .. } => params.clone(),
                     _ => Vec::new(),
                 };
-                let substituted_params: Vec<TypeId> = declared_params
-                    .iter()
-                    .map(|&t| self.substitute_call_param_type(fb, t, fn_def, owner))
-                    .collect();
+                let substituted_params: Vec<TypeId> = match &resolution_bindings {
+                    Some(bindings) => declared_params
+                        .iter()
+                        .map(|&t| self.substitute(t, bindings))
+                        .collect(),
+                    None => declared_params
+                        .iter()
+                        .map(|&t| self.substitute_call_param_type(fb, t, fn_def, owner))
+                        .collect(),
+                };
                 let mut fat_args: Vec<TypeId> = Vec::new();
                 for (offset, arg) in args.iter().enumerate() {
                     let param_ty = substituted_params
@@ -4576,8 +4595,14 @@ impl<'ctx> MirLowering<'ctx> {
                     }
                 }
 
-                let call_target =
-                    self.resolve_call_target(fn_def, generic_args, &hir_fn, &fat_args, owner);
+                let call_target = self.resolve_call_target(
+                    fn_def,
+                    generic_args,
+                    &hir_fn,
+                    &fat_args,
+                    owner,
+                    resolution_bindings,
+                );
 
                 let mut arg_operands = Vec::with_capacity(args.len() + 1);
 
@@ -10318,6 +10343,7 @@ impl<'ctx> MirLowering<'ctx> {
         bindings_override: Option<HashMap<DefId, TypeId>>,
     ) -> MirFunction {
         let generic_defs: Vec<DefId> = hir_fn.generics.iter().map(|g| g.def_id).collect();
+        let has_override = bindings_override.is_some();
         let bindings: HashMap<DefId, TypeId> = match bindings_override {
             Some(override_bindings) => override_bindings,
             _ if !generic_defs.is_empty() => {
@@ -10354,22 +10380,26 @@ impl<'ctx> MirLowering<'ctx> {
             _ => HashMap::default(),
         };
 
-        let bindings = match owner_struct.and_then(|owner| {
-            self.typecheck
-                .default_method_bindings
-                .get(&(def_id, owner))
-                .cloned()
-        }) {
-            Some(default_bindings) => {
-                let mut bindings = bindings;
-                for (def, ty) in default_bindings {
-                    let ty = self.substitute(ty, &bindings);
+        let bindings = if has_override {
+            bindings
+        } else {
+            match owner_struct.and_then(|owner| {
+                self.typecheck
+                    .default_method_bindings
+                    .get(&(def_id, owner))
+                    .cloned()
+            }) {
+                Some(default_bindings) => {
+                    let mut bindings = bindings;
+                    for (def, ty) in default_bindings {
+                        let ty = self.substitute(ty, &bindings);
 
-                    bindings.insert(def, ty);
+                        bindings.insert(def, ty);
+                    }
+                    bindings
                 }
-                bindings
+                None => bindings,
             }
-            None => bindings,
         };
 
         let fn_ty = self
@@ -10754,12 +10784,19 @@ impl<'ctx> MirLowering<'ctx> {
         hir_fn: &Rc<HirFn>,
         fat_args: &[TypeId],
         owner: Option<DefId>,
+        bindings_override: Option<HashMap<DefId, TypeId>>,
     ) -> CallTarget {
         if hir_fn.is_extern && hir_fn.body.is_none() {
             let idx = self.register_extern_fn(fn_def, hir_fn);
             CallTarget::Extern(idx)
         } else {
-            let mir_id = self.monomorphize_fn(fn_def, generic_args, owner, fat_args);
+            let mir_id = self.monomorphize_fn_with_bindings(
+                fn_def,
+                generic_args,
+                owner,
+                fat_args,
+                bindings_override,
+            );
             CallTarget::Direct(mir_id)
         }
     }

@@ -256,6 +256,8 @@ pub struct CallResolution {
     pub fn_def: DefId,
     pub generic_args: Vec<TypeId>,
     pub owner: Option<DefId>,
+    pub interface_args: Option<Vec<TypeId>>,
+    pub bindings: Option<HashMap<DefId, TypeId>>,
 }
 
 #[derive(Debug, Clone)]

@@ -157,6 +157,8 @@ struct MethodSignatureEntry {
     span: SourceSpan,
 }
 
+type CandidateRank = (u8, bool, bool, bool, usize, DefId, Option<ImplEntry>);
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum MethodOwnerKey {
     Def(DefId),
@@ -5486,6 +5488,8 @@ impl<'res> TypeChecker<'res> {
                 fn_def: def_id,
                 generic_args: resolved_generic_args,
                 owner: None,
+                interface_args: None,
+                bindings: None,
             },
         );
 
@@ -5690,6 +5694,8 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def,
                 generic_args: resolved_generic_args,
                 owner: None,
+                interface_args: None,
+                bindings: None,
             },
         );
 
@@ -5814,6 +5820,8 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def,
                 generic_args: resolved_generic_args,
                 owner: None,
+                interface_args: None,
+                bindings: None,
             },
         );
 
@@ -5909,6 +5917,8 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def,
                 generic_args: resolved_generic_args,
                 owner: None,
+                interface_args: None,
+                bindings: None,
             },
         );
 
@@ -5972,6 +5982,8 @@ impl<'res> TypeChecker<'res> {
                             fn_def: method_def,
                             generic_args: resolved_generic_args,
                             owner: Some(zeen_resolve::builtin_def_id(builtin_ty)),
+                            interface_args: None,
+                            bindings: None,
                         },
                     );
                     let ret = self.substitute_generics(sig_ret, &bindings);
@@ -6261,17 +6273,51 @@ impl<'res> TypeChecker<'res> {
             return None;
         }
 
-        let method_def_id = {
+        let (method_def_id, selected_entry) = {
             if let Some(method) = preselected_method {
-                method
+                (method, self.method_impl_entry(struct_def, method))
             } else {
-                if !self.struct_methods.contains_key(&struct_def) {
-                    return None;
-                }
+                let candidates = self
+                    .struct_methods
+                    .get(&struct_def)
+                    .and_then(|methods| methods.get(&field_name))
+                    .cloned();
 
-                let Some(method_def_id) =
-                    self.select_method_candidate(struct_def, field_name, &struct_generic_args)
-                else {
+                let candidates = candidates?;
+
+                let needs_selection = candidates.len() > 1
+                    || candidates.iter().any(|&method| {
+                        self.method_iface_def(method)
+                            .and_then(|iface_def| {
+                                self.result.impl_registry.get(&(struct_def, iface_def))
+                            })
+                            .is_some_and(|entries| {
+                                entries
+                                    .iter()
+                                    .filter(|entry| entry.methods.contains(&method))
+                                    .count()
+                                    > 1
+                            })
+                    });
+
+                let picked = if needs_selection {
+                    self.pick_instance_candidate(
+                        struct_def,
+                        &candidates,
+                        &struct_generic_args,
+                        args,
+                        explicit_generic_args,
+                        expected,
+                        &source,
+                    )
+                } else {
+                    candidates.first().and_then(|&method| {
+                        self.method_candidate_rank(struct_def, method, &struct_generic_args)
+                            .map(|_| (method, self.method_impl_entry(struct_def, method)))
+                    })
+                };
+
+                let Some(picked) = picked else {
                     let field = self.interner.borrow().resolve(&field_name).into();
                     self.report(TypeError::UnknownField {
                         struct_name: self.display_type(obj_ty).into(),
@@ -6282,7 +6328,7 @@ impl<'res> TypeChecker<'res> {
                     return Some(self.result.interner.error());
                 };
 
-                method_def_id
+                picked
             }
         };
         let (self_mode, raw_params, raw_ret, sig_generics) = {
@@ -6360,20 +6406,14 @@ impl<'res> TypeChecker<'res> {
             _ => {}
         }
 
-        let type_generics = self.type_member_generics(struct_def);
-        let mut bindings: HashMap<DefId, TypeId> = type_generics
-            .iter()
-            .copied()
-            .zip(struct_generic_args.iter().copied())
-            .collect();
+        let iface_def = self.method_iface_def(method_def_id);
 
-        if let Some(entry) = self.method_impl_entry(struct_def, method_def_id) {
-            for (imp_g, struct_g) in &entry.generic_bindings {
-                if let Some(&concrete) = bindings.get(struct_g) {
-                    bindings.insert(*imp_g, concrete);
-                }
-            }
-        }
+        let mut bindings = self.impl_method_bindings(
+            struct_def,
+            &struct_generic_args,
+            selected_entry.as_ref(),
+            iface_def,
+        );
 
         for (g, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
             let ty = self.lower_hir_type(explicit);
@@ -6390,6 +6430,10 @@ impl<'res> TypeChecker<'res> {
             self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
         }
 
+        if let Some(expected) = expected {
+            self.seed_inference_bindings(sig_ret, expected, &mut bindings);
+        }
+
         for g in &sig_generics {
             if !bindings.contains_key(g) {
                 let interner = self.interner.borrow();
@@ -6403,6 +6447,24 @@ impl<'res> TypeChecker<'res> {
                 });
 
                 bindings.insert(*g, self.result.interner.error());
+            }
+        }
+
+        if let Some(entry) = &selected_entry {
+            for g in &entry.generics {
+                if !bindings.contains_key(g) {
+                    let interner = self.interner.borrow();
+                    let generic_name = interner.resolve(&self.resolution.defs[g].name).into();
+                    drop(interner);
+
+                    self.report(TypeError::CannotInferGeneric {
+                        generic_name,
+                        src: source.src(),
+                        span: source.span,
+                    });
+
+                    bindings.insert(*g, self.result.interner.error());
+                }
             }
         }
 
@@ -6441,14 +6503,73 @@ impl<'res> TypeChecker<'res> {
 
         self.check_impl_entry_bounds(struct_def, method_def_id, &bindings, &source);
 
-        let mut monomorphized_args: Vec<TypeId> = struct_generic_args;
+        let interface_args = iface_def.map(|iface_def| {
+            let iface_generics = self
+                .interface_generics
+                .get(&iface_def)
+                .cloned()
+                .unwrap_or_default();
+
+            iface_generics
+                .iter()
+                .map(|g| {
+                    let ty = bindings
+                        .get(g)
+                        .copied()
+                        .unwrap_or_else(|| self.result.interner.intern(Type::GenericParam(*g)));
+
+                    self.substitute_generics(ty, &bindings)
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let mut monomorphized_args: Vec<TypeId> = struct_generic_args.clone();
         monomorphized_args.extend(resolved_generic_args);
 
-        let owner = self
-            .result
-            .interface_method_owners
-            .contains_key(&method_def_id)
-            .then_some(struct_def);
+        let call_bindings = if iface_def.is_some() {
+            let mut call_bindings = bindings.clone();
+
+            if let Some(iface_def) = iface_def
+                && let Some(&placeholder) =
+                    self.resolution.interface_self_placeholders.get(&iface_def)
+            {
+                let self_ty = self.method_self_type(struct_def, &struct_generic_args);
+                call_bindings.insert(placeholder, self_ty);
+            }
+
+            for _ in 0..2 {
+                let snapshot = call_bindings.clone();
+                let current: Vec<(DefId, TypeId)> = call_bindings
+                    .iter()
+                    .map(|(&key, &value)| (key, value))
+                    .collect();
+
+                for (key, value) in current {
+                    let resolved = self.substitute_generics(value, &snapshot);
+                    call_bindings.insert(key, resolved);
+                }
+            }
+
+            if let Some(entry) = &selected_entry {
+                for g in &entry.generics {
+                    let value = call_bindings
+                        .get(g)
+                        .copied()
+                        .unwrap_or_else(|| self.result.interner.error());
+                    monomorphized_args.push(value);
+                }
+            }
+
+            if let Some(interface_args) = &interface_args {
+                monomorphized_args.extend(interface_args.iter().copied());
+            }
+
+            Some(call_bindings)
+        } else {
+            None
+        };
+
+        let owner = iface_def.map(|_| struct_def);
 
         self.result.call_resolutions.insert(
             call_id,
@@ -6456,6 +6577,8 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def_id,
                 generic_args: monomorphized_args,
                 owner,
+                interface_args,
+                bindings: call_bindings,
             },
         );
 
@@ -7371,6 +7494,8 @@ impl<'res> TypeChecker<'res> {
                 fn_def: method_def_id,
                 generic_args: monomorphized_args,
                 owner,
+                interface_args: None,
+                bindings: None,
             },
         );
 
@@ -9214,6 +9339,102 @@ impl<'res> TypeChecker<'res> {
             .cloned()
     }
 
+    fn method_iface_def(&self, method: DefId) -> Option<DefId> {
+        self.method_owning_interface
+            .get(&method)
+            .or_else(|| self.result.interface_method_owners.get(&method))
+            .copied()
+    }
+
+    fn impl_method_bindings(
+        &self,
+        struct_def: DefId,
+        struct_args: &[TypeId],
+        entry: Option<&ImplEntry>,
+        iface_def: Option<DefId>,
+    ) -> HashMap<DefId, TypeId> {
+        let type_generics = self.type_member_generics(struct_def);
+        let mut bindings: HashMap<DefId, TypeId> = type_generics
+            .iter()
+            .copied()
+            .zip(struct_args.iter().copied())
+            .collect();
+
+        let Some(entry) = entry else {
+            return bindings;
+        };
+
+        if entry.is_specialized && entry.object_args.as_slice() == struct_args {
+            for (generic, arg) in type_generics.iter().zip(entry.object_args.iter()) {
+                bindings.insert(*generic, *arg);
+            }
+        }
+
+        for (imp_g, struct_g) in &entry.generic_bindings {
+            if let Some(&concrete) = bindings.get(struct_g) {
+                bindings.insert(*imp_g, concrete);
+            }
+        }
+
+        if let Some(iface_def) = iface_def {
+            let iface_generics = self
+                .interface_generics
+                .get(&iface_def)
+                .cloned()
+                .unwrap_or_default();
+
+            for (iface_g, iface_arg) in iface_generics.iter().zip(entry.interface_args.iter()) {
+                let resolved = self.resolve_binding(*iface_arg, &bindings);
+                bindings.insert(*iface_g, resolved);
+            }
+        }
+
+        bindings
+    }
+
+    fn resolve_binding(&self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> TypeId {
+        let mut current = ty;
+        let mut seen: HashSet<DefId> = HashSet::default();
+
+        while let Type::GenericParam(generic) = self.result.interner.get(current) {
+            if !seen.insert(*generic) {
+                break;
+            }
+
+            match bindings.get(generic).copied() {
+                Some(next) if next != current => current = next,
+                _ => break,
+            }
+        }
+
+        current
+    }
+
+    fn method_entries_for(&self, struct_def: DefId, method: DefId) -> Vec<Option<ImplEntry>> {
+        let Some(iface_def) = self.method_iface_def(method) else {
+            return vec![self.method_impl_entry(struct_def, method)];
+        };
+
+        let matched: Vec<ImplEntry> = self
+            .result
+            .impl_registry
+            .get(&(struct_def, iface_def))
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|entry| entry.methods.contains(&method))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if matched.is_empty() {
+            vec![self.method_impl_entry(struct_def, method)]
+        } else {
+            matched.into_iter().map(Some).collect()
+        }
+    }
+
     fn match_builtin_shape(
         &self,
         shape: &BuiltinShape,
@@ -9363,36 +9584,24 @@ impl<'res> TypeChecker<'res> {
         if bounds_hold { 1 } else { 4 }
     }
 
-    fn select_method_candidate(
-        &self,
-        object: DefId,
-        name: Spur,
-        struct_args: &[TypeId],
-    ) -> Option<DefId> {
-        let candidates = self.struct_methods.get(&object)?.get(&name)?;
-
-        let mut best: Option<(u8, DefId)> = None;
-
-        for &candidate in candidates {
-            let Some(rank) = self.method_candidate_rank(object, candidate, struct_args) else {
-                continue;
-            };
-
-            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
-                best = Some((rank, candidate));
-            }
-        }
-
-        best.map(|(_, method)| method)
-    }
-
     fn method_candidate_rank(
         &self,
         object: DefId,
         method: DefId,
         struct_args: &[TypeId],
     ) -> Option<u8> {
-        let Some(entry) = self.method_impl_entry(object, method) else {
+        let entry = self.method_impl_entry(object, method);
+
+        self.method_entry_rank(object, entry.as_ref(), struct_args)
+    }
+
+    fn method_entry_rank(
+        &self,
+        object: DefId,
+        entry: Option<&ImplEntry>,
+        struct_args: &[TypeId],
+    ) -> Option<u8> {
+        let Some(entry) = entry else {
             return Some(3);
         };
 
@@ -9435,6 +9644,123 @@ impl<'res> TypeChecker<'res> {
         });
 
         Some(if bounds_hold { 1 } else { 4 })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pick_instance_candidate(
+        &mut self,
+        struct_def: DefId,
+        candidates: &[DefId],
+        struct_args: &[TypeId],
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        expected: Option<TypeId>,
+        source: &Source,
+    ) -> Option<(DefId, Option<ImplEntry>)> {
+        let mut pairs: Vec<(DefId, Option<DefId>, Option<ImplEntry>)> = Vec::new();
+
+        for &method in candidates {
+            let iface_def = self.method_iface_def(method);
+
+            for entry in self.method_entries_for(struct_def, method) {
+                pairs.push((method, iface_def, entry));
+            }
+        }
+
+        if pairs.len() == 1 {
+            let (method, _, entry) = pairs.pop()?;
+
+            return Some((method, entry));
+        }
+
+        let self_ty = self.method_self_type(struct_def, struct_args);
+
+        let mut best: Option<CandidateRank> = None;
+
+        self.speculating = true;
+
+        for (index, (method, iface_def, entry)) in pairs.into_iter().enumerate() {
+            let sig = &self.fn_sigs[&method];
+            let raw_params = sig.params.clone();
+            let raw_ret = sig.ret;
+            let sig_generics = sig.generics.clone();
+            let has_self = sig.self_mode.is_some();
+
+            let sig_params: Vec<TypeId> = raw_params
+                .iter()
+                .map(|&param| self.substitute_self(param, self_ty))
+                .collect();
+            let sig_ret = self.substitute_self(raw_ret, self_ty);
+
+            let user_params = if has_self {
+                &sig_params[1..]
+            } else {
+                &sig_params[..]
+            };
+
+            let mut bindings =
+                self.impl_method_bindings(struct_def, struct_args, entry.as_ref(), iface_def);
+
+            for (generic, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
+                let ty = self.lower_hir_type(explicit);
+                bindings.insert(*generic, ty);
+            }
+
+            for (param_ty, arg) in user_params.iter().zip(args.iter()) {
+                self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+            }
+
+            if let Some(expected) = expected {
+                self.seed_inference_bindings(sig_ret, expected, &mut bindings);
+            }
+
+            let args_fit = user_params.iter().zip(args.iter()).all(|(&param_ty, arg)| {
+                let Some(&arg_ty) = self.result.expr_types.get(&arg.id) else {
+                    return true;
+                };
+                let param_ty = self.substitute_generics(param_ty, &bindings);
+
+                try_coerce(&mut self.result.interner, arg_ty, param_ty).is_ok()
+            });
+
+            let ret_fit = expected.is_none_or(|expected| {
+                let ret = self.substitute_generics(sig_ret, &bindings);
+
+                try_coerce(&mut self.result.interner, ret, expected).is_ok()
+            });
+
+            let Some(rank) = self.method_entry_rank(struct_def, entry.as_ref(), struct_args) else {
+                continue;
+            };
+
+            let generic_iface_args = entry.as_ref().is_some_and(|entry| {
+                entry
+                    .interface_args
+                    .iter()
+                    .any(|arg| matches!(self.result.interner.get(*arg), Type::GenericParam(_)))
+            });
+
+            let key = (rank, !args_fit, !ret_fit, generic_iface_args, index);
+
+            if best
+                .as_ref()
+                .is_none_or(|current| key < (current.0, current.1, current.2, current.3, current.4))
+            {
+                best = Some((
+                    rank,
+                    !args_fit,
+                    !ret_fit,
+                    generic_iface_args,
+                    index,
+                    method,
+                    entry,
+                ));
+            }
+        }
+
+        self.speculating = false;
+
+        best.map(|(_, _, _, _, _, method, entry)| (method, entry))
     }
 
     fn impl_generic_slot(entry: &ImplEntry, generic: DefId) -> String {
@@ -10282,6 +10608,7 @@ impl<'res> TypeChecker<'res> {
                         .and_then(|candidates| {
                             candidates.iter().copied().find(|candidate| {
                                 !self.method_owning_interface.contains_key(candidate)
+                                    && !self.result.interface_method_owners.contains_key(candidate)
                             })
                         })
                 });
