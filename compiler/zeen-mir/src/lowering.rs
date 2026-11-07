@@ -1937,8 +1937,58 @@ impl<'ctx> MirLowering<'ctx> {
                 self.concrete_associated_binding(zeen_resolve::builtin_def_id(builtin), &[], def)
             }
 
+            Type::Slice { .. } | Type::ManyPointer { .. } | Type::Array { .. } => {
+                self.builtin_shape_associated_binding(base, def)
+            }
+
             _ => None,
         }
+    }
+
+    fn builtin_shape_associated_binding(&mut self, base: TypeId, def: DefId) -> Option<TypeId> {
+        let interface = match self.resolution.defs.get(&def).map(|info| info.kind.clone()) {
+            Some(DefKind::AssociatedType { interface }) => interface,
+            _ => return None,
+        };
+
+        let mut owners: Vec<DefId> = self.typecheck.builtin_shapes.keys().copied().collect();
+        owners.sort();
+
+        for owner in owners {
+            let Some(entries) = self.typecheck.impl_registry.get(&(owner, interface)) else {
+                continue;
+            };
+
+            let shape = self.typecheck.builtin_shapes[&owner].clone();
+            let generics = self
+                .typecheck
+                .builtin_shape_generics
+                .get(&owner)
+                .cloned()
+                .unwrap_or_default();
+
+            let mut matched: HashMap<DefId, TypeId> = HashMap::default();
+
+            if !zeen_types::match_builtin_shape(
+                &self.typecheck.interner,
+                &shape,
+                base,
+                &generics,
+                &mut matched,
+            ) {
+                continue;
+            }
+
+            let bound = entries
+                .iter()
+                .find_map(|entry| entry.assoc_bindings.get(&def).copied());
+
+            if let Some(bound) = bound {
+                return Some(self.substitute(bound, &matched));
+            }
+        }
+
+        None
     }
 
     fn concrete_associated_binding(

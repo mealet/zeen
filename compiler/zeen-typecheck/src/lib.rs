@@ -8482,8 +8482,57 @@ impl<'res> TypeChecker<'res> {
                 self.concrete_assoc_binding(zeen_resolve::builtin_def_id(builtin), &[], def)
             }
 
+            Type::Slice { .. } | Type::ManyPointer { .. } | Type::Array { .. } => {
+                self.builtin_shape_assoc_binding(base, def)
+            }
+
             _ => None,
         }
+    }
+
+    fn builtin_shape_assoc_binding(&mut self, base: TypeId, def: DefId) -> Option<TypeId> {
+        let Some(DefKind::AssociatedType { interface }) =
+            self.resolution.defs.get(&def).map(|info| info.kind.clone())
+        else {
+            return None;
+        };
+
+        let mut owners: Vec<DefId> = self.result.builtin_shapes.keys().copied().collect();
+        owners.sort();
+
+        let mut found: Option<(TypeId, HashMap<DefId, TypeId>)> = None;
+
+        for owner in owners {
+            let Some(entries) = self.result.impl_registry.get(&(owner, interface)) else {
+                continue;
+            };
+
+            let shape = self.result.builtin_shapes[&owner].clone();
+            let generics = self.type_member_generics(owner);
+            let mut matched: HashMap<DefId, TypeId> = HashMap::default();
+
+            if !self.match_builtin_shape(&shape, base, &generics, &mut matched) {
+                continue;
+            }
+
+            let bound = entries
+                .iter()
+                .find_map(|entry| entry.assoc_bindings.get(&def).copied());
+
+            if let Some(bound) = bound {
+                found = Some((bound, matched));
+
+                break;
+            }
+        }
+
+        let (bound, matched) = found?;
+
+        Some(zeen_types::substitute_generics(
+            &mut self.result.interner,
+            bound,
+            &matched,
+        ))
     }
 
     fn concrete_assoc_binding(
