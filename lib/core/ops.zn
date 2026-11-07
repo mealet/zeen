@@ -96,13 +96,17 @@ pub interface Not {
 }
 
 /// Dereference operator (`*expr`).
-pub interface[T] Deref {
-  fn deref(*const self) T;
+pub interface Deref {
+  alias Target;
+
+  fn deref(*const self) Target;
 }
 
 /// Dereference operator with pointer access (example: `*lvalue = rvalue`, uses DerefPtr for lvalue).
-pub interface[T] DerefPtr {
-  fn deref_ptr(*self) *T;
+pub interface DerefPtr {
+  alias Target;
+
+  fn deref_ptr(*self) *Target;
 }
 
 /// Index operation (`expr[index] -> T`)

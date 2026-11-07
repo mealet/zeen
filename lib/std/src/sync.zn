@@ -112,12 +112,16 @@ pub struct MutexGuard[T] {
 }
 
 implement[T: Copy] Deref : MutexGuard[T] {
+  alias Target = T;
+
   fn deref(*const self) T {
     return *self.got;
   }
 }
 
 implement[T] DerefPtr : MutexGuard[T] {
+  alias Target = T;
+
   fn deref_ptr(*self) *T {
     return self.got;
   }
@@ -262,12 +266,16 @@ pub struct RwReadGuard[T] {
 }
 
 implement[T: Copy] Deref : RwReadGuard[T] {
+  alias Target = T;
+
   fn deref(*const self) T {
     return *self.got;
   }
 }
 
 implement[T] DerefPtr : RwReadGuard[T] {
+  alias Target = T;
+
   fn deref_ptr(*self) *T {
     return self.got;
   }
@@ -290,12 +298,16 @@ pub struct RwWriteGuard[T] {
 }
 
 implement[T: Copy] Deref : RwWriteGuard[T] {
+  alias Target = T;
+
   fn deref(*const self) T {
     return *self.got;
   }
 }
 
 implement[T] DerefPtr : RwWriteGuard[T] {
+  alias Target = T;
+
   fn deref_ptr(*self) *T {
     return self.got;
   }
@@ -396,12 +408,16 @@ implement[T] Drop : Arc[T] {
 }
 
 implement[T: Copy] Deref : Arc[T] {
+  alias Target = T;
+
   fn deref(*const self) T {
     *self.ptr
   }
 }
 
 implement[T] DerefPtr : Arc[T] {
+  alias Target = T;
+
   fn deref_ptr(*self) *T {
     self.ptr
   }

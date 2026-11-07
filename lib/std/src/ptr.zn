@@ -57,12 +57,16 @@ implement[T] Drop : Unique[T] {
 }
 
 implement[T: Copy] Deref : Unique[T] {
+  alias Target = T;
+
   fn deref(*const self) T {
     *self.ptr
   }
 }
 
 implement[T] DerefPtr : Unique[T] {
+  alias Target = T;
+
   fn deref_ptr(*self) *T {
     self.ptr
   }
@@ -146,12 +150,16 @@ implement[T] Drop : Shared[T] {
 }
 
 implement[T: Copy] Deref : Shared[T] {
+  alias Target = T;
+
   fn deref(*const self) T {
     *self.ptr
   }
 }
 
 implement[T] DerefPtr : Shared[T] {
+  alias Target = T;
+
   fn deref_ptr(*self) *T {
     self.ptr
   }
