@@ -461,6 +461,7 @@ impl<'res> TypeChecker<'res> {
 
                 for field in &s.fields {
                     let (ty, is_const) = self.lower_hir_type_with_const(&field.ty);
+                    let ty = self.normalize_associated(ty);
 
                     self.result.def_types.insert(field.def_id, ty);
                     self.result.const_bindings.insert(field.def_id, is_const);
@@ -715,6 +716,7 @@ impl<'res> TypeChecker<'res> {
                 }
 
                 let (ty, is_const) = self.lower_hir_type_with_const(&param.ty);
+                let ty = self.normalize_associated(ty);
 
                 let effective_const = if idx == 0 {
                     match self_mode {
@@ -2202,9 +2204,11 @@ impl<'res> TypeChecker<'res> {
                 value,
                 is_const,
             } => {
-                let declared = explicit_type
-                    .as_ref()
-                    .map(|t| self.lower_hir_type_with_const(t));
+                let declared = explicit_type.as_ref().map(|t| {
+                    let (ty, is_const) = self.lower_hir_type_with_const(t);
+
+                    (self.normalize_associated(ty), is_const)
+                });
 
                 let declared_ty = declared.map(|(ty, _)| ty);
                 let _declared_const = declared.map(|(_, c)| c).unwrap_or(false);
