@@ -258,6 +258,7 @@ impl<'res> TypeChecker<'res> {
         self.result.struct_generics = self.struct_generics;
         self.result.enum_variants = self.enum_variants;
         self.result.enum_generics = self.enum_generics;
+        self.result.generic_assoc_bindings = self.generic_assoc_bindings;
         self.result.interface_registry = self.interface_registry.into_name_map();
 
         (self.result, self.errors)
@@ -7890,7 +7891,9 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn substitute_generics(&mut self, ty: TypeId, bindings: &HashMap<DefId, TypeId>) -> TypeId {
-        zeen_types::substitute_generics(&mut self.result.interner, ty, bindings)
+        let substituted = zeen_types::substitute_generics(&mut self.result.interner, ty, bindings);
+
+        self.normalize_associated(substituted)
     }
 
     fn substitute_self(&mut self, ty: TypeId, self_ty: TypeId) -> TypeId {
@@ -8020,7 +8023,16 @@ impl<'res> TypeChecker<'res> {
         let mut found = Vec::new();
 
         for ((object, iface), entries) in &self.result.impl_registry {
-            if *object != def_id || !entries.iter().any(|e| e.object_args == args) {
+            if *object != def_id {
+                continue;
+            }
+
+            let mut unify = HashMap::default();
+
+            if !entries
+                .iter()
+                .any(|entry| self.unify_impl_args(&entry.object_args, args, &mut unify))
+            {
                 continue;
             }
 
@@ -8030,6 +8042,84 @@ impl<'res> TypeChecker<'res> {
         }
 
         found
+    }
+
+    fn unify_impl_args(
+        &self,
+        pattern: &[TypeId],
+        concrete: &[TypeId],
+        unify: &mut HashMap<DefId, TypeId>,
+    ) -> bool {
+        if pattern.len() != concrete.len() {
+            return false;
+        }
+
+        pattern
+            .iter()
+            .zip(concrete.iter())
+            .all(|(&pattern, &concrete)| self.unify_impl_type(pattern, concrete, unify))
+    }
+
+    fn unify_impl_type(
+        &self,
+        pattern: TypeId,
+        concrete: TypeId,
+        unify: &mut HashMap<DefId, TypeId>,
+    ) -> bool {
+        match self.result.interner.get(pattern).clone() {
+            Type::GenericParam(g) => match unify.get(&g).copied() {
+                Some(existing) => existing == concrete,
+                None => {
+                    unify.insert(g, concrete);
+
+                    true
+                }
+            },
+
+            Type::Pointer {
+                inner: pattern_inner,
+                is_const: pattern_const,
+            } => match self.result.interner.get(concrete).clone() {
+                Type::Pointer {
+                    inner: concrete_inner,
+                    is_const: concrete_const,
+                } => {
+                    pattern_const == concrete_const
+                        && self.unify_impl_type(pattern_inner, concrete_inner, unify)
+                }
+                _ => false,
+            },
+
+            Type::Struct {
+                def_id: pattern_def,
+                generic_args: pattern_args,
+            } => match self.result.interner.get(concrete).clone() {
+                Type::Struct {
+                    def_id: concrete_def,
+                    generic_args: concrete_args,
+                } => {
+                    pattern_def == concrete_def
+                        && self.unify_impl_args(&pattern_args, &concrete_args, unify)
+                }
+                _ => false,
+            },
+
+            Type::Enum {
+                def_id: pattern_def,
+                generic_args: pattern_args,
+            } => match self.result.interner.get(concrete).clone() {
+                Type::Enum {
+                    def_id: concrete_def,
+                    generic_args: concrete_args,
+                } => {
+                    pattern_def == concrete_def
+                        && self.unify_impl_args(&pattern_args, &concrete_args, unify)
+                }
+                _ => false,
+            },
+
+            _ => pattern == concrete,
+        }
     }
 
     fn resolve_associated_def(
@@ -8301,22 +8391,43 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn concrete_assoc_binding(&self, def_id: DefId, args: &[TypeId], def: DefId) -> Option<TypeId> {
-        for ((object, _), entries) in &self.result.impl_registry {
-            if *object != def_id {
-                continue;
-            }
+    fn concrete_assoc_binding(
+        &mut self,
+        def_id: DefId,
+        args: &[TypeId],
+        def: DefId,
+    ) -> Option<TypeId> {
+        let bound = {
+            let mut found = None;
 
-            for entry in entries {
-                if entry.object_args == args
-                    && let Some(bound) = entry.assoc_bindings.get(&def)
-                {
-                    return Some(*bound);
+            for ((object, _), entries) in &self.result.impl_registry {
+                if *object != def_id {
+                    continue;
+                }
+
+                for entry in entries {
+                    let mut unify = HashMap::default();
+
+                    if self.unify_impl_args(&entry.object_args, args, &mut unify)
+                        && let Some(bound) = entry.assoc_bindings.get(&def)
+                    {
+                        found = Some((*bound, unify));
+
+                        break;
+                    }
+                }
+
+                if found.is_some() {
+                    break;
                 }
             }
-        }
 
-        None
+            found
+        };
+
+        let (bound, unify) = bound?;
+
+        Some(self.substitute_generics(bound, &unify))
     }
 
     fn register_where_clauses(&mut self, clauses: &[HirWhereClause]) {
@@ -9517,15 +9628,14 @@ impl<'res> TypeChecker<'res> {
                 .unwrap_or_default()
         };
 
-        let self_generic_args: Vec<TypeId> =
-            if sig_ctx.is_specialized && sig_ctx.object_args.len() == owner_generics.len() {
-                sig_ctx.object_args.to_vec()
-            } else {
-                owner_generics
-                    .iter()
-                    .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
-                    .collect()
-            };
+        let self_generic_args: Vec<TypeId> = if sig_ctx.object_args.len() == owner_generics.len() {
+            sig_ctx.object_args.to_vec()
+        } else {
+            owner_generics
+                .iter()
+                .map(|&g| self.result.interner.intern(Type::GenericParam(g)))
+                .collect()
+        };
 
         let builtin_self = match self.def_kind(object_def).cloned() {
             Some(DefKind::Builtin(builtin)) => Some(self.result.interner.builtin(builtin)),

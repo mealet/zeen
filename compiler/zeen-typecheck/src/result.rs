@@ -30,6 +30,7 @@ pub struct TypeCheckResult {
 
     pub interface_registry: HashMap<String, DefId>,
     pub interface_assoc_types: HashMap<DefId, Vec<DefId>>,
+    pub generic_assoc_bindings: HashMap<(DefId, DefId), TypeId>,
     pub enum_variants: HashMap<DefId, Vec<DefId>>,
     pub method_owner: HashMap<DefId, DefId>,
     pub const_bindings: HashMap<DefId, bool>,
