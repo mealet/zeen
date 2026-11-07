@@ -1,0 +1,43 @@
+struct Cell[T] {
+    value: T,
+}
+
+implement[T] Deref : Cell[T] {
+    alias Target = T;
+
+    fn deref(*const self) Target {
+        return self.value;
+    }
+}
+
+struct Buffer[T] {
+    items: [*]T,
+}
+
+implement[T] Index : Buffer[T] {
+    alias Output = T;
+
+    fn index(*const self, index: usize) Output {
+        return self.items[index];
+    }
+}
+
+fn read[D: Deref](value: *const D) D.Target {
+    return value.deref();
+}
+
+fn second[B: Index](buffer: *const B) B.Output {
+    return buffer[1];
+}
+
+fn main() {
+    const cell = Cell { .value = 42 };
+
+    @println("deref {}", read(&cell));
+
+    const numbers = {10, 20, 30};
+    const buffer = Buffer { .items = @as([*]i32, &numbers[0]) };
+
+    @println("index {}", second(&buffer));
+    @println("operator {}", buffer[2]);
+}

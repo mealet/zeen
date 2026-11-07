@@ -1,0 +1,46 @@
+struct Vector {
+    pub x: f64,
+    pub y: f64,
+}
+
+implement Copy : Vector {}
+
+implement Add[i32] : Vector {
+    alias Output = Vector;
+
+    fn add(self, other: i32) Output {
+        return Vector {
+            .x = self.x + @as(f64, other),
+            .y = self.y + @as(f64, other),
+        };
+    }
+}
+
+implement Add[f64] : Vector {
+    alias Output = Vector;
+
+    fn add(self, other: f64) Output {
+        return Vector {
+            .x = self.x + other,
+            .y = self.y + other,
+        };
+    }
+}
+
+implement Neg : Vector {
+    fn neg(self) Output {
+        return Vector { .x = -self.x, .y = -self.y };
+    }
+}
+
+fn main() {
+    const base = Vector { .x = 1.0, .y = 2.0 };
+
+    const whole = base + 3;
+    const precise = base + 0.5;
+    const negated = -base;
+
+    @println("{:.1} {:.1}", whole.x, whole.y);
+    @println("{:.1} {:.1}", precise.x, precise.y);
+    @println("{:.1} {:.1}", negated.x, negated.y);
+}
