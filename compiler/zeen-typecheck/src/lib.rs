@@ -7925,7 +7925,9 @@ impl<'res> TypeChecker<'res> {
                     return true;
                 }
 
-                let cur = self.ctx.current();
+                let Some(cur) = self.ctx.try_current() else {
+                    return false;
+                };
 
                 let Some(bounds) = cur.generic_bounds.get(&g) else {
                     return false;
@@ -8158,6 +8160,22 @@ impl<'res> TypeChecker<'res> {
             .iter()
             .zip(concrete.iter())
             .all(|(&pattern, &concrete)| self.unify_impl_type(pattern, concrete, unify))
+    }
+
+    fn impl_entry_bounds_hold(
+        &self,
+        entry: &ImplEntry,
+        unify: &HashMap<DefId, TypeId>,
+    ) -> bool {
+        entry.generic_bounds.iter().all(|(imp_g, ifaces)| {
+            let Some(&concrete) = unify.get(imp_g) else {
+                return true;
+            };
+
+            ifaces
+                .iter()
+                .all(|&iface| self.type_satisfies_interface(concrete, iface))
+        })
     }
 
     fn unify_impl_type(
@@ -8553,6 +8571,7 @@ impl<'res> TypeChecker<'res> {
                     let mut unify = HashMap::default();
 
                     if self.unify_impl_args(&entry.object_args, args, &mut unify)
+                        && self.impl_entry_bounds_hold(entry, &unify)
                         && let Some(bound) = entry.assoc_bindings.get(&def)
                     {
                         found = Some((*bound, unify));
