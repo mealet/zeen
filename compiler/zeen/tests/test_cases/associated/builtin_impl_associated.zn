@@ -1,0 +1,34 @@
+interface FirstItem {
+    alias Item;
+
+    pub fn first(*self) Item;
+}
+
+implement[T] FirstItem : builtin []T {
+    alias Item = *T;
+
+    fn first(*self) Item {
+        return &(*self)[0];
+    }
+}
+
+implement[T] FirstItem : builtin [3]T {
+    alias Item = *T;
+
+    fn first(*self) Item {
+        return &(*self)[0];
+    }
+}
+
+fn first_of[S: FirstItem](source: *S) S.Item {
+    return source.first();
+}
+
+fn main() {
+    let values = {10, 20, 30};
+    let slice: []i32 = values[..];
+    let array: [3]i32 = {7, 8, 9};
+
+    @println("{}", *first_of(&slice));
+    @println("{}", *first_of(&array));
+}
