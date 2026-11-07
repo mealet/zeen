@@ -110,13 +110,17 @@ pub interface DerefPtr {
 }
 
 /// Index operation (`expr[index] -> T`)
-pub interface[T] Index {
-  fn index(*const self, index: usize) T;
+pub interface Index {
+  alias Output;
+
+  fn index(*const self, index: usize) Output;
 }
 
 /// Index operation with pointer access (`lvalue[index] = rvalue`)
-pub interface[T] IndexPtr {
-  fn index_ptr(*self, index: usize) *T;
+pub interface IndexPtr {
+  alias Output;
+
+  fn index_ptr(*self, index: usize) *Output;
 }
 
 /// Hash value generation for hash based collections.

@@ -758,6 +758,8 @@ implement[T: Eq] Eq : List[T] {
 }
 
 implement[T: Copy] Index : List[T] {
+  alias Output = T;
+
   fn index(*const self, index: usize) T {
     const opt = self.get(index);
 
@@ -770,6 +772,8 @@ implement[T: Copy] Index : List[T] {
 }
 
 implement[T] Index : List[T] {
+  alias Output = *T;
+
   fn index(*const self, index: usize) *T {
     let opt = self.get_ptr(index);
 
@@ -782,6 +786,8 @@ implement[T] Index : List[T] {
 }
 
 implement[T] IndexPtr : List[T] {
+  alias Output = T;
+
   fn index_ptr(*self, index: usize) *T {
     let opt = self.get_ptr(index);
 
