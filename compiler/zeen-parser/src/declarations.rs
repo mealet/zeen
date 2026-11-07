@@ -3173,4 +3173,216 @@ mod tests {
         let errors = parser.parse_program().unwrap_err();
         assert_matches!(errors[0], ParserError::ExpectedToken { .. });
     }
+    #[test]
+    fn interface_with_associated_type() {
+        const SRC: &str = "interface Iterator { alias Item; }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::InterfaceDecl {
+                    aliases: [Declaration {
+                        kind: DeclarationKind::AssociatedType(declarations::AssociatedTypeDecl {
+                            name: _,
+                            bounds: None,
+                            default: None,
+                        }),
+                        ..
+                    }],
+                    methods: [],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn interface_with_associated_type_default() {
+        const SRC: &str = "interface[Rhs] Add { alias Output = Self; }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::InterfaceDecl {
+                    aliases: [Declaration {
+                        kind: DeclarationKind::AssociatedType(declarations::AssociatedTypeDecl {
+                            name: _,
+                            bounds: None,
+                            default: Some(TypeExpr {
+                                kind: TypeKind::SelfAlias,
+                                ..
+                            }),
+                        }),
+                        ..
+                    }],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn interface_with_associated_type_bound() {
+        const SRC: &str = "interface PtrIterator { alias Iter: Iterator; }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::InterfaceDecl {
+                    aliases: [Declaration {
+                        kind: DeclarationKind::AssociatedType(declarations::AssociatedTypeDecl {
+                            name: _,
+                            bounds: Some([(_, _)]),
+                            default: None,
+                        }),
+                        ..
+                    }],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn implement_with_associated_type() {
+        const SRC: &str = "implement Iterator : Counter { alias Item = i32; }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ImplementDecl {
+                    interface_args: [],
+                    where_clauses: None,
+                    aliases: [Declaration {
+                        kind: DeclarationKind::AssociatedType(declarations::AssociatedTypeDecl {
+                            name: _,
+                            bounds: None,
+                            default: Some(TypeExpr {
+                                kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                                ..
+                            }),
+                        }),
+                        ..
+                    }],
+                    methods: [],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn implement_with_interface_args() {
+        const SRC: &str = "implement From[i32] : Meters { }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ImplementDecl {
+                    interface_args: [TypeExpr {
+                        kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                        ..
+                    }],
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn fn_with_where_bound() {
+        const SRC: &str = "fn f[T](value: T) where T: Copy { }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    where_clauses: Some([declarations::WhereClause {
+                        kind: declarations::WhereClauseKind::Bound { bounds: [(_, _)] },
+                        ..
+                    }]),
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn fn_with_where_equality() {
+        const SRC: &str = "fn sum[I](iter: I) where I.Item = i32 { }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::FnDecl {
+                    where_clauses: Some([declarations::WhereClause {
+                        ty: TypeExpr {
+                            kind: TypeKind::Associated { .. },
+                            ..
+                        },
+                        kind: declarations::WhereClauseKind::Equality {
+                            ty: TypeExpr {
+                                kind: TypeKind::Builtin(zeen_ast::types::BuiltinType::i32),
+                                ..
+                            }
+                        },
+                        ..
+                    }]),
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn implement_with_where_clause() {
+        const SRC: &str = "implement[T] Show : Wrapper[T] where T.Item = i32 { }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        assert_matches!(
+            parser.parse_program(),
+            Ok([Declaration {
+                kind: DeclarationKind::ImplementDecl {
+                    where_clauses: Some([declarations::WhereClause {
+                        kind: declarations::WhereClauseKind::Equality { .. },
+                        ..
+                    }]),
+                    ..
+                },
+                ..
+            }])
+        );
+    }
+
+    #[test]
+    fn pub_associated_type_is_rejected() {
+        const SRC: &str = "interface Iterator { pub alias Item; }";
+
+        make_parser!(SRC, tokens, bump, rodeo, parser);
+
+        let errors = parser.parse_program().unwrap_err();
+        assert_matches!(errors[0], ParserError::UnsupportedAction { .. });
+    }
 }

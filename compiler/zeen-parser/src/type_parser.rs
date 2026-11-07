@@ -1120,4 +1120,57 @@ mod tests {
 
         assert_eq!(type_parser.parse(), None);
     }
+    #[test]
+    fn associated_type_projection() {
+        const SRC: &str = "I.Item";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        let base_name = rodeo.borrow_mut().get_or_intern("I");
+        let assoc_name = rodeo.borrow_mut().get_or_intern("Item");
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Associated {
+                    base: &TypeExpr {
+                        kind: TypeKind::Named {
+                            name: base_name,
+                            generic_args: None,
+                        },
+                        span: (0, 1).into(),
+                    },
+                    name: (assoc_name, (2, 4).into()),
+                },
+                span: (0, 6).into(),
+            }
+        );
+
+        assert_eq!(type_parser.parse(), None);
+    }
+
+    #[test]
+    fn self_associated_type_projection() {
+        const SRC: &str = "Self.Item";
+
+        make_type_parser!(SRC, tokens, bump, rodeo, parser, type_parser);
+
+        let assoc_name = rodeo.borrow_mut().get_or_intern("Item");
+
+        assert_eq!(
+            type_parser.parse().unwrap(),
+            &TypeExpr {
+                kind: TypeKind::Associated {
+                    base: &TypeExpr {
+                        kind: TypeKind::SelfAlias,
+                        span: (0, 4).into(),
+                    },
+                    name: (assoc_name, (5, 4).into()),
+                },
+                span: (0, 9).into(),
+            }
+        );
+
+        assert_eq!(type_parser.parse(), None);
+    }
 }
