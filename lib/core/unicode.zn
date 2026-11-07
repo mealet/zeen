@@ -31,6 +31,8 @@ implement RuneIter {
 }
 
 implement Iterator : RuneIter {
+  alias Item = Rune;
+
   /// Returns the next code point of the sequence
   pub fn next(*self) Option[Rune] {
     if (self.index >= self.len) {

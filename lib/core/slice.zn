@@ -25,6 +25,8 @@ implement Range {
 implement Copy : Range {}
 
 implement Iterator : Range {
+  alias Item = usize;
+
   pub fn next(*self) Option[usize] {
     const start = self.start.unwrap_or(0);
     const done = self.end.is_some() && start >= self.end.unwrap_or(0);

@@ -101,6 +101,8 @@ implement ArgsIter {
 }
 
 implement Iterator : ArgsIter {
+  alias Item = []const char;
+
   pub fn next(*self) Option[[]const char] {
     const at = @as(usize, self.index);
 

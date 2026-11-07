@@ -819,6 +819,8 @@ pub struct ListIter[T] {
 }
 
 implement[T] Iterator : ListIter[T] {
+  alias Item = *T;
+
   fn next(*self) Option[*T] {
     if (self.idx >= self.len) {
       return Option.None;
@@ -832,12 +834,16 @@ implement[T] Iterator : ListIter[T] {
 }
 
 implement[T] PtrIterator : List[T] {
+  alias Iter = ListIter[T];
+
   fn iter(*self) ListIter[T] {
     ListIter { .ptr = self.ptr, .len = self._len, .idx = 0 }
   }
 }
 
 implement[T] OwnedIterator : List[T] {
+  alias Iter = OwnedListIter[T];
+
   fn into_iter(self) OwnedListIter[T] {
     let ptr = self.ptr;
     let len = self._len;
@@ -861,6 +867,8 @@ pub struct OwnedListIter[T] {
 }
 
 implement[T] Iterator : OwnedListIter[T] {
+  alias Item = T;
+
   fn next(*self) Option[T] {
     if (self.idx >= self.len) {
       return Option.None;
