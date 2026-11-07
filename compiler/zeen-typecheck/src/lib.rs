@@ -909,16 +909,15 @@ impl<'res> TypeChecker<'res> {
             };
 
             if let Some(iface_def) = imp.interface {
+                let key = self.impl_duplicate_key(&entry);
                 let is_duplicate = self
                     .result
                     .impl_registry
                     .get(&(object_def, iface_def))
                     .is_some_and(|existing| {
-                        existing.iter().any(|e| {
-                            e.object_args == object_args
-                                && e.interface_args == interface_args
-                                && e.is_specialized == is_specialized
-                        })
+                        existing
+                            .iter()
+                            .any(|e| self.impl_duplicate_key(e) == key)
                     });
 
                 if is_duplicate {
@@ -9486,21 +9485,21 @@ impl<'res> TypeChecker<'res> {
         Some(if bounds_hold { 1 } else { 4 })
     }
 
-    fn impl_entry_signature(&self, entry: &ImplEntry) -> (Vec<String>, Vec<String>) {
-        let generic_slot = |generic: DefId| {
-            entry
-                .generics
-                .iter()
-                .position(|g| *g == generic)
-                .map(|index| format!("#{index}"))
-                .unwrap_or_default()
-        };
+    fn impl_generic_slot(entry: &ImplEntry, generic: DefId) -> String {
+        entry
+            .generics
+            .iter()
+            .position(|g| *g == generic)
+            .map(|index| format!("#{index}"))
+            .unwrap_or_default()
+    }
 
+    fn impl_entry_signature(&self, entry: &ImplEntry) -> (Vec<String>, Vec<String>) {
         let args: Vec<String> = entry
             .object_args
             .iter()
             .map(|&arg| match self.result.interner.get(arg) {
-                Type::GenericParam(g) => generic_slot(*g),
+                Type::GenericParam(g) => Self::impl_generic_slot(entry, *g),
                 _ => self.display_type(arg),
             })
             .collect();
@@ -9509,7 +9508,7 @@ impl<'res> TypeChecker<'res> {
             .generic_bounds
             .iter()
             .flat_map(|(generic, ifaces)| {
-                let slot = generic_slot(*generic);
+                let slot = Self::impl_generic_slot(entry, *generic);
 
                 ifaces.iter().map(move |&iface_def| {
                     let name = self.def_name(iface_def).unwrap_or_default();
@@ -9521,6 +9520,24 @@ impl<'res> TypeChecker<'res> {
         bounds.sort();
 
         (args, bounds)
+    }
+
+    fn impl_duplicate_key(
+        &self,
+        entry: &ImplEntry,
+    ) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let (args, bounds) = self.impl_entry_signature(entry);
+
+        let interface_args: Vec<String> = entry
+            .interface_args
+            .iter()
+            .map(|&arg| match self.result.interner.get(arg) {
+                Type::GenericParam(g) => Self::impl_generic_slot(entry, *g),
+                _ => self.display_type(arg),
+            })
+            .collect();
+
+        (args, interface_args, bounds)
     }
 
     fn check_duplicate_methods(&mut self, module: &HirModule) {
@@ -16362,4 +16379,5 @@ mod tests {
         )
         .expect("two implementations with different interface args must coexist");
     }
+
 }
