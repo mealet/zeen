@@ -15924,4 +15924,370 @@ mod tests {
         let args = result.fn_item_monos.values().next().expect("one entry");
         assert_eq!(args.len(), 1);
     }
+
+    #[test]
+    fn associated_type_projection_through_bound() {
+        typecheck(
+            r#"
+            interface Source {
+                alias Item;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Number {
+                value: i32,
+            }
+
+            implement Source : Number {
+                alias Item = i32;
+
+                fn read(*self) Item {
+                    return self.value;
+                }
+            }
+
+            fn read_item[S: Source](source: *S) S.Item {
+                return source.read();
+            }
+
+            fn main() {
+                let number = Number { .value = 3 };
+                let item: i32 = read_item(&number);
+            }
+            "#,
+        )
+        .expect("projection through a bound must typecheck");
+    }
+
+    #[test]
+    fn associated_type_default_used_by_implement() {
+        typecheck(
+            r#"
+            interface Source {
+                alias Item = i32;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Number {
+                value: i32,
+            }
+
+            implement Source : Number {
+                fn read(*self) Item {
+                    return self.value;
+                }
+            }
+
+            fn main() {
+                let number = Number { .value = 7 };
+                let item: i32 = number.read();
+            }
+            "#,
+        )
+        .expect("interface default must satisfy an implement without a binding");
+    }
+
+    #[test]
+    fn associated_type_where_equality_unlocks_operation() {
+        typecheck(
+            r#"
+            interface Source {
+                alias Item;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Number {
+                value: i32,
+            }
+
+            implement Source : Number {
+                alias Item = i32;
+
+                fn read(*self) Item {
+                    return self.value;
+                }
+            }
+
+            fn doubled[S: Source](source: *S) i32 where S.Item = i32 {
+                return source.read() + source.read();
+            }
+
+            fn main() {
+                let number = Number { .value = 2 };
+                let value = doubled(&number);
+            }
+            "#,
+        )
+        .expect("where equality must bind the projection");
+    }
+
+    #[test]
+    fn associated_type_without_where_equality_fails() {
+        let errors = typecheck(
+            r#"
+            interface Source {
+                alias Item;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Number {
+                value: i32,
+            }
+
+            implement Source : Number {
+                alias Item = i32;
+
+                fn read(*self) Item {
+                    return self.value;
+                }
+            }
+
+            fn doubled[S: Source](source: *S) i32 {
+                return source.read() + source.read();
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("unbound projection arithmetic must fail");
+
+        assert!(
+            !errors.is_empty(),
+            "expected at least one error for unbound projection"
+        );
+    }
+
+    #[test]
+    fn associated_type_where_bound_allows_interface_call() {
+        typecheck(
+            r#"
+            interface Marker {
+                pub fn mark(*self) i32;
+            }
+
+            interface Source {
+                alias Item;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Tagged {
+                value: i32,
+            }
+
+            struct Holder {
+                value: i32,
+            }
+
+            implement Marker : Tagged {
+                fn mark(*self) i32 {
+                    return self.value;
+                }
+            }
+
+            implement Source : Holder {
+                alias Item = Tagged;
+
+                fn read(*self) Item {
+                    return Tagged { .value = self.value };
+                }
+            }
+
+            fn marked[S: Source](source: *S) i32 where S.Item: Marker {
+                return source.read().mark();
+            }
+
+            fn main() {
+                let holder = Holder { .value = 5 };
+                let value = marked(&holder);
+            }
+            "#,
+        )
+        .expect("where bound must allow interface calls on the projection");
+    }
+
+    #[test]
+    fn associated_type_bound_not_satisfied_is_reported() {
+        let errors = typecheck(
+            r#"
+            interface Marker {
+                pub fn mark(*self) i32;
+            }
+
+            interface Source {
+                alias Item: Marker;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Plain {
+                value: i32,
+            }
+
+            implement Source : Plain {
+                alias Item = Plain;
+
+                fn read(*self) Item {
+                    return Plain { .value = self.value };
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("alias bound violation must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AssociatedTypeBoundNotSatisfied { .. })),
+            "expected AssociatedTypeBoundNotSatisfied, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn associated_type_default_bound_is_checked() {
+        typecheck(
+            r#"
+            interface Marker {
+                pub fn mark(*self) i32;
+            }
+
+            interface Source {
+                alias Item: Marker = Tagged;
+
+                pub fn read(*self) Item;
+            }
+
+            struct Tagged {
+                value: i32,
+            }
+
+            struct Holder {
+                value: i32,
+            }
+
+            implement Marker : Tagged {
+                fn mark(*self) i32 {
+                    return self.value;
+                }
+            }
+
+            implement Source : Holder {
+                fn read(*self) Item {
+                    return Tagged { .value = self.value };
+                }
+            }
+
+            fn main() {
+                let holder = Holder { .value = 1 };
+                let value = holder.read().mark();
+            }
+            "#,
+        )
+        .expect("default bound satisfied by the default type");
+    }
+
+    #[test]
+    fn associated_type_sibling_binding_is_resolved() {
+        typecheck(
+            r#"
+            interface Pair {
+                alias Left;
+                alias Right = Left;
+
+                pub fn right(*self) Right;
+            }
+
+            struct Node {
+                value: i32,
+            }
+
+            implement Pair : Node {
+                alias Left = i32;
+
+                fn right(*self) Right {
+                    return self.value;
+                }
+            }
+
+            fn main() {
+                let node = Node { .value = 4 };
+                let value: i32 = node.right();
+            }
+            "#,
+        )
+        .expect("alias referencing another alias must resolve");
+    }
+
+    #[test]
+    fn associated_type_cycle_is_reported() {
+        let errors = typecheck(
+            r#"
+            interface Chain {
+                alias Left = Right;
+                alias Right = Left;
+
+                pub fn value(*self) Left;
+            }
+
+            struct Node {
+                value: i32,
+            }
+
+            implement Chain : Node {
+                fn value(*self) Left {
+                    return self.value;
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("cyclic defaults must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::AssociatedTypeCycle { .. })),
+            "expected AssociatedTypeCycle, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn specialized_impls_dispatch_by_interface_args() {
+        typecheck(
+            r#"
+            interface[T] From {
+                pub fn from(value: T) Self;
+            }
+
+            struct Meters {
+                value: f64,
+            }
+
+            implement From[i32] : Meters {
+                fn from(value: i32) Self {
+                    return Meters { .value = @as(f64, value) };
+                }
+            }
+
+            implement From[f64] : Meters {
+                fn from(value: f64) Self {
+                    return Meters { .value = value };
+                }
+            }
+
+            fn main() {
+                let whole = Meters.from(2);
+                let precise = Meters.from(1.5);
+            }
+            "#,
+        )
+        .expect("two implementations with different interface args must coexist");
+    }
 }
