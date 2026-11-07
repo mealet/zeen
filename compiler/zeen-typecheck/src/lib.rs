@@ -97,6 +97,8 @@ pub struct TypeChecker<'res> {
 
     pending_impl_checks: Vec<PendingImplCheck>,
 
+    pending_assoc_checks: Vec<PendingAssocCheck>,
+
     range_def: OnceCell<Option<DefId>>,
 }
 
@@ -135,6 +137,13 @@ struct PendingImplCheck {
     object_args: Vec<TypeId>,
     interface_args: Vec<TypeId>,
     is_specialized: bool,
+    source: Source,
+}
+
+struct PendingAssocCheck {
+    assoc: DefId,
+    bound_ty: TypeId,
+    span: SourceSpan,
     source: Source,
 }
 
@@ -242,6 +251,7 @@ impl<'res> TypeChecker<'res> {
             speculating: false,
             type_names_as_values: HashMap::default(),
             pending_impl_checks: Vec::new(),
+            pending_assoc_checks: Vec::new(),
             range_def: OnceCell::new(),
         }
     }
@@ -379,6 +389,17 @@ impl<'res> TypeChecker<'res> {
                 pending.object_def,
                 &sig_ctx,
                 &((pending.source.span, pending.source.src()).into()),
+            );
+        }
+
+        let pending_assoc_checks = std::mem::take(&mut self.pending_assoc_checks);
+
+        for pending in pending_assoc_checks {
+            self.check_associated_type_bounds(
+                pending.assoc,
+                pending.bound_ty,
+                pending.span,
+                &pending.source,
             );
         }
 
@@ -7875,6 +7896,10 @@ impl<'res> TypeChecker<'res> {
                 .is_some(),
 
             Type::GenericParam(g) => {
+                if self.generic_param_satisfies_interface(g, iface_def) {
+                    return true;
+                }
+
                 let cur = self.ctx.current();
 
                 let Some(bounds) = cur.generic_bounds.get(&g) else {
@@ -7882,6 +7907,24 @@ impl<'res> TypeChecker<'res> {
                 };
 
                 bounds.contains(&iface_def)
+            }
+
+            Type::Associated { base, def } => {
+                if self
+                    .assoc_type_bounds
+                    .get(&def)
+                    .is_some_and(|bounds| bounds.contains(&iface_def))
+                {
+                    return true;
+                }
+
+                match self.result.interner.get(base).clone() {
+                    Type::GenericParam(g) => self
+                        .generic_assoc_bounds
+                        .get(&(g, def))
+                        .is_some_and(|bounds| bounds.contains(&iface_def)),
+                    _ => false,
+                }
             }
 
             Type::ManyPointer { inner, .. } => {
@@ -8237,13 +8280,23 @@ impl<'res> TypeChecker<'res> {
     fn normalize_associated_inner(
         &mut self,
         ty: TypeId,
-        visited: &mut HashSet<(DefId, DefId)>,
+        visited: &mut HashSet<(TypeId, DefId)>,
     ) -> TypeId {
         match self.result.interner.get(ty).clone() {
-            Type::Associated { base, def } => match self.associated_binding(base, def, visited) {
-                Some(bound) => self.normalize_associated_inner(bound, visited),
-                None => ty,
-            },
+            Type::Associated { base, def } => {
+                if !visited.insert((base, def)) {
+                    return ty;
+                }
+
+                let expanded = match self.associated_binding(base, def) {
+                    Some(bound) => self.normalize_associated_inner(bound, visited),
+                    None => ty,
+                };
+
+                visited.remove(&(base, def));
+
+                expanded
+            }
 
             Type::Pointer { inner, is_const } => {
                 let new_inner = self.normalize_associated_inner(inner, visited);
@@ -8380,26 +8433,11 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
-    fn associated_binding(
-        &mut self,
-        base: TypeId,
-        def: DefId,
-        visited: &mut HashSet<(DefId, DefId)>,
-    ) -> Option<TypeId> {
+    fn associated_binding(&mut self, base: TypeId, def: DefId) -> Option<TypeId> {
         match self.result.interner.get(base).clone() {
-            Type::GenericParam(g) => {
-                if !visited.insert((g, def)) {
-                    return None;
-                }
+            Type::GenericParam(g) => self.generic_assoc_bindings.get(&(g, def)).copied(),
 
-                self.generic_assoc_bindings.get(&(g, def)).copied()
-            }
-
-            Type::InterfaceSelfPlaceholder(p) => {
-                if !visited.insert((p, def)) {
-                    return None;
-                }
-
+            Type::InterfaceSelfPlaceholder(_) => {
                 let default = self.assoc_type_defaults.get(&def).cloned()?;
                 let lowered = self.lower_hir_type_with_const(&default).0;
 
@@ -8459,7 +8497,11 @@ impl<'res> TypeChecker<'res> {
 
         let (bound, unify) = bound?;
 
-        Some(self.substitute_generics(bound, &unify))
+        Some(zeen_types::substitute_generics(
+            &mut self.result.interner,
+            bound,
+            &unify,
+        ))
     }
 
     fn register_where_clauses(&mut self, clauses: &[HirWhereClause]) {
@@ -8521,7 +8563,8 @@ impl<'res> TypeChecker<'res> {
             .cloned()
             .unwrap_or_default();
 
-        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+        let mut raw: HashMap<DefId, TypeId> = HashMap::default();
+        let mut spans: HashMap<DefId, SourceSpan> = HashMap::default();
 
         for alias in aliases {
             if !assoc_ids.contains(&alias.def_id) {
@@ -8540,7 +8583,7 @@ impl<'res> TypeChecker<'res> {
                 continue;
             };
 
-            if bindings.contains_key(&alias.def_id) {
+            if raw.contains_key(&alias.def_id) {
                 let name: SmolStr = self.interner.borrow().resolve(&alias.name.0).into();
 
                 self.report(TypeError::DuplicateAssociatedType {
@@ -8553,21 +8596,19 @@ impl<'res> TypeChecker<'res> {
             }
 
             let lowered = self.lower_hir_type(default);
-            let substituted = self.substitute_self(lowered, self_ty);
-            let normalized = self.normalize_associated(substituted);
-
-            bindings.insert(alias.def_id, normalized);
+            raw.insert(alias.def_id, self.substitute_self(lowered, self_ty));
+            spans.insert(alias.def_id, alias.name.1);
         }
 
-        for assoc in assoc_ids {
-            if bindings.contains_key(&assoc) {
+        for assoc in &assoc_ids {
+            if raw.contains_key(assoc) {
                 continue;
             }
 
-            let Some(default) = self.assoc_type_defaults.get(&assoc).cloned() else {
+            let Some(default) = self.assoc_type_defaults.get(assoc).cloned() else {
                 self.report(TypeError::MissingAssociatedType {
                     interface: self.def_name(iface_def).unwrap_or_default().into(),
-                    name: self.def_name(assoc).unwrap_or_default().into(),
+                    name: self.def_name(*assoc).unwrap_or_default().into(),
                     src: source.src(),
                     span: source.span,
                 });
@@ -8576,10 +8617,42 @@ impl<'res> TypeChecker<'res> {
             };
 
             let lowered = self.lower_hir_type(&default);
-            let substituted = self.substitute_self(lowered, self_ty);
-            let normalized = self.normalize_associated(substituted);
+            raw.insert(*assoc, self.substitute_self(lowered, self_ty));
+            spans.insert(*assoc, source.span);
+        }
 
-            bindings.insert(assoc, normalized);
+        let edges = self.assoc_reference_edges(&assoc_ids, &raw, self_ty);
+        let mut cycle_state: HashMap<DefId, u8> = HashMap::default();
+
+        for assoc in &assoc_ids {
+            self.detect_associated_type_cycle(*assoc, &edges, &mut cycle_state, &spans, source);
+        }
+
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+        let mut resolving: HashSet<DefId> = HashSet::default();
+
+        for assoc in &assoc_ids {
+            let Some(&ty) = raw.get(assoc) else {
+                continue;
+            };
+
+            let resolved = self.resolve_assoc_siblings(ty, self_ty, &raw, &mut resolving);
+            let normalized = self.normalize_associated(resolved);
+
+            bindings.insert(*assoc, normalized);
+
+            if self
+                .assoc_type_bounds
+                .get(assoc)
+                .is_some_and(|bounds| !bounds.is_empty())
+            {
+                self.pending_assoc_checks.push(PendingAssocCheck {
+                    assoc: *assoc,
+                    bound_ty: normalized,
+                    span: spans.get(assoc).copied().unwrap_or(source.span),
+                    source: source.clone(),
+                });
+            }
         }
 
         if let Some(entries) = self.result.impl_registry.get_mut(&(object_def, iface_def))
@@ -8590,6 +8663,291 @@ impl<'res> TypeChecker<'res> {
             })
         {
             entry.assoc_bindings = bindings;
+        }
+    }
+
+    fn assoc_reference_edges(
+        &self,
+        assoc_ids: &[DefId],
+        raw: &HashMap<DefId, TypeId>,
+        self_ty: TypeId,
+    ) -> HashMap<DefId, Vec<DefId>> {
+        let mut edges: HashMap<DefId, Vec<DefId>> = HashMap::default();
+
+        for assoc in assoc_ids {
+            let Some(&ty) = raw.get(assoc) else {
+                continue;
+            };
+
+            let mut refs = Vec::new();
+
+            self.collect_sibling_refs(ty, self_ty, assoc_ids, &mut refs);
+            edges.insert(*assoc, refs);
+        }
+
+        edges
+    }
+
+    fn collect_sibling_refs(
+        &self,
+        ty: TypeId,
+        self_ty: TypeId,
+        assoc_ids: &[DefId],
+        out: &mut Vec<DefId>,
+    ) {
+        match self.result.interner.get(ty).clone() {
+            Type::Associated { base, def } => {
+                if base == self_ty && assoc_ids.contains(&def) && !out.contains(&def) {
+                    out.push(def);
+                }
+            }
+
+            Type::Pointer { inner, .. }
+            | Type::ManyPointer { inner, .. }
+            | Type::Slice { element: inner, .. }
+            | Type::Array { element: inner, .. } => {
+                self.collect_sibling_refs(inner, self_ty, assoc_ids, out);
+            }
+
+            Type::Struct { generic_args, .. } | Type::Enum { generic_args, .. } => {
+                for arg in generic_args {
+                    self.collect_sibling_refs(arg, self_ty, assoc_ids, out);
+                }
+            }
+
+            Type::Fn { params, ret } | Type::FatFn { params, ret, .. } => {
+                for param in params {
+                    self.collect_sibling_refs(param, self_ty, assoc_ids, out);
+                }
+
+                self.collect_sibling_refs(ret, self_ty, assoc_ids, out);
+            }
+
+            _ => {}
+        }
+    }
+
+    fn detect_associated_type_cycle(
+        &mut self,
+        assoc: DefId,
+        edges: &HashMap<DefId, Vec<DefId>>,
+        state: &mut HashMap<DefId, u8>,
+        spans: &HashMap<DefId, SourceSpan>,
+        source: &Source,
+    ) {
+        match state.get(&assoc).copied() {
+            Some(1) => {
+                let name: SmolStr = self.def_name(assoc).unwrap_or_default().into();
+
+                self.report(TypeError::AssociatedTypeCycle {
+                    name,
+                    src: source.src(),
+                    span: spans.get(&assoc).copied().unwrap_or(source.span),
+                });
+
+                state.insert(assoc, 2);
+
+                return;
+            }
+
+            Some(2) => return,
+
+            _ => {}
+        }
+
+        state.insert(assoc, 1);
+
+        for next in edges.get(&assoc).cloned().unwrap_or_default() {
+            self.detect_associated_type_cycle(next, edges, state, spans, source);
+        }
+
+        state.insert(assoc, 2);
+    }
+
+    fn resolve_assoc_siblings(
+        &mut self,
+        ty: TypeId,
+        self_ty: TypeId,
+        raw: &HashMap<DefId, TypeId>,
+        resolving: &mut HashSet<DefId>,
+    ) -> TypeId {
+        match self.result.interner.get(ty).clone() {
+            Type::Associated { base, def } if base == self_ty => {
+                let Some(&target) = raw.get(&def) else {
+                    return ty;
+                };
+
+                if !resolving.insert(def) {
+                    return ty;
+                }
+
+                let resolved = self.resolve_assoc_siblings(target, self_ty, raw, resolving);
+
+                resolving.remove(&def);
+
+                resolved
+            }
+
+            Type::Pointer { inner, is_const } => {
+                let new_inner = self.resolve_assoc_siblings(inner, self_ty, raw, resolving);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::ManyPointer { inner, is_const } => {
+                let new_inner = self.resolve_assoc_siblings(inner, self_ty, raw, resolving);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::ManyPointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Array { element, len } => {
+                let new_element = self.resolve_assoc_siblings(element, self_ty, raw, resolving);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Array {
+                        element: new_element,
+                        len,
+                    })
+                }
+            }
+
+            Type::Slice { element, is_const } => {
+                let new_element = self.resolve_assoc_siblings(element, self_ty, raw, resolving);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Slice {
+                        element: new_element,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|arg| self.resolve_assoc_siblings(*arg, self_ty, raw, resolving))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|arg| self.resolve_assoc_siblings(*arg, self_ty, raw, resolving))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Enum {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Fn { params, ret } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|param| self.resolve_assoc_siblings(*param, self_ty, raw, resolving))
+                    .collect();
+                let new_ret = self.resolve_assoc_siblings(ret, self_ty, raw, resolving);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Fn {
+                        params: new_params,
+                        ret: new_ret,
+                    })
+                }
+            }
+
+            Type::FatFn {
+                params,
+                ret,
+                once,
+                erased,
+            } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|param| self.resolve_assoc_siblings(*param, self_ty, raw, resolving))
+                    .collect();
+                let new_ret = self.resolve_assoc_siblings(ret, self_ty, raw, resolving);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::FatFn {
+                        params: new_params,
+                        ret: new_ret,
+                        once,
+                        erased,
+                    })
+                }
+            }
+
+            _ => ty,
+        }
+    }
+
+    fn check_associated_type_bounds(
+        &mut self,
+        assoc: DefId,
+        bound_ty: TypeId,
+        span: SourceSpan,
+        source: &Source,
+    ) {
+        let bounds = self
+            .assoc_type_bounds
+            .get(&assoc)
+            .cloned()
+            .unwrap_or_default();
+
+        for bound in bounds {
+            if self.type_satisfies_interface(bound_ty, bound) {
+                continue;
+            }
+
+            self.report(TypeError::AssociatedTypeBoundNotSatisfied {
+                name: self.def_name(assoc).unwrap_or_default().into(),
+                ty: self.display_type(bound_ty).into(),
+                bound: self.def_name(bound).unwrap_or_default().into(),
+                src: source.src(),
+                span,
+            });
         }
     }
 
