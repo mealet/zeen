@@ -32,6 +32,7 @@ pub enum DeclarationKind<'arena> {
         generics: Option<&'arena [GenericType<'arena>]>,
         params: &'arena [FnParam<'arena>],
         return_type: Option<&'arena TypeExpr<'arena>>,
+        where_clauses: Option<&'arena [WhereClause<'arena>]>,
 
         body: Option<&'arena Statement<'arena>>,
 
@@ -53,15 +54,19 @@ pub enum DeclarationKind<'arena> {
         is_pub: bool,
 
         generics: Option<&'arena [GenericType<'arena>]>,
+        aliases: &'arena [&'arena Declaration<'arena>],
         methods: &'arena [&'arena Declaration<'arena>], // FnDecl
     },
 
     ImplementDecl {
         interface: Option<(Spur, SourceSpan)>,
+        interface_args: &'arena [&'arena TypeExpr<'arena>],
         builtin: Option<&'arena BuiltinShape>,
         object: (Spur, SourceSpan, &'arena [&'arena TypeExpr<'arena>]), // name, span, generics slots
         generics: Option<&'arena [GenericType<'arena>]>,
+        where_clauses: Option<&'arena [WhereClause<'arena>]>,
 
+        aliases: &'arena [&'arena Declaration<'arena>],
         methods: &'arena [&'arena Declaration<'arena>], // FnDecl
     },
 
@@ -102,6 +107,8 @@ pub enum DeclarationKind<'arena> {
     },
 
     Alias(AliasDecl<'arena>),
+
+    AssociatedType(AssociatedTypeDecl<'arena>),
 
     ComptimeConst {
         name: (Spur, SourceSpan),
@@ -181,6 +188,30 @@ pub struct AliasDecl<'arena> {
     pub is_pub: bool,
     pub generics: Option<&'arena [GenericType<'arena>]>,
     pub ty: &'arena TypeExpr<'arena>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AssociatedTypeDecl<'arena> {
+    pub name: (Spur, SourceSpan),
+    pub bounds: Option<&'arena [(Spur, SourceSpan)]>,
+    pub default: Option<&'arena TypeExpr<'arena>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WhereClause<'arena> {
+    pub ty: &'arena TypeExpr<'arena>,
+    pub kind: WhereClauseKind<'arena>,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WhereClauseKind<'arena> {
+    Bound {
+        bounds: &'arena [(Spur, SourceSpan)],
+    },
+    Equality {
+        ty: &'arena TypeExpr<'arena>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
