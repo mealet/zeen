@@ -25,6 +25,11 @@ pub enum HirTypeKind {
         generic_args: Vec<Rc<HirTypeExpr>>,
     },
 
+    Associated {
+        base: Rc<HirTypeExpr>,
+        name: (lasso::Spur, miette::SourceSpan),
+    },
+
     Const(Rc<HirTypeExpr>),
 
     TypeOf(Rc<HirExpr>),

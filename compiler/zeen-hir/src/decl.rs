@@ -55,7 +55,7 @@ pub struct HirFn {
     pub generics: Vec<HirGenericParam>,
     pub params: Vec<Rc<HirParam>>,
     pub return_type: Option<Rc<HirTypeExpr>>,
-
+    pub where_clauses: Vec<HirWhereClause>,
     pub body: Option<Rc<HirStmt>>,
 
     pub is_pub: bool,
@@ -63,6 +63,19 @@ pub struct HirFn {
 
     pub self_param: Option<DefId>,
     pub parent_fn: Option<DefId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirWhereClause {
+    pub ty: Rc<HirTypeExpr>,
+    pub kind: HirWhereClauseKind,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone)]
+pub enum HirWhereClauseKind {
+    Bound { bounds: Vec<DefId> },
+    Equality { ty: Rc<HirTypeExpr> },
 }
 
 #[derive(Debug, Clone)]
@@ -109,7 +122,16 @@ pub struct HirInterface {
     pub is_pub: bool,
 
     pub generics: Vec<HirGenericParam>,
+    pub aliases: Vec<Rc<HirAssociatedType>>,
     pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn
+}
+
+#[derive(Debug, Clone)]
+pub struct HirAssociatedType {
+    pub def_id: DefId,
+    pub name: (Spur, SourceSpan),
+    pub bounds: Vec<DefId>,
+    pub default: Option<Rc<HirTypeExpr>>,
 }
 
 // -> Implement
@@ -117,13 +139,16 @@ pub struct HirInterface {
 #[derive(Debug, Clone)]
 pub struct HirImplement {
     pub interface: Option<DefId>,
+    pub interface_args: Vec<Rc<HirTypeExpr>>,
     pub object: Option<DefId>,
 
     pub generics: Vec<HirGenericParam>,
+    pub where_clauses: Vec<HirWhereClause>,
     pub object_generics_bindings: Vec<DefId>,
     pub object_generic_types: Vec<Rc<HirTypeExpr>>,
     pub object_bindings_span: SourceSpan,
 
+    pub aliases: Vec<Rc<HirAssociatedType>>,
     pub methods: Vec<Rc<HirDecl>>, // HirDeclKind::Fn
 }
 

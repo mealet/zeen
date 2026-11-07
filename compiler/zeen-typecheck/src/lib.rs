@@ -1192,6 +1192,12 @@ impl<'res> TypeChecker<'res> {
 
             HirTypeKind::VaArgs => self.result.interner.void(),
 
+            HirTypeKind::Associated { base, .. } => {
+                let _ = self.lower_hir_type(base);
+
+                self.result.interner.error()
+            }
+
             HirTypeKind::Named {
                 def_id,
                 generic_args,

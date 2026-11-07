@@ -603,6 +603,7 @@ impl<'ctx> MirLowering<'ctx> {
             generics: Vec::new(),
             params: Vec::new(),
             return_type: None,
+            where_clauses: Vec::new(),
             body: Some(Rc::new(body)),
             is_pub: false,
             is_extern: false,
