@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO="${ZORA_REPO:-https://github.com/mealet/zora}"
+REPO="${ZORA_REPO:-https://github.com/zeen-lang/zora}"
 REF="${ZORA_REF:-}"
 SRC="${ZORA_SRC:-}"
 

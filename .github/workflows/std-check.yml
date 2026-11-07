@@ -48,7 +48,7 @@ jobs:
         mkdir -p "$GITHUB_WORKSPACE/dist/bin"
         cp compiler/target/release/zeen "$GITHUB_WORKSPACE/dist/bin/zeen"
         echo "$GITHUB_WORKSPACE/dist/bin" >> "$GITHUB_PATH"
-        cargo install --git https://github.com/mealet/zora --locked --root "$GITHUB_WORKSPACE/dist" --force zora
+        cargo install --git https://github.com/zeen-lang/zora --locked --root "$GITHUB_WORKSPACE/dist" --force zora
 
     - name: Verify Tools
       run: |

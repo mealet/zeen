@@ -9,7 +9,7 @@ set -eu
 # ZEEN_REPO and ZEEN_API_URL override the release source, which is only
 # useful for testing.
 
-REPO="${ZEEN_REPO:-mealet/zeen}"
+REPO="${ZEEN_REPO:-zeen-lang/zeen}"
 API_URL="${ZEEN_API_URL:-https://api.github.com}"
 
 PREFIX=""

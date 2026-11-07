@@ -26,7 +26,7 @@ try {
         [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch {}
 
-$Repo = if ($env:ZEEN_REPO) { $env:ZEEN_REPO } else { 'mealet/zeen' }
+$Repo = if ($env:ZEEN_REPO) { $env:ZEEN_REPO } else { 'zeen-lang/zeen' }
 $ApiUrl = if ($env:ZEEN_API_URL) { $env:ZEEN_API_URL } else { 'https://api.github.com' }
 
 if (-not $Prefix) {

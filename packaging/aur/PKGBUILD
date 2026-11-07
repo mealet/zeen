@@ -4,13 +4,13 @@ pkgver=0.3.0
 pkgrel=1
 pkgdesc="Compiler, language server and package manager of the Zeen language"
 arch=('x86_64')
-url="https://github.com/mealet/zeen"
+url="https://github.com/zeen-lang/zeen"
 license=('Apache-2.0')
 depends=('gcc-libs' 'glibc' 'llvm-libs')
 makedepends=('cargo' 'llvm')
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
-        "zora::git+https://github.com/mealet/zora")
+        "zora::git+https://github.com/zeen-lang/zora")
 sha256sums=('SKIP' 'SKIP')
 
 prepare() {

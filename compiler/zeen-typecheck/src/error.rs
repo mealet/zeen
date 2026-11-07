@@ -506,7 +506,7 @@ pub enum TypeError {
     #[diagnostic(
         severity(Error),
         code(zeen::typechecker::dangling_defid),
-        help("please report this on: https://github.com/mealet/zeen/issues")
+        help("please report this on: https://github.com/zeen-lang/zeen/issues")
     )]
     DanglingDefId {
         id: u32,

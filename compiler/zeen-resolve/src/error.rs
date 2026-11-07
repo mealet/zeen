@@ -67,7 +67,7 @@ pub enum ResolveError {
         severity(Error),
         code(zeen::resolver::std_not_configured),
         help(
-            "pass `--std <path>` or set `ZEEN_STD` to the std library root, or install it to `~/.zeen/std` (see https://github.com/mealet/zeen)"
+            "pass `--std <path>` or set `ZEEN_STD` to the std library root, or install it to `~/.zeen/std` (see https://github.com/zeen-lang/zeen)"
         )
     )]
     StdlibNotConfigured {
@@ -124,7 +124,7 @@ pub enum ResolveError {
     #[diagnostic(
         severity(Error),
         code(zeen::resolver::disabled_feature),
-        help("visit for more information: https://github.com/mealet/zeen")
+        help("visit for more information: https://github.com/zeen-lang/zeen")
     )]
     DisabledFeature {
         reason: SmolStr,

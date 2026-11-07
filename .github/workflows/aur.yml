@@ -45,7 +45,7 @@ jobs:
           echo "publishing zeen $PKGVER"
 
           curl -fsSL -o /tmp/source.tar.gz \
-            "https://github.com/mealet/zeen/archive/refs/tags/$TAG.tar.gz"
+            "https://github.com/zeen-lang/zeen/archive/refs/tags/$TAG.tar.gz"
           SHA="$(sha256sum /tmp/source.tar.gz | cut -d' ' -f1)"
 
           cd "$GITHUB_WORKSPACE/packaging/aur"

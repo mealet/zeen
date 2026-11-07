@@ -8,7 +8,7 @@ Older releases may not receive security fixes. Users are encouraged to upgrade t
 
 ## Reporting a Vulnerability
 
-The preferred way to report security vulnerabilities is through [GitHub Private Vulnerability Reporting](https://github.com/mealet/zeen/security/advisories/new).
+The preferred way to report security vulnerabilities is through [GitHub Private Vulnerability Reporting](https://github.com/zeen-lang/zeen/security/advisories/new).
 
 **Please do not disclose security vulnerabilities through public GitHub Issues, Discussions, or Pull Requests.**
 

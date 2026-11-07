@@ -3,7 +3,7 @@ Here's the contribution guide for you:
 
 ## Repository Issues
 Found a bug? Wanna suggest an improvement? You can always open an issue in this repository:
-1. Open repo's [issues](https://github.com/mealet/zeen/issues)
+1. Open repo's [issues](https://github.com/zeen-lang/zeen/issues)
 2. Please ensure that your problem/improvement wasn't already reported (use search)
 3. Push the button `New issue`
 4. Use one of suggested templates and follow their instructions
@@ -54,7 +54,7 @@ ci: ...     - CI/CD changes
 ```bash
 git push -u origin NEW_BRANCH
 ```
-4. Open pull request at https://github.com/mealet/zeen/pulls
+4. Open pull request at https://github.com/zeen-lang/zeen/pulls
 
 _Contributions are accepted under the project's license (see [LICENSE](LICENSE))_
 
@@ -93,7 +93,7 @@ Tests are the most important part of contribution, so always be sure that you've
 1. Install the [Rust Programming Language](https://www.rust-lang.org/) and [LLVM 22](https://www.llvm.org/docs/GettingStarted.html)
 2. Clone the repository:
 ```sh
-git clone https://github.com/mealet/zeen
+git clone https://github.com/zeen-lang/zeen
 ```
 3. Build the compiler:
 ```sh

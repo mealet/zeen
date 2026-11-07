@@ -56,7 +56,7 @@ fn parse_pkg_flags(flags: &[String]) -> Vec<(String, std::path::PathBuf)> {
 }
 
 fn resolve_std_root(explicit: Option<&Path>) -> Result<Option<std::path::PathBuf>, String> {
-    const REPO: &str = "https://github.com/mealet/zeen";
+    const REPO: &str = "https://github.com/zeen-lang/zeen";
 
     fn std_src(root: &Path) -> Option<std::path::PathBuf> {
         let src = root.join("src");
@@ -189,7 +189,7 @@ fn main() {
 
     if result.is_err() {
         cli::println_error(
-            "internal compiler error (ICE). This is a compiler bug; see https://github.com/mealet/zeen",
+            "internal compiler error (ICE). This is a compiler bug; see https://github.com/zeen-lang/zeen",
         );
         exit(1);
     }

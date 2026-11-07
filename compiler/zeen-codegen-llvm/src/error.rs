@@ -10,7 +10,7 @@ pub enum CodegenError {
     #[error("LLVM failed to verify the generated module `{module}`")]
     #[diagnostic(
         code(zeen::codegen::verify_failed),
-        url("https://github.com/mealet/zeen/issues/new"),
+        url("https://github.com/zeen-lang/zeen/issues/new"),
         help("This is a compiler bug. Please report it with the full output.")
     )]
     ModuleVerificationFailed { module: String, detail: String },

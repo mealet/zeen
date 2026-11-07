@@ -2,7 +2,7 @@
 # Utility: https://github.com/casey/just
 
 # Zeen Compiler Justfile
-# https://github.com/mealet/zeen
+# https://github.com/zeen-lang/zeen
 
 # Usage: just <recipe>
 # (used in development purposes)
