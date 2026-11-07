@@ -45,6 +45,7 @@ pub struct TypeCheckResult {
     pub format_arg_resolutions: HashMap<HirId, DefId>,
     pub interface_method_owners: HashMap<DefId, DefId>,
     pub for_iterator_next_methods: HashMap<HirId, DefId>,
+    pub default_method_bindings: HashMap<(DefId, DefId), HashMap<DefId, TypeId>>,
 }
 
 #[derive(Debug, Clone)]
@@ -250,6 +251,7 @@ impl TypeCheckResult {
 pub struct CallResolution {
     pub fn_def: DefId,
     pub generic_args: Vec<TypeId>,
+    pub owner: Option<DefId>,
 }
 
 #[derive(Debug, Clone)]

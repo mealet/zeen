@@ -513,6 +513,10 @@ pub fn substitute_generics(
     match interner.get(ty).clone() {
         Type::GenericParam(g) => bindings.get(&g).copied().unwrap_or(ty),
 
+        Type::InterfaceSelfPlaceholder(placeholder) => {
+            bindings.get(&placeholder).copied().unwrap_or(ty)
+        }
+
         Type::Pointer { inner, is_const } => {
             let new_inner = substitute_generics(interner, inner, bindings);
             if new_inner == inner {

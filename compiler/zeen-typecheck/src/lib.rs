@@ -69,6 +69,7 @@ pub struct TypeChecker<'res> {
     interface_registry: InterfaceRegistry,
     interface_methods: HashMap<DefId, Vec<DefId>>,
     interface_generics: HashMap<DefId, Vec<DefId>>,
+    interface_methods_with_body: HashSet<DefId>,
 
     struct_generics: HashMap<DefId, Vec<DefId>>,
     struct_methods: HashMap<DefId, HashMap<Spur, Vec<DefId>>>,
@@ -211,6 +212,7 @@ impl<'res> TypeChecker<'res> {
             interface_registry,
             interface_methods: HashMap::default(),
             interface_generics: HashMap::default(),
+            interface_methods_with_body: HashSet::default(),
             struct_generics: HashMap::default(),
             struct_methods: HashMap::default(),
             enum_variants: HashMap::default(),
@@ -460,6 +462,12 @@ impl<'res> TypeChecker<'res> {
                         .interface_method_owners
                         .insert(method.def_id, decl.def_id);
                     self.declare_signature(method);
+
+                    if let HirDeclKind::Fn(f) = &method.kind
+                        && f.body.is_some()
+                    {
+                        self.interface_methods_with_body.insert(method.def_id);
+                    }
                 }
             }
 
@@ -5354,6 +5362,7 @@ impl<'res> TypeChecker<'res> {
             CallResolution {
                 fn_def: def_id,
                 generic_args: resolved_generic_args,
+                owner: None,
             },
         );
 
@@ -5523,11 +5532,226 @@ impl<'res> TypeChecker<'res> {
             CallResolution {
                 fn_def: method_def,
                 generic_args: resolved_generic_args,
+                owner: None,
             },
         );
 
         let ret = self.substitute_generics(sig_ret, &bindings);
         Some(self.substitute_self(ret, recv_ty))
+    }
+
+    fn interface_self_placeholder_owner(&self, ty: TypeId) -> Option<(DefId, DefId)> {
+        let placeholder = match self.result.interner.get(ty).clone() {
+            Type::InterfaceSelfPlaceholder(placeholder) => placeholder,
+
+            Type::Pointer { inner, .. } => match self.result.interner.get(inner).clone() {
+                Type::InterfaceSelfPlaceholder(placeholder) => placeholder,
+                _ => return None,
+            },
+
+            _ => return None,
+        };
+
+        self.resolution
+            .interface_self_placeholders
+            .iter()
+            .find(|&(_, &value)| value == placeholder)
+            .map(|(&iface_def, _)| (iface_def, placeholder))
+    }
+
+    fn try_check_interface_self_method_call(
+        &mut self,
+        call_id: HirId,
+        object: &HirExpr,
+        field: (Spur, SourceSpan),
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        source: Source,
+    ) -> Option<TypeId> {
+        let (field_name, field_span) = field;
+
+        let obj_ty = self.synth_expr(object);
+        let (iface_def, _placeholder) = self.interface_self_placeholder_owner(obj_ty)?;
+
+        let (recv_ty, recv_is_ptr, recv_ptr_is_const) =
+            match self.result.interner.get(obj_ty).clone() {
+                Type::Pointer { inner, is_const } => (inner, true, is_const),
+                _ => (obj_ty, false, false),
+            };
+
+        let method_name = self.interner.borrow().resolve(&field_name).to_string();
+        let method_def = self
+            .interface_methods
+            .get(&iface_def)?
+            .iter()
+            .copied()
+            .find(|&method| self.def_name(method).as_deref() == Some(method_name.as_str()))?;
+
+        let sig = &self.fn_sigs[&method_def];
+        let sig_params = sig.params.clone();
+        let sig_ret = sig.ret;
+        let sig_generics = sig.generics.clone();
+        let self_mode = sig.self_mode;
+        let has_self = self_mode.is_some();
+
+        if recv_is_ptr {
+            match self_mode {
+                Some(SelfMode::Value) | Some(SelfMode::ValueConst) => {
+                    self.report(TypeError::CannotMoveThroughPointer {
+                        src: source.src(),
+                        span: field_span,
+                    });
+                }
+                Some(SelfMode::RefMut) if recv_ptr_is_const => {
+                    self.report(TypeError::AssignToConst {
+                        src: source.src(),
+                        span: field_span,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        let expected_args = sig_params.len() - usize::from(has_self);
+        if args.len() != expected_args {
+            self.report(TypeError::ArgCountMismatch {
+                expected: expected_args,
+                found: args.len(),
+                src: source.src(),
+                span: source.span,
+            });
+        }
+
+        let user_params = if has_self {
+            &sig_params[1..]
+        } else {
+            &sig_params[..]
+        };
+
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+        for (param_ty, arg) in user_params.iter().zip(args.iter()) {
+            let param_ty = self.substitute_self(*param_ty, recv_ty);
+            self.infer_or_check_arg(param_ty, arg, &mut bindings, source.clone());
+        }
+
+        for (generic, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
+            let ty = self.lower_hir_type(explicit);
+            bindings.insert(*generic, ty);
+        }
+
+        let resolved_generic_args: Vec<TypeId> = sig_generics
+            .iter()
+            .map(|generic| {
+                bindings
+                    .get(generic)
+                    .copied()
+                    .unwrap_or_else(|| self.result.interner.error())
+            })
+            .collect();
+
+        self.result.call_resolutions.insert(
+            call_id,
+            CallResolution {
+                fn_def: method_def,
+                generic_args: resolved_generic_args,
+                owner: None,
+            },
+        );
+
+        let ret = self.substitute_generics(sig_ret, &bindings);
+        Some(self.substitute_self(ret, recv_ty))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn try_check_interface_self_static_call(
+        &mut self,
+        call_id: HirId,
+        placeholder: DefId,
+        field: (Spur, SourceSpan),
+        args: &[Rc<HirExpr>],
+        explicit_generic_args: &[Rc<HirTypeExpr>],
+        source: Source,
+        expected: Option<TypeId>,
+    ) -> Option<TypeId> {
+        let (field_name, field_span) = field;
+
+        let iface_def = self
+            .resolution
+            .interface_self_placeholders
+            .iter()
+            .find(|&(_, &value)| value == placeholder)
+            .map(|(&iface_def, _)| iface_def)?;
+
+        let method_name = self.interner.borrow().resolve(&field_name).to_string();
+        let method_def = self
+            .interface_methods
+            .get(&iface_def)?
+            .iter()
+            .copied()
+            .find(|&method| self.def_name(method).as_deref() == Some(method_name.as_str()))?;
+
+        let (self_mode, sig_params, sig_ret, sig_generics) = {
+            let sig = &self.fn_sigs[&method_def];
+            (
+                sig.self_mode,
+                sig.params.clone(),
+                sig.ret,
+                sig.generics.clone(),
+            )
+        };
+
+        if self_mode.is_some() {
+            self.report(TypeError::AssociatedCallOnInstaneMethod {
+                src: source.src(),
+                span: field_span,
+            });
+            return Some(self.result.interner.error());
+        }
+
+        if args.len() != sig_params.len() {
+            self.report(TypeError::ArgCountMismatch {
+                expected: sig_params.len(),
+                found: args.len(),
+                src: source.src(),
+                span: source.span,
+            });
+        }
+
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+
+        for (generic, explicit) in sig_generics.iter().zip(explicit_generic_args.iter()) {
+            let ty = self.lower_hir_type(explicit);
+            bindings.insert(*generic, ty);
+        }
+
+        for (param_ty, arg) in sig_params.iter().zip(args.iter()) {
+            self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
+        }
+
+        if let Some(expected) = expected {
+            self.seed_inference_bindings(sig_ret, expected, &mut bindings);
+        }
+
+        let resolved_generic_args: Vec<TypeId> = sig_generics
+            .iter()
+            .map(|generic| {
+                bindings
+                    .get(generic)
+                    .copied()
+                    .unwrap_or_else(|| self.result.interner.error())
+            })
+            .collect();
+
+        self.result.call_resolutions.insert(
+            call_id,
+            CallResolution {
+                fn_def: method_def,
+                generic_args: resolved_generic_args,
+                owner: None,
+            },
+        );
+
+        Some(self.substitute_generics(sig_ret, &bindings))
     }
 
     fn check_builtin_interface_method(
@@ -5584,6 +5808,7 @@ impl<'res> TypeChecker<'res> {
                         crate::result::CallResolution {
                             fn_def: method_def,
                             generic_args: resolved_generic_args,
+                            owner: Some(zeen_resolve::builtin_def_id(builtin_ty)),
                         },
                     );
                     let ret = self.substitute_generics(sig_ret, &bindings);
@@ -5593,6 +5818,27 @@ impl<'res> TypeChecker<'res> {
         }
 
         None
+    }
+
+    fn method_self_type(&mut self, owner_def: DefId, owner_args: &[TypeId]) -> TypeId {
+        match self.def_kind(owner_def).cloned() {
+            Some(DefKind::Builtin(builtin)) => self.result.interner.builtin(builtin),
+
+            Some(DefKind::BuiltinShape(shape)) => {
+                let generics = self.type_member_generics(owner_def);
+                self.builtin_shape_type(&shape, &generics)
+            }
+
+            Some(DefKind::Enum) => self.result.interner.intern(Type::Enum {
+                def_id: owner_def,
+                generic_args: owner_args.to_vec(),
+            }),
+
+            _ => self.result.interner.intern(Type::Struct {
+                def_id: owner_def,
+                generic_args: owner_args.to_vec(),
+            }),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5607,6 +5853,24 @@ impl<'res> TypeChecker<'res> {
         expected: Option<TypeId>,
     ) -> Option<TypeId> {
         let (field_name, field_span) = field;
+
+        if let HirExprKind::Type(ty) = &object.kind
+            && let HirTypeKind::SelfType(def_id) = ty.kind
+            && matches!(
+                self.def_kind(def_id),
+                Some(DefKind::InterfaceSelfPlaceholder)
+            )
+        {
+            return self.try_check_interface_self_static_call(
+                call_id,
+                def_id,
+                field,
+                args,
+                explicit_generic_args,
+                source,
+                expected,
+            );
+        }
 
         if let Some((builtin, owner)) = self.builtin_expr_owner(object) {
             return Some(self.check_builtin_associated_fn_call(
@@ -5680,6 +5944,17 @@ impl<'res> TypeChecker<'res> {
             && matches!(self.result.interner.get(inner), Type::GenericParam(_))
         {
             return self.try_check_generic_bound_method_call(
+                call_id,
+                object,
+                field,
+                args,
+                explicit_generic_args,
+                source,
+            );
+        }
+
+        if self.interface_self_placeholder_owner(obj_ty).is_some() {
+            return self.try_check_interface_self_method_call(
                 call_id,
                 object,
                 field,
@@ -5858,12 +6133,33 @@ impl<'res> TypeChecker<'res> {
                 method_def_id
             }
         };
-        let sig = &self.fn_sigs[&method_def_id];
-        let self_mode = sig.self_mode;
+        let (self_mode, raw_params, raw_ret, sig_generics) = {
+            let sig = &self.fn_sigs[&method_def_id];
+            (
+                sig.self_mode,
+                sig.params.clone(),
+                sig.ret,
+                sig.generics.clone(),
+            )
+        };
 
-        let sig_params = sig.params.clone();
-        let sig_ret = sig.ret;
-        let sig_generics = sig.generics.clone();
+        let interface_self = self
+            .result
+            .interface_method_owners
+            .contains_key(&method_def_id)
+            .then(|| self.method_self_type(struct_def, &struct_generic_args));
+
+        let sig_params: Vec<TypeId> = match interface_self {
+            Some(self_ty) => raw_params
+                .into_iter()
+                .map(|param| self.substitute_self(param, self_ty))
+                .collect(),
+            None => raw_params,
+        };
+        let sig_ret = match interface_self {
+            Some(self_ty) => self.substitute_self(raw_ret, self_ty),
+            None => raw_ret,
+        };
 
         if self_mode.is_none() {
             let method = self.interner.borrow().resolve(&field_name).into();
@@ -5996,11 +6292,18 @@ impl<'res> TypeChecker<'res> {
         let mut monomorphized_args: Vec<TypeId> = struct_generic_args;
         monomorphized_args.extend(resolved_generic_args);
 
+        let owner = self
+            .result
+            .interface_method_owners
+            .contains_key(&method_def_id)
+            .then_some(struct_def);
+
         self.result.call_resolutions.insert(
             call_id,
             CallResolution {
                 fn_def: method_def_id,
                 generic_args: monomorphized_args,
+                owner,
             },
         );
 
@@ -6765,6 +7068,37 @@ impl<'res> TypeChecker<'res> {
             bindings.insert(*g, ty);
         }
 
+        let interface_self = if self
+            .result
+            .interface_method_owners
+            .contains_key(&method_def_id)
+        {
+            let owner_args: Vec<TypeId> = type_generics
+                .iter()
+                .map(|generic| {
+                    bindings.get(generic).copied().unwrap_or_else(|| {
+                        self.result.interner.intern(Type::GenericParam(*generic))
+                    })
+                })
+                .collect();
+
+            Some(self.method_self_type(struct_def, &owner_args))
+        } else {
+            None
+        };
+
+        let sig_params: Vec<TypeId> = match interface_self {
+            Some(self_ty) => sig_params
+                .into_iter()
+                .map(|param| self.substitute_self(param, self_ty))
+                .collect(),
+            None => sig_params,
+        };
+        let sig_ret = match interface_self {
+            Some(self_ty) => self.substitute_self(sig_ret, self_ty),
+            None => sig_ret,
+        };
+
         for (param_ty, arg) in sig_params.iter().zip(args.iter()) {
             self.infer_or_check_arg(*param_ty, arg, &mut bindings, source.clone());
         }
@@ -6871,11 +7205,18 @@ impl<'res> TypeChecker<'res> {
         let mut monomorphized_args = resolved_struct_args;
         monomorphized_args.extend(resolved_generic_args);
 
+        let owner = self
+            .result
+            .interface_method_owners
+            .contains_key(&method_def_id)
+            .then_some(struct_def);
+
         self.result.call_resolutions.insert(
             call_id,
             CallResolution {
                 fn_def: method_def_id,
                 generic_args: monomorphized_args,
+                owner,
             },
         );
 
@@ -7696,7 +8037,12 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn method_impl_entry(&self, object: DefId, method: DefId) -> Option<ImplEntry> {
-        if let Some(&iface_def) = self.method_owning_interface.get(&method)
+        let owning_interface = self
+            .method_owning_interface
+            .get(&method)
+            .or_else(|| self.result.interface_method_owners.get(&method));
+
+        if let Some(&iface_def) = owning_interface
             && let Some(entries) = self.result.impl_registry.get(&(object, iface_def))
             && let Some(entry) = entries.iter().find(|e| e.methods.contains(&method))
         {
@@ -8649,6 +8995,15 @@ impl<'res> TypeChecker<'res> {
             let explicit_method = impl_method_names.get(&method_name).copied();
 
             match explicit_method.or(inherent_method) {
+                None if self.interface_methods_with_body.contains(&iface_method_def) => {
+                    self.register_default_method(
+                        iface_def,
+                        iface_method_def,
+                        object_def,
+                        sig_ctx,
+                        self_ty,
+                    );
+                }
                 None => {
                     self.report(TypeError::InterfaceMethodMissing {
                         interface: self.def_name(iface_def).unwrap_or_default().into(),
@@ -8688,6 +9043,56 @@ impl<'res> TypeChecker<'res> {
                 }
             }
         }
+    }
+
+    fn register_default_method(
+        &mut self,
+        iface_def: DefId,
+        method_def: DefId,
+        object_def: DefId,
+        sig_ctx: &ImplSigCtx,
+        self_ty: TypeId,
+    ) {
+        let Some(name) = self.resolution.defs.get(&method_def).map(|info| info.name) else {
+            return;
+        };
+
+        let methods = self
+            .struct_methods
+            .entry(object_def)
+            .or_default()
+            .entry(name)
+            .or_default();
+
+        if !methods.contains(&method_def) {
+            methods.push(method_def);
+        }
+
+        let iface_generics = self
+            .interface_generics
+            .get(&iface_def)
+            .cloned()
+            .unwrap_or_default();
+
+        let struct_args: Vec<TypeId> = match self.result.interner.get(self_ty).clone() {
+            Type::Struct { generic_args, .. } | Type::Enum { generic_args, .. } => generic_args,
+            _ => Vec::new(),
+        };
+
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+        for (iface_generic, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
+            bindings.insert(*iface_generic, *struct_arg);
+        }
+
+        if let Some(&placeholder) = self.resolution.interface_self_placeholders.get(&iface_def) {
+            bindings.insert(placeholder, self_ty);
+        }
+
+        self.result
+            .default_method_bindings
+            .insert((method_def, object_def), bindings);
+
+        self.record_inherent_interface_method(object_def, iface_def, sig_ctx, method_def);
     }
 
     fn record_inherent_interface_method(
