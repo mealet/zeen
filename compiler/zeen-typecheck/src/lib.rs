@@ -16163,6 +16163,36 @@ mod tests {
     }
 
     #[test]
+    fn generic_index_through_pointer_to_generic_param() {
+        typecheck_full(
+            r#"
+            struct Buffer[T] {
+                items: [*]T,
+            }
+
+            implement[T] Index : Buffer[T] {
+                alias Output = T;
+
+                fn index(*const self, index: usize) Output {
+                    return self.items[index];
+                }
+            }
+
+            fn second[B: Index](buffer: *const B) B.Output {
+                return buffer[1];
+            }
+
+            fn main() {
+                const numbers = {10, 20, 30};
+                const buffer = Buffer { .items = @as([*]i32, &numbers[0]) };
+                let value: i32 = second(&buffer);
+            }
+            "#,
+        )
+        .expect("generic indexing through a pointer to a generic parameter must typecheck");
+    }
+
+    #[test]
     fn associated_type_default_used_by_implement() {
         typecheck(
             r#"
@@ -16528,6 +16558,49 @@ mod tests {
                 .any(|err| matches!(err, TypeError::DuplicateImpl { .. })),
             "expected DuplicateImpl, got: {errors:?}"
         );
+    }
+
+    #[test]
+    fn heterogeneous_operator_impls_dispatch_by_rhs() {
+        typecheck_full(
+            r#"
+            struct Vector {
+                x: f64,
+                y: f64,
+            }
+
+            implement Copy : Vector {}
+
+            implement Add[i32] : Vector {
+                alias Output = Vector;
+
+                fn add(self, other: i32) Vector {
+                    return Vector {
+                        .x = self.x + @as(f64, other),
+                        .y = self.y + @as(f64, other),
+                    };
+                }
+            }
+
+            implement Add[f64] : Vector {
+                alias Output = Vector;
+
+                fn add(self, other: f64) Vector {
+                    return Vector {
+                        .x = self.x + other,
+                        .y = self.y + other,
+                    };
+                }
+            }
+
+            fn main() {
+                let base = Vector { .x = 1.0, .y = 2.0 };
+                let whole = base + 3;
+                let precise = base + 0.5;
+            }
+            "#,
+        )
+        .expect("operator implementations must dispatch by the right hand side type");
     }
 
     #[test]
