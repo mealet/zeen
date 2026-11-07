@@ -1,0 +1,27 @@
+interface[T] Convert {
+    pub fn from(value: T) Self;
+}
+
+pub struct Meters {
+    pub value: f64,
+}
+
+implement Convert[i32] : Meters {
+    fn from(value: i32) Self {
+        return Meters { .value = @as(f64, value) };
+    }
+}
+
+implement Convert[f64] : Meters {
+    fn from(value: f64) Self {
+        return Meters { .value = value };
+    }
+}
+
+fn main() {
+    const whole = Meters.from(3);
+    const precise = Meters.from(1.5);
+
+    @println("{:.1}", whole.value);
+    @println("{:.1}", precise.value);
+}
