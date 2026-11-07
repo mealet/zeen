@@ -1080,6 +1080,18 @@ impl<'ctx> NameResolver {
                     .and_then(|iface| self.result.interface_assoc_types.get(&iface).cloned())
                     .unwrap_or_default();
 
+                for assoc_id in &assoc_ids {
+                    let Some(info) = self.result.defs.get(assoc_id) else {
+                        continue;
+                    };
+
+                    if implement_generic_names.contains(&info.name) {
+                        continue;
+                    }
+
+                    self.table.declare_type(info.name, *assoc_id);
+                }
+
                 for alias in aliases {
                     let DeclarationKind::AssociatedType(associated) = alias.kind else {
                         continue;
