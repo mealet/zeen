@@ -304,7 +304,7 @@ fn for_loop_over_rvalue_slice_materializes_iterator() {
 fn for_loop_over_iterator_struct_monomorphizes_next() {
     let mir = compile_mir_ok(
         "struct Counter { n: i32 } \
-         implement Iterator : Counter { fn next(*self) Option[i32] { \
+         implement Iterator : Counter { alias Item = i32; fn next(*self) Option[Item] { \
             if (self.n < 5) { self.n = self.n + 1; return Option.Some(self.n); }; \
             Option.None \
          } } \
@@ -324,7 +324,7 @@ fn for_loop_over_iterator_struct_monomorphizes_next() {
 fn for_loop_over_generic_iterator_struct_monomorphizes_next() {
     let mir = compile_mir_ok(
         "struct Repeat[T] { value: T, remaining: i32 } \
-         implement[T] Iterator : Repeat[T] { fn next(*self) Option[T] { \
+         implement[T] Iterator : Repeat[T] { alias Item = T; fn next(*self) Option[Item] { \
             if (self.remaining > 0) { self.remaining = self.remaining - 1; \
                 return Option.Some(self.value); }; \
             Option.None \
