@@ -1095,6 +1095,9 @@ impl<'ctx> NameResolver {
 
                     if let Some(assoc_id) = matching {
                         self.table.declare_type(associated.name.0, assoc_id);
+                        self.result
+                            .binding_sites
+                            .insert(NodeKey::from_decl(alias), assoc_id);
                     }
                 }
 

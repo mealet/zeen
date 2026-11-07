@@ -25,7 +25,10 @@ use zeen_ast::{
 use zeen_driver::{CompilationContext, CompilationOutput};
 use zeen_hir::{
     HirId, HirModule,
-    decl::{HirDecl, HirDeclKind, HirEnumVariantPayload, HirFn},
+    decl::{
+        HirAssociatedType, HirDecl, HirDeclKind, HirEnumVariantPayload, HirFn, HirWhereClause,
+        HirWhereClauseKind,
+    },
     expr::{
         HirExpr, HirExprKind, HirFieldInit, HirMacroKind, HirPattern, HirPatternBinding,
         HirSwitchArm,
@@ -70,6 +73,12 @@ pub struct TypeChecker<'res> {
     interface_methods: HashMap<DefId, Vec<DefId>>,
     interface_generics: HashMap<DefId, Vec<DefId>>,
     interface_methods_with_body: HashSet<DefId>,
+    interface_assoc_types: HashMap<DefId, Vec<DefId>>,
+    assoc_type_defaults: HashMap<DefId, Rc<HirTypeExpr>>,
+    assoc_type_bounds: HashMap<DefId, Vec<DefId>>,
+    generic_assoc_bindings: HashMap<(DefId, DefId), TypeId>,
+    generic_assoc_bounds: HashMap<(DefId, DefId), Vec<DefId>>,
+    current_self_ty: Option<TypeId>,
 
     struct_generics: HashMap<DefId, Vec<DefId>>,
     struct_methods: HashMap<DefId, HashMap<Spur, Vec<DefId>>>,
@@ -213,6 +222,12 @@ impl<'res> TypeChecker<'res> {
             interface_methods: HashMap::default(),
             interface_generics: HashMap::default(),
             interface_methods_with_body: HashSet::default(),
+            interface_assoc_types: HashMap::default(),
+            assoc_type_defaults: HashMap::default(),
+            assoc_type_bounds: HashMap::default(),
+            generic_assoc_bindings: HashMap::default(),
+            generic_assoc_bounds: HashMap::default(),
+            current_self_ty: None,
             struct_generics: HashMap::default(),
             struct_methods: HashMap::default(),
             enum_variants: HashMap::default(),
@@ -314,6 +329,26 @@ impl<'res> TypeChecker<'res> {
                 for generic in &e.generics {
                     self.all_generic_bounds
                         .insert(generic.def_id, generic.bounds.clone());
+                }
+            }
+
+            if let HirDeclKind::Interface(i) = &decl.kind {
+                let assoc_ids: Vec<DefId> = i.aliases.iter().map(|a| a.def_id).collect();
+
+                self.interface_assoc_types
+                    .insert(decl.def_id, assoc_ids.clone());
+                self.result
+                    .interface_assoc_types
+                    .insert(decl.def_id, assoc_ids);
+
+                for alias in &i.aliases {
+                    if let Some(default) = &alias.default {
+                        self.assoc_type_defaults
+                            .insert(alias.def_id, Rc::clone(default));
+                    }
+
+                    self.assoc_type_bounds
+                        .insert(alias.def_id, alias.bounds.clone());
                 }
             }
         }
@@ -620,6 +655,8 @@ impl<'res> TypeChecker<'res> {
                 .or_insert_with(|| bounds.clone());
         }
 
+        self.register_where_clauses(&hir_fn.where_clauses);
+
         let self_mode = hir_fn
             .params
             .first()
@@ -715,26 +752,13 @@ impl<'res> TypeChecker<'res> {
                 .insert(object_def, imp.generics.iter().map(|g| g.def_id).collect());
         }
 
-        for method in &imp.methods {
-            self.declare_signature(method);
-
-            if let (HirDeclKind::Fn(f), Some(object_def)) = (&method.kind, imp.object) {
-                self.result.method_owner.insert(method.def_id, object_def);
-                self.struct_methods
-                    .entry(object_def)
-                    .or_default()
-                    .entry(f.name.0)
-                    .or_default()
-                    .push(method.def_id);
-
-                if let Some(iface_def) = imp.interface {
-                    self.method_owning_interface
-                        .insert(method.def_id, iface_def);
-                }
+        let Some(object_def) = imp.object else {
+            for method in &imp.methods {
+                self.declare_signature(method);
             }
-        }
 
-        let Some(object_def) = imp.object else { return };
+            return;
+        };
 
         if !matches!(
             self.def_kind(object_def),
@@ -787,7 +811,9 @@ impl<'res> TypeChecker<'res> {
             .map(|shape| !shape.has_params())
             .unwrap_or(is_specialized);
 
-        if shape.is_none() && imp.object_generic_types.len() != struct_generics.len() {
+        let args_valid = shape.is_some() || imp.object_generic_types.len() == struct_generics.len();
+
+        if !args_valid {
             let name_id = self
                 .resolution
                 .defs
@@ -827,6 +853,7 @@ impl<'res> TypeChecker<'res> {
                     .collect(),
                 generic_bindings,
                 generics: imp.generics.iter().map(|g| g.def_id).collect(),
+                assoc_bindings: HashMap::default(),
             };
 
             if let Some(iface_def) = imp.interface {
@@ -860,14 +887,13 @@ impl<'res> TypeChecker<'res> {
                         src: source.src(),
                         span: imp.object_bindings_span,
                     });
-                    return;
+                } else {
+                    self.result
+                        .impl_registry
+                        .entry((object_def, iface_def))
+                        .or_default()
+                        .push(entry);
                 }
-
-                self.result
-                    .impl_registry
-                    .entry((object_def, iface_def))
-                    .or_default()
-                    .push(entry);
             } else {
                 self.result
                     .inherent_impls
@@ -875,6 +901,44 @@ impl<'res> TypeChecker<'res> {
                     .or_default()
                     .push(entry);
             }
+
+            let impl_self_ty = self.method_self_type(object_def, &object_args);
+
+            let previous_self_ty = self.current_self_ty;
+            self.current_self_ty = Some(impl_self_ty);
+
+            if let Some(iface_def) = imp.interface {
+                self.bind_implement_associated_types(
+                    iface_def,
+                    object_def,
+                    impl_self_ty,
+                    &object_args,
+                    is_specialized,
+                    &imp.aliases,
+                    &source,
+                );
+            }
+
+            for method in &imp.methods {
+                self.declare_signature(method);
+
+                if let HirDeclKind::Fn(f) = &method.kind {
+                    self.result.method_owner.insert(method.def_id, object_def);
+                    self.struct_methods
+                        .entry(object_def)
+                        .or_default()
+                        .entry(f.name.0)
+                        .or_default()
+                        .push(method.def_id);
+
+                    if let Some(iface_def) = imp.interface {
+                        self.method_owning_interface
+                            .insert(method.def_id, iface_def);
+                    }
+                }
+            }
+
+            self.current_self_ty = previous_self_ty;
         }
 
         self.substitute_impl_self_types(imp, object_def, &object_args);
@@ -943,9 +1007,14 @@ impl<'res> TypeChecker<'res> {
 
             let params: Vec<TypeId> = params
                 .iter()
-                .map(|&param| self.substitute_generics(param, &bindings))
+                .map(|&param| {
+                    let param = self.substitute_generics(param, &bindings);
+
+                    self.normalize_associated(param)
+                })
                 .collect();
             let ret = self.substitute_generics(ret, &bindings);
+            let ret = self.normalize_associated(ret);
 
             let Some(sig) = self.fn_sigs.get_mut(&method.def_id) else {
                 continue;
@@ -1013,7 +1082,9 @@ impl<'res> TypeChecker<'res> {
     }
 
     fn lower_hir_type(&mut self, ty: &HirTypeExpr) -> TypeId {
-        self.lower_hir_type_with_const(ty).0
+        let lowered = self.lower_hir_type_with_const(ty).0;
+
+        self.normalize_associated(lowered)
     }
 
     fn lower_hir_type_with_const(&mut self, ty: &HirTypeExpr) -> (TypeId, bool) {
@@ -1160,6 +1231,10 @@ impl<'res> TypeChecker<'res> {
                         .intern(Type::InterfaceSelfPlaceholder(*def_id)),
 
                     _ => {
+                        if let Some(self_ty) = self.current_self_ty {
+                            return self_ty;
+                        }
+
                         if let Some(DefKind::Builtin(builtin)) = self.def_kind(*def_id) {
                             return self.result.interner.builtin(*builtin);
                         }
@@ -1192,10 +1267,16 @@ impl<'res> TypeChecker<'res> {
 
             HirTypeKind::VaArgs => self.result.interner.void(),
 
-            HirTypeKind::Associated { base, .. } => {
-                let _ = self.lower_hir_type(base);
+            HirTypeKind::Associated { base, name } => {
+                let base_ty = self.lower_hir_type(base);
 
-                self.result.interner.error()
+                match self.resolve_associated_def(base_ty, name.0, &ty.source) {
+                    Some(def) => self
+                        .result
+                        .interner
+                        .intern(Type::Associated { base: base_ty, def }),
+                    None => self.result.interner.error(),
+                }
             }
 
             HirTypeKind::Named {
@@ -1244,6 +1325,29 @@ impl<'res> TypeChecker<'res> {
                     }
 
                     Some(DefKind::TypeAlias) => self.lower_alias_ref(*def_id, args, ty),
+
+                    Some(DefKind::AssociatedType { interface }) => {
+                        let base = match self.current_self_ty {
+                            Some(self_ty) => self_ty,
+
+                            None => {
+                                let placeholder = self
+                                    .resolution
+                                    .interface_self_placeholders
+                                    .get(interface)
+                                    .copied()
+                                    .unwrap_or(*def_id);
+
+                                self.result
+                                    .interner
+                                    .intern(Type::InterfaceSelfPlaceholder(placeholder))
+                            }
+                        };
+
+                        self.result
+                            .interner
+                            .intern(Type::Associated { base, def: *def_id })
+                    }
 
                     _ => {
                         let struct_generics = self
@@ -1640,23 +1744,9 @@ impl<'res> TypeChecker<'res> {
             )
         };
 
-        let self_type = struct_def.map(|sd| {
-            let self_mode_ty =
-                |base_ty: TypeId, interner: &mut zeen_types::TypeInterner| match self_mode {
-                    Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_ty,
-                    Some(SelfMode::RefMut) => interner.intern(Type::Pointer {
-                        inner: base_ty,
-                        is_const: false,
-                    }),
-                    Some(SelfMode::RefConst) => interner.intern(Type::Pointer {
-                        inner: base_ty,
-                        is_const: true,
-                    }),
-                };
-
+        let self_base_ty = struct_def.map(|sd| {
             if let Some(DefKind::Builtin(builtin)) = self.def_kind(sd) {
-                let base_ty = self.result.interner.builtin(*builtin);
-                return self_mode_ty(base_ty, &mut self.result.interner);
+                return self.result.interner.builtin(*builtin);
             }
 
             let shape = match self.def_kind(sd) {
@@ -1666,9 +1756,8 @@ impl<'res> TypeChecker<'res> {
 
             if let Some(shape) = shape {
                 let generics = self.type_member_generics(sd);
-                let base_ty = self.builtin_shape_type(&shape, &generics);
 
-                return self_mode_ty(base_ty, &mut self.result.interner);
+                return self.builtin_shape_type(&shape, &generics);
             }
 
             let is_enum = matches!(self.def_kind(sd), Some(DefKind::Enum));
@@ -1689,7 +1778,7 @@ impl<'res> TypeChecker<'res> {
                     .collect()
             };
 
-            let base_ty = if is_enum {
+            if is_enum {
                 self.result.interner.intern(Type::Enum {
                     def_id: sd,
                     generic_args,
@@ -1699,9 +1788,19 @@ impl<'res> TypeChecker<'res> {
                     def_id: sd,
                     generic_args,
                 })
-            };
+            }
+        });
 
-            self_mode_ty(base_ty, &mut self.result.interner)
+        let self_type = self_base_ty.map(|base_ty| match self_mode {
+            Some(SelfMode::Value) | Some(SelfMode::ValueConst) | None => base_ty,
+            Some(SelfMode::RefMut) => self.result.interner.intern(Type::Pointer {
+                inner: base_ty,
+                is_const: false,
+            }),
+            Some(SelfMode::RefConst) => self.result.interner.intern(Type::Pointer {
+                inner: base_ty,
+                is_const: true,
+            }),
         });
         let mut generic_bindings = HashMap::default();
         let mut generic_bounds = HashMap::default();
@@ -1744,6 +1843,9 @@ impl<'res> TypeChecker<'res> {
             }
         }
 
+        let previous_self_ty = self.current_self_ty;
+        self.current_self_ty = self_base_ty;
+
         self.ctx.push_fn(FnCtx {
             fn_def: def_id,
             return_type: sig_ret,
@@ -1781,6 +1883,8 @@ impl<'res> TypeChecker<'res> {
         };
 
         self.ctx.pop_fn();
+
+        self.current_self_ty = previous_self_ty;
 
         self.bodies_in_progress.remove(&def_id);
         self.bodies_checked.insert(def_id);
@@ -5543,7 +5647,9 @@ impl<'res> TypeChecker<'res> {
         );
 
         let ret = self.substitute_generics(sig_ret, &bindings);
-        Some(self.substitute_self(ret, recv_ty))
+        let ret = self.substitute_self(ret, recv_ty);
+
+        Some(self.normalize_associated(ret))
     }
 
     fn interface_self_placeholder_owner(&self, ty: TypeId) -> Option<(DefId, DefId)> {
@@ -5665,7 +5771,9 @@ impl<'res> TypeChecker<'res> {
         );
 
         let ret = self.substitute_generics(sig_ret, &bindings);
-        Some(self.substitute_self(ret, recv_ty))
+        let ret = self.substitute_self(ret, recv_ty);
+
+        Some(self.normalize_associated(ret))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5757,7 +5865,9 @@ impl<'res> TypeChecker<'res> {
             },
         );
 
-        Some(self.substitute_generics(sig_ret, &bindings))
+        let ret = self.substitute_generics(sig_ret, &bindings);
+
+        Some(self.normalize_associated(ret))
     }
 
     fn check_builtin_interface_method(
@@ -5818,7 +5928,9 @@ impl<'res> TypeChecker<'res> {
                         },
                     );
                     let ret = self.substitute_generics(sig_ret, &bindings);
-                    return Some(self.substitute_self(ret, recv_ty));
+                    let ret = self.substitute_self(ret, recv_ty);
+
+                    return Some(self.normalize_associated(ret));
                 }
             }
         }
@@ -6313,7 +6425,9 @@ impl<'res> TypeChecker<'res> {
             },
         );
 
-        Some(self.substitute_generics(sig_ret, &bindings))
+        let ret = self.substitute_generics(sig_ret, &bindings);
+
+        Some(self.normalize_associated(ret))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -7226,7 +7340,9 @@ impl<'res> TypeChecker<'res> {
             },
         );
 
-        Some(self.substitute_generics(sig_ret, &bindings))
+        let ret = self.substitute_generics(sig_ret, &bindings);
+
+        Some(self.normalize_associated(ret))
     }
 
     fn check_call_via_fn_type(
@@ -7820,13 +7936,25 @@ impl<'res> TypeChecker<'res> {
             Type::Struct {
                 def_id,
                 generic_args,
+            }
+            | Type::Enum {
+                def_id,
+                generic_args,
             } => {
+                let is_enum = matches!(self.result.interner.get(ty), Type::Enum { .. });
+
                 let new_args: Vec<TypeId> = generic_args
                     .iter()
                     .map(|a| self.substitute_self(*a, self_ty))
                     .collect();
+
                 if new_args == generic_args {
                     ty
+                } else if is_enum {
+                    self.result.interner.intern(Type::Enum {
+                        def_id,
+                        generic_args: new_args,
+                    })
                 } else {
                     self.result.interner.intern(Type::Struct {
                         def_id,
@@ -7851,7 +7979,472 @@ impl<'res> TypeChecker<'res> {
                 }
             }
 
+            Type::Associated { base, def } => {
+                let new_base = self.substitute_self(base, self_ty);
+                if new_base == base {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Associated {
+                        base: new_base,
+                        def,
+                    })
+                }
+            }
+
             _ => ty,
+        }
+    }
+
+    fn assoc_def_by_name(&self, iface: DefId, name: Spur) -> Option<DefId> {
+        self.interface_assoc_types
+            .get(&iface)?
+            .iter()
+            .copied()
+            .find(|def| {
+                self.resolution
+                    .defs
+                    .get(def)
+                    .is_some_and(|info| info.name == name)
+            })
+    }
+
+    fn interface_of_placeholder(&self, placeholder: DefId) -> Option<DefId> {
+        self.resolution
+            .interface_self_placeholders
+            .iter()
+            .find(|(_, value)| **value == placeholder)
+            .map(|(key, _)| *key)
+    }
+
+    fn concrete_assoc_defs(&self, def_id: DefId, args: &[TypeId], name: Spur) -> Vec<DefId> {
+        let mut found = Vec::new();
+
+        for ((object, iface), entries) in &self.result.impl_registry {
+            if *object != def_id || !entries.iter().any(|e| e.object_args == args) {
+                continue;
+            }
+
+            if let Some(def) = self.assoc_def_by_name(*iface, name) {
+                found.push(def);
+            }
+        }
+
+        found
+    }
+
+    fn resolve_associated_def(
+        &mut self,
+        base: TypeId,
+        name: Spur,
+        source: &Source,
+    ) -> Option<DefId> {
+        let found: Vec<DefId> = match self.result.interner.get(base).clone() {
+            Type::GenericParam(g) => self
+                .all_generic_bounds
+                .get(&g)
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|iface| self.assoc_def_by_name(*iface, name))
+                .collect(),
+
+            Type::InterfaceSelfPlaceholder(p) => self
+                .interface_of_placeholder(p)
+                .and_then(|iface| self.assoc_def_by_name(iface, name))
+                .into_iter()
+                .collect(),
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            }
+            | Type::Enum {
+                def_id,
+                generic_args,
+            } => self.concrete_assoc_defs(def_id, &generic_args, name),
+
+            Type::Builtin(builtin) => {
+                self.concrete_assoc_defs(zeen_resolve::builtin_def_id(builtin), &[], name)
+            }
+
+            _ => Vec::new(),
+        };
+
+        let unique: Vec<DefId> = found.iter().copied().fold(Vec::new(), |mut acc, def| {
+            if !acc.contains(&def) {
+                acc.push(def);
+            }
+
+            acc
+        });
+
+        let name_str = self.interner.borrow().resolve(&name).into();
+
+        match unique.len() {
+            1 => Some(unique[0]),
+
+            0 => {
+                self.report(TypeError::UnknownAssociatedType {
+                    name: name_str,
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                None
+            }
+
+            _ => {
+                self.report(TypeError::AmbiguousAssociatedType {
+                    base: self.display_type(base).into(),
+                    name: name_str,
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                None
+            }
+        }
+    }
+
+    fn normalize_associated(&mut self, ty: TypeId) -> TypeId {
+        let mut visited = HashSet::default();
+
+        self.normalize_associated_inner(ty, &mut visited)
+    }
+
+    fn normalize_associated_inner(
+        &mut self,
+        ty: TypeId,
+        visited: &mut HashSet<(DefId, DefId)>,
+    ) -> TypeId {
+        match self.result.interner.get(ty).clone() {
+            Type::Associated { base, def } => match self.associated_binding(base, def, visited) {
+                Some(bound) => self.normalize_associated_inner(bound, visited),
+                None => ty,
+            },
+
+            Type::Pointer { inner, is_const } => {
+                let new_inner = self.normalize_associated_inner(inner, visited);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Pointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::ManyPointer { inner, is_const } => {
+                let new_inner = self.normalize_associated_inner(inner, visited);
+
+                if new_inner == inner {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::ManyPointer {
+                        inner: new_inner,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Array { element, len } => {
+                let new_element = self.normalize_associated_inner(element, visited);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Array {
+                        element: new_element,
+                        len,
+                    })
+                }
+            }
+
+            Type::Slice { element, is_const } => {
+                let new_element = self.normalize_associated_inner(element, visited);
+
+                if new_element == element {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Slice {
+                        element: new_element,
+                        is_const,
+                    })
+                }
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|arg| self.normalize_associated_inner(*arg, visited))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Struct {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Enum {
+                def_id,
+                generic_args,
+            } => {
+                let new_args: Vec<TypeId> = generic_args
+                    .iter()
+                    .map(|arg| self.normalize_associated_inner(*arg, visited))
+                    .collect();
+
+                if new_args == generic_args {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Enum {
+                        def_id,
+                        generic_args: new_args,
+                    })
+                }
+            }
+
+            Type::Fn { params, ret } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|param| self.normalize_associated_inner(*param, visited))
+                    .collect();
+                let new_ret = self.normalize_associated_inner(ret, visited);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::Fn {
+                        params: new_params,
+                        ret: new_ret,
+                    })
+                }
+            }
+
+            Type::FatFn {
+                params,
+                ret,
+                once,
+                erased,
+            } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|param| self.normalize_associated_inner(*param, visited))
+                    .collect();
+                let new_ret = self.normalize_associated_inner(ret, visited);
+
+                if new_params == params && new_ret == ret {
+                    ty
+                } else {
+                    self.result.interner.intern(Type::FatFn {
+                        params: new_params,
+                        ret: new_ret,
+                        once,
+                        erased,
+                    })
+                }
+            }
+
+            _ => ty,
+        }
+    }
+
+    fn associated_binding(
+        &mut self,
+        base: TypeId,
+        def: DefId,
+        visited: &mut HashSet<(DefId, DefId)>,
+    ) -> Option<TypeId> {
+        match self.result.interner.get(base).clone() {
+            Type::GenericParam(g) => {
+                if !visited.insert((g, def)) {
+                    return None;
+                }
+
+                self.generic_assoc_bindings.get(&(g, def)).copied()
+            }
+
+            Type::InterfaceSelfPlaceholder(p) => {
+                if !visited.insert((p, def)) {
+                    return None;
+                }
+
+                let default = self.assoc_type_defaults.get(&def).cloned()?;
+                let lowered = self.lower_hir_type_with_const(&default).0;
+
+                Some(self.substitute_self(lowered, base))
+            }
+
+            Type::Struct {
+                def_id,
+                generic_args,
+            }
+            | Type::Enum {
+                def_id,
+                generic_args,
+            } => self.concrete_assoc_binding(def_id, &generic_args, def),
+
+            Type::Builtin(builtin) => {
+                self.concrete_assoc_binding(zeen_resolve::builtin_def_id(builtin), &[], def)
+            }
+
+            _ => None,
+        }
+    }
+
+    fn concrete_assoc_binding(&self, def_id: DefId, args: &[TypeId], def: DefId) -> Option<TypeId> {
+        for ((object, _), entries) in &self.result.impl_registry {
+            if *object != def_id {
+                continue;
+            }
+
+            for entry in entries {
+                if entry.object_args == args
+                    && let Some(bound) = entry.assoc_bindings.get(&def)
+                {
+                    return Some(*bound);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn register_where_clauses(&mut self, clauses: &[HirWhereClause]) {
+        for clause in clauses {
+            let subject = self.lower_hir_type_with_const(&clause.ty).0;
+
+            match &clause.kind {
+                HirWhereClauseKind::Bound { bounds } => {
+                    match self.result.interner.get(subject).clone() {
+                        Type::GenericParam(g) => {
+                            self.all_generic_bounds
+                                .entry(g)
+                                .or_default()
+                                .extend(bounds.iter().copied());
+                        }
+
+                        Type::Associated { base, def } => {
+                            if let Type::GenericParam(g) = self.result.interner.get(base).clone() {
+                                self.generic_assoc_bounds
+                                    .entry((g, def))
+                                    .or_default()
+                                    .extend(bounds.iter().copied());
+                            }
+                        }
+
+                        _ => {}
+                    }
+                }
+
+                HirWhereClauseKind::Equality { ty } => {
+                    let eq_ty = self.lower_hir_type(ty);
+
+                    if let Type::Associated { base, def } =
+                        self.result.interner.get(subject).clone()
+                        && let Type::GenericParam(g) = self.result.interner.get(base).clone()
+                    {
+                        self.generic_assoc_bindings.insert((g, def), eq_ty);
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bind_implement_associated_types(
+        &mut self,
+        iface_def: DefId,
+        object_def: DefId,
+        self_ty: TypeId,
+        object_args: &[TypeId],
+        is_specialized: bool,
+        aliases: &[Rc<HirAssociatedType>],
+        source: &Source,
+    ) {
+        let assoc_ids = self
+            .interface_assoc_types
+            .get(&iface_def)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
+
+        for alias in aliases {
+            if !assoc_ids.contains(&alias.def_id) {
+                let name: SmolStr = self.interner.borrow().resolve(&alias.name.0).into();
+
+                self.report(TypeError::UnknownAssociatedType {
+                    name,
+                    src: source.src(),
+                    span: alias.name.1,
+                });
+
+                continue;
+            }
+
+            let Some(default) = &alias.default else {
+                continue;
+            };
+
+            if bindings.contains_key(&alias.def_id) {
+                let name: SmolStr = self.interner.borrow().resolve(&alias.name.0).into();
+
+                self.report(TypeError::DuplicateAssociatedType {
+                    name,
+                    src: source.src(),
+                    span: alias.name.1,
+                });
+
+                continue;
+            }
+
+            let lowered = self.lower_hir_type(default);
+            let substituted = self.substitute_self(lowered, self_ty);
+            let normalized = self.normalize_associated(substituted);
+
+            bindings.insert(alias.def_id, normalized);
+        }
+
+        for assoc in assoc_ids {
+            if bindings.contains_key(&assoc) {
+                continue;
+            }
+
+            let Some(default) = self.assoc_type_defaults.get(&assoc).cloned() else {
+                self.report(TypeError::MissingAssociatedType {
+                    interface: self.def_name(iface_def).unwrap_or_default().into(),
+                    name: self.def_name(assoc).unwrap_or_default().into(),
+                    src: source.src(),
+                    span: source.span,
+                });
+
+                continue;
+            };
+
+            let lowered = self.lower_hir_type(&default);
+            let substituted = self.substitute_self(lowered, self_ty);
+            let normalized = self.normalize_associated(substituted);
+
+            bindings.insert(assoc, normalized);
+        }
+
+        if let Some(entries) = self.result.impl_registry.get_mut(&(object_def, iface_def))
+            && let Some(entry) = entries.iter_mut().find(|entry| {
+                entry.object_args.as_slice() == object_args
+                    && entry.is_specialized == is_specialized
+            })
+        {
+            entry.assoc_bindings = bindings;
         }
     }
 
@@ -8738,7 +9331,12 @@ impl<'res> TypeChecker<'res> {
             .iter()
             .map(|&p| self.substitute_generics(p, &impl_subst))
             .collect();
+        let impl_params: Vec<TypeId> = impl_params
+            .iter()
+            .map(|&p| self.normalize_associated(p))
+            .collect();
         let impl_ret = self.substitute_generics(impl_ret_raw, &impl_subst);
+        let impl_ret = self.normalize_associated(impl_ret);
 
         let mut all_iface_generics = iface_generics.clone();
         all_iface_generics.extend(iface_method_generics.iter().copied());
@@ -8778,8 +9376,13 @@ impl<'res> TypeChecker<'res> {
                 self.substitute_generics(p, &generic_subst)
             })
             .collect();
+        let iface_params: Vec<TypeId> = iface_params
+            .iter()
+            .map(|&p| self.normalize_associated(p))
+            .collect();
 
         let iface_ret = self.substitute_generics(iface_ret_raw, &generic_subst);
+        let iface_ret = self.normalize_associated(iface_ret);
 
         let params_match = iface_params.len() == impl_params.len()
             && iface_params

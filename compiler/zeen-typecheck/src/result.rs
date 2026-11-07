@@ -29,6 +29,7 @@ pub struct TypeCheckResult {
     pub builtin_shape_generics: HashMap<DefId, Vec<DefId>>,
 
     pub interface_registry: HashMap<String, DefId>,
+    pub interface_assoc_types: HashMap<DefId, Vec<DefId>>,
     pub enum_variants: HashMap<DefId, Vec<DefId>>,
     pub method_owner: HashMap<DefId, DefId>,
     pub const_bindings: HashMap<DefId, bool>,
@@ -56,6 +57,7 @@ pub struct ImplEntry {
     pub generic_bounds: Vec<(DefId, Vec<DefId>)>,
     pub generic_bindings: Vec<(DefId, DefId)>,
     pub generics: Vec<DefId>,
+    pub assoc_bindings: HashMap<DefId, TypeId>,
 }
 
 impl TypeCheckResult {
