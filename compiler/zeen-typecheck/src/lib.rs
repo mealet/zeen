@@ -10368,14 +10368,9 @@ impl<'res> TypeChecker<'res> {
             .cloned()
             .unwrap_or_default();
 
-        let struct_args: Vec<TypeId> = match self.result.interner.get(self_ty).clone() {
-            Type::Struct { generic_args, .. } | Type::Enum { generic_args, .. } => generic_args,
-            _ => Vec::new(),
-        };
-
         let mut bindings: HashMap<DefId, TypeId> = HashMap::default();
-        for (iface_generic, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
-            bindings.insert(*iface_generic, *struct_arg);
+        for (iface_generic, iface_arg) in iface_generics.iter().zip(sig_ctx.interface_args.iter()) {
+            bindings.insert(*iface_generic, *iface_arg);
         }
 
         if let Some(&placeholder) = self.resolution.interface_self_placeholders.get(&iface_def) {
