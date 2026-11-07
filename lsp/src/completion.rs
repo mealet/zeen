@@ -7,7 +7,7 @@ use zeen_ast::types::BuiltinShape;
 use zeen_hir::HirMacroKind;
 use zeen_lexer::token::{CompilerKeyword, CompilerType};
 
-use crate::analysis::{Analysis, BuiltinTarget, Member, MemberKind, Role};
+use crate::analysis::{Analysis, BuiltinTarget, Member, MemberKind, Role, TypeKind};
 use crate::modules::{ModuleKind, ModuleMember};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -474,6 +474,267 @@ fn implemented_methods(text: &str, body_start: usize) -> Vec<String> {
     names
 }
 
+fn alias_decl_prefix(text: &str, offset: usize) -> Option<&str> {
+    let offset = offset.min(text.len());
+    let line_start = text[..offset]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let line = text.get(line_start..offset)?;
+    let rest = line.trim_start().strip_prefix("alias")?;
+
+    if !rest.starts_with([' ', '\t']) {
+        return None;
+    }
+
+    let rest = rest.trim_start();
+
+    if rest.is_empty() {
+        return Some("");
+    }
+
+    rest.bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        .then_some(rest)
+}
+
+fn implemented_aliases(text: &str, body_start: usize, limit: usize) -> Vec<String> {
+    let Some(body) = text.get(body_start..limit.min(text.len())) else {
+        return Vec::new();
+    };
+
+    let mut names = Vec::new();
+
+    for line in body.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("alias") else {
+            continue;
+        };
+
+        if !rest.starts_with([' ', '\t']) {
+            continue;
+        }
+
+        let name: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+            .collect();
+
+        if !name.is_empty() {
+            names.push(name);
+        }
+    }
+
+    names
+}
+
+fn implement_header_name(header: &str) -> Option<&str> {
+    let rest = header.trim_start().strip_prefix("implement")?;
+
+    if !rest.is_empty() && !rest.starts_with([' ', '\t', '[']) {
+        return None;
+    }
+
+    let rest = rest.trim_start();
+    let rest = match rest.strip_prefix('[') {
+        Some(after) => after.get(after.find(']')? + 1..)?.trim_start(),
+        None => rest,
+    };
+
+    let end = rest
+        .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .unwrap_or(rest.len());
+    let name = &rest[..end];
+
+    if name.is_empty() || !rest[end..].trim_start().is_empty() {
+        return None;
+    }
+
+    Some(name)
+}
+
+fn implement_header_args(text: &str, offset: usize) -> Option<(String, usize)> {
+    let offset = offset.min(text.len());
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut bracket = None;
+
+    for index in (0..offset).rev() {
+        match bytes[index] {
+            b']' => depth += 1,
+            b'[' => {
+                if depth == 0 {
+                    bracket = Some(index);
+                    break;
+                }
+
+                depth -= 1;
+            }
+            b'{' | b'}' | b';' => return None,
+            _ => {}
+        }
+    }
+
+    let bracket = bracket?;
+    let before = text.get(..bracket)?;
+    let start = before.rfind("implement")?;
+
+    if start > 0 {
+        let previous = before.as_bytes()[start - 1];
+
+        if previous.is_ascii_alphanumeric() || previous == b'_' {
+            return None;
+        }
+    }
+
+    let name = implement_header_name(&before[start..])?;
+
+    let mut arg_index = 0usize;
+    let mut depth = 0usize;
+
+    for byte in bytes[bracket + 1..offset].iter().copied() {
+        match byte {
+            b'[' | b'(' => depth += 1,
+            b']' | b')' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => arg_index += 1,
+            _ => {}
+        }
+    }
+
+    Some((name.to_string(), arg_index))
+}
+
+fn type_module_kind(kind: &ModuleKind) -> bool {
+    matches!(
+        kind,
+        ModuleKind::Struct | ModuleKind::Enum | ModuleKind::Interface | ModuleKind::Alias
+    )
+}
+
+fn push_type_item(
+    name: &str,
+    kind: CompletionItemKind,
+    detail: Option<String>,
+    prefix: &str,
+    seen: &mut HashSet<String>,
+    items: &mut Vec<CompletionItem>,
+) {
+    if !name.starts_with(prefix) || !seen.insert(name.to_string()) {
+        return;
+    }
+
+    items.push(CompletionItem {
+        label: name.to_string(),
+        kind: Some(kind),
+        detail,
+        ..Default::default()
+    });
+}
+
+fn type_completion_items(
+    text: &str,
+    analysis: &Analysis,
+    prefix: &str,
+    paths: ResolvePaths<'_>,
+) -> Vec<CompletionItem> {
+    let mut seen = HashSet::new();
+    let mut items = Vec::new();
+
+    for builtin in CompilerType::all_names() {
+        push_type_item(
+            &builtin,
+            CompletionItemKind::STRUCT,
+            None,
+            prefix,
+            &mut seen,
+            &mut items,
+        );
+    }
+
+    for occurrence in &analysis.occurrences {
+        if occurrence.role != Role::Type {
+            continue;
+        }
+
+        let Some(name) = text.get(occurrence.offset..occurrence.offset + occurrence.len) else {
+            continue;
+        };
+
+        let kind = occurrence
+            .def
+            .and_then(|def| analysis.type_kinds.get(&def))
+            .map(|kind| match kind {
+                TypeKind::Struct | TypeKind::Alias => CompletionItemKind::STRUCT,
+                TypeKind::Enum => CompletionItemKind::ENUM,
+                TypeKind::Interface => CompletionItemKind::INTERFACE,
+            })
+            .unwrap_or(CompletionItemKind::STRUCT);
+
+        push_type_item(name, kind, None, prefix, &mut seen, &mut items);
+    }
+
+    for member in crate::modules::core_members() {
+        if !type_module_kind(&member.kind) {
+            continue;
+        }
+
+        push_type_item(
+            &member.name,
+            module_kind(&member.kind),
+            Some(member.module.clone()),
+            prefix,
+            &mut seen,
+            &mut items,
+        );
+    }
+
+    if let (Some(dir), Some(root)) = (paths.dir, paths.project()) {
+        for import in crate::modules::imports_for(text, paths.std) {
+            for member in
+                crate::modules::members_of_use(dir, root, paths.std, paths.packages(), &import)
+            {
+                if !type_module_kind(&member.kind) {
+                    continue;
+                }
+
+                push_type_item(
+                    &member.name,
+                    module_kind(&member.kind),
+                    Some(member.module.clone()),
+                    prefix,
+                    &mut seen,
+                    &mut items,
+                );
+            }
+        }
+    }
+
+    items
+}
+
+pub fn implement_header_complete(
+    text: &str,
+    analysis: &Analysis,
+    offset: usize,
+    paths: ResolvePaths<'_>,
+) -> Vec<CompletionItem> {
+    let Some((interface, arg_index)) = implement_header_args(text, offset) else {
+        return Vec::new();
+    };
+
+    let arity = analysis
+        .interface_arity
+        .get(&interface)
+        .copied()
+        .unwrap_or(0);
+
+    if arg_index >= arity {
+        return Vec::new();
+    }
+
+    type_completion_items(text, analysis, ident_prefix(text, offset), paths)
+}
+
 pub fn implement_complete(text: &str, analysis: &Analysis, offset: usize) -> Vec<CompletionItem> {
     let frames = scan_frames(text, offset);
     let Some(index) = frames
@@ -494,6 +755,41 @@ pub fn implement_complete(text: &str, analysis: &Analysis, offset: usize) -> Vec
     let Some(members) = analysis.interfaces.get(interface) else {
         return Vec::new();
     };
+
+    let line_start = text[..offset.min(text.len())]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+
+    if let Some(alias_prefix) = alias_decl_prefix(text, offset) {
+        let bound = implemented_aliases(text, frames[index].body_start, line_start);
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut items = Vec::new();
+
+        for member in members {
+            if member.kind != MemberKind::AssociatedType {
+                continue;
+            }
+
+            if bound.iter().any(|name| name == &member.name)
+                || !member.name.starts_with(alias_prefix)
+                || !seen.insert(member.name.clone())
+            {
+                continue;
+            }
+
+            items.push(CompletionItem {
+                label: member.name.clone(),
+                kind: Some(CompletionItemKind::TYPE_PARAMETER),
+                detail: Some(format!("alias {}", member.name)),
+                insert_text: Some(format!("{} = $0;", member.name)),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                ..Default::default()
+            });
+        }
+
+        return items;
+    }
 
     let implemented = implemented_methods(text, frames[index].body_start);
     let typed = ident_prefix(text, offset);

@@ -124,6 +124,7 @@ pub struct Analysis {
     pub(crate) raw_exprs: Vec<RawExpr>,
     pub implements: Vec<(DefId, DefId)>,
     pub interfaces: HashMap<String, Vec<Member>>,
+    pub interface_arity: HashMap<String, usize>,
     pub interface_def_name: HashMap<DefId, String>,
     pub interface_self_owners: HashMap<DefId, DefId>,
     pub generic_bounds: HashMap<DefId, Vec<DefId>>,
@@ -1337,6 +1338,9 @@ impl<'ctx> Walker<'ctx> {
                 let name = self.interner.resolve(&interface.name.0).to_string();
                 let source = decl.source.src.inner().as_str();
                 self.analysis
+                    .interface_arity
+                    .insert(name.clone(), interface.generics.len());
+                self.analysis
                     .interface_def_name
                     .insert(decl.def_id, name.clone());
                 self.collect_interface(name, &interface.aliases, &interface.methods, source);
@@ -1467,6 +1471,9 @@ impl<'ctx> Walker<'ctx> {
 
                 let name = self.interner.resolve(&interface.name.0).to_string();
                 let text = self.text;
+                self.analysis
+                    .interface_arity
+                    .insert(name.clone(), interface.generics.len());
                 self.analysis
                     .interface_def_name
                     .insert(decl.def_id, name.clone());
