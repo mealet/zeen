@@ -5,6 +5,8 @@ struct Words {
 }
 
 implement Iterator : Words {
+  alias Item = String;
+
   fn next(*self) Option[String] {
     if (self.index == 0) {
       self.index = 1;

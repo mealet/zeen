@@ -11,6 +11,8 @@ struct Repeat[T] {
 }
 
 implement[T] Iterator : Repeat[T] {
+  alias Item = T;
+
   fn next(*self) Option[T] {
     if (self.remaining > 0) {
       self.remaining = self.remaining - 1;
