@@ -7,6 +7,8 @@ struct Holder[T] {
 }
 
 implement[T] Deref : Holder[T] {
+  alias Target = T;
+
   fn deref(*const self) T {
     self.value
   }
