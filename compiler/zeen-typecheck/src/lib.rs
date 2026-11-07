@@ -5587,6 +5587,23 @@ impl<'res> TypeChecker<'res> {
         });
     }
 
+    fn is_bound_method_receiver(&self, ty: TypeId) -> bool {
+        match self.result.interner.get(ty).clone() {
+            Type::Pointer { inner, .. } => self.is_bound_method_receiver(inner),
+
+            Type::GenericParam(_) => true,
+
+            Type::Associated { base, .. } => {
+                matches!(
+                    self.result.interner.get(base),
+                    Type::GenericParam(_) | Type::InterfaceSelfPlaceholder(_)
+                )
+            }
+
+            _ => false,
+        }
+    }
+
     fn try_check_generic_bound_method_call(
         &mut self,
         call_id: HirId,
@@ -5606,11 +5623,28 @@ impl<'res> TypeChecker<'res> {
                 _ => (obj_ty, false, false),
             };
 
-        let Type::GenericParam(g) = self.result.interner.get(recv_ty).clone() else {
-            return None;
+        let bounds = match self.result.interner.get(recv_ty).clone() {
+            Type::GenericParam(g) => self.ctx.generic_bounds(g).to_vec(),
+
+            Type::Associated { base, def } => {
+                let mut bounds = self
+                    .assoc_type_bounds
+                    .get(&def)
+                    .cloned()
+                    .unwrap_or_default();
+
+                if let Type::GenericParam(g) = self.result.interner.get(base).clone()
+                    && let Some(extra) = self.generic_assoc_bounds.get(&(g, def))
+                {
+                    bounds.extend(extra.iter().copied());
+                }
+
+                bounds
+            }
+
+            _ => return None,
         };
 
-        let bounds = self.ctx.generic_bounds(g).to_vec();
         let method_name = self.interner.borrow().resolve(&field_name).to_string();
 
         let mut candidate: Option<DefId> = None;
@@ -6101,20 +6135,7 @@ impl<'res> TypeChecker<'res> {
         let mut obj_ty = self.synth_expr(object);
         self.type_names_as_values.remove(&object.id);
 
-        if matches!(self.result.interner.get(obj_ty), Type::GenericParam(_)) {
-            return self.try_check_generic_bound_method_call(
-                call_id,
-                object,
-                field,
-                args,
-                explicit_generic_args,
-                source,
-            );
-        }
-
-        if let Type::Pointer { inner, .. } = self.result.interner.get(obj_ty).clone()
-            && matches!(self.result.interner.get(inner), Type::GenericParam(_))
-        {
+        if self.is_bound_method_receiver(obj_ty) {
             return self.try_check_generic_bound_method_call(
                 call_id,
                 object,
