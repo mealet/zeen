@@ -54,6 +54,7 @@ pub struct TypeCheckResult {
 pub struct ImplEntry {
     pub methods: Vec<DefId>,
     pub object_args: Vec<TypeId>,
+    pub interface_args: Vec<TypeId>,
     pub is_specialized: bool,
     pub generic_bounds: Vec<(DefId, Vec<DefId>)>,
     pub generic_bindings: Vec<(DefId, DefId)>,

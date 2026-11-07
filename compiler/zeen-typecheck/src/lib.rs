@@ -133,6 +133,7 @@ struct PendingImplCheck {
     object_def: DefId,
     imp_generics: Vec<DefId>,
     object_args: Vec<TypeId>,
+    interface_args: Vec<TypeId>,
     is_specialized: bool,
     source: Source,
 }
@@ -156,6 +157,7 @@ enum MethodOwnerKey {
 struct ImplSigCtx<'a> {
     imp_generics: &'a [DefId],
     object_args: &'a [TypeId],
+    interface_args: &'a [TypeId],
     is_specialized: bool,
 }
 
@@ -334,6 +336,9 @@ impl<'res> TypeChecker<'res> {
             }
 
             if let HirDeclKind::Interface(i) = &decl.kind {
+                self.interface_generics
+                    .insert(decl.def_id, i.generics.iter().map(|g| g.def_id).collect());
+
                 let assoc_ids: Vec<DefId> = i.aliases.iter().map(|a| a.def_id).collect();
 
                 self.interface_assoc_types
@@ -364,6 +369,7 @@ impl<'res> TypeChecker<'res> {
             let sig_ctx = ImplSigCtx {
                 imp_generics: &pending.imp_generics,
                 object_args: &pending.object_args,
+                interface_args: &pending.interface_args,
                 is_specialized: pending.is_specialized,
             };
 
@@ -487,9 +493,6 @@ impl<'res> TypeChecker<'res> {
             }
 
             HirDeclKind::Interface(i) => {
-                self.interface_generics
-                    .insert(decl.def_id, i.generics.iter().map(|g| g.def_id).collect());
-
                 self.interface_methods
                     .insert(decl.def_id, i.methods.iter().map(|m| m.def_id).collect());
 
@@ -812,6 +815,30 @@ impl<'res> TypeChecker<'res> {
             .map(|shape| !shape.has_params())
             .unwrap_or(is_specialized);
 
+        let interface_args: Vec<TypeId> = imp
+            .interface_args
+            .iter()
+            .map(|arg| self.lower_hir_type(arg))
+            .collect();
+
+        if let Some(iface_def) = imp.interface {
+            let generic_count = self
+                .interface_generics
+                .get(&iface_def)
+                .map(|generics| generics.len())
+                .unwrap_or(0);
+
+            if !interface_args.is_empty() && interface_args.len() != generic_count {
+                self.report(TypeError::GenericArgCountMismatch {
+                    name: self.def_name(iface_def).unwrap_or_default().into(),
+                    expected: generic_count,
+                    found: interface_args.len(),
+                    src: source.src(),
+                    span: imp.object_bindings_span,
+                });
+            }
+        }
+
         let args_valid = shape.is_some() || imp.object_generic_types.len() == struct_generics.len();
 
         if !args_valid {
@@ -846,6 +873,7 @@ impl<'res> TypeChecker<'res> {
             let entry = ImplEntry {
                 methods: imp.methods.iter().map(|m| m.def_id).collect(),
                 object_args: object_args.clone(),
+                interface_args: interface_args.clone(),
                 is_specialized,
                 generic_bounds: imp
                     .generics
@@ -864,7 +892,9 @@ impl<'res> TypeChecker<'res> {
                     .get(&(object_def, iface_def))
                     .is_some_and(|existing| {
                         existing.iter().any(|e| {
-                            e.object_args == object_args && e.is_specialized == is_specialized
+                            e.object_args == object_args
+                                && e.interface_args == interface_args
+                                && e.is_specialized == is_specialized
                         })
                     });
 
@@ -914,6 +944,7 @@ impl<'res> TypeChecker<'res> {
                     object_def,
                     impl_self_ty,
                     &object_args,
+                    &interface_args,
                     is_specialized,
                     &imp.aliases,
                     &source,
@@ -975,6 +1006,7 @@ impl<'res> TypeChecker<'res> {
             object_def,
             imp_generics: imp.generics.iter().map(|g| g.def_id).collect(),
             object_args,
+            interface_args,
             is_specialized,
             source,
         });
@@ -8478,6 +8510,7 @@ impl<'res> TypeChecker<'res> {
         object_def: DefId,
         self_ty: TypeId,
         object_args: &[TypeId],
+        interface_args: &[TypeId],
         is_specialized: bool,
         aliases: &[Rc<HirAssociatedType>],
         source: &Source,
@@ -8552,6 +8585,7 @@ impl<'res> TypeChecker<'res> {
         if let Some(entries) = self.result.impl_registry.get_mut(&(object_def, iface_def))
             && let Some(entry) = entries.iter_mut().find(|entry| {
                 entry.object_args.as_slice() == object_args
+                    && entry.interface_args.as_slice() == interface_args
                     && entry.is_specialized == is_specialized
             })
         {
@@ -8674,7 +8708,7 @@ impl<'res> TypeChecker<'res> {
         source: &Source,
     ) -> Option<DefId> {
         let type_generics = self.type_member_generics(struct_def);
-        let mut best: Option<(u8, DefId)> = None;
+        let mut best: Option<(u8, bool, DefId)> = None;
 
         self.speculating = true;
 
@@ -8736,14 +8770,25 @@ impl<'res> TypeChecker<'res> {
                 continue;
             };
 
-            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
-                best = Some((rank, candidate));
+            let args_fit = sig_params.iter().zip(args.iter()).all(|(&param_ty, arg)| {
+                let Some(&arg_ty) = self.result.expr_types.get(&arg.id) else {
+                    return true;
+                };
+                let param_ty = self.substitute_generics(param_ty, &bindings);
+
+                try_coerce(&mut self.result.interner, arg_ty, param_ty).is_ok()
+            });
+
+            if best
+                .is_none_or(|(best_rank, best_fit, _)| (rank, !args_fit) < (best_rank, !best_fit))
+            {
+                best = Some((rank, args_fit, candidate));
             }
         }
 
         self.speculating = false;
 
-        best.map(|(_, method)| method)
+        best.map(|(_, _, method)| method)
     }
 
     fn method_impl_entry(&self, object: DefId, method: DefId) -> Option<ImplEntry> {
@@ -9382,6 +9427,10 @@ impl<'res> TypeChecker<'res> {
 
         let mut generic_subst: HashMap<DefId, TypeId> = HashMap::default();
 
+        for (iface_g, arg) in iface_generics.iter().zip(sig_ctx.interface_args.iter()) {
+            generic_subst.insert(*iface_g, *arg);
+        }
+
         let struct_generics: Vec<DefId> = match self.result.interner.get(self_struct_ty) {
             Type::Struct { def_id, .. } => self
                 .struct_generics
@@ -9470,7 +9519,13 @@ impl<'res> TypeChecker<'res> {
         let mut instantiation_params: HashSet<DefId> = HashSet::default();
         instantiation_params.extend(struct_generics.iter().copied());
         instantiation_params.extend(sig_ctx.imp_generics.iter().copied());
-        for (iface_g, struct_arg) in iface_generics.iter().zip(struct_args.iter()) {
+        for (idx, (iface_g, struct_arg)) in
+            iface_generics.iter().zip(struct_args.iter()).enumerate()
+        {
+            if idx < sig_ctx.interface_args.len() {
+                continue;
+            }
+
             let inferred_varies = match generic_subst.get(iface_g) {
                 Some(&bound) => self.type_mentions_any(bound, &instantiation_params),
                 None => false,
@@ -9828,6 +9883,7 @@ impl<'res> TypeChecker<'res> {
         let Some(entry) = entries.iter_mut().find(|entry| {
             entry.is_specialized == sig_ctx.is_specialized
                 && entry.object_args.as_slice() == sig_ctx.object_args
+                && entry.interface_args.as_slice() == sig_ctx.interface_args
         }) else {
             return;
         };
