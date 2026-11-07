@@ -16380,4 +16380,75 @@ mod tests {
         .expect("two implementations with different interface args must coexist");
     }
 
+    #[test]
+    fn duplicate_generic_impls_are_reported() {
+        let errors = typecheck(
+            r#"
+            interface[T] From {
+                pub fn from(value: T) Self;
+            }
+
+            struct Wrapper[T] {
+                value: T,
+            }
+
+            implement[T] From[T] : Wrapper[T] {
+                fn from(value: T) Self {
+                    return Wrapper { .value = value };
+                }
+            }
+
+            implement[U] From[U] : Wrapper[U] {
+                fn from(value: U) Self {
+                    return Wrapper { .value = value };
+                }
+            }
+
+            fn main() {}
+            "#,
+        )
+        .expect_err("duplicate generic implementations must fail");
+
+        assert!(
+            errors
+                .iter()
+                .any(|err| matches!(err, TypeError::DuplicateImpl { .. })),
+            "expected DuplicateImpl, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn concrete_impl_wins_over_generic_impl() {
+        typecheck(
+            r#"
+            interface Marker {
+                pub fn show(*self) i32;
+            }
+
+            struct Wrapper[T] {
+                value: T,
+            }
+
+            implement[T] Marker : Wrapper[T] {
+                fn show(*self) i32 {
+                    return 1;
+                }
+            }
+
+            implement Marker : Wrapper[i32] {
+                fn show(*self) i32 {
+                    return 2;
+                }
+            }
+
+            fn main() {
+                let ints = Wrapper { .value = 5 };
+                let floats = Wrapper { .value = 1.5 };
+                let a = ints.show();
+                let b = floats.show();
+            }
+            "#,
+        )
+        .expect("concrete implementation must be preferred over generic one");
+    }
 }
