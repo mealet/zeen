@@ -915,9 +915,7 @@ impl<'res> TypeChecker<'res> {
                     .impl_registry
                     .get(&(object_def, iface_def))
                     .is_some_and(|existing| {
-                        existing
-                            .iter()
-                            .any(|e| self.impl_duplicate_key(e) == key)
+                        existing.iter().any(|e| self.impl_duplicate_key(e) == key)
                     });
 
                 if is_duplicate {
@@ -2888,6 +2886,9 @@ impl<'res> TypeChecker<'res> {
                                 .intern(Type::Slice { element, is_const }),
                             None => element,
                         },
+                        Type::GenericParam(g) if range_index.is_none() => {
+                            self.check_slice_access_on_generic(g, inner, expr)
+                        }
                         _ => {
                             self.report(TypeError::NotIndexable {
                                 child_type: self.display_type(obj_ty).into(),
@@ -2917,52 +2918,7 @@ impl<'res> TypeChecker<'res> {
                     },
                     Type::Error => self.result.interner.error(),
                     Type::GenericParam(g) if range_index.is_none() => {
-                        let (iface_name, method_name) = if self.expect_assign_interface {
-                            ("IndexPtr", "index_ptr")
-                        } else {
-                            ("Index", "index")
-                        };
-
-                        let Some(iface_def) = self.interface_registry.get(iface_name) else {
-                            self.report(TypeError::InterfaceNotAvailable {
-                                name: iface_name.into(),
-                                src: object.source.src(),
-                                span: object.source.span,
-                            });
-                            return self.result.interner.error();
-                        };
-
-                        if !self.ctx.generic_bounds(g).contains(&iface_def) {
-                            self.report(TypeError::GenericMissingBound {
-                                generic: self.def_name(g).unwrap_or_default().into(),
-                                bound: iface_name.into(),
-                                src: object.source.src(),
-                                span: object.source.span,
-                            });
-                            return self.result.interner.error();
-                        }
-
-                        let Some(method_def) =
-                            self.interface_methods.get(&iface_def).and_then(|methods| {
-                                methods
-                                    .iter()
-                                    .copied()
-                                    .find(|&m| self.def_name(m).as_deref() == Some(method_name))
-                            })
-                        else {
-                            return self.result.interner.error();
-                        };
-
-                        self.result.operator_resolutions.insert(
-                            expr.id,
-                            OperatorResolution {
-                                method_def,
-                                generic_args: vec![obj_ty],
-                                ordering_cmp: None,
-                            },
-                        );
-
-                        self.fn_sigs[&method_def].ret
+                        self.check_slice_access_on_generic(g, obj_ty, expr)
                     }
                     Type::GenericParam(_) if range_index.is_some() => {
                         self.report(TypeError::NotIndexable {
@@ -8161,11 +8117,7 @@ impl<'res> TypeChecker<'res> {
             .all(|(&pattern, &concrete)| self.unify_impl_type(pattern, concrete, unify))
     }
 
-    fn impl_entry_bounds_hold(
-        &self,
-        entry: &ImplEntry,
-        unify: &HashMap<DefId, TypeId>,
-    ) -> bool {
+    fn impl_entry_bounds_hold(&self, entry: &ImplEntry, unify: &HashMap<DefId, TypeId>) -> bool {
         entry.generic_bounds.iter().all(|(imp_g, ifaces)| {
             let Some(&concrete) = unify.get(imp_g) else {
                 return true;
@@ -9522,10 +9474,7 @@ impl<'res> TypeChecker<'res> {
         (args, bounds)
     }
 
-    fn impl_duplicate_key(
-        &self,
-        entry: &ImplEntry,
-    ) -> (Vec<String>, Vec<String>, Vec<String>) {
+    fn impl_duplicate_key(&self, entry: &ImplEntry) -> (Vec<String>, Vec<String>, Vec<String>) {
         let (args, bounds) = self.impl_entry_signature(entry);
 
         let interface_args: Vec<String> = entry
@@ -9684,6 +9633,94 @@ impl<'res> TypeChecker<'res> {
         }
     }
 
+    fn select_interface_method(
+        &mut self,
+        object: DefId,
+        iface_def: DefId,
+        struct_args: &[TypeId],
+        method_name: &str,
+        explicit_args: &[TypeId],
+    ) -> Option<DefId> {
+        let entries = self.result.impl_registry.get(&(object, iface_def))?.clone();
+
+        let mut candidates: Vec<(u8, DefId)> = Vec::new();
+
+        for entry in &entries {
+            let Some(&method) = entry
+                .methods
+                .iter()
+                .find(|&&def| self.def_name(def).as_deref() == Some(method_name))
+            else {
+                continue;
+            };
+
+            let Some(rank) = self.method_candidate_rank(object, method, struct_args) else {
+                continue;
+            };
+
+            candidates.push((rank, method));
+        }
+
+        candidates.sort_by_key(|(rank, _)| *rank);
+
+        candidates
+            .into_iter()
+            .map(|(_, method)| method)
+            .find(|&method| self.method_args_match(object, struct_args, method, explicit_args))
+    }
+
+    fn method_args_match(
+        &mut self,
+        object: DefId,
+        struct_args: &[TypeId],
+        method: DefId,
+        args: &[TypeId],
+    ) -> bool {
+        let sig = &self.fn_sigs[&method];
+        let raw_params: Vec<TypeId> = match sig.self_mode {
+            Some(_) => sig.params[1..].to_vec(),
+            None => sig.params.clone(),
+        };
+
+        if raw_params.len() != args.len() {
+            return false;
+        }
+
+        let entry = self.method_impl_entry(object, method);
+        let owner_generics = self.type_member_generics(object);
+
+        let mut bindings: HashMap<DefId, TypeId> = owner_generics
+            .iter()
+            .copied()
+            .zip(struct_args.iter().copied())
+            .collect();
+
+        if let Some(entry) = &entry {
+            if entry.is_specialized {
+                for (generic, arg) in owner_generics.iter().zip(entry.object_args.iter()) {
+                    bindings.insert(*generic, *arg);
+                }
+            }
+
+            for (imp_g, struct_g) in &entry.generic_bindings {
+                if let Some(&concrete) = bindings.get(struct_g) {
+                    bindings.insert(*imp_g, concrete);
+                }
+            }
+        }
+
+        raw_params.iter().zip(args.iter()).all(|(&param, &arg)| {
+            let expected = self.substitute_generics(param, &bindings);
+
+            let auto_addr = match self.result.interner.get(expected) {
+                Type::Pointer { inner, .. } => arg == *inner,
+                _ => false,
+            };
+
+            auto_addr || try_coerce(&mut self.result.interner, arg, expected).is_ok()
+        })
+    }
+
     fn call_interface_method(
         &mut self,
         struct_def: DefId,
@@ -9703,25 +9740,38 @@ impl<'res> TypeChecker<'res> {
             return None;
         };
 
-        let Some(entry) = self.applicable_impl(struct_def, iface_def, struct_generic_args) else {
-            let struct_ty = self.result.interner.intern(Type::Struct {
-                def_id: struct_def,
-                generic_args: struct_generic_args.to_vec(),
-            });
+        let method_def_id = match self.select_interface_method(
+            struct_def,
+            iface_def,
+            struct_generic_args,
+            method_name,
+            explicit_args,
+        ) {
+            Some(method) => method,
+            None => {
+                let Some(entry) = self.applicable_impl(struct_def, iface_def, struct_generic_args)
+                else {
+                    let struct_ty = self.result.interner.intern(Type::Struct {
+                        def_id: struct_def,
+                        generic_args: struct_generic_args.to_vec(),
+                    });
 
-            self.report(TypeError::InterfaceNotImplemented {
-                name: iface_name.into(),
-                ty_name: self.display_type(struct_ty).into(),
-                src: source.src(),
-                span: source.span,
-            });
-            return None;
+                    self.report(TypeError::InterfaceNotImplemented {
+                        name: iface_name.into(),
+                        ty_name: self.display_type(struct_ty).into(),
+                        src: source.src(),
+                        span: source.span,
+                    });
+                    return None;
+                };
+
+                entry
+                    .methods
+                    .iter()
+                    .copied()
+                    .find(|&def_id| self.def_name(def_id).as_deref() == Some(method_name))?
+            }
         };
-
-        let &method_def_id = entry
-            .methods
-            .iter()
-            .find(|&&def_id| self.def_name(def_id).as_deref() == Some(method_name))?;
 
         let sig = &self.fn_sigs[&method_def_id];
         let self_mode = sig.self_mode;
@@ -9774,7 +9824,9 @@ impl<'res> TypeChecker<'res> {
             .zip(struct_generic_args.iter().copied())
             .collect();
 
-        for (imp_g, struct_g) in &entry.generic_bindings {
+        let entry = self.method_impl_entry(struct_def, method_def_id);
+
+        for (imp_g, struct_g) in entry.iter().flat_map(|entry| &entry.generic_bindings) {
             if let Some(&concrete) = bindings.get(struct_g) {
                 bindings.insert(*imp_g, concrete);
             }
@@ -10870,7 +10922,10 @@ impl<'res> TypeChecker<'res> {
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
             self.result.interner.builtin(BuiltinType::bool)
         } else {
-            lhs
+            let raw = self.fn_sigs[&method_def].ret;
+            let ret = self.substitute_self(raw, lhs);
+
+            self.normalize_associated(ret)
         }
     }
 
@@ -10990,7 +11045,10 @@ impl<'res> TypeChecker<'res> {
                     },
                 );
 
-                operand
+                let raw = self.fn_sigs[&method_def].ret;
+                let ret = self.substitute_self(raw, operand);
+
+                self.normalize_associated(ret)
             }
 
             Type::Pointer { inner, .. } if matches!(op, UnaryOp::Deref) => inner,
@@ -11091,6 +11149,61 @@ impl<'res> TypeChecker<'res> {
             }
             None => self.result.interner.error(),
         }
+    }
+
+    fn check_slice_access_on_generic(
+        &mut self,
+        g: DefId,
+        generic_ty: TypeId,
+        expr: &HirExpr,
+    ) -> TypeId {
+        let (iface_name, method_name) = if self.expect_assign_interface {
+            ("IndexPtr", "index_ptr")
+        } else {
+            ("Index", "index")
+        };
+
+        let Some(iface_def) = self.interface_registry.get(iface_name) else {
+            self.report(TypeError::InterfaceNotAvailable {
+                name: iface_name.into(),
+                src: expr.source.src(),
+                span: expr.source.span,
+            });
+            return self.result.interner.error();
+        };
+
+        if !self.ctx.generic_bounds(g).contains(&iface_def) {
+            self.report(TypeError::GenericMissingBound {
+                generic: self.def_name(g).unwrap_or_default().into(),
+                bound: iface_name.into(),
+                src: expr.source.src(),
+                span: expr.source.span,
+            });
+            return self.result.interner.error();
+        }
+
+        let Some(method_def) = self.interface_methods.get(&iface_def).and_then(|methods| {
+            methods
+                .iter()
+                .copied()
+                .find(|&m| self.def_name(m).as_deref() == Some(method_name))
+        }) else {
+            return self.result.interner.error();
+        };
+
+        self.result.operator_resolutions.insert(
+            expr.id,
+            OperatorResolution {
+                method_def,
+                generic_args: vec![generic_ty],
+                ordering_cmp: None,
+            },
+        );
+
+        let raw = self.fn_sigs[&method_def].ret;
+        let ret = self.substitute_self(raw, generic_ty);
+
+        self.normalize_associated(ret)
     }
 
     fn check_slice_access_on_struct(
