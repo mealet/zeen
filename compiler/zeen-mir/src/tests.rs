@@ -2187,3 +2187,49 @@ fn logical_or_short_circuits_through_branch() {
         "expected SwitchInt for `||` and for `if`, got {switches}"
     );
 }
+
+#[test]
+fn default_interface_method_binds_interface_generic_args() {
+    let printed = print_mir_ok(
+        "interface[T] Sink { \
+             pub fn push(*const self, value: T) T { return value; } \
+         } \
+         struct Counter { pub count: i32 } \
+         implement Sink[i32] : Counter {} \
+         fn main() { \
+             let counter: Counter = .{ .count = 0 }; \
+             @println(\"{}\", counter.push(42)); \
+         }",
+    );
+
+    assert!(
+        printed.contains("fn Counter.push(%0: *const Counter, %1: i32) i32"),
+        "{printed}"
+    );
+    assert!(!printed.contains("GenericParam"), "{printed}");
+}
+
+#[test]
+fn associated_type_projection_lowers_to_concrete() {
+    let printed = print_mir_ok(
+        "interface Source { \
+             alias Item; \
+             pub fn read(*const self) Item; \
+         } \
+         struct Celsius { pub degrees: i32 } \
+         implement Source : Celsius { \
+             alias Item = i32; \
+             fn read(*const self) Item { return self.degrees; } \
+         } \
+         fn read_item[S: Source](source: *const S) S.Item { return source.read(); } \
+         fn main() { \
+             let celsius: Celsius = .{ .degrees = 21 }; \
+             @println(\"{}\", read_item(&celsius)); \
+         }",
+    );
+
+    assert!(
+        printed.contains("fn read_item[Celsius](%0: *const Celsius) i32"),
+        "{printed}"
+    );
+}

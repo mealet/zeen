@@ -140,6 +140,14 @@ mod tests {
                 .find(|def| self.name(def) == name)
                 .cloned()
         }
+
+        fn find_id(&self, name: &str) -> Option<DefId> {
+            self.resolution
+                .defs
+                .iter()
+                .find(|(_, def)| self.name(def) == name)
+                .map(|(id, _)| *id)
+        }
     }
 
     fn resolve_full(src: &str) -> Result<Fixture, Vec<ResolveError>> {
@@ -467,6 +475,60 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0].0, Some(Resolution::Def(_))));
         assert!(matches!(entries[0].1, Resolution::Def(_)));
+    }
+
+    #[test]
+    fn interface_associated_type_is_registered() {
+        let fx = resolve_ok("interface Source { alias Item; fn read(*const self) Item; }");
+
+        let source_id = fx
+            .find_id("Source")
+            .expect("interface Source must be defined");
+        let assoc_ids = fx
+            .resolution
+            .interface_assoc_types
+            .get(&source_id)
+            .expect("interface assoc types must be recorded");
+
+        assert_eq!(assoc_ids.len(), 1);
+
+        let assoc = fx
+            .resolution
+            .defs
+            .get(&assoc_ids[0])
+            .expect("associated type def must exist");
+
+        assert_eq!(fx.name(assoc), "Item");
+        assert!(matches!(
+            assoc.kind,
+            DefKind::AssociatedType { interface } if interface == source_id
+        ));
+    }
+
+    #[test]
+    fn implement_associated_alias_binds_interface_type() {
+        let fx = resolve_ok(
+            "interface Source { alias Item; fn read(*const self) Item; } \
+             struct Celsius { degrees: i32 } \
+             implement Source : Celsius { \
+                 alias Item = i32; \
+                 fn read(*const self) Item { return self.degrees; } \
+             }",
+        );
+
+        let source_id = fx
+            .find_id("Source")
+            .expect("interface Source must be defined");
+        let assoc_id = fx.resolution.interface_assoc_types[&source_id][0];
+
+        let bound_sites = fx
+            .resolution
+            .binding_sites
+            .values()
+            .filter(|id| **id == assoc_id)
+            .count();
+
+        assert_eq!(bound_sites, 2);
     }
 
     #[test]

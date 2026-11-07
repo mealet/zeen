@@ -1615,6 +1615,50 @@ mod tests {
     }
 
     #[test]
+    fn interface_lowers_associated_types() {
+        let fx =
+            lower_ok("interface Source { alias Item: Copy = i32; fn read(*const self) Item; }");
+        let source = fx.interface_decl("Source");
+
+        assert_eq!(source.aliases.len(), 1);
+
+        let item = &source.aliases[0];
+
+        assert_eq!(fx.name(item.name.0), "Item");
+        assert_eq!(item.bounds.len(), 1);
+        assert!(matches!(
+            item.default.as_ref().map(|ty| &ty.kind),
+            Some(HirTypeKind::Builtin(BuiltinType::i32))
+        ));
+    }
+
+    #[test]
+    fn implement_lowers_associated_aliases() {
+        let fx = lower_ok(
+            "interface Source { alias Item; fn read(*const self) Item; } \
+             struct Celsius { degrees: i32 } \
+             implement Source : Celsius { \
+                 alias Item = i32; \
+                 fn read(*const self) Item { return self.degrees; } \
+             }",
+        );
+
+        let implement = fx
+            .module
+            .decls
+            .iter()
+            .find_map(|decl| match &decl.kind {
+                HirDeclKind::Implement(imp) if !imp.aliases.is_empty() => Some(imp.clone()),
+                _ => None,
+            })
+            .expect("implement with an associated alias");
+
+        assert_eq!(implement.aliases.len(), 1);
+        assert_eq!(fx.name(implement.aliases[0].name.0), "Item");
+        assert!(implement.aliases[0].default.is_some());
+    }
+
+    #[test]
     fn global_var_lowers_with_type_and_value() {
         let fx = lower_ok("let g: i32 = 0; pub const c: bool = true;");
 
